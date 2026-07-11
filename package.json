@@ -1,0 +1,48 @@
+{
+	"name": "@orkestrel/contracts",
+	"version": "0.0.1",
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"type": "module",
+	"main": "./dist/src/core/index.cjs",
+	"types": "./dist/src/core/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/src/core/index.d.ts",
+			"require": "./dist/src/core/index.cjs",
+			"default": "./dist/src/core/index.cjs"
+		}
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"scripts": {
+		"clean": "node -e \"try{require('node:fs').rmSync('dist',{recursive:true,force:true})}catch{}\"",
+		"copy": "node -e \"const fs=require('node:fs'),p=require('node:path'),a=process.argv[1],b=process.argv[2];fs.mkdirSync(p.dirname(b),{recursive:true});fs.cpSync(a,b,{force:true});console.log('Copied: '+a+' to '+b)\"",
+		"tmp:txt": "node -e \"const fs=require('node:fs'),p=require('node:path');function walk(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const f=p.join(d,e.name);if(e.isDirectory()){walk(f)}else if(!e.name.endsWith('.md')&&!e.name.endsWith('.txt')){const t=f+'.txt';if(!fs.existsSync(t)){fs.renameSync(f,t)}else{console.warn('Skipping '+f+' — target exists: '+t)}}}}try{walk('tmp')}catch(e){if(e.code!=='ENOENT')throw e}\"",
+		"lint": "oxlint --config .oxlintrc.json --fix .",
+		"check": "tsc --noEmit --project tsconfig.json",
+		"check:src": "npm run check:src:core && npm run check:src:browser",
+		"check:src:core": "tsc --noEmit -p configs/src/tsconfig.core.json",
+		"format": "oxfmt --config .oxfmtrc.json --write .",
+		"test": "npm run test:src",
+		"test:src": "vitest run --config vite.config.ts --reporter=dot --project src:core",
+		"build": "npm run clean && npm run build:src",
+		"build:src": "npm run build:src:core",
+		"build:src:core": "vite build --config configs/src/vite.core.config.ts && tsc -p configs/src/tsconfig.core.json",
+		"prepublishOnly": "npm run format && npm run lint && npm run check && npm run build && npm test"
+	},
+	"devDependencies": {
+		"@types/node": "^26.1.1",
+		"oxfmt": "^0.58.0",
+		"oxlint": "^1.73.0",
+		"typescript": "^6.0.3",
+		"vite": "^8.1.4",
+		"vitest": "^4.1.10"
+	},
+	"engines": {
+		"node": ">=24"
+	}
+}
