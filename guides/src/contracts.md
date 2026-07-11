@@ -1,12 +1,12 @@
 # Contracts
 
-> The contract & validation surface — runtime type guards, guard combinators, flat parsers, and a shape DSL. Narrow `unknown` safely, compose guards, coerce-and-extract a field, or declare a value's shape once and compile it into a guard, parser, JSON Schema, and generator that can never drift. Source: [`src/core/contracts`](../../src/core/contracts). Surfaced through the `@src/core` barrel.
+> The contract & validation surface — runtime type guards, guard combinators, flat parsers, and a shape DSL. Narrow `unknown` safely, compose guards, coerce-and-extract a field, or declare a value's shape once and compile it into a guard, parser, JSON Schema, and generator that can never drift. Source: [`src/core`](../../src/core). Surfaced through the `@src/core` barrel.
 
 Validation is where untrusted data — an HTTP body, a parsed JSON blob, a tool argument — crosses into typed code. This module is that crossing: it turns `unknown` into a narrowed `T` (or a clean `undefined`) without ever throwing, so a hostile input becomes a `false`, not a crash. It deliberately ships **flat, total primitives** instead of a full schema framework — every guard is a one-argument pure function, the parsers coerce-or-bail rather than collect errors, and the JSON surface is the lazy boundary, not a recursive validator. The one place recursion is needed (a contract over a nested shape) is opt-in through the shape DSL, where the tree is finite and developer-authored. The payoff: nothing here can hang on a cycle, blow the stack on adversarial depth, or silently let a bad value through.
 
 ## Surface
 
-A guard is the `Guard<T>` type from [`types.ts`](../../src/core/contracts/types.ts):
+A guard is the `Guard<T>` type from [`types.ts`](../../src/core/types.ts):
 
 ```ts
 type Guard<T> = (value: unknown) => value is T
@@ -177,11 +177,11 @@ The lazy, safe JSON boundary — flat primitives, the recursive `JSONValue` meta
 
 ### Helper
 
-| Helper                  | Kind     | Behavior                                                                                                                                                                                    |
-| ----------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enumerableSymbolCount` | function | Count of a value's own enumerable **symbol** keys — backs `isEmptyObject` / `isNonEmptyObject` (string-key counts alone miss symbol-keyed records).                                         |
-| `seededRandom`          | function | Build a deterministic mulberry32 `RandomFunction` from a numeric seed — the default seed source for `compileGenerator` / `createContract`'s `generate`.                                     |
-| `schemaToParameters`    | function | Narrow a compiled `JSONSchema` to the open tool-parameters record via `isRecord` (§14, never `as`) — the one extraction every contract-backed tool factory routes its `parameters` through. |
+| Helper                  | Kind     | Behavior                                                                                                                                                                                                     |
+| ----------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `enumerableSymbolCount` | function | Count of a value's own enumerable **symbol** keys — backs `isEmptyObject` / `isNonEmptyObject` (string-key counts alone miss symbol-keyed records).                                                          |
+| `seededRandom`          | function | Build a deterministic mulberry32 `RandomFunction` from a numeric seed — the default seed source for `compileGenerator` / `createContract`'s `generate`.                                                      |
+| `schemaToParameters`    | function | Narrow a compiled `JSONSchema` to the open tool-parameters record via `isRecord` (§14, never `as`) — the single sanctioned crossing from a compiled contract schema, written once rather than per call site. |
 
 ### Types
 
@@ -204,7 +204,7 @@ The lazy, safe JSON boundary — flat primitives, the recursive `JSONValue` meta
 
 ### Shape builders
 
-Declarative constructors for the `ContractShape` union (`src/core/contracts/shapers.ts`). One shape compiles into a guard, parser, schema, and generator (see the compilers, below).
+Declarative constructors for the `ContractShape` union (`src/core/shapers.ts`). One shape compiles into a guard, parser, schema, and generator (see the compilers, below).
 
 | Builder            | Kind     | Builds                                                                                                                        |
 | ------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -249,7 +249,7 @@ Declarative constructors for the `ContractShape` union (`src/core/contracts/shap
 
 ### Compilers
 
-Turn one `ContractShape` into the four lockstep outputs (`src/core/contracts/compilers.ts`). The individual compilers return untyped runtime functions; `createContract` is the typed entry point — its `is` / `parse` / `generate` carry `Infer<S>` by inferring once, at the boundary (so the recursion stays cheap). `compileGuard` / `compileParser` reuse the existing combinators and parsers rather than re-implementing them, and apply each leaf's refinements (`min` / `max` / `pattern`) through the **same** combinators — `stringOf` for a string's length/pattern and `boundsOf` for a number's value and an array's length — so a compiled parser and guard enforce the same constraints and can never drift.
+Turn one `ContractShape` into the four lockstep outputs (`src/core/compilers.ts`). The individual compilers return untyped runtime functions; `createContract` is the typed entry point — its `is` / `parse` / `generate` carry `Infer<S>` by inferring once, at the boundary (so the recursion stays cheap). `compileGuard` / `compileParser` reuse the existing combinators and parsers rather than re-implementing them, and apply each leaf's refinements (`min` / `max` / `pattern`) through the **same** combinators — `stringOf` for a string's length/pattern and `boundsOf` for a number's value and an array's length — so a compiled parser and guard enforce the same constraints and can never drift.
 
 | API                 | Kind      | Summary                                                                                                                                                                                                                             |
 | ------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -274,12 +274,12 @@ The public methods of each behavioral interface — one table per type, keyed by
 
 ## Contract
 
-These invariants hold across `src/core/contracts` ↔ `contracts.md`:
+These invariants hold across `src/core` ↔ `contracts.md`:
 
 1. **DOC ↔ SOURCE bijection.** Every `function` / `type` row in the `## Surface` tables is a real export of the contracts source tree, and every contracts-module export appears as a Surface row — exhaustive, both directions (AGENTS §22). Adding, renaming, or removing a guard breaks the parity gate until the doc is reconciled.
 2. **Guards are total (§14).** Every guard takes one `unknown`, returns a `boolean` type predicate, and **never throws** — adversarial input yields `false`. The only deferral is `lazyOf`, whose thunk runs per call; `whereOf` / `lazyOf` / `transformOf` contain a callback throw as a non-match via the core `attempt` helper.
 3. **Parse ↔ guard soundness (§14).** Each standalone leaf parser (`parseString`, …) pairs with the guard for its **output type**: a guard-valid input is returned unchanged (by identity, never rejected), and every non-`undefined` output satisfies that type guard. Coercion of otherwise-invalid inputs is a bonus on top, not a violation. The **compiled** contract goes further: `compileParser` (and thus `createContract`'s `parse`) re-applies every leaf REFINEMENT after coercion through the same combinators (`stringOf` / `boundsOf`) `compileGuard` uses — so a non-`undefined` `contract.parse` always satisfies `contract.is`, refinements (`min` / `max` / `pattern`) included, and the two cannot drift.
-4. **Types are the source of truth.** `Guard`, `Parser`, and the guard-shape types are declared in [`types.ts`](../../src/core/contracts/types.ts) first; guards and parsers conform to them, never the reverse.
+4. **Types are the source of truth.** `Guard`, `Parser`, and the guard-shape types are declared in [`types.ts`](../../src/core/types.ts) first; guards and parsers conform to them, never the reverse.
 5. **DOC ↔ SOURCE method bijection.** Every behavioral interface's `## Methods` table lists exactly its public methods (call-signature members) — exhaustive, both directions — and each implementing class exposes the same public methods, no more (AGENTS §22). A renamed / added / removed method breaks the gate until the table is reconciled.
 
 What ships for JSON is the **flat, lazy boundary** in the `### JSON` table above. The **deep** recursive JSON value / object / JSON-Schema validators (and the ~50-field `JSONSchemaDefinition`) are intentionally **not** part of this surface — keeping them total on cyclic / deep input needs the cycle-and-depth machinery this template avoids. Build only the piece you need from the combinators, where you need it.
@@ -436,7 +436,6 @@ One declaration; the guard, parser, schema, and generator never drift because th
 
 ## Tests
 
-- [`tests/guides/parity.test.ts`](../../tests/guides/src/parity.test.ts) — the `## Surface` ↔ `src/core/contracts` bijection (value + type exports).
 - [`tests/src/core/contracts/validators.test.ts`](../../tests/src/core/contracts/validators.test.ts) — per-guard behavior (incl. `isJSONPrimitive`) + parse ↔ guard soundness corpus.
 - [`tests/src/core/contracts/combinators.test.ts`](../../tests/src/core/contracts/combinators.test.ts) — combinator semantics (`recordOf` exactness, `tupleOf` arity, `lazyOf` per-call thunk, `whereOf` / `transformOf` throw-containment, `boundsOf` / `matchOf` / `stringOf` leaf refinements, …).
 - [`tests/src/core/contracts/parsers.test.ts`](../../tests/src/core/contracts/parsers.test.ts) — coercion + soundness pairings + nested-field reads.

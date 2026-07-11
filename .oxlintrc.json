@@ -23,7 +23,7 @@
 
 		"import/no-default-export": "error",
 		"import/extensions": "off",
-		"import/no-unassigned-import": ["error", { "allow": ["**/*.css", "**/*.scss", "bootstrap"] }],
+		"import/no-unassigned-import": ["error", { "allow": ["**/*.css", "**/*.scss"] }],
 
 		"no-var": "error",
 		"prefer-const": "error",

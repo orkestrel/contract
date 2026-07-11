@@ -1,11 +1,28 @@
 {
 	"name": "@orkestrel/contracts",
 	"version": "0.0.1",
+	"description": "Zero-dependency contract toolkit — type guards, combinators, parsers, and a shape DSL that compiles one contract shape into a guard, parser, JSON Schema, and generator. The foundation package of the @orkestrel line.",
+	"keywords": [
+		"contracts",
+		"json-schema",
+		"parsers",
+		"type-guards",
+		"typescript",
+		"validation",
+		"zero-dependency"
+	],
+	"homepage": "https://github.com/orkestrel/contracts#readme",
+	"bugs": "https://github.com/orkestrel/contracts/issues",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/orkestrel/contracts.git"
+	},
 	"files": [
 		"dist",
 		"README.md"
 	],
 	"type": "module",
+	"sideEffects": false,
 	"main": "./dist/src/core/index.cjs",
 	"types": "./dist/src/core/index.d.ts",
 	"exports": {
@@ -24,7 +41,7 @@
 		"tmp:txt": "node -e \"const fs=require('node:fs'),p=require('node:path');function walk(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const f=p.join(d,e.name);if(e.isDirectory()){walk(f)}else if(!e.name.endsWith('.md')&&!e.name.endsWith('.txt')){const t=f+'.txt';if(!fs.existsSync(t)){fs.renameSync(f,t)}else{console.warn('Skipping '+f+' — target exists: '+t)}}}}try{walk('tmp')}catch(e){if(e.code!=='ENOENT')throw e}\"",
 		"lint": "oxlint --config .oxlintrc.json --fix .",
 		"check": "tsc --noEmit --project tsconfig.json",
-		"check:src": "npm run check:src:core && npm run check:src:browser",
+		"check:src": "npm run check:src:core",
 		"check:src:core": "tsc --noEmit -p configs/src/tsconfig.core.json",
 		"format": "oxfmt --config .oxfmtrc.json --write .",
 		"test": "npm run test:src",

@@ -68,7 +68,7 @@ export function attempt<T>(callback: () => T): Result<T> {
  * string array descends left-to-right through nested objects. Intermediates may
  * be any object — records, class instances, or arrays indexed by string. Returns
  * `undefined` the moment a segment is missing or lands on a non-object, so the
- * lookup is total. (Generalises scsr's `extractField` / `extractProperty`.)
+ * lookup is total.
  *
  * @param record - The source record
  * @param path - A property key, or a key path descending into nested objects
@@ -357,7 +357,7 @@ export function createDeferred<T>(): DeferredInterface<T> {
  * Dotted markers always address nested fields — a top-level key that itself
  * contains a dot is not addressable through this marker grammar. A finite
  * numeric value renders with thousands separators on its integer part
- * (`2000000` → `2,000,000`), locale-independent, so interpolated dollar figures
+ * (`2000000` → `2,000,000`), locale-independent, so large interpolated numbers
  * and counts read naturally.
  *
  * @param template - The message template containing zero or more markers
@@ -380,10 +380,9 @@ export function interpolateMessage(
 		const value = resolveField(record, path.includes('.') ? path.split('.') : path)
 		if (value === undefined) return marker
 		// Finite numbers render with thousands separators on the integer part
-		// (locale-independent, pure ECMAScript) so a rated dollar figure or count
-		// interpolated into a determination message reads as `$2,000,000`, not
-		// `$2000000`. Sub-thousand values (a protection class, a small count) group
-		// to themselves, so no existing message changes.
+		// (locale-independent, pure ECMAScript) so a large value interpolated
+		// into a message reads as `2,000,000`, not `2000000`. Sub-thousand values
+		// (small counts, codes) group to themselves, so no existing message changes.
 		if (typeof value === 'number' && Number.isFinite(value)) {
 			const [integer, fraction] = Math.abs(value).toString().split('.')
 			const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
@@ -398,12 +397,11 @@ export function interpolateMessage(
  * collapsed to a single hyphen, leading / trailing hyphens trimmed.
  *
  * @remarks
- * A pure, environment-agnostic string transform (`'Show Opens Dialog'` →
- * `'show-opens-dialog'`), so it lives in the shared core layer rather than any
- * one environment: it is used by multiple surfaces — the browser Harness slugs
- * each scenario name for its `?scenario=<slug>` URL contract, and the dev docs
- * site builds its heading anchor ids on top of it (`uniqueSlug`). An
- * all-separator input yields the empty string; the caller supplies any fallback.
+ * A pure, deterministic string transform (`'Show Opens Dialog'` →
+ * `'show-opens-dialog'`), environment-agnostic so it lives in the shared core
+ * layer rather than any one environment: lowercase, hyphen-separated, edge-trimmed
+ * output suitable for URL fragments and anchor ids. An all-separator input yields
+ * the empty string; the caller supplies any fallback.
  *
  * @param name - The human name to slugify
  * @returns The slug — lowercase, hyphen-separated, edge-trimmed
@@ -481,18 +479,17 @@ export function enumerableSymbolCount(value: object): number {
 }
 
 /**
- * Narrow a compiled {@link JSONSchema} down to the open `Readonly<Record<string, unknown>>` a
- * tool's `parameters` advertises — through the {@link isRecord} boundary guard, never an
- * assertion (AGENTS §14).
+ * Narrow a compiled {@link JSONSchema} down to the open `Readonly<Record<string, unknown>>` shape
+ * tool definitions advertise as `parameters` — through the {@link isRecord} boundary guard, never
+ * an assertion (AGENTS §14).
  *
  * @remarks
  * A `JSONSchema` is the closed contract-compiler fragment (it has no index signature), whereas a
- * tool advertises its `parameters` as the open record `ToolInterface.parameters` speaks. The two
- * are structurally compatible but not assignable, so the schema crosses that boundary through
- * `isRecord` — a compiled contract schema is always a record, so the guard passes; the `undefined`
- * fallback only satisfies the type's optionality. The one extraction every tool factory whose
- * `parameters` come from a compiled contract routes through (the workspace tool, the workflow
- * tool), so the narrowing lives once rather than copy-pasted per factory.
+ * tool advertises its `parameters` as an open record. The two are structurally compatible but not
+ * assignable, so the schema crosses that boundary through `isRecord` — a compiled contract schema
+ * is always a record, so the guard passes; the `undefined` fallback only satisfies the type's
+ * optionality. This is the single sanctioned narrowing from a compiled contract schema to the open
+ * tool-parameters record, so the crossing lives once rather than being copy-pasted per call site.
  *
  * @param schema - The compiled JSON Schema (a contract's `schema`)
  * @returns The schema as the open tool-parameters record, or `undefined` when it is not a record

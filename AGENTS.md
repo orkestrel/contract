@@ -384,7 +384,7 @@ Two members carry a fixed concept-name regardless of the entity:
 
 Each surface grows through the centralized-file pattern. The full set of recognized centralized files (use only the ones a surface actually needs):
 
-- `types.ts` · `constants.ts` · `helpers.ts` · `validators.ts` · `parsers.ts` · `shapers.ts` · `compilers.ts` · `factories.ts` · `middlewares.ts` · `seeders.ts` · `schemas.ts` · `relations.ts` · `errors.ts` · `index.ts`
+- `types.ts` · `constants.ts` · `helpers.ts` · `validators.ts` · `combinators.ts` · `parsers.ts` · `shapers.ts` · `compilers.ts` · `factories.ts` · `middlewares.ts` · `seeders.ts` · `schemas.ts` · `relations.ts` · `errors.ts` · `index.ts`
 
 **Implementation files contain ONLY** class implementations with `#` private fields and imports. They must **NOT** contain interface definitions, type aliases, constants, or free-standing helper functions — extract those to the appropriate centralized file. Keep compiler/parser recursion in the **functional core**: a **pure** branch — referentially transparent, touching no instance state and calling no sibling method — stays an **exported, centralized helper** (`helpers.ts` / `compilers.ts` / `parsers.ts`), testable in isolation, and is never hidden behind a file-local non-exported function. A branch that must reach the **imperative shell** — instance `#`state or a sibling method — is not a free function but a **method**: public when it is the interface contract, a `#` private method (§7) otherwise. These are complementary, not in tension: extraction pushes every pure **leaf** out to a centralized helper, while an **orchestration** step lives as a class method — and a public method is a real **composition** of those leaves, never a thin 1:1 delegate that only forwards to one helper. "Orchestration" is broader than "stateful": a pure but **compositional or recursive algorithm step** (a chaining pass, a `solve`/`isolate`/`prove` routine, a relational join) stays a `#` private method even when it touches no `#`state and — after its own leaves are extracted — calls only helpers, because it is the class's behavior, not a leaf (§7 gives the ordered leaf test).
 
@@ -587,7 +587,8 @@ No inheritance from `Emitter`, no delegation boilerplate, no `Omit` hacks.
 
 Three orthogonal surfaces handle "is this data what I expect?":
 
-- **Validators (`validators.ts`)** — pure type guards (`Guard<T> = (value: unknown) => value is T`) plus combinators (`arrayOf`, `recordOf`, `unionOf`). Answer "is this a `T`?" No coercion, no side effects.
+- **Validators (`validators.ts`)** — pure `is*` type guards (`Guard<T> = (value: unknown) => value is T`). Answer "is this a `T`?" No coercion, no side effects.
+- **Combinators (`combinators.ts`)** — guard-composing functions (`arrayOf`, `recordOf`, `unionOf`) that build a new `Guard<T>` out of existing ones.
 - **Parsers (`parsers.ts`)** — flat coercion functions returning the typed value or `undefined`. Answer "give me a `T` or nothing." Cross-type conversions live here (`parseNumber('42') → 42`).
 - **Contracts (the shape DSL)** — when validation, serialization, and test data must never drift, declare one `ContractShape` (shapers) and compile it (compilers) into four lockstep outputs: a JSON Schema, a guard, a parser, and a seeded generator. Add a shape variant once; every output covers it. This is the heavy machinery — reach for it only when the four-way parity earns its keep; small surfaces use plain guards + parsers.
 
@@ -595,7 +596,7 @@ Three orthogonal surfaces handle "is this data what I expect?":
 
 **Parse ↔ guard soundness.** A guard-valid input is never rejected by its parser; a parsed value always satisfies the guard. Keep them derived from one source (or test the round-trip) so they cannot diverge.
 
-> The reference `src/core` demonstrates the lightweight end of this: `Result`/`Guard` types, `validators.ts` guards + the `arrayOf` combinator, `parsers.ts` coercers, `errors.ts` (`AppError` + guard), and a `create{Entity}` factory (`createGreeter`) wrapping a one-class-per-file domain entity (`greeters/Greeter.ts`).
+> The reference `src/core` demonstrates the lightweight end of this: the contracts surface — `Guard`/`Result` types in `types.ts`, `is*` guards in `validators.ts`, `*Of` combinators in `combinators.ts`, coercing parsers in `parsers.ts`, and the shape DSL (`shapers.ts` + `compilers.ts`) that compiles one `ContractShape` into a guard, parser, JSON Schema, and generator.
 
 ---
 
@@ -827,7 +828,7 @@ Applies when an `app/browser/` surface uses Vue.
 
 ## 19. SCSS conventions
 
-When a project ships SCSS, the styles layer mirrors the TypeScript centralization principles (§5) — read the parallel TS section first. The concrete token vocabulary is project-specific (a Bootstrap project uses `--bs-*`, a Tailwind project uses `--set-*`, the reference template uses `--explorer-*`); the structural rules below are universal.
+When a project ships SCSS, the styles layer mirrors the TypeScript centralization principles (§5) — read the parallel TS section first. The concrete token vocabulary is project-specific (a Bootstrap project uses `--bs-*`, a Tailwind project uses `--set-*`, the reference template uses `--app-*`); the structural rules below are universal.
 
 ### 19.1 Centralized files (the §5 analogue for SCSS)
 
@@ -860,14 +861,14 @@ When a project ships SCSS, the styles layer mirrors the TypeScript centralizatio
 
 ### 19.4 Naming
 
-| Kind             | Casing                | Pattern                           | Examples                         |
-| ---------------- | --------------------- | --------------------------------- | -------------------------------- |
-| Function         | lowercase, kebab-case | `{verb}` or `{noun}`              | `tint`, `clamp`                  |
-| Mixin            | lowercase, kebab-case | verb / verb-noun                  | `reduced-motion`, `transition`   |
-| Sass `$variable` | lowercase, kebab-case | `!default` if overridable         | `$variants`, `$breakpoints`      |
-| Custom property  | project token scheme  | `--{scope}-{property}[-modifier]` | `--explorer-surface`, `--bs-...` |
-| Modifier class   | bare adjective/noun   | `.{name}`                         | `.surface`, `.muted`, `.accent`  |
-| State class      | bare adjective        | §10 lifecycle vocabulary          | `.active`, `.disabled`           |
+| Kind             | Casing                | Pattern                           | Examples                        |
+| ---------------- | --------------------- | --------------------------------- | ------------------------------- |
+| Function         | lowercase, kebab-case | `{verb}` or `{noun}`              | `tint`, `clamp`                 |
+| Mixin            | lowercase, kebab-case | verb / verb-noun                  | `reduced-motion`, `transition`  |
+| Sass `$variable` | lowercase, kebab-case | `!default` if overridable         | `$variants`, `$breakpoints`     |
+| Custom property  | project token scheme  | `--{scope}-{property}[-modifier]` | `--app-surface`, `--bs-...`     |
+| Modifier class   | bare adjective/noun   | `.{name}`                         | `.surface`, `.muted`, `.accent` |
+| State class      | bare adjective        | §10 lifecycle vocabulary          | `.active`, `.disabled`          |
 
 State class names use the §10 lifecycle vocabulary. The composable owns interactivity state (which class is on the element, when transitions fire, what `aria-*` is set); the partial owns visual chrome. They meet at the **class name** and the **transition token** — both stable contracts.
 

@@ -124,8 +124,8 @@ export function literalShape<const T extends readonly (string | number | boolean
  * declares (and `compileSchema` already emits) — the idiomatic way to describe an enum field
  * without widening the bare builder. The `const` value tuple `T` is preserved EXACTLY (like
  * {@link literalShape}), so a downstream `Infer` still narrows the field to the precise literal
- * union — the description never widens the type. Shared by the tool-authoring shapes (the workflow
- * and workspace tools) that need a `via` / `operation` discriminant to carry per-value guidance.
+ * union — the description never widens the type. Useful wherever a literal discriminant field needs
+ * to carry per-value guidance (a `via` / `operation` style field).
  *
  * @param description - The field-level guidance to embed in the schema
  * @param values - The permitted literals
