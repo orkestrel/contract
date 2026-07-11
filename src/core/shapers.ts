@@ -1,22 +1,29 @@
 import type {
+	ArrayShape,
 	ArrayShapeOptions,
 	BooleanShape,
 	BooleanShapeOptions,
 	ContractShape,
 	JSONSchema,
+	LiteralShape,
+	LiteralShapeOptions,
+	NullableShape,
 	NumberShape,
 	NumberShapeOptions,
+	ObjectShape,
 	ObjectShapeOptions,
+	OptionalShape,
 	RawShape,
+	RecordShapeOptions,
 	StringShape,
 	StringShapeOptions,
+	UnionShape,
 } from './types.js'
 
-// The builders return precise, intersection-free object types (e.g. clean
-// `{ type: 'array'; items: S; … }`, not `… & ArrayShape`). Each is still
-// structurally assignable to its shape interface and to `ContractShape`; keeping
-// them intersection-free keeps `Infer<typeof shape>` shallow enough for the
-// compiler (intersections of intersections trip TS's instantiation-depth guard).
+// The builders return the parameterized types.ts interfaces (e.g. `ArrayShape<S>`,
+// `ObjectShape<P>`), never inline object literals — the generic parameter keeps
+// `Infer<typeof shape>` exact while the return type still enforces conformance to
+// the shared shape interface.
 
 // Shape builders — pure constructors for the `ContractShape` union. Each returns
 // a plain descriptor; the compilers (compilers.ts) turn it into a guard, parser,
@@ -99,49 +106,22 @@ export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
  * Build a literal shape from a fixed set of primitive values.
  *
  * @param values - The permitted literals
+ * @param options - Optional `description`
  * @returns A literal shape whose `Infer` is the union of `values`
  *
  * @example
  * ```ts
- * const role = literalShape('admin', 'member', 'guest')
+ * const role = literalShape(['admin', 'member', 'guest'])
  * // Infer<typeof role> = 'admin' | 'member' | 'guest'
+ *
+ * const via = literalShape(['function', 'tool', 'agent'], { description: 'How to run the step.' })
  * ```
  */
 export function literalShape<const T extends readonly (string | number | boolean)[]>(
-	...values: T
-): { readonly type: 'literal'; readonly values: T } {
-	return { type: 'literal', values }
-}
-
-/**
- * Build a literal shape carrying a `description` — the description-aware counterpart of
- * {@link literalShape} (whose variadic builder takes only values), so a discriminant / enum field
- * can ride its own field-level guidance into the emitted JSON Schema.
- *
- * @remarks
- * {@link literalShape} is purely `(...values)`, so a `description` cannot be threaded through it.
- * This composes the bare shape and attaches the `description` the `LiteralShape` interface already
- * declares (and `compileSchema` already emits) — the idiomatic way to describe an enum field
- * without widening the bare builder. The `const` value tuple `T` is preserved EXACTLY (like
- * {@link literalShape}), so a downstream `Infer` still narrows the field to the precise literal
- * union — the description never widens the type. Useful wherever a literal discriminant field needs
- * to carry per-value guidance (a `via` / `operation` style field).
- *
- * @param description - The field-level guidance to embed in the schema
- * @param values - The permitted literals
- * @returns A literal shape (with `description`) whose `Infer` is the union of `values`
- *
- * @example
- * ```ts
- * const via = describedLiteral('How to run the step.', 'function', 'tool', 'agent')
- * // Infer<typeof via> = 'function' | 'tool' | 'agent'
- * ```
- */
-export function describedLiteral<const T extends readonly (string | number | boolean)[]>(
-	description: string,
-	...values: T
-): { readonly type: 'literal'; readonly values: T; readonly description: string } {
-	return { ...literalShape(...values), description }
+	values: T,
+	options?: LiteralShapeOptions,
+): LiteralShape<T> {
+	return { type: 'literal', values, description: options?.description }
 }
 
 // === Collections
@@ -161,13 +141,7 @@ export function describedLiteral<const T extends readonly (string | number | boo
 export function arrayShape<S extends ContractShape>(
 	items: S,
 	options?: ArrayShapeOptions,
-): {
-	readonly type: 'array'
-	readonly items: S
-	readonly min?: number
-	readonly max?: number
-	readonly description?: string
-} {
+): ArrayShape<S> {
 	return {
 		type: 'array',
 		items,
@@ -201,12 +175,7 @@ export function arrayShape<S extends ContractShape>(
 export function objectShape<P extends Readonly<Record<string, ContractShape>>>(
 	properties: P,
 	options?: ObjectShapeOptions,
-): {
-	readonly type: 'object'
-	readonly properties: P
-	readonly additionalProperties?: boolean | ContractShape
-	readonly description?: string
-} {
+): ObjectShape<P> {
 	return {
 		type: 'object',
 		properties,
@@ -233,13 +202,8 @@ export function objectShape<P extends Readonly<Record<string, ContractShape>>>(
  */
 export function recordShape<S extends ContractShape>(
 	values: S,
-	options?: { readonly description?: string },
-): {
-	readonly type: 'object'
-	readonly properties: Readonly<Record<string, never>>
-	readonly additionalProperties: S
-	readonly description?: string
-} {
+	options?: RecordShapeOptions,
+): ObjectShape {
 	return {
 		type: 'object',
 		properties: {},
@@ -262,14 +226,7 @@ export function recordShape<S extends ContractShape>(
  * // Infer<typeof id> = string | number
  * ```
  */
-export function unionShape<V extends readonly ContractShape[]>(
-	...variants: V
-): {
-	readonly type: 'union'
-	readonly variants: V
-	readonly mode?: 'anyOf' | 'oneOf'
-	readonly description?: string
-} {
+export function unionShape<V extends readonly ContractShape[]>(...variants: V): UnionShape<V> {
 	return { type: 'union', variants }
 }
 
@@ -283,14 +240,7 @@ export function unionShape<V extends readonly ContractShape[]>(
  * @param variants - The candidate shapes
  * @returns A union shape with `mode: 'oneOf'`
  */
-export function oneOfShape<V extends readonly ContractShape[]>(
-	...variants: V
-): {
-	readonly type: 'union'
-	readonly variants: V
-	readonly mode: 'oneOf'
-	readonly description?: string
-} {
+export function oneOfShape<V extends readonly ContractShape[]>(...variants: V): UnionShape<V> {
 	return { type: 'union', variants, mode: 'oneOf' }
 }
 
@@ -304,9 +254,7 @@ export function oneOfShape<V extends readonly ContractShape[]>(
  * @param inner - The wrapped shape
  * @returns An optional shape
  */
-export function optionalShape<S extends ContractShape>(
-	inner: S,
-): { readonly type: 'optional'; readonly inner: S } {
+export function optionalShape<S extends ContractShape>(inner: S): OptionalShape<S> {
 	return { type: 'optional', inner }
 }
 
@@ -316,9 +264,7 @@ export function optionalShape<S extends ContractShape>(
  * @param inner - The wrapped shape
  * @returns A nullable shape
  */
-export function nullableShape<S extends ContractShape>(
-	inner: S,
-): { readonly type: 'nullable'; readonly inner: S } {
+export function nullableShape<S extends ContractShape>(inner: S): NullableShape<S> {
 	return { type: 'nullable', inner }
 }
 

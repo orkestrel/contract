@@ -32,7 +32,7 @@ describe('compileSchema', () => {
 	})
 
 	it('emits literals as enum and arrays with items + bounds', () => {
-		expect(compileSchema(literalShape('a', 'b'))).toEqual({ enum: ['a', 'b'] })
+		expect(compileSchema(literalShape(['a', 'b']))).toEqual({ enum: ['a', 'b'] })
 		expect(compileSchema(arrayShape(stringShape(), { max: 2 }))).toEqual({
 			type: 'array',
 			items: { type: 'string' },
@@ -108,8 +108,8 @@ describe('compileGuard', () => {
 		expect(id(3)).toBe(true)
 		expect(id(true)).toBe(false)
 		expect(compileGuard(nullableShape(stringShape()))(null)).toBe(true)
-		expect(compileGuard(literalShape('a', 'b'))('a')).toBe(true)
-		expect(compileGuard(literalShape('a', 'b'))('c')).toBe(false)
+		expect(compileGuard(literalShape(['a', 'b']))('a')).toBe(true)
+		expect(compileGuard(literalShape(['a', 'b']))('c')).toBe(false)
 		const arr = compileGuard(arrayShape(integerShape(), { min: 1 }))
 		expect(arr([1, 2])).toBe(true)
 		expect(arr([])).toBe(false)
@@ -230,7 +230,7 @@ describe('compileGenerator', () => {
 		const shape = objectShape({
 			name: stringShape({ min: 1 }),
 			age: integerShape({ min: 0, max: 120 }),
-			role: literalShape('admin', 'guest'),
+			role: literalShape(['admin', 'guest']),
 			tags: arrayShape(stringShape(), { min: 1, max: 3 }),
 		})
 		const guard = compileGuard(shape)
@@ -263,7 +263,7 @@ describe('compileGenerator', () => {
 	})
 
 	it('throws on a degenerate empty literal / union (programmer error)', () => {
-		expect(() => compileGenerator(literalShape(), seededRandom(1))).toThrow('at least one value')
+		expect(() => compileGenerator(literalShape([]), seededRandom(1))).toThrow('at least one value')
 		expect(() => compileGenerator(unionShape(), seededRandom(1))).toThrow('at least one variant')
 	})
 

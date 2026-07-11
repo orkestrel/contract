@@ -235,16 +235,18 @@ export interface BooleanShape {
 }
 
 /** A literal shape — accepts exactly one of a fixed set of primitive values. */
-export interface LiteralShape {
+export interface LiteralShape<
+	T extends readonly (string | number | boolean)[] = readonly (string | number | boolean)[],
+> {
 	readonly type: 'literal'
-	readonly values: readonly (string | number | boolean)[]
+	readonly values: T
 	readonly description?: string
 }
 
 /** An array shape with an element shape and optional length bounds. */
-export interface ArrayShape {
+export interface ArrayShape<S extends ContractShape = ContractShape> {
 	readonly type: 'array'
-	readonly items: ContractShape
+	readonly items: S
 	readonly min?: number
 	readonly max?: number
 	readonly description?: string
@@ -259,9 +261,11 @@ export interface ArrayShape {
  * `false` rejects them (closed), `true` accepts them as-is, a `ContractShape`
  * validates them.
  */
-export interface ObjectShape {
+export interface ObjectShape<
+	P extends Readonly<Record<string, ContractShape>> = Readonly<Record<string, ContractShape>>,
+> {
 	readonly type: 'object'
-	readonly properties: Readonly<Record<string, ContractShape>>
+	readonly properties: P
 	readonly additionalProperties?: boolean | ContractShape
 	readonly description?: string
 }
@@ -273,23 +277,23 @@ export interface ObjectShape {
  * `mode` selects the emitted JSON Schema keyword: `'anyOf'` (default) or
  * `'oneOf'`. Runtime behavior is identical.
  */
-export interface UnionShape {
+export interface UnionShape<V extends readonly ContractShape[] = readonly ContractShape[]> {
 	readonly type: 'union'
-	readonly variants: readonly ContractShape[]
+	readonly variants: V
 	readonly mode?: 'anyOf' | 'oneOf'
 	readonly description?: string
 }
 
 /** An optional wrapper — the inner shape may be absent (`undefined`). */
-export interface OptionalShape {
+export interface OptionalShape<S extends ContractShape = ContractShape> {
 	readonly type: 'optional'
-	readonly inner: ContractShape
+	readonly inner: S
 }
 
 /** A nullable wrapper — the inner shape may be `null`. */
-export interface NullableShape {
+export interface NullableShape<S extends ContractShape = ContractShape> {
 	readonly type: 'nullable'
-	readonly inner: ContractShape
+	readonly inner: S
 }
 
 /**
@@ -393,6 +397,11 @@ export interface BooleanShapeOptions {
 	readonly description?: string
 }
 
+/** Options for {@link LiteralShape} (via `literalShape`). */
+export interface LiteralShapeOptions {
+	readonly description?: string
+}
+
 /** Options for {@link ArrayShape} (via `arrayShape`). */
 export interface ArrayShapeOptions {
 	readonly min?: number
@@ -403,6 +412,11 @@ export interface ArrayShapeOptions {
 /** Options for {@link ObjectShape} (via `objectShape`). */
 export interface ObjectShapeOptions {
 	readonly additionalProperties?: boolean | ContractShape
+	readonly description?: string
+}
+
+/** Options for record shapes (via `recordShape`). */
+export interface RecordShapeOptions {
 	readonly description?: string
 }
 

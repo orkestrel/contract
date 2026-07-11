@@ -6,8 +6,8 @@ export default defineConfig(
 		build: {
 			lib: {
 				entry: resolveWorkspacePath('src/core/index.ts'),
-				formats: ['cjs'],
-				fileName: () => 'index.cjs',
+				formats: ['es'],
+				fileName: () => 'index.js',
 			},
 			outDir: 'dist/src/core',
 		},

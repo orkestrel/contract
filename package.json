@@ -24,14 +24,15 @@
 	],
 	"type": "module",
 	"sideEffects": false,
-	"main": "./dist/src/core/index.cjs",
+	"main": "./dist/src/core/index.js",
 	"types": "./dist/src/core/index.d.ts",
 	"exports": {
 		".": {
 			"types": "./dist/src/core/index.d.ts",
-			"require": "./dist/src/core/index.cjs",
-			"default": "./dist/src/core/index.cjs"
-		}
+			"import": "./dist/src/core/index.js",
+			"default": "./dist/src/core/index.js"
+		},
+		"./package.json": "./package.json"
 	},
 	"publishConfig": {
 		"access": "public"
@@ -45,12 +46,14 @@
 		"check:src": "npm run check:src:core",
 		"check:src:core": "tsc --noEmit -p configs/src/tsconfig.core.json",
 		"format": "oxfmt --config .oxfmtrc.json --write .",
+		"format:check": "oxfmt --config .oxfmtrc.json --check .",
+		"lint:check": "oxlint --config .oxlintrc.json .",
 		"test": "npm run test:src",
 		"test:src": "vitest run --config vite.config.ts --reporter=dot --project src:core",
 		"build": "npm run clean && npm run build:src",
 		"build:src": "npm run build:src:core",
 		"build:src:core": "vite build --config configs/src/vite.core.config.ts && tsc -p configs/src/tsconfig.core.json",
-		"prepublishOnly": "npm run format && npm run lint && npm run check && npm run build && npm test"
+		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run check:src && npm run build && npm test"
 	},
 	"devDependencies": {
 		"@types/node": "^26.1.1",

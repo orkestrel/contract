@@ -3,7 +3,6 @@ import type { Infer } from '@src/core'
 import {
 	arrayShape,
 	booleanShape,
-	describedLiteral,
 	integerShape,
 	literalShape,
 	nullableShape,
@@ -44,14 +43,14 @@ describe('shape builders', () => {
 	})
 
 	it('literalShape preserves the value tuple', () => {
-		expect(literalShape('admin', 'guest')).toMatchObject({
+		expect(literalShape(['admin', 'guest'])).toMatchObject({
 			type: 'literal',
 			values: ['admin', 'guest'],
 		})
 	})
 
-	it('describedLiteral preserves the value tuple and attaches the description', () => {
-		expect(describedLiteral('the user role', 'admin', 'guest')).toEqual({
+	it('literalShape attaches the description via options', () => {
+		expect(literalShape(['admin', 'guest'], { description: 'the user role' })).toEqual({
 			type: 'literal',
 			values: ['admin', 'guest'],
 			description: 'the user role',
@@ -109,7 +108,7 @@ describe('Infer', () => {
 		const user = objectShape({
 			name: stringShape({ min: 1 }),
 			age: integerShape(),
-			role: literalShape('admin', 'guest'),
+			role: literalShape(['admin', 'guest']),
 			bio: optionalShape(stringShape()),
 			avatar: nullableShape(stringShape()),
 			tags: arrayShape(stringShape()),
@@ -126,5 +125,8 @@ describe('Infer', () => {
 		expect(value.name).toBe('Ada')
 		expect(value.role).toBe('admin')
 		expect(value.avatar).toBeNull()
+		// @ts-expect-error — Infer must narrow role to the exact literal union, not string
+		const widened: Infer<typeof user> = { ...value, role: 'owner' }
+		expect(widened).toBeDefined()
 	})
 })

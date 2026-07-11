@@ -212,22 +212,21 @@ The lazy, safe JSON boundary — flat primitives, the recursive `JSONValue` meta
 
 Declarative constructors for the `ContractShape` union (`src/core/shapers.ts`). One shape compiles into a guard, parser, schema, and generator (see the compilers, below).
 
-| Builder            | Kind     | Builds                                                                                                                        |
-| ------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `stringShape`      | function | a string shape with optional `min` / `max` / `pattern`.                                                                       |
-| `numberShape`      | function | a numeric shape with optional bounds.                                                                                         |
-| `integerShape`     | function | a numeric shape fixed to integers (`integer: true`).                                                                          |
-| `booleanShape`     | function | a boolean shape.                                                                                                              |
-| `literalShape`     | function | a shape accepting one of fixed literals — `Infer` is their union.                                                             |
-| `describedLiteral` | function | a literal shape carrying a `description` — the description-aware `literalShape` (for a discriminant / enum field's guidance). |
-| `arrayShape`       | function | an array shape over an element shape, with optional length bounds.                                                            |
-| `objectShape`      | function | an object shape from a property map (closed to unknown keys by default).                                                      |
-| `recordShape`      | function | an open object (dictionary) whose values all match one shape.                                                                 |
-| `unionShape`       | function | a union of variant shapes (`anyOf`; first match wins).                                                                        |
-| `oneOfShape`       | function | a union that emits `oneOf` — identical runtime to `unionShape`.                                                               |
-| `optionalShape`    | function | wraps a shape so it may be absent (an optional object field).                                                                 |
-| `nullableShape`    | function | wraps a shape so it may be `null`.                                                                                            |
-| `rawShape`         | function | embeds a raw `JSONSchema` fragment — the guard accepts any value.                                                             |
+| Builder         | Kind     | Builds                                                                                                               |
+| --------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
+| `stringShape`   | function | a string shape with optional `min` / `max` / `pattern`.                                                              |
+| `numberShape`   | function | a numeric shape with optional bounds.                                                                                |
+| `integerShape`  | function | a numeric shape fixed to integers (`integer: true`).                                                                 |
+| `booleanShape`  | function | a boolean shape.                                                                                                     |
+| `literalShape`  | function | a shape accepting one of fixed literals from a `values` array, with optional `description` — `Infer` is their union. |
+| `arrayShape`    | function | an array shape over an element shape, with optional length bounds.                                                   |
+| `objectShape`   | function | an object shape from a property map (closed to unknown keys by default).                                             |
+| `recordShape`   | function | an open object (dictionary) whose values all match one shape.                                                        |
+| `unionShape`    | function | a union of variant shapes (`anyOf`; first match wins).                                                               |
+| `oneOfShape`    | function | a union that emits `oneOf` — identical runtime to `unionShape`.                                                      |
+| `optionalShape` | function | wraps a shape so it may be absent (an optional object field).                                                        |
+| `nullableShape` | function | wraps a shape so it may be `null`.                                                                                   |
+| `rawShape`      | function | embeds a raw `JSONSchema` fragment — the guard accepts any value.                                                    |
 
 ### Shape types
 
@@ -250,8 +249,10 @@ Declarative constructors for the `ContractShape` union (`src/core/shapers.ts`). 
 | `StringShapeOptions`  | interface | options for `stringShape`.                                     |
 | `NumberShapeOptions`  | interface | options for `numberShape` / `integerShape`.                    |
 | `BooleanShapeOptions` | interface | options for `booleanShape`.                                    |
+| `LiteralShapeOptions` | interface | options for `literalShape`.                                    |
 | `ArrayShapeOptions`   | interface | options for `arrayShape`.                                      |
 | `ObjectShapeOptions`  | interface | options for `objectShape`.                                     |
+| `RecordShapeOptions`  | interface | options for `recordShape`.                                     |
 
 ### Compilers
 
@@ -401,7 +402,7 @@ import {
 const user = objectShape({
 	name: stringShape({ min: 1 }),
 	age: integerShape({ min: 0, max: 120 }),
-	role: literalShape('admin', 'member', 'guest'),
+	role: literalShape(['admin', 'member', 'guest']),
 	tags: arrayShape(stringShape()),
 	bio: optionalShape(stringShape()), // may be absent
 })
