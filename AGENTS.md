@@ -811,7 +811,7 @@ The per-env contracts **unify with the build**: `configs/src/tsconfig.{core,brow
 - **Formatter:** `oxfmt` (`.oxfmtrc.json`).
 - **Bundler:** Vite.
 - **Test runner:** Vitest with `@vitest/browser-playwright` for browser tests.
-- **Node target:** `node22` for core and server builds.
+- **Node target:** `node24` for core and server builds.
 - **Browser framework:** Vue 3 (when a browser app is present).
 
 ---
