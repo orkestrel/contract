@@ -15,7 +15,7 @@ the map.
 
 1. Locate the relevant files and directories — glob/grep first; open a file only to
    confirm relevance, and skim, never read end-to-end.
-2. Identify entry points, the contracts/types involved, the matching tests, and the
+2. Identify entry points, the contract/types involved, the matching tests, and the
    governing docs (AGENTS.md always; any guide that covers the area).
 3. Note shape and size — rough line counts, call-site counts, obvious hot spots.
 

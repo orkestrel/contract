@@ -1,5 +1,5 @@
 {
-	"name": "@orkestrel/contracts",
+	"name": "@orkestrel/contract",
 	"version": "0.0.1",
 	"description": "Zero-dependency contract toolkit — type guards, combinators, parsers, and a shape DSL that compiles one contract shape into a guard, parser, JSON Schema, and generator. The foundation package of the @orkestrel line.",
 	"keywords": [
@@ -11,12 +11,12 @@
 		"validation",
 		"zero-dependency"
 	],
-	"homepage": "https://github.com/orkestrel/contracts#readme",
-	"bugs": "https://github.com/orkestrel/contracts/issues",
+	"homepage": "https://github.com/orkestrel/contract#readme",
+	"bugs": "https://github.com/orkestrel/contract/issues",
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/orkestrel/contracts.git"
+		"url": "git+https://github.com/orkestrel/contract.git"
 	},
 	"files": [
 		"dist",

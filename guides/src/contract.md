@@ -295,9 +295,9 @@ The public methods of each behavioral interface — one table per type, keyed by
 
 ## Contract
 
-These invariants hold across `src/core` ↔ `contracts.md`:
+These invariants hold across `src/core` ↔ `contract.md`:
 
-1. **DOC ↔ SOURCE bijection.** Every `function` / `type` row in the `## Surface` tables is a real export of the contracts source tree, and every contracts-module export appears as a Surface row — exhaustive, both directions (AGENTS §22). Adding, renaming, or removing a guard breaks the parity gate until the doc is reconciled.
+1. **DOC ↔ SOURCE bijection.** Every `function` / `type` row in the `## Surface` tables is a real export of the contracts source tree, and every contract-module export appears as a Surface row — exhaustive, both directions (AGENTS §22). Adding, renaming, or removing a guard breaks the parity gate until the doc is reconciled.
 2. **Guards are total (§14).** Every guard takes one `unknown`, returns a `boolean` type predicate, and **never throws** — adversarial input yields `false`. The only deferral is `lazyOf`, whose thunk runs per call; `whereOf` / `lazyOf` / `transformOf` contain a callback throw as a non-match via the core `attempt` helper.
 3. **Parse ↔ guard soundness (§14).** Each standalone leaf parser (`parseString`, …) pairs with the guard for its **output type**: a guard-valid input is returned unchanged (by identity, never rejected), and every non-`undefined` output satisfies that type guard. Coercion of otherwise-invalid inputs is a bonus on top, not a violation. The **compiled** contract goes further: `compileParser` (and thus `createContract`'s `parse`) re-applies every leaf REFINEMENT after coercion through the same combinators (`stringOf` / `boundsOf`) `compileGuard` uses — so a non-`undefined` `contract.parse` always satisfies `contract.is`, refinements (`min` / `max` / `pattern`) included, and the two cannot drift.
 4. **Types are the source of truth.** `Guard`, `Parser`, and the guard-shape types are declared in [`types.ts`](../../src/core/types.ts) first; guards and parsers conform to them, never the reverse.
@@ -458,12 +458,12 @@ One declaration; the guard, parser, schema, and generator never drift because th
 
 ## Tests
 
-- [`tests/src/core/contracts/validators.test.ts`](../../tests/src/core/contracts/validators.test.ts) — per-guard behavior (incl. `isJSONPrimitive`) + parse ↔ guard soundness corpus.
-- [`tests/src/core/contracts/combinators.test.ts`](../../tests/src/core/contracts/combinators.test.ts) — combinator semantics (`recordOf` exactness, `tupleOf` arity, `lazyOf` per-call thunk, `whereOf` / `transformOf` throw-containment, `boundsOf` / `matchOf` / `stringOf` leaf refinements, …).
-- [`tests/src/core/contracts/parsers.test.ts`](../../tests/src/core/contracts/parsers.test.ts) — coercion + soundness pairings + nested-field reads.
-- [`tests/src/core/contracts/helpers.test.ts`](../../tests/src/core/contracts/helpers.test.ts) — `enumerableSymbolCount`, `seededRandom`, and `schemaToParameters` (a compiled-contract record schema passes through by reference; a non-record yields `undefined`).
-- [`tests/src/core/contracts/shapers.test.ts`](../../tests/src/core/contracts/shapers.test.ts) — shape builders + `Infer` derivation.
-- [`tests/src/core/contracts/compilers.test.ts`](../../tests/src/core/contracts/compilers.test.ts) — `compileSchema` / `compileGuard` / `compileParser` / `compileGenerator` + `createContract` round-trip, incl. parse↔guard refinement parity (out-of-bounds leaves parse to `undefined`).
+- [`tests/src/core/validators.test.ts`](../../tests/src/core/validators.test.ts) — per-guard behavior (incl. `isJSONPrimitive`) + parse ↔ guard soundness corpus.
+- [`tests/src/core/combinators.test.ts`](../../tests/src/core/combinators.test.ts) — combinator semantics (`recordOf` exactness, `tupleOf` arity, `lazyOf` per-call thunk, `whereOf` / `transformOf` throw-containment, `boundsOf` / `matchOf` / `stringOf` leaf refinements, …).
+- [`tests/src/core/parsers.test.ts`](../../tests/src/core/parsers.test.ts) — coercion + soundness pairings + nested-field reads.
+- [`tests/src/core/helpers.test.ts`](../../tests/src/core/helpers.test.ts) — `enumerableSymbolCount`, `seededRandom`, and `schemaToParameters` (a compiled-contract record schema passes through by reference; a non-record yields `undefined`).
+- [`tests/src/core/shapers.test.ts`](../../tests/src/core/shapers.test.ts) — shape builders + `Infer` derivation.
+- [`tests/src/core/compilers.test.ts`](../../tests/src/core/compilers.test.ts) — `compileSchema` / `compileGuard` / `compileParser` / `compileGenerator` + `createContract` round-trip, incl. parse↔guard refinement parity (out-of-bounds leaves parse to `undefined`).
 
 ## See also
 
