@@ -26,7 +26,7 @@ export const srcCore = (config?: UserConfig): UserConfig =>
 			},
 			test: {
 				name: { label: 'src:core', color: 'magenta' },
-				include: ['tests/src/core/**/*.test.ts', 'tests/setup.test.ts'],
+				include: ['tests/src/core/**/*.test.ts'],
 				setupFiles: ['./tests/setup.ts'],
 				environment: 'node',
 				browser: { enabled: false },

@@ -40,3 +40,7 @@ For the full surface — guards, combinators, parsers, the JSON boundary, and th
 ## Package
 
 Published as a single typed entry point per the `exports` field in `package.json`.
+
+## License
+
+MIT © [Orkestrel](https://github.com/orkestrel) — see [LICENSE](./LICENSE).
