@@ -4,9 +4,9 @@ A dual-axis index into this repository's guides — by concept, and by directory
 
 ## By concept
 
-| Concept   | Spec                                 | Source                    | Tests                                 |
-| --------- | ------------------------------------ | ------------------------- | ------------------------------------- |
-| Contract  | [`src/contract.md`](src/contract.md) | [`src/core`](../src/core) | [`tests/src/core`](../tests/src/core) |
+| Concept  | Spec                                 | Source                    | Tests                                 |
+| -------- | ------------------------------------ | ------------------------- | ------------------------------------- |
+| Contract | [`src/contract.md`](src/contract.md) | [`src/core`](../src/core) | [`tests/src/core`](../tests/src/core) |
 
 ## By directory
 
