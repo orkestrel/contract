@@ -6,6 +6,8 @@ import {
 	isFiniteNumber,
 	isInteger,
 	isJSONPrimitive,
+	isJSONValue,
+	isNull,
 	isNumber,
 	isRecord,
 	isString,
@@ -21,6 +23,10 @@ import {
 	parseIntegerField,
 	parseJSON,
 	parseJSONAs,
+	parseJSONValue,
+	parseJSONValueField,
+	parseNull,
+	parseNullField,
 	parseNumber,
 	parseNumberField,
 	parseRecord,
@@ -46,24 +52,32 @@ describe('primitive parsers', () => {
 
 	it('parseNumber accepts finite numbers and numeric strings', () => {
 		expect(parseNumber(42)).toBe(42)
-		expect(parseNumber(-0)).toBe(-0)
+		expect(Object.is(parseNumber(-0), -0)).toBe(true)
 		expect(parseNumber('42')).toBe(42)
 		expect(parseNumber(' 3.14 ')).toBe(3.14)
+		expect(parseNumber('  42')).toBe(42)
 		expect(parseNumber('')).toBeUndefined()
 		expect(parseNumber('   ')).toBeUndefined()
 		expect(parseNumber('abc')).toBeUndefined()
 		expect(parseNumber(Number.NaN)).toBeUndefined()
 		expect(parseNumber(Number.POSITIVE_INFINITY)).toBeUndefined()
 		expect(parseNumber(true)).toBeUndefined()
+		// Clause-A edge sweep: JS numeric-literal quirks Number(...) honors.
+		expect(parseNumber('0x10')).toBe(16)
+		expect(parseNumber('.5')).toBe(0.5)
+		expect(parseNumber('5.')).toBe(5)
+		expect(parseNumber('1e999')).toBeUndefined()
+		expect(parseNumber('1_000')).toBeUndefined()
 	})
 
 	it('parseInteger rejects fractional numbers', () => {
 		expect(parseInteger(42)).toBe(42)
-		expect(parseInteger(-0)).toBe(-0)
+		expect(Object.is(parseInteger(-0), -0)).toBe(true)
 		expect(parseInteger('42')).toBe(42)
 		expect(parseInteger(3.14)).toBeUndefined()
 		expect(parseInteger('3.14')).toBeUndefined()
 		expect(parseInteger('abc')).toBeUndefined()
+		expect(parseInteger(2 ** 53)).toBe(2 ** 53)
 	})
 
 	it('parseBoolean accepts booleans and their string/number spellings', () => {
@@ -78,6 +92,13 @@ describe('primitive parsers', () => {
 		expect(parseBoolean('yes')).toBeUndefined()
 		expect(parseBoolean(2)).toBeUndefined()
 		expect(parseBoolean(null)).toBeUndefined()
+	})
+
+	it('parseNull accepts only null, returning null (not undefined) on success', () => {
+		expect(parseNull(null)).toBeNull()
+		expect(parseNull('null')).toBeUndefined()
+		expect(parseNull(undefined)).toBeUndefined()
+		expect(parseNull(0)).toBeUndefined()
 	})
 })
 
@@ -105,6 +126,28 @@ describe('structural parsers', () => {
 		expect(parseEnum('b', allowed)).toBe('b')
 		expect(parseEnum('c', allowed)).toBeUndefined()
 		expect(parseEnum(1, allowed)).toBeUndefined()
+	})
+
+	it('parseEnum widens to number and boolean literals, matching by identity only', () => {
+		expect(parseEnum(1, [1, 2])).toBe(1)
+		expect(parseEnum(true, [true, false])).toBe(true)
+		// No cross-type coercion — a numeric-looking string never matches a number literal.
+		expect(parseEnum('1', [1])).toBeUndefined()
+		// Object.is semantics: NaN matches its own literal (unlike ===).
+		expect(parseEnum(Number.NaN, [Number.NaN])).toBe(Number.NaN)
+	})
+
+	it('parseJSONValue narrows a cycle-safe JSON tree by reference', () => {
+		const tree = { nested: [1, 'x', null] }
+		expect(parseJSONValue(tree)).toBe(tree)
+		expect(parseJSONValue(Number.NaN)).toBeUndefined()
+		expect(parseJSONValue(Number.POSITIVE_INFINITY)).toBeUndefined()
+		expect(parseJSONValue(() => 1)).toBeUndefined()
+		expect(parseJSONValue(new Date())).toBeUndefined()
+
+		const cyclic: Record<string, unknown> = { a: 1 }
+		cyclic.self = cyclic
+		expect(parseJSONValue(cyclic)).toBeUndefined()
 	})
 })
 
@@ -152,6 +195,36 @@ describe('record-field parsers', () => {
 		// An array element reached by string index along the path.
 		expect(parseEnumField(record, ['user', 'roles', '0'], allowed)).toBe('admin')
 	})
+
+	it('parseNullField and parseJSONValueField read present, absent, and nested paths', () => {
+		const record: Record<string, unknown> = {
+			flag: null,
+			present: 'not null',
+			tree: { nested: [1, 'x', null] },
+			user: { profile: { setting: null } },
+		}
+
+		expect(parseNullField(record, 'flag')).toBeNull()
+		expect(parseNullField(record, 'present')).toBeUndefined()
+		expect(parseNullField(record, 'missing')).toBeUndefined()
+		expect(parseNullField(record, ['user', 'profile', 'setting'])).toBeNull()
+
+		expect(parseJSONValueField(record, 'tree')).toEqual({ nested: [1, 'x', null] })
+		expect(parseJSONValueField(record, 'missing')).toBeUndefined()
+		expect(parseJSONValueField(record, ['user', 'profile', 'setting'])).toBeNull()
+	})
+
+	it('parseNullField and parseJSONValueField never throw against a hostile getter', () => {
+		const hostile = {
+			get a(): unknown {
+				throw new Error('hostile getter')
+			},
+		}
+		expect(() => parseNullField(hostile, 'a')).not.toThrow()
+		expect(parseNullField(hostile, 'a')).toBeUndefined()
+		expect(() => parseJSONValueField(hostile, 'a')).not.toThrow()
+		expect(parseJSONValueField(hostile, 'a')).toBeUndefined()
+	})
 })
 
 describe('parse ↔ guard soundness (AGENTS §14)', () => {
@@ -190,6 +263,21 @@ describe('parse ↔ guard soundness (AGENTS §14)', () => {
 		expect(
 			soundnessViolations(literalOf(...allowed), (value) => parseEnum(value, allowed)),
 		).toEqual([])
+	})
+
+	it('parseEnum ↔ literalOf with mixed numeric/boolean literals', () => {
+		const allowed: readonly [1, 2, true] = [1, 2, true]
+		expect(
+			soundnessViolations(literalOf(...allowed), (value) => parseEnum(value, allowed)),
+		).toEqual([])
+	})
+
+	it('parseNull ↔ isNull', () => {
+		expect(soundnessViolations(isNull, parseNull)).toEqual([])
+	})
+
+	it('parseJSONValue ↔ isJSONValue', () => {
+		expect(soundnessViolations(isJSONValue, parseJSONValue)).toEqual([])
 	})
 })
 

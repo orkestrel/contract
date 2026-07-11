@@ -26,7 +26,12 @@ import { attempt } from './helpers.js'
 // Every combinator returns a `Guard<T>` — a total function (AGENTS §14). The
 // three combinators that invoke a caller-supplied callback inside the guard
 // body (`whereOf`, `lazyOf`, `transformOf`) contain any throw via `attempt`, so
-// the produced guard reports a non-match instead of propagating.
+// the produced guard reports a non-match instead of propagating. The container
+// combinators (`arrayOf`, `tupleOf`, `setOf`, `mapOf`, `iterableOf`, `recordOf`)
+// likewise wrap their element/entry/key-read walk in `attempt` after the cheap
+// structural check — a hostile Proxy trap, a throwing getter, a throwing
+// iterator, or a throwing caller-supplied predicate yields a non-match, never a
+// propagated throw.
 
 /**
  * Build a guard that accepts arrays whose every element satisfies `elementGuard`.
@@ -41,8 +46,13 @@ import { attempt } from './helpers.js'
 export function arrayOf<T>(elementGuard: Guard<T>): Guard<readonly T[]>
 export function arrayOf(elementGuard: (value: unknown) => boolean): Guard<readonly unknown[]>
 export function arrayOf(elementGuard: (value: unknown) => boolean): Guard<readonly unknown[]> {
-	return (value: unknown): value is readonly unknown[] =>
-		isArray(value) && value.every(elementGuard)
+	return (value: unknown): value is readonly unknown[] => {
+		if (!isArray(value)) {
+			return false
+		}
+		const outcome = attempt(() => value.every(elementGuard))
+		return outcome.success && outcome.value
+	}
 }
 
 /**
@@ -66,16 +76,24 @@ export function tupleOf(
 	...guards: ReadonlyArray<(value: unknown) => boolean>
 ): Guard<readonly unknown[]> {
 	return (value: unknown): value is readonly unknown[] => {
-		if (!isArray(value) || value.length !== guards.length) {
+		if (!isArray(value)) {
 			return false
 		}
-		for (let index = 0; index < guards.length; index += 1) {
-			const guard = guards[index]
-			if (!guard?.(value[index])) {
+		// Arity comparison reads `.length`, which — like the element reads below —
+		// can hit a hostile Proxy trap, so it stays inside the contained region too.
+		const outcome = attempt(() => {
+			if (value.length !== guards.length) {
 				return false
 			}
-		}
-		return true
+			for (let index = 0; index < guards.length; index += 1) {
+				const guard = guards[index]
+				if (!guard?.(value[index])) {
+					return false
+				}
+			}
+			return true
+		})
+		return outcome.success && outcome.value
 	}
 }
 
@@ -154,12 +172,15 @@ export function setOf(elementGuard: (value: unknown) => boolean): Guard<Readonly
 		if (!isSet(value)) {
 			return false
 		}
-		for (const entry of value) {
-			if (!elementGuard(entry)) {
-				return false
+		const outcome = attempt(() => {
+			for (const entry of value) {
+				if (!elementGuard(entry)) {
+					return false
+				}
 			}
-		}
-		return true
+			return true
+		})
+		return outcome.success && outcome.value
 	}
 }
 
@@ -187,12 +208,15 @@ export function mapOf(
 		if (!isMap(value)) {
 			return false
 		}
-		for (const [key, entryValue] of value) {
-			if (!keyGuard(key) || !valueGuard(entryValue)) {
-				return false
+		const outcome = attempt(() => {
+			for (const [key, entryValue] of value) {
+				if (!keyGuard(key) || !valueGuard(entryValue)) {
+					return false
+				}
 			}
-		}
-		return true
+			return true
+		})
+		return outcome.success && outcome.value
 	}
 }
 
@@ -217,7 +241,10 @@ export function recordOf<S extends GuardsShape>(
  *
  * Key presence is tested with `Object.hasOwn`, so a shape key satisfied only by
  * an inherited prototype member (`toString`, `constructor`, …) counts as absent.
- * A non-object / `null` / array input returns `false` rather than throwing.
+ * A non-object / `null` / array input returns `false` rather than throwing. The
+ * extra-key check only inspects `Object.keys` (string keys), so an extra
+ * enumerable SYMBOL key is never rejected — intentional, for JSON fidelity, and
+ * matches the compiled guard.
  *
  * @example
  * ```ts
@@ -263,29 +290,32 @@ export function recordOf<
 			return false
 		}
 
-		for (const key of Object.keys(value)) {
-			if (!allowed.has(key)) {
-				return false
-			}
-		}
-
-		for (const key in shape) {
-			if (!Object.prototype.hasOwnProperty.call(shape, key)) {
-				continue
-			}
-			const present = Object.hasOwn(value, key)
-			if (!optionalSet.has(key) && !present) {
-				return false
-			}
-			if (present) {
-				const guard = shape[key]
-				if (!guard(value[key])) {
+		const outcome = attempt(() => {
+			for (const key of Object.keys(value)) {
+				if (!allowed.has(key)) {
 					return false
 				}
 			}
-		}
 
-		return true
+			for (const key in shape) {
+				if (!Object.prototype.hasOwnProperty.call(shape, key)) {
+					continue
+				}
+				const present = Object.hasOwn(value, key)
+				if (!optionalSet.has(key) && !present) {
+					return false
+				}
+				if (present) {
+					const guard = shape[key]
+					if (!guard(value[key])) {
+						return false
+					}
+				}
+			}
+
+			return true
+		})
+		return outcome.success && outcome.value
 	}
 }
 
@@ -308,12 +338,15 @@ export function iterableOf(elementGuard: (value: unknown) => boolean): Guard<Ite
 		if (!isIterable(value)) {
 			return false
 		}
-		for (const entry of value) {
-			if (!elementGuard(entry)) {
-				return false
+		const outcome = attempt(() => {
+			for (const entry of value) {
+				if (!elementGuard(entry)) {
+					return false
+				}
 			}
-		}
-		return true
+			return true
+		})
+		return outcome.success && outcome.value
 	}
 }
 
@@ -740,4 +773,20 @@ export function stringOf(options?: {
  */
 export function nullableOf<T>(guard: Guard<T>): Guard<T | null> {
 	return (value: unknown): value is T | null => value === null || guard(value)
+}
+
+/**
+ * Extend a guard to also allow `undefined` — the optional counterpart of
+ * {@link nullableOf}.
+ *
+ * @example
+ * ```ts
+ * const isOptionalString = optionalOf(isString)
+ * isOptionalString('hi')        // true
+ * isOptionalString(undefined)   // true
+ * isOptionalString(null)        // false
+ * ```
+ */
+export function optionalOf<T>(guard: Guard<T>): Guard<T | undefined> {
+	return (value: unknown): value is T | undefined => value === undefined || guard(value)
 }

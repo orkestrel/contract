@@ -12,11 +12,13 @@ import {
 	isBoolean,
 	isFiniteNumber,
 	isInteger,
+	isJSONValue,
+	isNull,
 	isRecord,
 	isString,
 	isUndefined,
 } from './validators.js'
-import { seededRandom } from './helpers.js'
+import { attempt, seededRandom } from './helpers.js'
 import {
 	arrayOf,
 	boundsOf,
@@ -35,6 +37,106 @@ import { parseBoolean, parseInteger, parseNumber, parseRecord, parseString } fro
 // recurse on themselves — branches are kept inline and public per AGENTS §5,
 // never hidden behind private helpers. `compileGuard` / `compileParser` reuse the
 // existing combinators and parsers rather than re-implementing them.
+
+// === Validation
+
+/**
+ * Validate that a {@link ContractShape} tree is well-formed — a pure recursive
+ * prepass run before compilation.
+ *
+ * @remarks
+ * Fail-fast, per AGENTS §12: a malformed shape is a programmer error, so this
+ * throws a plain `Error` immediately rather than surfacing as a silently-wrong
+ * guard, parser, schema, or generator later. Checks, recursively:
+ *
+ * - An {@link OptionalShape} is only legal as a direct object-property value —
+ *   `optionalShape` wrapping an array item, a union variant, another
+ *   optional/nullable's inner shape, `additionalProperties`, or the top-level
+ *   shape all throw. An object property IS the one legal placement: its value
+ *   is unwrapped to `.inner` before recursing, so `.inner` itself is validated
+ *   as a normal (non-optional-wrapping) shape.
+ * - A {@link UnionShape} needs at least one variant; a {@link LiteralShape}
+ *   needs at least one value and rejects non-finite (`NaN` / `Infinity` /
+ *   `-Infinity`) number values.
+ * - A bounded {@link StringShape} / {@link NumberShape} / {@link ArrayShape}
+ *   needs `min <= max` when both are set.
+ * - An integer {@link NumberShape} (`integer: true`) needs a non-empty integer
+ *   range: `Math.ceil(min ?? -Infinity) <= Math.floor(max ?? Infinity)`.
+ * - `null` / `json` / `raw` / `boolean` are always-valid leaves. Recursion
+ *   continues into array items, object properties (and `additionalProperties`
+ *   when it is a shape), union variants, and optional/nullable inner shapes.
+ *
+ * @param shape - The shape to validate
+ * @throws {Error} When the shape is malformed
+ */
+export function validateShape(shape: ContractShape): void {
+	switch (shape.type) {
+		case 'string': {
+			if (shape.min !== undefined && shape.max !== undefined && shape.min > shape.max) {
+				throw new Error('validateShape: a string shape has min greater than max')
+			}
+			return
+		}
+		case 'number': {
+			if (shape.min !== undefined && shape.max !== undefined && shape.min > shape.max) {
+				throw new Error('validateShape: a number shape has min greater than max')
+			}
+			if (shape.integer === true) {
+				const lo = Math.ceil(shape.min ?? Number.NEGATIVE_INFINITY)
+				const hi = Math.floor(shape.max ?? Number.POSITIVE_INFINITY)
+				if (lo > hi) {
+					throw new Error('validateShape: an integer number shape has an empty integer range')
+				}
+			}
+			return
+		}
+		case 'boolean':
+		case 'null':
+		case 'json':
+		case 'raw':
+			return
+		case 'literal':
+			if (shape.values.length === 0) {
+				throw new Error('validateShape: a literal shape needs at least one value')
+			}
+			for (const value of shape.values) {
+				if (typeof value === 'number' && !Number.isFinite(value)) {
+					throw new Error('validateShape: a literal shape may not contain non-finite number values')
+				}
+			}
+			return
+		case 'array': {
+			if (shape.min !== undefined && shape.max !== undefined && shape.min > shape.max) {
+				throw new Error('validateShape: an array shape has min greater than max')
+			}
+			validateShape(shape.items)
+			return
+		}
+		case 'object': {
+			for (const key of Object.keys(shape.properties)) {
+				const child = shape.properties[key]
+				if (child === undefined) continue
+				validateShape(child.type === 'optional' ? child.inner : child)
+			}
+			const extra = shape.additionalProperties
+			if (extra !== undefined && extra !== true && extra !== false) validateShape(extra)
+			return
+		}
+		case 'union':
+			if (shape.variants.length === 0) {
+				throw new Error('validateShape: a union shape needs at least one variant')
+			}
+			for (const variant of shape.variants) validateShape(variant)
+			return
+		case 'optional':
+			throw new Error(
+				'validateShape: an optional shape may only appear as a direct object-property value',
+			)
+		case 'nullable':
+			validateShape(shape.inner)
+			return
+	}
+}
 
 // === Schema
 
@@ -69,6 +171,15 @@ export function compileSchema(shape: ContractShape): JSONSchema {
 		case 'boolean':
 			return {
 				type: 'boolean',
+				...(shape.description !== undefined ? { description: shape.description } : {}),
+			}
+		case 'null':
+			return {
+				type: 'null',
+				...(shape.description !== undefined ? { description: shape.description } : {}),
+			}
+		case 'json':
+			return {
 				...(shape.description !== undefined ? { description: shape.description } : {}),
 			}
 		case 'literal':
@@ -155,6 +266,10 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
 		}
 		case 'boolean':
 			return isBoolean
+		case 'null':
+			return isNull
+		case 'json':
+			return isJSONValue
 		case 'literal':
 			return literalOf(...shape.values)
 		case 'array': {
@@ -164,7 +279,10 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
 			return whereOf(base, (value) => withinLength(value.length))
 		}
 		case 'object': {
-			const map: Record<string, Guard<unknown>> = {}
+			// Honest typing: a null-prototype accumulator so a property literally
+			// named '__proto__' becomes an own data key instead of mutating the
+			// prototype — the same pattern `pickOf` uses (combinators.ts).
+			const map: Record<string, Guard<unknown>> = Object.create(null)
 			const optionalKeys: string[] = []
 			for (const key of Object.keys(shape.properties)) {
 				const child = shape.properties[key]
@@ -189,15 +307,20 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
 				for (const key of required) {
 					if (!Object.hasOwn(value, key)) return false
 				}
-				for (const key of Object.keys(value)) {
-					const guard = map[key]
-					if (guard !== undefined) {
-						if (!guard(value[key])) return false
-					} else if (additional !== undefined && !additional(value[key])) {
-						return false
+				// Contain the whole key-enumeration + value-read walk — a hostile
+				// getter on `value` must yield `false`, never throw (AGENTS §14).
+				const outcome = attempt(() => {
+					for (const key of Object.keys(value)) {
+						const guard = Object.hasOwn(map, key) ? map[key] : undefined
+						if (guard !== undefined) {
+							if (!guard(value[key])) return false
+						} else if (additional !== undefined && !additional(value[key])) {
+							return false
+						}
 					}
-				}
-				return true
+					return true
+				})
+				return outcome.success && outcome.value
 			}
 		}
 		case 'union':
@@ -221,8 +344,8 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
  * @remarks
  * Reuses the leaf parsers (`parseString` / `parseInteger` / `parseNumber` /
  * `parseBoolean` / `parseRecord`) and coerces structurally. An object fails as a
- * whole on any required-field failure; a union returns the first variant that
- * both parses and guards.
+ * whole on any required-field failure; a union returns a guard-valid value
+ * unchanged, otherwise the first variant that both parses and guards wins.
  *
  * After coercing a leaf, it re-applies that leaf's REFINEMENTS through the same
  * combinators `compileGuard` uses — `stringOf` for a string's length/pattern and
@@ -262,6 +385,14 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 		}
 		case 'boolean':
 			return parseBoolean
+		case 'null':
+			return (value) => (value === null ? null : undefined)
+		case 'json':
+			return (value) => (isJSONValue(value) ? value : undefined)
+		// The literal parser trims a matching string but never numeric-coerces —
+		// `'42'` never parses to the literal `42`; only an exact (post-trim) match
+		// of one of `shape.values` succeeds. This is an intended leniency, not a
+		// soundness gap: a coerced value is always re-checked against `allowed`.
 		case 'literal': {
 			const allowed = new Set<unknown>(shape.values)
 			return (value) => {
@@ -290,6 +421,10 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 				return unbounded || withinLength(result.length) ? result : undefined
 			}
 		}
+		// A closed object (no `additionalProperties`) silently drops unknown keys
+		// present on the input rather than failing the parse — an intended
+		// coercion leniency (the compiled guard still rejects them; this only
+		// matters for guard-invalid inputs handed to `parse`).
 		case 'object': {
 			const entries: { key: string; parse: Parser<unknown>; optional: boolean }[] = []
 			for (const key of Object.keys(shape.properties)) {
@@ -306,30 +441,38 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 			return (value) => {
 				const record = parseRecord(value)
 				if (record === undefined) return undefined
-				const result: Record<string, unknown> = {}
-				for (const entry of entries) {
-					const raw = record[entry.key]
-					if (raw === undefined) {
-						if (entry.optional) continue
-						return undefined
+				// Contain the whole record walk — a hostile getter on `record` must
+				// yield `undefined`, never throw (AGENTS §14).
+				const outcome = attempt(() => {
+					// Honest typing: a null-prototype accumulator so an input own key
+					// literally named '__proto__' lands as an own data key instead of
+					// mutating the prototype (same pattern as `pickOf`).
+					const result: Record<string, unknown> = Object.create(null)
+					for (const entry of entries) {
+						const raw = record[entry.key]
+						if (raw === undefined) {
+							if (entry.optional) continue
+							return undefined
+						}
+						const parsed = entry.parse(raw)
+						if (parsed === undefined) return undefined
+						result[entry.key] = parsed
 					}
-					const parsed = entry.parse(raw)
-					if (parsed === undefined) return undefined
-					result[entry.key] = parsed
-				}
-				if (open) {
-					for (const key of Object.keys(record)) {
-						if (known.has(key)) continue
-						if (additional === undefined) {
-							result[key] = record[key]
-						} else {
-							const parsed = additional(record[key])
-							if (parsed === undefined) return undefined
-							result[key] = parsed
+					if (open) {
+						for (const key of Object.keys(record)) {
+							if (known.has(key)) continue
+							if (additional === undefined) {
+								result[key] = record[key]
+							} else {
+								const parsed = additional(record[key])
+								if (parsed === undefined) return undefined
+								result[key] = parsed
+							}
 						}
 					}
-				}
-				return result
+					return result
+				})
+				return outcome.success ? outcome.value : undefined
 			}
 		}
 		case 'union': {
@@ -338,6 +481,14 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 				guard: compileGuard(variant),
 			}))
 			return (value) => {
+				// Identity pass first (AGENTS §14 clause A): a value already valid
+				// against ANY variant's guard is returned unchanged, so an earlier
+				// variant's coercion never overwrites a guard-valid input.
+				for (const variant of variants) {
+					if (variant.guard(value)) return value
+				}
+				// Coercion pass: no variant matched as-is, so parse-then-guard,
+				// first variant that both parses and guards wins.
 				for (const variant of variants) {
 					const parsed = variant.parse(value)
 					if (parsed !== undefined && variant.guard(parsed)) return parsed
@@ -367,9 +518,13 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
  * The same shape and the same `random` source always produce the same value, so
  * seed data is reproducible. Defaults to a {@link seededRandom} source seeded
  * from the wall clock when none is supplied. Throws on a degenerate empty
- * `literalShape` / `unionShape`, or on a pattern-constrained `stringShape`
- * whose generated sample cannot satisfy the pattern — a programmer error that
- * cannot generate a value (AGENTS §12).
+ * `literalShape` / `unionShape`, on a pattern-constrained `stringShape` whose
+ * generated sample cannot satisfy the pattern, or on a `rawShape` (its embedded
+ * schema is arbitrary and cannot be auto-generated) — a programmer error that
+ * cannot generate a value (AGENTS §12). `createContract` runs
+ * {@link validateShape} first, so a degenerate `literalShape` / `unionShape` /
+ * bounded shape is normally caught there; these throws remain here as defense
+ * for standalone `compileGenerator` use.
  *
  * @param shape - The shape to generate from
  * @param random - A seeded random source (defaults to `seededRandom(Date.now())`)
@@ -399,11 +554,32 @@ export function compileGenerator(
 		case 'number': {
 			const min = shape.min ?? 0
 			const max = shape.max ?? 100
-			const value = random() * (max - min) + min
-			return shape.integer === true ? Math.floor(value) : value
+			if (shape.integer === true) {
+				const lo = Math.ceil(min)
+				const hi = Math.floor(max)
+				return Math.floor(random() * (hi - lo + 1)) + lo
+			}
+			return random() * (max - min) + min
 		}
 		case 'boolean':
 			return random() >= 0.5
+		case 'null':
+			return null
+		case 'json': {
+			const pick = Math.floor(random() * 5)
+			if (pick === 0) return null
+			if (pick === 1) return random() >= 0.5
+			if (pick === 2) return Math.floor(random() * 1000)
+			if (pick === 3) {
+				const alphabet = 'abcdefghijklmnopqrstuvwxyz'
+				let value = ''
+				for (let index = 0; index < 6; index += 1) {
+					value += alphabet[Math.floor(random() * alphabet.length)]
+				}
+				return value
+			}
+			return { value: Math.floor(random() * 1000) }
+		}
 		case 'literal': {
 			if (shape.values.length === 0) {
 				throw new Error('compileGenerator: a literal shape needs at least one value')
@@ -411,9 +587,9 @@ export function compileGenerator(
 			return shape.values[Math.floor(random() * shape.values.length)]
 		}
 		case 'array': {
-			const min = shape.min ?? 1
-			const max = shape.max ?? Math.max(min, 3)
-			const length = Math.floor(random() * (max - min + 1)) + min
+			const lo = shape.min ?? Math.min(1, shape.max ?? 1)
+			const hi = shape.max ?? Math.max(lo, 3)
+			const length = Math.floor(random() * (hi - lo + 1)) + lo
 			const result: unknown[] = []
 			for (let index = 0; index < length; index += 1) {
 				result.push(compileGenerator(shape.items, random))
@@ -428,6 +604,18 @@ export function compileGenerator(
 				if (child.type === 'optional' && random() < 0.3) continue
 				result[key] = compileGenerator(child, random)
 			}
+			// An open object (additionalProperties is a shape, not a boolean) also
+			// generates synthetic extra entries so the shape does not trivially
+			// generate as `{}` — skip any collision with a declared property name.
+			const extra = shape.additionalProperties
+			if (extra !== undefined && extra !== true && extra !== false) {
+				const count = 1 + Math.floor(random() * 2)
+				for (let index = 0; index < count; index += 1) {
+					const key = `key${index}`
+					if (Object.hasOwn(result, key)) continue
+					result[key] = compileGenerator(extra, random)
+				}
+			}
 			return result
 		}
 		case 'union': {
@@ -441,7 +629,9 @@ export function compileGenerator(
 		case 'nullable':
 			return random() < 0.2 ? null : compileGenerator(shape.inner, random)
 		case 'raw':
-			return undefined
+			throw new Error(
+				'compileGenerator: a raw shape embeds an arbitrary JSON Schema and cannot be auto-generated — supply values another way',
+			)
 	}
 }
 
@@ -452,8 +642,10 @@ export function compileGenerator(
  * lockstep outputs from one declaration.
  *
  * @remarks
- * Precompiles the schema, guard, and parser once; `generate` walks the shape per
- * call with the supplied random source.
+ * Runs {@link validateShape} first — a malformed shape throws immediately
+ * rather than compiling into a silently-wrong contract (AGENTS §12). Then
+ * precompiles the schema, guard, and parser once; `generate` walks the shape
+ * per call with the supplied random source.
  *
  * @param shape - The shape to compile
  * @returns A contract bundling `schema` / `is` / `parse` / `generate`
@@ -469,6 +661,7 @@ export function compileGenerator(
 export function createContract<S extends ContractShape>(shape: S): ContractInterface<Infer<S>>
 export function createContract(shape: ContractShape): ContractInterface<unknown>
 export function createContract(shape: ContractShape): ContractInterface<unknown> {
+	validateShape(shape)
 	const schema = compileSchema(shape)
 	const guard = compileGuard(shape)
 	const parser = compileParser(shape)

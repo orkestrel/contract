@@ -30,10 +30,18 @@ export function attempt<T>(callback: () => T): Result<T> {
 	try {
 		return { success: true, value: callback() }
 	} catch (reason) {
-		return {
-			success: false,
-			error: reason instanceof Error ? reason : new Error(String(reason)),
+		if (reason instanceof Error) {
+			return { success: false, error: reason }
 		}
+		// A thrown non-Error value's own `toString` may itself throw (a hostile
+		// object) — contain that conversion too so normalization never escapes.
+		let message = 'Unknown thrown value'
+		try {
+			message = String(reason)
+		} catch {
+			// keep the fallback message
+		}
+		return { success: false, error: new Error(message) }
 	}
 }
 
@@ -47,7 +55,8 @@ export function attempt<T>(callback: () => T): Result<T> {
  * string array descends left-to-right through nested objects. Intermediates may
  * be any object — records, class instances, or arrays indexed by string. Returns
  * `undefined` the moment a segment is missing or lands on a non-object, so the
- * lookup is total.
+ * lookup is total — even against a hostile getter or Proxy trap that throws on
+ * read, contained via {@link attempt} so the throw never escapes.
  *
  * @param record - The source record
  * @param path - A property key, or a key path descending into nested objects
@@ -65,7 +74,10 @@ export function resolveField(record: Readonly<Record<string, unknown>>, path: Fi
 	let current: unknown = record
 	for (const key of keys) {
 		if (!isObject(current)) return undefined
-		current = Reflect.get(current, key)
+		const container = current
+		const outcome = attempt(() => Reflect.get(container, key))
+		if (!outcome.success) return undefined
+		current = outcome.value
 	}
 	return current
 }

@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import type { Infer } from '@src/core'
+import type { Infer, JSONValue } from '@src/core'
 import {
 	arrayShape,
 	booleanShape,
 	integerShape,
+	jsonShape,
 	literalShape,
 	nullableShape,
+	nullShape,
 	numberShape,
 	objectShape,
 	oneOfShape,
@@ -101,6 +103,22 @@ describe('shape builders', () => {
 			schema: { type: 'string', description: 'any' },
 		})
 	})
+
+	it('nullShape returns a bare null shape and threads its description', () => {
+		expect(nullShape()).toEqual({ type: 'null', description: undefined })
+		expect(nullShape({ description: 'nothing' })).toEqual({
+			type: 'null',
+			description: 'nothing',
+		})
+	})
+
+	it('jsonShape returns a bare json shape and threads its description', () => {
+		expect(jsonShape()).toEqual({ type: 'json', description: undefined })
+		expect(jsonShape({ description: 'any JSON value' })).toEqual({
+			type: 'json',
+			description: 'any JSON value',
+		})
+	})
 })
 
 describe('Infer', () => {
@@ -128,5 +146,27 @@ describe('Infer', () => {
 		// @ts-expect-error — Infer must narrow role to the exact literal union, not string
 		const widened: Infer<typeof user> = { ...value, role: 'owner' }
 		expect(widened).toBeDefined()
+	})
+
+	it('derives null for a nullShape (compile-time)', () => {
+		const shape = nullShape()
+		const value: Infer<typeof shape> = null
+		expect(value).toBeNull()
+		// @ts-expect-error — Infer<NullShape> must be exactly `null`, not `string`
+		const wrong: Infer<typeof shape> = 'not null'
+		expect(wrong).toBeDefined()
+	})
+
+	it('derives JSONValue for a jsonShape (compile-time)', () => {
+		const shape = jsonShape()
+		const value: Infer<typeof shape> = { nested: [1, 'x', null] }
+		expect(value).toEqual({ nested: [1, 'x', null] })
+		const primitive: Infer<typeof shape> = 'a JSON value'
+		expect(primitive).toBe('a JSON value')
+		// @ts-expect-error — Infer<JSONShape> must be JSONValue, not a function
+		const wrong: Infer<typeof shape> = () => 1
+		expect(wrong).toBeDefined()
+		const check: JSONValue = value
+		expect(check).toBeDefined()
 	})
 })

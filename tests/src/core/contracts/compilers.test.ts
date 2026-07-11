@@ -8,8 +8,11 @@ import {
 	compileSchema,
 	createContract,
 	integerShape,
+	isRecord,
+	jsonShape,
 	literalShape,
 	nullableShape,
+	nullShape,
 	numberShape,
 	objectShape,
 	oneOfShape,
@@ -19,8 +22,229 @@ import {
 	seededRandom,
 	stringShape,
 	unionShape,
+	validateShape,
 } from '@src/core'
 import { SOUNDNESS_SAMPLE } from '../../../setup.js'
+
+describe('validateShape', () => {
+	it('throws on an optional shape used as an array item', () => {
+		expect(() => validateShape(arrayShape(optionalShape(stringShape())))).toThrow(
+			'validateShape: an optional shape may only appear as a direct object-property value',
+		)
+	})
+
+	it('throws on an optional shape used as a union variant', () => {
+		expect(() => validateShape(unionShape(optionalShape(stringShape()), integerShape()))).toThrow(
+			'validateShape: an optional shape may only appear as a direct object-property value',
+		)
+	})
+
+	it('throws on an optional shape used as a nullable inner', () => {
+		expect(() => validateShape(nullableShape(optionalShape(stringShape())))).toThrow(
+			'validateShape: an optional shape may only appear as a direct object-property value',
+		)
+	})
+
+	it('throws on an optional shape used as another optional inner', () => {
+		expect(() => validateShape(optionalShape(optionalShape(stringShape())))).toThrow(
+			'validateShape: an optional shape may only appear as a direct object-property value',
+		)
+	})
+
+	it('throws on an optional shape used as additionalProperties', () => {
+		expect(() =>
+			validateShape(objectShape({}, { additionalProperties: optionalShape(stringShape()) })),
+		).toThrow('validateShape: an optional shape may only appear as a direct object-property value')
+	})
+
+	it('throws on a top-level optional shape', () => {
+		expect(() => validateShape(optionalShape(stringShape()))).toThrow(
+			'validateShape: an optional shape may only appear as a direct object-property value',
+		)
+	})
+
+	it('throws on an empty union', () => {
+		expect(() => validateShape(unionShape())).toThrow(
+			'validateShape: a union shape needs at least one variant',
+		)
+	})
+
+	it('throws on an empty literal', () => {
+		expect(() => validateShape(literalShape([]))).toThrow(
+			'validateShape: a literal shape needs at least one value',
+		)
+	})
+
+	it('throws on a literal shape containing a non-finite number value', () => {
+		expect(() => validateShape(literalShape([Number.NaN]))).toThrow(
+			'validateShape: a literal shape may not contain non-finite number values',
+		)
+		expect(() => validateShape(literalShape([Number.POSITIVE_INFINITY]))).toThrow(
+			'validateShape: a literal shape may not contain non-finite number values',
+		)
+		expect(() => validateShape(literalShape([Number.NEGATIVE_INFINITY]))).toThrow(
+			'validateShape: a literal shape may not contain non-finite number values',
+		)
+		// A finite number literal alongside other values still passes.
+		expect(() => validateShape(literalShape([1, 'a', 2.5]))).not.toThrow()
+	})
+
+	it('throws on a string shape with min greater than max', () => {
+		expect(() => validateShape(stringShape({ min: 5, max: 1 }))).toThrow(
+			'validateShape: a string shape has min greater than max',
+		)
+	})
+
+	it('throws on a number shape with min greater than max', () => {
+		expect(() => validateShape(numberShape({ min: 5, max: 1 }))).toThrow(
+			'validateShape: a number shape has min greater than max',
+		)
+	})
+
+	it('throws on an array shape with min greater than max', () => {
+		expect(() => validateShape(arrayShape(stringShape(), { min: 5, max: 1 }))).toThrow(
+			'validateShape: an array shape has min greater than max',
+		)
+	})
+
+	it('throws on an integer shape with an empty integer range', () => {
+		expect(() => validateShape(integerShape({ min: 2.5, max: 2.6 }))).toThrow(
+			'validateShape: an integer number shape has an empty integer range',
+		)
+	})
+
+	it('does not throw on legal placements', () => {
+		// optional as a direct object property
+		expect(() => validateShape(objectShape({ bio: optionalShape(stringShape()) }))).not.toThrow()
+		// bounds where min === max
+		expect(() => validateShape(stringShape({ min: 3, max: 3 }))).not.toThrow()
+		expect(() => validateShape(numberShape({ min: 3, max: 3 }))).not.toThrow()
+		expect(() => validateShape(arrayShape(stringShape(), { min: 2, max: 2 }))).not.toThrow()
+		expect(() => validateShape(integerShape({ min: 2, max: 3 }))).not.toThrow()
+		// null / json / raw / boolean leaves
+		expect(() => validateShape(nullShape())).not.toThrow()
+		expect(() => validateShape(jsonShape())).not.toThrow()
+		expect(() => validateShape(rawShape({}))).not.toThrow()
+		expect(() => validateShape(booleanShape())).not.toThrow()
+		// nested legal composites
+		expect(() =>
+			validateShape(
+				objectShape({
+					tags: arrayShape(objectShape({ id: stringShape(), note: optionalShape(stringShape()) })),
+					kind: unionShape(nullShape(), jsonShape(), rawShape({})),
+					meta: nullableShape(objectShape({ value: optionalShape(integerShape()) })),
+					extra: optionalShape(recordShape(jsonShape())),
+				}),
+			),
+		).not.toThrow()
+	})
+})
+
+describe('createContract fail-fast', () => {
+	it('throws at creation time for a degenerate shape, not at use', () => {
+		expect(() => createContract(stringShape({ min: 5, max: 1 }))).toThrow(
+			'validateShape: a string shape has min greater than max',
+		)
+		expect(() => createContract(unionShape())).toThrow(
+			'validateShape: a union shape needs at least one variant',
+		)
+		expect(() => createContract(literalShape([]))).toThrow(
+			'validateShape: a literal shape needs at least one value',
+		)
+		expect(() => createContract(integerShape({ min: 2.5, max: 2.6 }))).toThrow(
+			'validateShape: an integer number shape has an empty integer range',
+		)
+		expect(() => createContract(arrayShape(optionalShape(stringShape())))).toThrow(
+			'validateShape: an optional shape may only appear as a direct object-property value',
+		)
+	})
+})
+
+describe('null / json compileSchema', () => {
+	it('emits { type: "null" } with optional description', () => {
+		expect(compileSchema(nullShape())).toEqual({ type: 'null' })
+		expect(compileSchema(nullShape({ description: 'nothing' }))).toEqual({
+			type: 'null',
+			description: 'nothing',
+		})
+	})
+
+	it('emits the empty schema for json, with optional description', () => {
+		expect(compileSchema(jsonShape())).toEqual({})
+		expect(compileSchema(jsonShape({ description: 'any JSON value' }))).toEqual({
+			description: 'any JSON value',
+		})
+	})
+})
+
+describe('null / json compileGuard', () => {
+	it('null guard accepts only null', () => {
+		const guard = compileGuard(nullShape())
+		expect(guard(null)).toBe(true)
+		expect(guard(undefined)).toBe(false)
+		expect(guard(0)).toBe(false)
+		expect(guard('null')).toBe(false)
+	})
+
+	it('json guard accepts nested JSON trees and rejects functions, NaN, Infinity, cycles, Date', () => {
+		const guard = compileGuard(jsonShape())
+		expect(guard(null)).toBe(true)
+		expect(guard(42)).toBe(true)
+		expect(guard('hello')).toBe(true)
+		expect(guard(true)).toBe(true)
+		expect(guard({ a: [1, 'x', { b: null }] })).toBe(true)
+		expect(guard(() => 1)).toBe(false)
+		expect(guard(Number.NaN)).toBe(false)
+		expect(guard(Number.POSITIVE_INFINITY)).toBe(false)
+		expect(guard(new Date())).toBe(false)
+		const cyclic: Record<string, unknown> = {}
+		cyclic.self = cyclic
+		expect(guard(cyclic)).toBe(false)
+	})
+})
+
+describe('null / json compileParser', () => {
+	it('null parser is an identity on null, undefined otherwise', () => {
+		const parse = compileParser(nullShape())
+		expect(parse(null)).toBeNull()
+		expect(parse('null')).toBeUndefined()
+		expect(parse(undefined)).toBeUndefined()
+	})
+
+	it('json parser is an identity for valid JSON, undefined for invalid', () => {
+		const parse = compileParser(jsonShape())
+		expect(parse({ a: 1 })).toEqual({ a: 1 })
+		expect(parse(42)).toBe(42)
+		expect(parse(() => 1)).toBeUndefined()
+		expect(parse(Number.NaN)).toBeUndefined()
+		expect(parse(undefined)).toBeUndefined()
+	})
+})
+
+describe('null / json compileGenerator', () => {
+	it('null generator always emits null and passes the null guard', () => {
+		const guard = compileGuard(nullShape())
+		for (let seed = 0; seed < 20; seed += 1) {
+			const value = compileGenerator(nullShape(), seededRandom(seed))
+			expect(value).toBeNull()
+			expect(guard(value)).toBe(true)
+		}
+	})
+
+	it('json generator output always passes the json guard, across many seeds', () => {
+		const guard = compileGuard(jsonShape())
+		for (let seed = 0; seed < 30; seed += 1) {
+			const value = compileGenerator(jsonShape(), seededRandom(seed))
+			expect(guard(value)).toBe(true)
+		}
+	})
+
+	it('json generator is deterministic for a given seed', () => {
+		expect(compileGenerator(jsonShape(), seededRandom(99))).toEqual(
+			compileGenerator(jsonShape(), seededRandom(99)),
+		)
+	})
+})
 
 describe('compileSchema', () => {
 	it('emits string / number constraints', () => {
@@ -122,6 +346,48 @@ describe('compileGuard', () => {
 		expect(() => guard(null)).not.toThrow()
 		expect(guard(null)).toBe(false)
 	})
+
+	it('an open object guard is total on hostile keys (__proto__, constructor) — no pollution', () => {
+		const guard = compileGuard(recordShape(integerShape()))
+		const parse = compileParser(recordShape(integerShape()))
+		const fromJSON: unknown = JSON.parse('{"__proto__":1}')
+		// The '__proto__' key is validated like any other own key (value 1 passes
+		// integerShape) — no throw, and guard/parse agree.
+		expect(() => guard(fromJSON)).not.toThrow()
+		expect(guard(fromJSON)).toBe(true)
+		expect(parse(fromJSON)).not.toBeUndefined()
+		// Object.prototype itself must be untouched by the walk.
+		expect(Object.getPrototypeOf({})).toBe(Object.prototype)
+
+		// 'constructor' is likewise just another own key — its value ('x') fails
+		// integerShape, so the object is rejected, not treated specially.
+		expect(guard({ constructor: 'x' })).toBe(false)
+		expect(parse({ constructor: 'x' })).toBeUndefined()
+
+		// A throwing getter must yield `false` / `undefined`, never throw.
+		const hostile: Record<string, unknown> = {}
+		Object.defineProperty(hostile, 'bad', {
+			enumerable: true,
+			get() {
+				throw new Error('hostile getter')
+			},
+		})
+		expect(() => guard(hostile)).not.toThrow()
+		expect(guard(hostile)).toBe(false)
+		expect(() => parse(hostile)).not.toThrow()
+		expect(parse(hostile)).toBeUndefined()
+	})
+
+	it('an open object guard/parse agree that a __proto__ own key round-trips faithfully', () => {
+		const parse = compileParser(recordShape(integerShape()))
+		const fromJSON: unknown = JSON.parse('{"__proto__":5}')
+		const parsed = parse(fromJSON)
+		expect(isRecord(parsed)).toBe(true)
+		const record = isRecord(parsed) ? parsed : {}
+		expect(Object.hasOwn(record, '__proto__')).toBe(true)
+		expect(record['__proto__']).toBe(5)
+		expect(JSON.stringify(record)).toBe('{"__proto__":5}')
+	})
 })
 
 describe('compileParser', () => {
@@ -142,8 +408,28 @@ describe('compileParser', () => {
 
 	it('union returns the first variant that both parses and guards', () => {
 		const parse = compileParser(unionShape(integerShape(), stringShape()))
-		expect(parse('36')).toBe(36)
+		// '36' is already guard-valid as a string (clause A), so it is returned
+		// unchanged rather than coerced by the integer variant.
+		expect(parse('36')).toBe('36')
 		expect(parse('hello')).toBe('hello')
+	})
+
+	it('union returns a guard-valid value unchanged rather than coerced by an earlier variant', () => {
+		const parse = compileParser(unionShape(stringShape(), integerShape()))
+		expect(parse(37)).toBe(37) // guard-valid via integer variant — not coerced to '37'
+		expect(parse('37')).toBe('37') // already guard-valid via string variant — unchanged
+		expect(parse(true)).toBeUndefined() // guard-invalid against every variant
+	})
+
+	it('union returns a guard-valid object by reference through the identity pass', () => {
+		const parse = compileParser(
+			unionShape(
+				objectShape({ name: stringShape() }),
+				objectShape({ name: stringShape(), age: integerShape() }),
+			),
+		)
+		const input = { name: 'Ada', age: 36 }
+		expect(parse(input)).toBe(input)
 	})
 
 	it('enforces string length + pattern refinements (rejects out-of-bounds)', () => {
@@ -279,6 +565,44 @@ describe('compileGenerator', () => {
 		})
 		const guard = compileGuard(shape)
 		expect(guard(compileGenerator(shape))).toBe(true)
+	})
+
+	it('generates an empty array when max:0 and passes the guard', () => {
+		const shape = arrayShape(stringShape(), { max: 0 })
+		const guard = compileGuard(shape)
+		for (let seed = 0; seed < 20; seed += 1) {
+			const value = compileGenerator(shape, seededRandom(seed))
+			expect(value).toEqual([])
+			expect(guard(value)).toBe(true)
+		}
+	})
+
+	it('generates within a fractional-bounds integer range and passes the guard', () => {
+		const shape = integerShape({ min: 2.5, max: 3.4 })
+		const guard = compileGuard(shape)
+		for (let seed = 0; seed < 20; seed += 1) {
+			const value = compileGenerator(shape, seededRandom(seed))
+			expect(value).toBe(3)
+			expect(guard(value)).toBe(true)
+		}
+	})
+
+	it('throws on a raw shape (cannot be auto-generated)', () => {
+		expect(() => compileGenerator(rawShape({ type: 'string' }), seededRandom(1))).toThrow(
+			'compileGenerator: a raw shape embeds an arbitrary JSON Schema and cannot be auto-generated — supply values another way',
+		)
+	})
+
+	it('an open recordShape generates at least one synthetic entry and passes its own guard', () => {
+		const shape = recordShape(integerShape())
+		const guard = compileGuard(shape)
+		for (let seed = 0; seed < 20; seed += 1) {
+			const value = compileGenerator(shape, seededRandom(seed))
+			expect(isRecord(value)).toBe(true)
+			const record = isRecord(value) ? value : {}
+			expect(Object.keys(record).length).toBeGreaterThan(0)
+			expect(guard(value)).toBe(true)
+		}
 	})
 })
 

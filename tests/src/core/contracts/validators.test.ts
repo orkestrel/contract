@@ -378,6 +378,258 @@ describe('emptiness validators', () => {
 		expect(isEmptyObject(nonEmptyObject)).toBe(false)
 		expect(isNonEmptyObject(nonEmptyObject)).toBe(true)
 	})
+
+	it('isEmptyString is exact-empty — whitespace-only strings are NOT empty (AGENTS §14 fix)', () => {
+		// Regression: isEmptyString previously used `.trim().length === 0`, which
+		// classified '  ' as empty and directly contradicted isNonEmptyString
+		// (which uses raw `.length > 0` and correctly calls '  ' non-empty). The
+		// pair must be disjoint and exhaustive over every string.
+		expect(isEmptyString('  ')).toBe(false)
+		expect(isNonEmptyString('  ')).toBe(true)
+		expect(isEmptyString('')).toBe(true)
+		expect(isNonEmptyString('')).toBe(false)
+		expect(isEmptyString('\t\n')).toBe(false)
+		expect(isNonEmptyString('\t\n')).toBe(true)
+	})
+
+	describe('emptiness pairs are disjoint and exhaustive', () => {
+		it('string pair', () => {
+			const values = ['', 'value', '  ', 'a', ' ']
+			for (const value of values) {
+				expect(isEmptyString(value)).toBe(!isNonEmptyString(value))
+			}
+		})
+
+		it('array pair', () => {
+			const values: readonly unknown[][] = [[], [1], [undefined], [1, 2, 3]]
+			for (const value of values) {
+				expect(isEmptyArray(value)).toBe(!isNonEmptyArray(value))
+			}
+		})
+
+		it('object pair', () => {
+			const values: unknown[] = [{}, { a: 1 }, Object.create(null), { [Symbol('s')]: 1 }]
+			for (const value of values) {
+				expect(isEmptyObject(value)).toBe(!isNonEmptyObject(value))
+			}
+		})
+
+		it('map pair', () => {
+			const values = [
+				new Map(),
+				new Map([['a', 1]]),
+				new Map([
+					['a', 1],
+					['b', 2],
+				]),
+			]
+			for (const value of values) {
+				expect(isEmptyMap(value)).toBe(!isNonEmptyMap(value))
+			}
+		})
+
+		it('set pair', () => {
+			const values = [new Set(), new Set([1]), new Set([1, 2])]
+			for (const value of values) {
+				expect(isEmptySet(value)).toBe(!isNonEmptySet(value))
+			}
+		})
+
+		it('non-applicable types both report false (not a boolean partition outside their domain)', () => {
+			expect(isEmptyString(42)).toBe(false)
+			expect(isNonEmptyString(42)).toBe(false)
+			expect(isEmptyArray({})).toBe(false)
+			expect(isNonEmptyArray({})).toBe(false)
+			expect(isEmptyObject([])).toBe(false)
+			expect(isNonEmptyObject([])).toBe(false)
+			expect(isEmptyMap(new Set())).toBe(false)
+			expect(isNonEmptyMap(new Set())).toBe(false)
+			expect(isEmptySet(new Map())).toBe(false)
+			expect(isNonEmptySet(new Map())).toBe(false)
+		})
+	})
+})
+
+describe('reflective guards contain hostile getter/Proxy throws (AGENTS §14)', () => {
+	it('isPromiseLike returns false, never throws, on a throwing then getter', () => {
+		const hostile: unknown = {
+			get then() {
+				throw new Error('boom')
+			},
+		}
+		expect(() => isPromiseLike(hostile)).not.toThrow()
+		expect(isPromiseLike(hostile)).toBe(false)
+	})
+
+	it('isPromiseLike returns false, never throws, on throwing catch/finally getters', () => {
+		const hostileCatch: unknown = {
+			then() {
+				return undefined
+			},
+			get catch() {
+				throw new Error('boom')
+			},
+		}
+		expect(() => isPromiseLike(hostileCatch)).not.toThrow()
+		expect(isPromiseLike(hostileCatch)).toBe(false)
+
+		const hostileFinally: unknown = {
+			then() {
+				return undefined
+			},
+			catch() {
+				return undefined
+			},
+			get finally() {
+				throw new Error('boom')
+			},
+		}
+		expect(() => isPromiseLike(hostileFinally)).not.toThrow()
+		expect(isPromiseLike(hostileFinally)).toBe(false)
+	})
+
+	it('isIterable returns false, never throws, on a throwing Symbol.iterator getter', () => {
+		const hostile: unknown = {
+			get [Symbol.iterator]() {
+				throw new Error('boom')
+			},
+		}
+		expect(() => isIterable(hostile)).not.toThrow()
+		expect(isIterable(hostile)).toBe(false)
+	})
+
+	it('isAsyncIterable returns false, never throws, on a throwing Symbol.asyncIterator getter', () => {
+		const hostile: unknown = {
+			get [Symbol.asyncIterator]() {
+				throw new Error('boom')
+			},
+		}
+		expect(() => isAsyncIterable(hostile)).not.toThrow()
+		expect(isAsyncIterable(hostile)).toBe(false)
+	})
+
+	it('isJSONValue returns false, never throws, on a throwing property getter', () => {
+		const hostile: unknown = {
+			get a() {
+				throw new Error('boom')
+			},
+		}
+		expect(() => isJSONValue(hostile)).not.toThrow()
+		expect(isJSONValue(hostile)).toBe(false)
+	})
+
+	it('isJSONValue returns false, never throws, on a throwing getter nested inside an array', () => {
+		const hostile: unknown = [
+			1,
+			{
+				get b() {
+					throw new Error('boom')
+				},
+			},
+		]
+		expect(() => isJSONValue(hostile)).not.toThrow()
+		expect(isJSONValue(hostile)).toBe(false)
+	})
+
+	it('a revoked Proxy never throws — isRecord, isJSONValue, isObject all return false', () => {
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+		expect(() => isRecord(proxy)).not.toThrow()
+		expect(isRecord(proxy)).toBe(false)
+		expect(() => isJSONValue(proxy)).not.toThrow()
+		expect(isJSONValue(proxy)).toBe(false)
+		expect(() => isObject(proxy)).not.toThrow()
+		// isObject is a plain typeof check with no reflective probe, so a revoked
+		// Proxy — still an object at typeof-level — reports true; only the
+		// probing guards (isRecord/isJSONValue) are exercised against a throw.
+		expect(isObject(proxy)).toBe(true)
+	})
+
+	it('a revoked Proxy inside a JSON structure is caught by isJSONValue', () => {
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+		expect(() => isJSONValue({ nested: proxy })).not.toThrow()
+		expect(isJSONValue({ nested: proxy })).toBe(false)
+	})
+})
+
+describe('isRecord — realm-agnostic plain-object test', () => {
+	it('accepts a null-prototype object', () => {
+		const record: Record<string, unknown> = Object.create(null)
+		record['id'] = 'plain'
+		expect(isRecord(record)).toBe(true)
+	})
+
+	it('accepts an object whose prototype-of-prototype is null (the realm-agnostic shape of every plain object)', () => {
+		// Simulates a "plain object from another realm": its direct prototype is
+		// not literally THIS realm's Object.prototype, but that prototype's own
+		// prototype is null — the invariant every realm's Object.prototype
+		// satisfies, since Object.prototype always sits one step above null.
+		const foreignObjectPrototype: object = Object.create(null)
+		const foreignPlain: unknown = Object.create(foreignObjectPrototype)
+		expect(isRecord(foreignPlain)).toBe(true)
+	})
+
+	it('accepts an ordinary object literal', () => {
+		expect(isRecord({})).toBe(true)
+		expect(isRecord({ a: 1 })).toBe(true)
+	})
+
+	it('rejects a class instance (its prototype chain runs through the class prototype, not directly to null)', () => {
+		class Example {
+			readonly value = 1
+		}
+		expect(isRecord(new Example())).toBe(false)
+	})
+
+	it('rejects an array', () => {
+		expect(isRecord([])).toBe(false)
+		expect(isRecord([1, 2, 3])).toBe(false)
+	})
+
+	it('rejects a Date', () => {
+		expect(isRecord(new Date())).toBe(false)
+	})
+
+	it('rejects null and non-objects', () => {
+		expect(isRecord(null)).toBe(false)
+		expect(isRecord(undefined)).toBe(false)
+		expect(isRecord('record')).toBe(false)
+		expect(isRecord(42)).toBe(false)
+	})
+})
+
+describe('isJSONValue — cycles, NaN/Infinity, and deep nesting', () => {
+	it('rejects a self-referencing record', () => {
+		const cycle: Record<string, unknown> = {}
+		cycle.self = cycle
+		expect(isJSONValue(cycle)).toBe(false)
+	})
+
+	it('rejects a self-referencing array', () => {
+		const cycle: unknown[] = []
+		cycle.push(cycle)
+		expect(isJSONValue(cycle)).toBe(false)
+	})
+
+	it('rejects NaN and ±Infinity anywhere in the structure', () => {
+		expect(isJSONValue(Number.NaN)).toBe(false)
+		expect(isJSONValue(Number.POSITIVE_INFINITY)).toBe(false)
+		expect(isJSONValue(Number.NEGATIVE_INFINITY)).toBe(false)
+		expect(isJSONValue({ n: Number.NaN })).toBe(false)
+		expect(isJSONValue([1, Number.POSITIVE_INFINITY])).toBe(false)
+	})
+
+	it('accepts deeply nested valid JSON structures', () => {
+		const deep = {
+			a: {
+				b: {
+					c: [1, 2, { d: ['x', 'y', { e: null }] }],
+				},
+			},
+		}
+		expect(isJSONValue(deep)).toBe(true)
+	})
 })
 
 describe('function validators', () => {

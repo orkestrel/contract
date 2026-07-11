@@ -1,6 +1,6 @@
-import type { Guard } from './types.js'
+import type { Guard, JSONValue } from './types.js'
 import type { FieldPath } from './types.js'
-import { isArray, isFiniteNumber, isRecord, isString } from './validators.js'
+import { isArray, isFiniteNumber, isJSONValue, isNull, isRecord, isString } from './validators.js'
 import { resolveField } from './helpers.js'
 
 // AGENTS §14: a parser answers "give me a `T` or nothing" — it returns the
@@ -9,10 +9,11 @@ import { resolveField } from './helpers.js'
 // UNCHANGED (by identity, never rejected), and every non-`undefined` output
 // satisfies that type guard. The pairings (verified in parsers.test.ts):
 //
-//   parseString  ↔ isString          parseRecord ↔ isRecord
-//   parseNumber  ↔ isFiniteNumber    parseArray  ↔ arrayOf(guard) / isArray
-//   parseInteger ↔ isInteger         parseEnum   ↔ literalOf(...allowed)
-//   parseBoolean ↔ isBoolean
+//   parseString  ↔ isString          parseRecord    ↔ isRecord
+//   parseNumber  ↔ isFiniteNumber    parseArray     ↔ arrayOf(guard) / isArray
+//   parseInteger ↔ isInteger         parseEnum      ↔ literalOf(...allowed)
+//   parseBoolean ↔ isBoolean         parseNull      ↔ isNull
+//                                    parseJSONValue ↔ isJSONValue
 //
 // Coercion of NON-valid inputs (e.g. numeric strings → numbers) is a bonus on
 // top of soundness, not a violation of it — clause A only constrains inputs the
@@ -101,6 +102,21 @@ export function parseBoolean(value: unknown): boolean | undefined {
 	return undefined
 }
 
+/**
+ * Parse an unknown value to `null`.
+ *
+ * @remarks
+ * A successful parse returns `null` itself — distinct from the `undefined`
+ * failure sentinel every other parser in this file uses. Only `null` passes;
+ * every other value (including `undefined`) → `undefined`.
+ *
+ * @param value - The value to parse
+ * @returns `null` on a successful parse, or `undefined`
+ */
+export function parseNull(value: unknown): null | undefined {
+	return isNull(value) ? value : undefined
+}
+
 // === Structural parsers
 
 /**
@@ -134,24 +150,44 @@ export function parseArray<T = unknown>(
 	return value
 }
 
+/**
+ * Parse an unknown value to a cycle-safe JSON value — the input reference,
+ * never cloned.
+ *
+ * @remarks
+ * Unlike {@link parseRecord} / {@link parseArray}, this is a DEEP gate: it
+ * walks the entire tree via {@link isJSONValue} rather than checking only the
+ * top-level shape. That walk is cycle-safe and total (never throws) because
+ * `isJSONValue` runs its own probe inside a guard, so an adversarial
+ * structure (a cycle, a hostile getter) yields `undefined` instead of hanging
+ * or throwing.
+ *
+ * @param value - The value to parse
+ * @returns The value, or `undefined` when it is not a valid JSON value
+ */
+export function parseJSONValue(value: unknown): JSONValue | undefined {
+	return isJSONValue(value) ? value : undefined
+}
+
 // === Enum parser
 
 /**
- * Parse an unknown value as one of the allowed literal strings.
+ * Parse an unknown value as one of the allowed literal primitives.
  *
  * @remarks
- * Matches with `Object.is` — the same equality `literalOf` uses — so the
- * `parseEnum ↔ literalOf(...allowed)` pairing stays exact.
+ * Pairs with {@link literalOf} — both match by `Object.is`, so the
+ * `parseEnum ↔ literalOf(...allowed)` pairing covers every literal primitive
+ * (string, number, or boolean), not only strings. Matching is identity, never
+ * cross-type coercion: `parseEnum('1', [1])` stays `undefined`.
  *
  * @param value - The value to parse
  * @param allowed - The permitted literal values
  * @returns The matched literal (by identity), or `undefined`
  */
-export function parseEnum<const T extends string>(
+export function parseEnum<const T extends string | number | boolean>(
 	value: unknown,
 	allowed: readonly T[],
 ): T | undefined {
-	if (!isString(value)) return undefined
 	for (const option of allowed) {
 		if (Object.is(value, option)) return option
 	}
@@ -217,6 +253,21 @@ export function parseBooleanField(
 }
 
 /**
+ * Read and parse a `null` field from a record by key or nested key path.
+ *
+ * @remarks
+ * A successful parse returns `null` itself — distinct from the `undefined`
+ * failure sentinel, which also covers a missing field.
+ *
+ * @param record - The source record
+ * @param path - A property key, or a key path descending into nested objects
+ * @returns `null` on a successful parse, or `undefined`
+ */
+export function parseNullField(record: Record<string, unknown>, path: FieldPath): null | undefined {
+	return parseNull(resolveField(record, path))
+}
+
+/**
  * Read and parse a nested record field from a record by key or nested key path.
  *
  * @param record - The source record
@@ -255,12 +306,31 @@ export function parseArrayField<T = unknown>(
  * @param allowed - The permitted literal values
  * @returns The matched literal, or `undefined`
  */
-export function parseEnumField<const T extends string>(
+export function parseEnumField<const T extends string | number | boolean>(
 	record: Record<string, unknown>,
 	path: FieldPath,
 	allowed: readonly T[],
 ): T | undefined {
 	return parseEnum(resolveField(record, path), allowed)
+}
+
+/**
+ * Read and parse a JSON-value field from a record by key or nested key path.
+ *
+ * @remarks
+ * Deep-gates the field's whole subtree via {@link parseJSONValue} — see that
+ * function's remarks for why this differs from the shallow
+ * {@link parseRecordField} / {@link parseArrayField}.
+ *
+ * @param record - The source record
+ * @param path - A property key, or a key path descending into nested objects
+ * @returns The value, or `undefined`
+ */
+export function parseJSONValueField(
+	record: Record<string, unknown>,
+	path: FieldPath,
+): JSONValue | undefined {
+	return parseJSONValue(resolveField(record, path))
 }
 
 // === JSON

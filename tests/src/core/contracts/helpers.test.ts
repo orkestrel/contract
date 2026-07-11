@@ -1,13 +1,106 @@
 import type { JSONSchema } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
+	attempt,
 	createContract,
 	enumerableSymbolCount,
 	objectShape,
+	resolveField,
 	schemaToParameters,
 	seededRandom,
 	stringShape,
 } from '@src/core'
+
+describe('attempt', () => {
+	it('captures a successful return value as a Success', () => {
+		const outcome = attempt(() => 42)
+		expect(outcome).toEqual({ success: true, value: 42 })
+	})
+
+	it('rethrows an Error reason as-is (by reference)', () => {
+		const error = new Error('boom')
+		const outcome = attempt(() => {
+			throw error
+		})
+		expect(outcome.success).toBe(false)
+		expect(!outcome.success && outcome.error).toBe(error)
+	})
+
+	it('normalizes a non-Error thrown value into an Error via String()', () => {
+		const outcome = attempt(() => {
+			throw 'plain string reason'
+		})
+		expect(outcome.success).toBe(false)
+		expect(!outcome.success && outcome.error).toBeInstanceOf(Error)
+		expect(!outcome.success && outcome.error.message).toBe('plain string reason')
+	})
+
+	it("falls back to a fixed message when the thrown value's own toString throws", () => {
+		const hostile = {
+			toString() {
+				throw new Error('hostile toString')
+			},
+		}
+		const outcome = attempt(() => {
+			throw hostile
+		})
+		expect(outcome.success).toBe(false)
+		expect(!outcome.success && outcome.error).toBeInstanceOf(Error)
+		expect(!outcome.success && outcome.error.message).toBe('Unknown thrown value')
+	})
+
+	it('never throws, regardless of what the callback throws', () => {
+		expect(() =>
+			attempt(() => {
+				throw new Error('anything')
+			}),
+		).not.toThrow()
+	})
+})
+
+describe('resolveField', () => {
+	it('resolves a single key, including a dotted key treated as one segment', () => {
+		expect(resolveField({ a: 1 }, 'a')).toBe(1)
+		expect(resolveField({ 'a.b': 1 }, 'a.b')).toBe(1)
+	})
+
+	it('resolves a nested path left-to-right', () => {
+		expect(resolveField({ user: { name: 'Ada' } }, ['user', 'name'])).toBe('Ada')
+	})
+
+	it('returns undefined for an off-path key', () => {
+		expect(resolveField({ a: 1 }, ['a', 'b'])).toBeUndefined()
+		expect(resolveField({}, 'missing')).toBeUndefined()
+	})
+
+	it('returns undefined when an intermediate segment is not an object', () => {
+		expect(resolveField({ a: 1 }, ['a', 'b'])).toBeUndefined()
+		expect(resolveField({ a: null }, ['a', 'b'])).toBeUndefined()
+		expect(resolveField({ a: 'x' }, ['a', 'b'])).toBeUndefined()
+	})
+
+	it('returns undefined against a hostile getter without throwing', () => {
+		const hostile = {
+			get a() {
+				throw new Error('hostile getter')
+			},
+		}
+		expect(() => resolveField(hostile, 'a')).not.toThrow()
+		expect(resolveField(hostile, 'a')).toBeUndefined()
+	})
+
+	it('returns undefined against a hostile getter mid-path without throwing', () => {
+		const hostile = {
+			user: {
+				get name() {
+					throw new Error('hostile nested getter')
+				},
+			},
+		}
+		expect(() => resolveField(hostile, ['user', 'name'])).not.toThrow()
+		expect(resolveField(hostile, ['user', 'name'])).toBeUndefined()
+	})
+})
 
 describe('seededRandom', () => {
 	it('is deterministic — the same seed yields the same sequence', () => {

@@ -7,13 +7,17 @@ import type {
 	ZeroArgAsyncFunction,
 	ZeroArgFunction,
 } from './types.js'
-import { enumerableSymbolCount } from './helpers.js'
+import { attempt, enumerableSymbolCount } from './helpers.js'
 
 // AGENTS §14: guards are total functions — a guard NEVER throws. Adversarial
 // input (hostile getters, exotic objects, cycles) returns `false`, never an
-// error. Every guard here is a single structural test with no user callbacks,
-// so totality is immediate; the combinators that DO take user callbacks contain
-// their throws via `attempt` (see ./helpers.js).
+// error. Most guards here are a single structural test with no user callbacks,
+// so totality is immediate. The reflective guards — those that probe a
+// property through `Reflect.get` or walk a structure (`isPromiseLike`,
+// `isIterable`, `isAsyncIterable`, `isJSONValue`, `isRecord`) can hit a hostile
+// getter or a revoked `Proxy` that throws mid-probe, so totality is NOT
+// automatic for them — each contains its probe/walk in `attempt` (see
+// ./helpers.js) and returns `false` on a caught throw.
 
 // === Primitive guards
 
@@ -103,6 +107,14 @@ export function isNullableBoolean(value: unknown): value is boolean | null {
 }
 
 // === Built-in guards
+//
+// The `instanceof`-based guard families below (Date/RegExp/Error/Promise,
+// Map/Set/WeakMap/WeakSet, the typed-array guards) are same-realm checks:
+// `instanceof` compares against the constructor's prototype in the CURRENT
+// realm, so a value built by another realm (a different `vm.Context`, iframe,
+// or worker global) fails even when it is structurally identical. This is a
+// known, accepted limitation — cross-realm identity would require duck-typing
+// every built-in, which trades soundness for portability.
 
 /** Determine whether a value is a `Date`. */
 export function isDate(value: unknown): value is Date {
@@ -138,10 +150,13 @@ export function isPromiseLike<T = unknown>(
 	if (!isObject(value)) {
 		return false
 	}
-	const thenValue = Reflect.get(value, 'then')
-	const catchValue = Reflect.get(value, 'catch')
-	const finallyValue = Reflect.get(value, 'finally')
-	return isFunction(thenValue) && isFunction(catchValue) && isFunction(finallyValue)
+	const outcome = attempt(() => {
+		const thenValue = Reflect.get(value, 'then')
+		const catchValue = Reflect.get(value, 'catch')
+		const finallyValue = Reflect.get(value, 'finally')
+		return isFunction(thenValue) && isFunction(catchValue) && isFunction(finallyValue)
+	})
+	return outcome.success && outcome.value
 }
 
 /** Determine whether a value is an `ArrayBuffer`. */
@@ -176,7 +191,8 @@ export function isIterable<T = unknown>(value: unknown): value is Iterable<T> {
 	if (!isObject(value)) {
 		return false
 	}
-	return isFunction(Reflect.get(value, Symbol.iterator))
+	const outcome = attempt(() => isFunction(Reflect.get(value, Symbol.iterator)))
+	return outcome.success && outcome.value
 }
 
 /** Determine whether a value implements the async iterable protocol (`Symbol.asyncIterator`). */
@@ -184,7 +200,8 @@ export function isAsyncIterable<T = unknown>(value: unknown): value is AsyncIter
 	if (!isObject(value)) {
 		return false
 	}
-	return isFunction(Reflect.get(value, Symbol.asyncIterator))
+	const outcome = attempt(() => isFunction(Reflect.get(value, Symbol.asyncIterator)))
+	return outcome.success && outcome.value
 }
 
 // === Object & collection guards
@@ -206,14 +223,27 @@ export function isObject(value: unknown): value is object {
  *
  * @remarks
  * Use instead of {@link isObject} to distinguish a plain `{}` /
- * `Object.create(null)` from arrays, `Date`, `Map`, etc.
+ * `Object.create(null)` from arrays, `Date`, `Map`, etc. The prototype-chain
+ * test is realm-agnostic: rather than comparing against the current realm's
+ * `Object.prototype` (which a plain object from another `vm.Context`, iframe,
+ * or worker would fail), it accepts any value whose prototype is `null`, OR
+ * whose prototype's own prototype is `null` — the shape every plain object
+ * has in every realm, since `Object.prototype` itself always sits one step
+ * above `null`. Arrays and class instances are still rejected: an array's
+ * prototype chain runs through `Array.prototype` before `null`, and a class
+ * instance's runs through the class's own prototype. The whole body runs
+ * inside `attempt` (AGENTS §14) so a revoked `Proxy` or a hostile
+ * `getPrototypeOf` trap cannot escape as a thrown error.
  */
 export function isRecord(value: unknown): value is Record<string, unknown> {
-	if (!isObject(value) || isArray(value)) {
-		return false
-	}
-	const prototype = Object.getPrototypeOf(value)
-	return prototype === Object.prototype || prototype === null
+	const outcome = attempt(() => {
+		if (!isObject(value) || isArray(value)) {
+			return false
+		}
+		const prototype = Object.getPrototypeOf(value)
+		return prototype === null || Object.getPrototypeOf(prototype) === null
+	})
+	return outcome.success && outcome.value
 }
 
 /** Determine whether a value is a `Map`. */
@@ -324,7 +354,7 @@ export function isBigUint64Array(value: unknown): value is BigUint64Array {
 
 /** Determine whether a value is the empty string `''`. */
 export function isEmptyString(value: unknown): value is '' {
-	return isString(value) && value.trim().length === 0
+	return isString(value) && value.length === 0
 }
 
 /** Determine whether a value is an empty array. */
@@ -461,6 +491,9 @@ export function isConstructor(value: unknown): value is AnyConstructor<object> {
  * Total guard: never throws, returns `false` for cycles, functions, `Date`
  * instances, class instances, `NaN`, and `±Infinity`. Arrays and plain records
  * are walked with an ancestor set so recursive input fails instead of hanging.
+ * The whole walk runs inside `attempt` (AGENTS §14): a hostile getter on a
+ * record property, or a revoked `Proxy` anywhere in the structure, is caught
+ * and yields `false` instead of escaping as a thrown error.
  *
  * @param value - The value to test
  * @returns `true` when the value has a JSON representation
@@ -489,7 +522,8 @@ export function isJSONValue(value: unknown): value is JSONValue {
 		ancestors.delete(entry)
 		return valid
 	}
-	return check(value)
+	const outcome = attempt(() => check(value))
+	return outcome.success && outcome.value
 }
 
 /**

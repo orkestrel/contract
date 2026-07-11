@@ -44,23 +44,23 @@ The `*Field` parsers read a (possibly nested) record field via a `FieldPath` (`s
 
 ### Structural & collection guards
 
-| Guard                 | Kind     | Narrows to                 | Behavior                                                                                                                        |
-| --------------------- | -------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `isObject`            | function | `object`                   | `typeof === 'object' && !== null` — **arrays and class instances pass**, `null` does not.                                       |
-| `isRecord`            | function | `Record<string, unknown>`  | Plain objects only: rejects arrays / `null`; prototype must be `Object.prototype` or `null` (so `Date` / class instances fail). |
-| `isMap`               | function | `ReadonlyMap<K, V>`        | `instanceof Map`.                                                                                                               |
-| `isSet`               | function | `ReadonlySet<T>`           | `instanceof Set`.                                                                                                               |
-| `isWeakMap`           | function | `WeakMap<object, unknown>` | `instanceof WeakMap`.                                                                                                           |
-| `isWeakSet`           | function | `WeakSet<object>`          | `instanceof WeakSet`.                                                                                                           |
-| `isDate`              | function | `Date`                     | `instanceof Date`.                                                                                                              |
-| `isRegExp`            | function | `RegExp`                   | `instanceof RegExp`.                                                                                                            |
-| `isError`             | function | `Error`                    | `instanceof Error`.                                                                                                             |
-| `isPromise`           | function | `Promise<T>`               | `instanceof Promise` (native promise only).                                                                                     |
-| `isPromiseLike`       | function | `PromiseLike<T>`           | An object with callable `then`, `catch`, _and_ `finally` — a bare `{ then }` thenable fails.                                    |
-| `isIterable`          | function | `Iterable<T>`              | A `string`, or an object with a callable `Symbol.iterator`.                                                                     |
-| `isAsyncIterable`     | function | `AsyncIterable<T>`         | An object with a callable `Symbol.asyncIterator`.                                                                               |
-| `isArrayBuffer`       | function | `ArrayBuffer`              | `instanceof ArrayBuffer`.                                                                                                       |
-| `isSharedArrayBuffer` | function | `SharedArrayBuffer`        | `instanceof SharedArrayBuffer` when the global exists.                                                                          |
+| Guard                 | Kind     | Narrows to                 | Behavior                                                                                                                                                                                                                      |
+| --------------------- | -------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `isObject`            | function | `object`                   | `typeof === 'object' && !== null` — **arrays and class instances pass**, `null` does not.                                                                                                                                     |
+| `isRecord`            | function | `Record<string, unknown>`  | Plain objects only: rejects arrays / `null`; realm-agnostic prototype-chain test (prototype is `null`, or its own prototype is `null`) so a plain object from another realm still passes while `Date` / class instances fail. |
+| `isMap`               | function | `ReadonlyMap<K, V>`        | `instanceof Map`.                                                                                                                                                                                                             |
+| `isSet`               | function | `ReadonlySet<T>`           | `instanceof Set`.                                                                                                                                                                                                             |
+| `isWeakMap`           | function | `WeakMap<object, unknown>` | `instanceof WeakMap`.                                                                                                                                                                                                         |
+| `isWeakSet`           | function | `WeakSet<object>`          | `instanceof WeakSet`.                                                                                                                                                                                                         |
+| `isDate`              | function | `Date`                     | `instanceof Date`.                                                                                                                                                                                                            |
+| `isRegExp`            | function | `RegExp`                   | `instanceof RegExp`.                                                                                                                                                                                                          |
+| `isError`             | function | `Error`                    | `instanceof Error`.                                                                                                                                                                                                           |
+| `isPromise`           | function | `Promise<T>`               | `instanceof Promise` (native promise only).                                                                                                                                                                                   |
+| `isPromiseLike`       | function | `PromiseLike<T>`           | An object with callable `then`, `catch`, _and_ `finally` — a bare `{ then }` thenable fails.                                                                                                                                  |
+| `isIterable`          | function | `Iterable<T>`              | A `string`, or an object with a callable `Symbol.iterator`.                                                                                                                                                                   |
+| `isAsyncIterable`     | function | `AsyncIterable<T>`         | An object with a callable `Symbol.asyncIterator`.                                                                                                                                                                             |
+| `isArrayBuffer`       | function | `ArrayBuffer`              | `instanceof ArrayBuffer`.                                                                                                                                                                                                     |
+| `isSharedArrayBuffer` | function | `SharedArrayBuffer`        | `instanceof SharedArrayBuffer` when the global exists.                                                                                                                                                                        |
 
 ### Array & typed-array guards
 
@@ -136,28 +136,33 @@ The `*Field` parsers read a (possibly nested) record field via a `FieldPath` (`s
 | `lazyOf`         | function | defers building the real guard until first call — the sanctioned recursion entry point; a throw is contained as a non-match.                                                            |
 | `transformOf`    | function | passes the base, projects the value, then validates the projection with a target guard; a throw is contained as a non-match.                                                            |
 | `nullableOf`     | function | passes iff the value is `null` **or** the guard passes (`T \| null`; `undefined` fails).                                                                                                |
+| `optionalOf`     | function | passes iff the value is `undefined` **or** the guard passes (`T \| undefined`; `null` fails) — the optional counterpart of `nullableOf`.                                                |
 | `boundsOf`       | function | accepts a **finite** number within an inclusive `[min, max]` (absent bound = unconstrained; `NaN` / `±Infinity` rejected) — reused on a `.length` for string / array length refinement. |
 | `matchOf`        | function | accepts a `string` matching a `RegExp` (refines `isString`).                                                                                                                            |
 | `stringOf`       | function | accepts a `string` within optional `min` / `max` length and matching an optional `pattern`; bare `isString` when unconstrained.                                                         |
 
 ### Parsers
 
-| Parser              | Kind     | Returns                                                                                                        |
-| ------------------- | -------- | -------------------------------------------------------------------------------------------------------------- |
-| `parseString`       | function | a `string` (a finite number coerces to its decimal string), else `undefined`. Pairs with `isString`.           |
-| `parseNumber`       | function | a finite `number` (a numeric string coerces), else `undefined`. Pairs with `isFiniteNumber`.                   |
-| `parseInteger`      | function | a finite integer (fractional values rejected), else `undefined`. Pairs with `isInteger`.                       |
-| `parseBoolean`      | function | a `boolean` (`'true'`/`'false'`/`'1'`/`'0'`/`1`/`0` coerce), else `undefined`. Pairs with `isBoolean`.         |
-| `parseRecord`       | function | the input record by reference, else `undefined`. Pairs with `isRecord`.                                        |
-| `parseArray`        | function | the input array by reference (optionally element-guarded), else `undefined`. Pairs with `isArray` / `arrayOf`. |
-| `parseEnum`         | function | the matched literal (`Object.is`), else `undefined`. Pairs with `literalOf`.                                   |
-| `parseStringField`  | function | `parseString` of a record field read by key or nested `FieldPath`.                                             |
-| `parseNumberField`  | function | `parseNumber` of a record field read by key or nested `FieldPath`.                                             |
-| `parseIntegerField` | function | `parseInteger` of a record field read by key or nested `FieldPath`.                                            |
-| `parseBooleanField` | function | `parseBoolean` of a record field read by key or nested `FieldPath`.                                            |
-| `parseRecordField`  | function | `parseRecord` of a record field read by key or nested `FieldPath`.                                             |
-| `parseArrayField`   | function | `parseArray` of a record field read by key or nested `FieldPath`.                                              |
-| `parseEnumField`    | function | `parseEnum` of a record field read by key or nested `FieldPath`.                                               |
+| Parser                | Kind     | Returns                                                                                                        |
+| --------------------- | -------- | -------------------------------------------------------------------------------------------------------------- |
+| `parseString`         | function | a `string` (a finite number coerces to its decimal string), else `undefined`. Pairs with `isString`.           |
+| `parseNumber`         | function | a finite `number` (a numeric string coerces), else `undefined`. Pairs with `isFiniteNumber`.                   |
+| `parseInteger`        | function | a finite integer (fractional values rejected), else `undefined`. Pairs with `isInteger`.                       |
+| `parseBoolean`        | function | a `boolean` (`'true'`/`'false'`/`'1'`/`'0'`/`1`/`0` coerce), else `undefined`. Pairs with `isBoolean`.         |
+| `parseRecord`         | function | the input record by reference, else `undefined`. Pairs with `isRecord`.                                        |
+| `parseArray`          | function | the input array by reference (optionally element-guarded), else `undefined`. Pairs with `isArray` / `arrayOf`. |
+| `parseEnum`           | function | the matched literal (`Object.is`, string / number / boolean), else `undefined`. Pairs with `literalOf`.        |
+| `parseNull`           | function | `null` on a successful parse (every other value, including `undefined`, → `undefined`). Pairs with `isNull`.   |
+| `parseJSONValue`      | function | a cycle-safe `JSONValue` — a **deep** gate via `isJSONValue` (walks the whole tree), else `undefined`.         |
+| `parseStringField`    | function | `parseString` of a record field read by key or nested `FieldPath`.                                             |
+| `parseNumberField`    | function | `parseNumber` of a record field read by key or nested `FieldPath`.                                             |
+| `parseIntegerField`   | function | `parseInteger` of a record field read by key or nested `FieldPath`.                                            |
+| `parseBooleanField`   | function | `parseBoolean` of a record field read by key or nested `FieldPath`.                                            |
+| `parseRecordField`    | function | `parseRecord` of a record field read by key or nested `FieldPath`.                                             |
+| `parseArrayField`     | function | `parseArray` of a record field read by key or nested `FieldPath`.                                              |
+| `parseEnumField`      | function | `parseEnum` of a record field read by key or nested `FieldPath`.                                               |
+| `parseNullField`      | function | `parseNull` of a record field read by key or nested `FieldPath`.                                               |
+| `parseJSONValueField` | function | `parseJSONValue` of a record field read by key or nested `FieldPath` — deep-gates that field's whole subtree.  |
 
 ### JSON
 
@@ -218,55 +223,64 @@ Declarative constructors for the `ContractShape` union (`src/core/shapers.ts`). 
 | `numberShape`   | function | a numeric shape with optional bounds.                                                                                |
 | `integerShape`  | function | a numeric shape fixed to integers (`integer: true`).                                                                 |
 | `booleanShape`  | function | a boolean shape.                                                                                                     |
+| `nullShape`     | function | a shape accepting only `null`.                                                                                       |
 | `literalShape`  | function | a shape accepting one of fixed literals from a `values` array, with optional `description` — `Infer` is their union. |
 | `arrayShape`    | function | an array shape over an element shape, with optional length bounds.                                                   |
 | `objectShape`   | function | an object shape from a property map (closed to unknown keys by default).                                             |
 | `recordShape`   | function | an open object (dictionary) whose values all match one shape.                                                        |
-| `unionShape`    | function | a union of variant shapes (`anyOf`; first match wins).                                                               |
+| `unionShape`    | function | a union of variant shapes (`anyOf`; the compiled guard/parser accept any matching variant).                          |
 | `oneOfShape`    | function | a union that emits `oneOf` — identical runtime to `unionShape`.                                                      |
 | `optionalShape` | function | wraps a shape so it may be absent (an optional object field).                                                        |
 | `nullableShape` | function | wraps a shape so it may be `null`.                                                                                   |
+| `jsonShape`     | function | a JSON passthrough shape — validates the value is real JSON (`isJSONValue`); the sound counterpart of `rawShape`.    |
 | `rawShape`      | function | embeds a raw `JSONSchema` fragment — the guard accepts any value.                                                    |
 
 ### Shape types
 
-| Type                  | Kind      | Shape                                                          |
-| --------------------- | --------- | -------------------------------------------------------------- |
-| `ContractShape`       | type      | the discriminated union of every shape descriptor.             |
-| `StringShape`         | interface | `{ type: 'string', min?, max?, pattern?, … }`.                 |
-| `NumberShape`         | interface | `{ type: 'number', min?, max?, integer?, … }`.                 |
-| `BooleanShape`        | interface | `{ type: 'boolean', … }`.                                      |
-| `LiteralShape`        | interface | `{ type: 'literal', values, … }`.                              |
-| `ArrayShape`          | interface | `{ type: 'array', items, min?, max?, … }`.                     |
-| `ObjectShape`         | interface | `{ type: 'object', properties, additionalProperties?, … }`.    |
-| `UnionShape`          | interface | `{ type: 'union', variants, mode?, … }`.                       |
-| `OptionalShape`       | interface | `{ type: 'optional', inner }`.                                 |
-| `NullableShape`       | interface | `{ type: 'nullable', inner }`.                                 |
-| `RawShape`            | interface | `{ type: 'raw', schema }`.                                     |
-| `Infer`               | type      | the static type a `ContractShape` describes.                   |
-| `InferObject`         | type      | `Infer` of an object shape — required keys plus optional keys. |
-| `InferUnion`          | type      | `Infer` of a union shape — the union of its variants.          |
-| `StringShapeOptions`  | interface | options for `stringShape`.                                     |
-| `NumberShapeOptions`  | interface | options for `numberShape` / `integerShape`.                    |
-| `BooleanShapeOptions` | interface | options for `booleanShape`.                                    |
-| `LiteralShapeOptions` | interface | options for `literalShape`.                                    |
-| `ArrayShapeOptions`   | interface | options for `arrayShape`.                                      |
-| `ObjectShapeOptions`  | interface | options for `objectShape`.                                     |
-| `RecordShapeOptions`  | interface | options for `recordShape`.                                     |
+| Type                  | Kind      | Shape                                                           |
+| --------------------- | --------- | --------------------------------------------------------------- |
+| `ContractShape`       | type      | the discriminated union of every shape descriptor.              |
+| `StringShape`         | interface | `{ type: 'string', min?, max?, pattern?, … }`.                  |
+| `NumberShape`         | interface | `{ type: 'number', min?, max?, integer?, … }`.                  |
+| `BooleanShape`        | interface | `{ type: 'boolean', … }`.                                       |
+| `NullShape`           | interface | `{ type: 'null', … }`.                                          |
+| `LiteralShape`        | interface | `{ type: 'literal', values, … }`.                               |
+| `ArrayShape`          | interface | `{ type: 'array', items, min?, max?, … }`.                      |
+| `ObjectShape`         | interface | `{ type: 'object', properties, additionalProperties?, … }`.     |
+| `UnionShape`          | interface | `{ type: 'union', variants, mode?, … }`.                        |
+| `OptionalShape`       | interface | `{ type: 'optional', inner }`.                                  |
+| `NullableShape`       | interface | `{ type: 'nullable', inner }`.                                  |
+| `JSONShape`           | interface | `{ type: 'json', … }` — accepts any JSON value (`isJSONValue`). |
+| `RawShape`            | interface | `{ type: 'raw', schema }`.                                      |
+| `Infer`               | type      | the static type a `ContractShape` describes.                    |
+| `InferObject`         | type      | `Infer` of an object shape — required keys plus optional keys.  |
+| `InferUnion`          | type      | `Infer` of a union shape — the union of its variants.           |
+| `StringShapeOptions`  | interface | options for `stringShape`.                                      |
+| `NumberShapeOptions`  | interface | options for `numberShape` / `integerShape`.                     |
+| `BooleanShapeOptions` | interface | options for `booleanShape`.                                     |
+| `NullShapeOptions`    | interface | options for `nullShape`.                                        |
+| `JSONShapeOptions`    | interface | options for `jsonShape`.                                        |
+| `LiteralShapeOptions` | interface | options for `literalShape`.                                     |
+| `ArrayShapeOptions`   | interface | options for `arrayShape`.                                       |
+| `ObjectShapeOptions`  | interface | options for `objectShape`.                                      |
+| `RecordShapeOptions`  | interface | options for `recordShape`.                                      |
 
 ### Compilers
 
 Turn one `ContractShape` into the four lockstep outputs (`src/core/compilers.ts`). The individual compilers return untyped runtime functions; `createContract` is the typed entry point — its `is` / `parse` / `generate` carry `Infer<S>` by inferring once, at the boundary (so the recursion stays cheap). `compileGuard` / `compileParser` reuse the existing combinators and parsers rather than re-implementing them, and apply each leaf's refinements (`min` / `max` / `pattern`) through the **same** combinators — `stringOf` for a string's length/pattern and `boundsOf` for a number's value and an array's length — so a compiled parser and guard enforce the same constraints and can never drift.
 
-| API                 | Kind      | Summary                                                                                                                                                                                                                             |
-| ------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `compileGuard`      | function  | shape → a `Guard<unknown>` (reuses `recordOf` / `arrayOf` / `unionOf` / `literalOf` / `nullableOf` / `whereOf`; refines leaves via `stringOf` / `boundsOf`).                                                                        |
-| `compileParser`     | function  | shape → a `Parser<unknown>` that coerces (reuses `parseString` / `parseInteger` / `parseRecord` / …) **then** re-applies each leaf's refinement (the same `stringOf` / `boundsOf`), so a non-`undefined` parse satisfies the guard. |
-| `compileSchema`     | function  | shape → a `JSONSchema` — emission over the finite shape; it never inspects a runtime value.                                                                                                                                         |
-| `compileGenerator`  | function  | shape + a `RandomFunction` → deterministic seed data; throws on an empty literal/union or a pattern-constrained `stringShape` it cannot satisfy (§12).                                                                              |
-| `createContract`    | function  | shape → a typed `ContractInterface<Infer<S>>` bundling `schema` / `is` / `parse` / `generate`.                                                                                                                                      |
-| `ContractInterface` | interface | the compiled-contract bundle — `{ schema, is, parse, generate }`.                                                                                                                                                                   |
-| `RandomFunction`    | type      | `() => number` in `[0, 1)` — the seed source for `generate`.                                                                                                                                                                        |
+| API                 | Kind      | Summary                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `validateShape`     | function  | shape → `void` — a pure recursive fail-fast prepass (§12): throws on `min > max`, an empty integer range, an empty literal/union, a literal shape containing a non-finite (`NaN` / `Infinity` / `-Infinity`) number value, or an `optionalShape` anywhere but a direct object-property value. `createContract` runs it first.                                             |
+| `compileGuard`      | function  | shape → a `Guard<unknown>` (reuses `recordOf` / `arrayOf` / `unionOf` / `literalOf` / `nullableOf` / `whereOf`; refines leaves via `stringOf` / `boundsOf`).                                                                                                                                                                                                              |
+| `compileParser`     | function  | shape → a `Parser<unknown>` that coerces (reuses `parseString` / `parseInteger` / `parseRecord` / …) **then** re-applies each leaf's refinement (the same `stringOf` / `boundsOf`), so a non-`undefined` parse satisfies the guard. A union first tries an identity pass (a guard-valid value is returned unchanged) before falling back to ordered per-variant coercion. |
+| `compileSchema`     | function  | shape → a `JSONSchema` — emission over the finite shape; it never inspects a runtime value.                                                                                                                                                                                                                                                                               |
+| `compileGenerator`  | function  | shape + a `RandomFunction` → deterministic seed data; throws on an empty literal/union, a pattern-constrained `stringShape` it cannot satisfy, or a `rawShape` (its embedded schema is arbitrary and cannot be auto-generated) (§12). Honors an array's `max: 0` and a `numberShape`'s integer fractional bounds.                                                         |
+| `createContract`    | function  | shape → a typed `ContractInterface<Infer<S>>` bundling `schema` / `is` / `parse` / `generate`; runs `validateShape` first, so a malformed shape throws immediately rather than compiling a silently-wrong contract.                                                                                                                                                       |
+| `ContractInterface` | interface | the compiled-contract bundle — `{ schema, is, parse, generate }`.                                                                                                                                                                                                                                                                                                         |
+| `RandomFunction`    | type      | `() => number` in `[0, 1)` — the seed source for `generate`.                                                                                                                                                                                                                                                                                                              |
+
+> A shape nesting a `rawShape` or a pattern-constrained `stringShape` still compiles cleanly (`compileSchema` / `compileGuard` / `compileParser` all succeed) — only `generate()` throws at CALL time, once it walks down into that leaf, because a `rawShape`'s embedded schema is arbitrary and a pattern the generator cannot satisfy has no auto-generatable sample.
 
 ## Methods
 
@@ -287,7 +301,8 @@ These invariants hold across `src/core` ↔ `contracts.md`:
 2. **Guards are total (§14).** Every guard takes one `unknown`, returns a `boolean` type predicate, and **never throws** — adversarial input yields `false`. The only deferral is `lazyOf`, whose thunk runs per call; `whereOf` / `lazyOf` / `transformOf` contain a callback throw as a non-match via the core `attempt` helper.
 3. **Parse ↔ guard soundness (§14).** Each standalone leaf parser (`parseString`, …) pairs with the guard for its **output type**: a guard-valid input is returned unchanged (by identity, never rejected), and every non-`undefined` output satisfies that type guard. Coercion of otherwise-invalid inputs is a bonus on top, not a violation. The **compiled** contract goes further: `compileParser` (and thus `createContract`'s `parse`) re-applies every leaf REFINEMENT after coercion through the same combinators (`stringOf` / `boundsOf`) `compileGuard` uses — so a non-`undefined` `contract.parse` always satisfies `contract.is`, refinements (`min` / `max` / `pattern`) included, and the two cannot drift.
 4. **Types are the source of truth.** `Guard`, `Parser`, and the guard-shape types are declared in [`types.ts`](../../src/core/types.ts) first; guards and parsers conform to them, never the reverse.
-5. **DOC ↔ SOURCE method bijection.** Every behavioral interface's `## Methods` table lists exactly its public methods (call-signature members) — exhaustive, both directions — and each implementing class exposes the same public methods, no more (AGENTS §22). A renamed / added / removed method breaks the gate until the table is reconciled.
+5. **`createContract` validates before it compiles (§12).** `validateShape` runs as a fail-fast prepass — a malformed shape (`min > max`, an empty integer range, an empty literal/union, a literal shape holding a non-finite number value, or an `optionalShape` placed anywhere but a direct object-property value) throws immediately instead of silently producing a wrong guard, parser, schema, or generator. `optionalShape` is legal in exactly one position: as the value of an object property.
+6. **DOC ↔ SOURCE method bijection.** Every behavioral interface's `## Methods` table lists exactly its public methods (call-signature members) — exhaustive, both directions — and each implementing class exposes the same public methods, no more (AGENTS §22). A renamed / added / removed method breaks the gate until the table is reconciled.
 
 What ships for JSON is the **flat, lazy boundary** in the `### JSON` table above. The **deep** recursive JSON value / object / JSON-Schema validators (and the ~50-field `JSONSchemaDefinition`) are intentionally **not** part of this surface — keeping them total on cyclic / deep input needs the cycle-and-depth machinery this template avoids. Build only the piece you need from the combinators, where you need it.
 

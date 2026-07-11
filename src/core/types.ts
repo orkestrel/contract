@@ -202,12 +202,14 @@ export type ContractShape =
 	| StringShape
 	| NumberShape
 	| BooleanShape
+	| NullShape
 	| LiteralShape
 	| ArrayShape
 	| ObjectShape
 	| UnionShape
 	| OptionalShape
 	| NullableShape
+	| JSONShape
 	| RawShape
 
 /** A string shape with optional length and pattern constraints. */
@@ -231,6 +233,12 @@ export interface NumberShape {
 /** A boolean shape — accepts only `true` or `false`. */
 export interface BooleanShape {
 	readonly type: 'boolean'
+	readonly description?: string
+}
+
+/** A null shape — accepts only `null`. */
+export interface NullShape {
+	readonly type: 'null'
 	readonly description?: string
 }
 
@@ -297,6 +305,21 @@ export interface NullableShape<S extends ContractShape = ContractShape> {
 }
 
 /**
+ * A JSON passthrough shape — accepts any JSON value.
+ *
+ * @remarks
+ * The compiled guard is a sound {@link isJSONValue} check (rejecting cycles,
+ * functions, `NaN`, and `±Infinity`); the parser gates through that guard; the
+ * schema is the empty schema `{}` (matches any JSON instance); the generator
+ * emits a small deterministic {@link JSONValue}. Unlike {@link RawShape}, whose
+ * guard accepts anything, this shape validates that a value is real JSON.
+ */
+export interface JSONShape {
+	readonly type: 'json'
+	readonly description?: string
+}
+
+/**
  * A raw JSON Schema passthrough — embeds a schema fragment directly.
  *
  * @remarks
@@ -322,31 +345,35 @@ export type Infer<S extends ContractShape> = S extends StringShape
 		? number
 		: S extends BooleanShape
 			? boolean
-			: S extends { readonly type: 'literal'; readonly values: infer V }
-				? V extends readonly (infer L)[]
-					? L
-					: never
-				: S extends { readonly type: 'array'; readonly items: infer I }
-					? I extends ContractShape
-						? readonly Infer<I>[]
+			: S extends NullShape
+				? null
+				: S extends { readonly type: 'literal'; readonly values: infer V }
+					? V extends readonly (infer L)[]
+						? L
 						: never
-					: S extends { readonly type: 'object'; readonly properties: infer P }
-						? P extends Readonly<Record<string, ContractShape>>
-							? InferObject<P>
+					: S extends { readonly type: 'array'; readonly items: infer I }
+						? I extends ContractShape
+							? readonly Infer<I>[]
 							: never
-						: S extends { readonly type: 'union'; readonly variants: infer V }
-							? V extends readonly ContractShape[]
-								? InferUnion<V>
+						: S extends { readonly type: 'object'; readonly properties: infer P }
+							? P extends Readonly<Record<string, ContractShape>>
+								? InferObject<P>
 								: never
-							: S extends { readonly type: 'optional'; readonly inner: infer I }
-								? I extends ContractShape
-									? Infer<I> | undefined
+							: S extends { readonly type: 'union'; readonly variants: infer V }
+								? V extends readonly ContractShape[]
+									? InferUnion<V>
 									: never
-								: S extends { readonly type: 'nullable'; readonly inner: infer I }
+								: S extends { readonly type: 'optional'; readonly inner: infer I }
 									? I extends ContractShape
-										? Infer<I> | null
+										? Infer<I> | undefined
 										: never
-									: unknown
+									: S extends { readonly type: 'nullable'; readonly inner: infer I }
+										? I extends ContractShape
+											? Infer<I> | null
+											: never
+										: S extends JSONShape
+											? JSONValue
+											: unknown
 
 /**
  * {@link Infer} of an object shape's `properties` — the required keys, plus the
@@ -394,6 +421,16 @@ export interface NumberShapeOptions {
 
 /** Options for {@link BooleanShape} (via `booleanShape`). */
 export interface BooleanShapeOptions {
+	readonly description?: string
+}
+
+/** Options for {@link NullShape} (via `nullShape`). */
+export interface NullShapeOptions {
+	readonly description?: string
+}
+
+/** Options for {@link JSONShape} (via `jsonShape`). */
+export interface JSONShapeOptions {
 	readonly description?: string
 }
 

@@ -5,9 +5,13 @@ import type {
 	BooleanShapeOptions,
 	ContractShape,
 	JSONSchema,
+	JSONShape,
+	JSONShapeOptions,
 	LiteralShape,
 	LiteralShapeOptions,
 	NullableShape,
+	NullShape,
+	NullShapeOptions,
 	NumberShape,
 	NumberShapeOptions,
 	ObjectShape,
@@ -100,6 +104,16 @@ export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
 		type: 'boolean',
 		description: options?.description,
 	}
+}
+
+/**
+ * Build a {@link NullShape}.
+ *
+ * @param options - Optional `description`
+ * @returns A null shape
+ */
+export function nullShape(options?: NullShapeOptions): NullShape {
+	return { type: 'null', description: options?.description }
 }
 
 /**
@@ -269,6 +283,21 @@ export function nullableShape<S extends ContractShape>(inner: S): NullableShape<
 }
 
 // === Escape hatch
+
+/**
+ * Build a {@link JSONShape}.
+ *
+ * @remarks
+ * The sound counterpart of {@link rawShape}: `rawShape` embeds an arbitrary
+ * schema fragment and accepts anything at runtime, while `jsonShape` validates
+ * that a value is real JSON (via {@link isJSONValue}).
+ *
+ * @param options - Optional `description`
+ * @returns A JSON passthrough shape
+ */
+export function jsonShape(options?: JSONShapeOptions): JSONShape {
+	return { type: 'json', description: options?.description }
+}
 
 /**
  * Build a {@link RawShape} from a JSON Schema fragment.

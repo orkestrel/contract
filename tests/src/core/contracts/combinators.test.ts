@@ -22,6 +22,7 @@ import {
 	notOf,
 	nullableOf,
 	omitOf,
+	optionalOf,
 	orOf,
 	pickOf,
 	recordOf,
@@ -496,5 +497,133 @@ describe('user-callback throw containment (AGENTS §14)', () => {
 		expect(() => throwingGuard('hello')).not.toThrow()
 		expect(throwingGuard('hello')).toBe(false)
 		expect(throwingGuard(42)).toBe(false)
+	})
+})
+
+describe('optionalOf', () => {
+	it('extends a guard with undefined tolerance', () => {
+		const maybeString = optionalOf(isString)
+		expect(maybeString(undefined)).toBe(true)
+		expect(maybeString('x')).toBe(true)
+		expect(maybeString(null)).toBe(false)
+		expect(maybeString(1)).toBe(false)
+	})
+})
+
+describe('container-combinator throw containment (AGENTS §14)', () => {
+	it('recordOf: a hostile getter on a value read is contained as a non-match', () => {
+		const hostile: unknown = {
+			get a() {
+				throw new Error('hostile getter')
+			},
+		}
+		const guard = recordOf({ a: isString })
+		expect(() => guard(hostile)).not.toThrow()
+		expect(guard(hostile)).toBe(false)
+	})
+
+	it('arrayOf and tupleOf: a Proxy with a throwing get trap is contained as a non-match', () => {
+		const target = ['a', 'b']
+		const hostile = new Proxy(target, {
+			get() {
+				throw new Error('hostile trap')
+			},
+		})
+		const arrayGuard = arrayOf(isString)
+		expect(() => arrayGuard(hostile)).not.toThrow()
+		expect(arrayGuard(hostile)).toBe(false)
+
+		const tupleGuard = tupleOf(isString, isString)
+		expect(() => tupleGuard(hostile)).not.toThrow()
+		expect(tupleGuard(hostile)).toBe(false)
+	})
+
+	it('setOf: a Set subclass with a hostile iterator is contained as a non-match', () => {
+		// A real Set (so isSet's structural check passes) whose iterator is overridden to throw.
+		const set = new Set(['a', 'b'])
+		Object.defineProperty(set, Symbol.iterator, {
+			value: () => {
+				throw new Error('hostile iterator')
+			},
+		})
+		const guard = setOf(isString)
+		expect(() => guard(set)).not.toThrow()
+		expect(guard(set)).toBe(false)
+	})
+
+	it('mapOf: a Map with a hostile iterator is contained as a non-match', () => {
+		const map = new Map([['a', 1]])
+		Object.defineProperty(map, Symbol.iterator, {
+			value: () => {
+				throw new Error('hostile iterator')
+			},
+		})
+		const guard = mapOf(isString, isNumber)
+		expect(() => guard(map)).not.toThrow()
+		expect(guard(map)).toBe(false)
+	})
+
+	it('iterableOf: an object with a throwing Symbol.iterator invocation is contained as a non-match', () => {
+		const hostile = {
+			[Symbol.iterator]() {
+				throw new Error('hostile iterator invocation')
+			},
+		}
+		const guard = iterableOf(isNumber)
+		expect(() => guard(hostile)).not.toThrow()
+		expect(guard(hostile)).toBe(false)
+	})
+
+	it('arrayOf: a throwing predicate is contained as a non-match', () => {
+		const guard = arrayOf((_value: unknown): boolean => {
+			throw new Error('predicate error')
+		})
+		expect(() => guard(['a'])).not.toThrow()
+		expect(guard(['a'])).toBe(false)
+	})
+
+	it('tupleOf: a throwing predicate is contained as a non-match', () => {
+		const guard = tupleOf((_value: unknown): boolean => {
+			throw new Error('predicate error')
+		})
+		expect(() => guard(['a'])).not.toThrow()
+		expect(guard(['a'])).toBe(false)
+	})
+
+	it('setOf: a throwing predicate is contained as a non-match', () => {
+		const guard = setOf((_value: unknown): boolean => {
+			throw new Error('predicate error')
+		})
+		expect(() => guard(new Set(['a']))).not.toThrow()
+		expect(guard(new Set(['a']))).toBe(false)
+	})
+
+	it('mapOf: a throwing predicate is contained as a non-match', () => {
+		const guard = mapOf(
+			(_value: unknown): boolean => {
+				throw new Error('key predicate error')
+			},
+			() => true,
+		)
+		expect(() => guard(new Map([['a', 1]]))).not.toThrow()
+		expect(guard(new Map([['a', 1]]))).toBe(false)
+	})
+
+	it('iterableOf: a throwing predicate is contained as a non-match', () => {
+		const guard = iterableOf((_value: unknown): boolean => {
+			throw new Error('predicate error')
+		})
+		expect(() => guard(['a'])).not.toThrow()
+		expect(guard(['a'])).toBe(false)
+	})
+
+	it('recordOf: a throwing predicate is contained as a non-match', () => {
+		const guard = recordOf({
+			a: (_value: unknown): _value is unknown => {
+				throw new Error('predicate error')
+			},
+		})
+		expect(() => guard({ a: 1 })).not.toThrow()
+		expect(guard({ a: 1 })).toBe(false)
 	})
 })
