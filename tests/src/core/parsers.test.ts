@@ -35,7 +35,7 @@ import {
 	parseStringField,
 	recordOf,
 } from '@src/core'
-import { soundnessViolations } from '../../../setup.js'
+import { soundnessViolations } from '../../setup.js'
 
 describe('primitive parsers', () => {
 	it('parseString returns strings as-is and coerces finite numbers', () => {

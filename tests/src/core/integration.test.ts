@@ -42,7 +42,7 @@ import {
 	expectJSONRoundtrip,
 	expectLockstep,
 	leafShapeVariations,
-} from '../../../setup.js'
+} from '../../setup.js'
 
 const SEEDS = [0, 1, 7, 42, 999]
 const MANY_SEEDS = Array.from({ length: 10 }, (_value, index) => index * 13 + 1)

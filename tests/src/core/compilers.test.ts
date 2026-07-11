@@ -24,7 +24,7 @@ import {
 	unionShape,
 	validateShape,
 } from '@src/core'
-import { SOUNDNESS_SAMPLE } from '../../../setup.js'
+import { SOUNDNESS_SAMPLE } from '../../setup.js'
 
 describe('validateShape', () => {
 	it('throws on an optional shape used as an array item', () => {
