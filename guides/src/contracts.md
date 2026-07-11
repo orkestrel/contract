@@ -237,33 +237,33 @@ Declarative constructors for the `ContractShape` union (`src/core/shapers.ts`). 
 
 ### Shape types
 
-| Type                  | Kind      | Shape                                                           |
-| --------------------- | --------- | --------------------------------------------------------------- |
-| `ContractShape`       | type      | the discriminated union of every shape descriptor.              |
-| `StringShape`         | interface | `{ type: 'string', min?, max?, pattern?, … }`.                  |
-| `NumberShape`         | interface | `{ type: 'number', min?, max?, integer?, … }`.                  |
-| `BooleanShape`        | interface | `{ type: 'boolean', … }`.                                       |
-| `NullShape`           | interface | `{ type: 'null', … }`.                                          |
-| `LiteralShape`        | interface | `{ type: 'literal', values, … }`.                               |
-| `ArrayShape`          | interface | `{ type: 'array', items, min?, max?, … }`.                      |
-| `ObjectShape`         | interface | `{ type: 'object', properties, additionalProperties?, … }`.     |
-| `UnionShape`          | interface | `{ type: 'union', variants, mode?, … }`.                        |
-| `OptionalShape`       | interface | `{ type: 'optional', inner }`.                                  |
-| `NullableShape`       | interface | `{ type: 'nullable', inner }`.                                  |
-| `JSONShape`           | interface | `{ type: 'json', … }` — accepts any JSON value (`isJSONValue`). |
-| `RawShape`            | interface | `{ type: 'raw', schema }`.                                      |
-| `Infer`               | type      | the static type a `ContractShape` describes.                    |
-| `InferObject`         | type      | `Infer` of an object shape — required keys plus optional keys.  |
-| `InferUnion`          | type      | `Infer` of a union shape — the union of its variants.           |
-| `StringShapeOptions`  | interface | options for `stringShape`.                                      |
-| `NumberShapeOptions`  | interface | options for `numberShape` / `integerShape`.                     |
-| `BooleanShapeOptions` | interface | options for `booleanShape`.                                     |
-| `NullShapeOptions`    | interface | options for `nullShape`.                                        |
-| `JSONShapeOptions`    | interface | options for `jsonShape`.                                        |
-| `LiteralShapeOptions` | interface | options for `literalShape`.                                     |
-| `ArrayShapeOptions`   | interface | options for `arrayShape`.                                       |
-| `ObjectShapeOptions`  | interface | options for `objectShape`.                                      |
-| `RecordShapeOptions`  | interface | options for `recordShape`.                                      |
+| Type                  | Kind      | Shape                                                                                                                                                                                                          |
+| --------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ContractShape`       | type      | the discriminated union of every shape descriptor.                                                                                                                                                             |
+| `StringShape`         | interface | `{ type: 'string', min?, max?, pattern?, … }`.                                                                                                                                                                 |
+| `NumberShape`         | interface | `{ type: 'number', min?, max?, integer?, … }`.                                                                                                                                                                 |
+| `BooleanShape`        | interface | `{ type: 'boolean', … }`.                                                                                                                                                                                      |
+| `NullShape`           | interface | `{ type: 'null', … }`.                                                                                                                                                                                         |
+| `LiteralShape`        | interface | `{ type: 'literal', values, … }`.                                                                                                                                                                              |
+| `ArrayShape`          | interface | `{ type: 'array', items, min?, max?, … }`.                                                                                                                                                                     |
+| `ObjectShape`         | interface | `{ type: 'object', properties, additionalProperties?, … }`.                                                                                                                                                    |
+| `UnionShape`          | interface | `{ type: 'union', variants, mode?, … }`.                                                                                                                                                                       |
+| `OptionalShape`       | interface | `{ type: 'optional', inner }`.                                                                                                                                                                                 |
+| `NullableShape`       | interface | `{ type: 'nullable', inner }`.                                                                                                                                                                                 |
+| `JSONShape`           | interface | `{ type: 'json', … }` — accepts any JSON value (`isJSONValue`).                                                                                                                                                |
+| `RawShape`            | interface | `{ type: 'raw', schema }`.                                                                                                                                                                                     |
+| `Infer`               | type      | the static type a `ContractShape` describes. Inferring the full widened `ContractShape` union bails out lazily to `unknown` (the union is a type-level fixed point); pass shapes narrowly for exact inference. |
+| `InferObject`         | type      | `Infer` of an object shape — required keys plus optional keys.                                                                                                                                                 |
+| `InferUnion`          | type      | `Infer` of a union shape — the union of its variants.                                                                                                                                                          |
+| `StringShapeOptions`  | interface | options for `stringShape`.                                                                                                                                                                                     |
+| `NumberShapeOptions`  | interface | options for `numberShape` / `integerShape`.                                                                                                                                                                    |
+| `BooleanShapeOptions` | interface | options for `booleanShape`.                                                                                                                                                                                    |
+| `NullShapeOptions`    | interface | options for `nullShape`.                                                                                                                                                                                       |
+| `JSONShapeOptions`    | interface | options for `jsonShape`.                                                                                                                                                                                       |
+| `LiteralShapeOptions` | interface | options for `literalShape`.                                                                                                                                                                                    |
+| `ArrayShapeOptions`   | interface | options for `arrayShape`.                                                                                                                                                                                      |
+| `ObjectShapeOptions`  | interface | options for `objectShape`.                                                                                                                                                                                     |
+| `RecordShapeOptions`  | interface | options for `recordShape`.                                                                                                                                                                                     |
 
 ### Compilers
 

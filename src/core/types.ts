@@ -338,42 +338,52 @@ export interface RawShape {
  * Structural and recursive: optional object fields surface as optional
  * properties, nullable wrappers add `| null`, and a literal tuple becomes a
  * string/number/boolean-literal union.
+ *
+ * The first, non-distributive branch bails out to `unknown` when `S` is the
+ * full widened {@link ContractShape} union. Five members of that union recurse
+ * back into the whole union through their defaulted generics, so inferring the
+ * full union is a fixed point that can never shrink — the compiler would fan
+ * out until it aborts with TS2589. Bailing out lazily short-circuits that
+ * fixed point (the untaken branch is never instantiated) while every narrow
+ * shape and every partial union still flows through the exact chain below.
  */
-export type Infer<S extends ContractShape> = S extends StringShape
-	? string
-	: S extends NumberShape
-		? number
-		: S extends BooleanShape
-			? boolean
-			: S extends NullShape
-				? null
-				: S extends { readonly type: 'literal'; readonly values: infer V }
-					? V extends readonly (infer L)[]
-						? L
-						: never
-					: S extends { readonly type: 'array'; readonly items: infer I }
-						? I extends ContractShape
-							? readonly Infer<I>[]
+export type Infer<S extends ContractShape> = [ContractShape] extends [S]
+	? unknown
+	: S extends StringShape
+		? string
+		: S extends NumberShape
+			? number
+			: S extends BooleanShape
+				? boolean
+				: S extends NullShape
+					? null
+					: S extends { readonly type: 'literal'; readonly values: infer V }
+						? V extends readonly (infer L)[]
+							? L
 							: never
-						: S extends { readonly type: 'object'; readonly properties: infer P }
-							? P extends Readonly<Record<string, ContractShape>>
-								? InferObject<P>
+						: S extends { readonly type: 'array'; readonly items: infer I }
+							? I extends ContractShape
+								? readonly Infer<I>[]
 								: never
-							: S extends { readonly type: 'union'; readonly variants: infer V }
-								? V extends readonly ContractShape[]
-									? InferUnion<V>
+							: S extends { readonly type: 'object'; readonly properties: infer P }
+								? P extends Readonly<Record<string, ContractShape>>
+									? InferObject<P>
 									: never
-								: S extends { readonly type: 'optional'; readonly inner: infer I }
-									? I extends ContractShape
-										? Infer<I> | undefined
+								: S extends { readonly type: 'union'; readonly variants: infer V }
+									? V extends readonly ContractShape[]
+										? InferUnion<V>
 										: never
-									: S extends { readonly type: 'nullable'; readonly inner: infer I }
+									: S extends { readonly type: 'optional'; readonly inner: infer I }
 										? I extends ContractShape
-											? Infer<I> | null
+											? Infer<I> | undefined
 											: never
-										: S extends JSONShape
-											? JSONValue
-											: unknown
+										: S extends { readonly type: 'nullable'; readonly inner: infer I }
+											? I extends ContractShape
+												? Infer<I> | null
+												: never
+											: S extends JSONShape
+												? JSONValue
+												: unknown
 
 /**
  * {@link Infer} of an object shape's `properties` — the required keys, plus the

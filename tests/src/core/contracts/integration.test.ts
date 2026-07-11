@@ -12,7 +12,7 @@
 // asserts: a failed inner `expect` throws, which the wrapper still surfaces
 // as a failing test.
 import { describe, expect, it } from 'vitest'
-import type { Guard } from '@src/core'
+import type { ContractShape, Guard, Infer, NumberShape, StringShape } from '@src/core'
 import {
 	arrayShape,
 	booleanShape,
@@ -283,5 +283,43 @@ describe('cross-pair composition', () => {
 		expect(isTree(tree)).toBe(true)
 		// A depth-mismatched shape (a string where a number is expected) fails.
 		expect(isTree({ value: 'x', children: [] })).toBe(false)
+	})
+})
+
+describe('widened ContractShape inference (TS2589 regression)', () => {
+	// Infer of the FULL widened union is a type-level fixed point (five members
+	// recurse back into the whole union), so Infer bails out to `unknown`
+	// lazily instead of letting the compiler fan out until TS2589. Every line
+	// in this block was a confirmed TS2589 trigger before the bail-out; the
+	// file compiling at all IS the regression assertion for them.
+	it('compiles the three previously-exploding widened forms and keeps them lockstep-sound', () => {
+		// Trigger 1: a bare type alias over the full union — exactly `unknown`.
+		type Widened = Infer<ContractShape>
+		type IsUnknown<T> = unknown extends T ? ([T] extends [unknown] ? true : false) : false
+		const widenedIsUnknown: IsUnknown<Widened> = true
+		expect(widenedIsUnknown).toBe(true)
+
+		// Trigger 2: an indexed-access argument out of a widened registry.
+		const registry: Record<string, ContractShape> = {
+			user: objectShape({ name: stringShape({ min: 1 }) }),
+		}
+		const fromRegistry = createContract(registry['user'] ?? stringShape())
+		expect(fromRegistry.is({ name: 'Ada' })).toBe(true)
+
+		// Trigger 3: chaining directly off the result of a widened call.
+		expect(fromRegistry.parse({ name: 'Ada' })).toEqual({ name: 'Ada' })
+		expect(
+			fromRegistry.is(createContract(registry['user'] ?? stringShape()).generate(seededRandom(11))),
+		).toBe(true)
+	})
+
+	it('partial unions still distribute exactly — only the full union bails out', () => {
+		// StringShape | NumberShape must stay string | number, not unknown.
+		type Partial = Infer<StringShape | NumberShape>
+		const asString: Partial = 'text'
+		const asNumber: Partial = 42
+		// @ts-expect-error — a boolean is outside the partial union's inference
+		const asBoolean: Partial = true
+		expect([asString, asNumber, asBoolean]).toBeDefined()
 	})
 })
