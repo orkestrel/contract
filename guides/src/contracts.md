@@ -177,30 +177,36 @@ The lazy, safe JSON boundary — flat primitives, the recursive `JSONValue` meta
 
 ### Helper
 
-| Helper                  | Kind     | Behavior                                                                                                                                                                                                     |
-| ----------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `enumerableSymbolCount` | function | Count of a value's own enumerable **symbol** keys — backs `isEmptyObject` / `isNonEmptyObject` (string-key counts alone miss symbol-keyed records).                                                          |
-| `seededRandom`          | function | Build a deterministic mulberry32 `RandomFunction` from a numeric seed — the default seed source for `compileGenerator` / `createContract`'s `generate`.                                                      |
-| `schemaToParameters`    | function | Narrow a compiled `JSONSchema` to the open tool-parameters record via `isRecord` (§14, never `as`) — the single sanctioned crossing from a compiled contract schema, written once rather than per call site. |
+| Helper                  | Kind     | Behavior                                                                                                                                                                                                                   |
+| ----------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `attempt`               | function | The sanctioned never-throw boundary — runs a callback and returns a `Result<T>`: `{ success: true, value }` on return, `{ success: false, error }` (wrapped in an `Error` if not already one) on throw.                    |
+| `enumerableSymbolCount` | function | Count of a value's own enumerable **symbol** keys — backs `isEmptyObject` / `isNonEmptyObject` (string-key counts alone miss symbol-keyed records).                                                                        |
+| `resolveField`          | function | Total lookup of a (possibly nested) field from a record by a `FieldPath` — a single string is **one** key (no dot-split); an array descends nested objects. Returns `undefined` off-path. Backs the `parse*Field` parsers. |
+| `seededRandom`          | function | Build a deterministic mulberry32 `RandomFunction` from a numeric seed — the default seed source for `compileGenerator` / `createContract`'s `generate`.                                                                    |
+| `schemaToParameters`    | function | Narrow a compiled `JSONSchema` to the open tool-parameters record via `isRecord` (§14, never `as`) — the single sanctioned crossing from a compiled contract schema, written once rather than per call site.               |
 
 ### Types
 
-| Type                     | Kind | Shape                                                                       |
-| ------------------------ | ---- | --------------------------------------------------------------------------- |
-| `Guard`                  | type | `(value: unknown) => value is T` — the core predicate.                      |
-| `GuardType`              | type | extracts `T` from a `Guard<T>`.                                             |
-| `GuardsShape`            | type | `Readonly<Record<string, Guard<unknown>>>` — a `recordOf` shape.            |
-| `FromGuards`             | type | the readonly record type a `GuardsShape` validates.                         |
-| `OptionalFromGuards`     | type | `FromGuards` with the listed keys made optional.                            |
-| `TupleFromGuards`        | type | the readonly tuple type a `tupleOf` guard list validates.                   |
-| `UnionToIntersection`    | type | distributes a union into an intersection (powers `IntersectionFromGuards`). |
-| `IntersectionFromGuards` | type | the intersection type a guard list validates.                               |
-| `Parser`                 | type | `(value: unknown) => T \| undefined` — the parser shape.                    |
-| `AnyConstructor`         | type | `new (...args: unknown[]) => T`.                                            |
-| `AnyFunction`            | type | `(...args: unknown[]) => unknown`.                                          |
-| `AnyAsyncFunction`       | type | `(...args: unknown[]) => Promise<unknown>`.                                 |
-| `ZeroArgFunction`        | type | `() => unknown`.                                                            |
-| `ZeroArgAsyncFunction`   | type | `() => Promise<unknown>`.                                                   |
+| Type                     | Kind | Shape                                                                                                                                        |
+| ------------------------ | ---- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Failure`                | type | `{ success: false, error: E }` — the discriminated failure branch of a `Result`.                                                             |
+| `FieldPath`              | type | `string \| readonly string[]` — a single key, or a path descending nested records; consumed by `resolveField` and the `parse*Field` parsers. |
+| `Guard`                  | type | `(value: unknown) => value is T` — the core predicate.                                                                                       |
+| `GuardType`              | type | extracts `T` from a `Guard<T>`.                                                                                                              |
+| `GuardsShape`            | type | `Readonly<Record<string, Guard<unknown>>>` — a `recordOf` shape.                                                                             |
+| `FromGuards`             | type | the readonly record type a `GuardsShape` validates.                                                                                          |
+| `OptionalFromGuards`     | type | `FromGuards` with the listed keys made optional.                                                                                             |
+| `TupleFromGuards`        | type | the readonly tuple type a `tupleOf` guard list validates.                                                                                    |
+| `UnionToIntersection`    | type | distributes a union into an intersection (powers `IntersectionFromGuards`).                                                                  |
+| `IntersectionFromGuards` | type | the intersection type a guard list validates.                                                                                                |
+| `Parser`                 | type | `(value: unknown) => T \| undefined` — the parser shape.                                                                                     |
+| `Result`                 | type | `Success<T> \| Failure<E>` — discriminated union for operations that can succeed or fail without throwing.                                   |
+| `Success`                | type | `{ success: true, value: T }` — the discriminated success branch of a `Result`.                                                              |
+| `AnyConstructor`         | type | `new (...args: unknown[]) => T`.                                                                                                             |
+| `AnyFunction`            | type | `(...args: unknown[]) => unknown`.                                                                                                           |
+| `AnyAsyncFunction`       | type | `(...args: unknown[]) => Promise<unknown>`.                                                                                                  |
+| `ZeroArgFunction`        | type | `() => unknown`.                                                                                                                             |
+| `ZeroArgAsyncFunction`   | type | `() => Promise<unknown>`.                                                                                                                    |
 
 ### Shape builders
 
@@ -256,7 +262,7 @@ Turn one `ContractShape` into the four lockstep outputs (`src/core/compilers.ts`
 | `compileGuard`      | function  | shape → a `Guard<unknown>` (reuses `recordOf` / `arrayOf` / `unionOf` / `literalOf` / `nullableOf` / `whereOf`; refines leaves via `stringOf` / `boundsOf`).                                                                        |
 | `compileParser`     | function  | shape → a `Parser<unknown>` that coerces (reuses `parseString` / `parseInteger` / `parseRecord` / …) **then** re-applies each leaf's refinement (the same `stringOf` / `boundsOf`), so a non-`undefined` parse satisfies the guard. |
 | `compileSchema`     | function  | shape → a `JSONSchema` — emission over the finite shape; it never inspects a runtime value.                                                                                                                                         |
-| `compileGenerator`  | function  | shape + a `RandomFunction` → deterministic seed data; throws on an empty literal/union (§12).                                                                                                                                       |
+| `compileGenerator`  | function  | shape + a `RandomFunction` → deterministic seed data; throws on an empty literal/union or a pattern-constrained `stringShape` it cannot satisfy (§12).                                                                              |
 | `createContract`    | function  | shape → a typed `ContractInterface<Infer<S>>` bundling `schema` / `is` / `parse` / `generate`.                                                                                                                                      |
 | `ContractInterface` | interface | the compiled-contract bundle — `{ schema, is, parse, generate }`.                                                                                                                                                                   |
 | `RandomFunction`    | type      | `() => number` in `[0, 1)` — the seed source for `generate`.                                                                                                                                                                        |

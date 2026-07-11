@@ -240,9 +240,36 @@ describe('compileGenerator', () => {
 		}
 	})
 
+	it('produces bounded strings that satisfy the compiled guard', () => {
+		const shapes = [
+			stringShape({ min: 2, max: 4 }),
+			stringShape({ max: 6 }),
+			stringShape({ min: 0, max: 0 }),
+			objectShape({ tag: stringShape({ min: 2, max: 4 }) }),
+			arrayShape(stringShape({ min: 2, max: 4 }), { min: 1, max: 3 }),
+		]
+		for (const shape of shapes) {
+			const guard = compileGuard(shape)
+			const random = seededRandom(11)
+			for (let index = 0; index < 20; index += 1) {
+				expect(guard(compileGenerator(shape, random))).toBe(true)
+			}
+		}
+	})
+
+	it('generates the empty string when min and max are both 0', () => {
+		const shape = stringShape({ min: 0, max: 0 })
+		expect(compileGenerator(shape, seededRandom(1))).toBe('')
+	})
+
 	it('throws on a degenerate empty literal / union (programmer error)', () => {
 		expect(() => compileGenerator(literalShape(), seededRandom(1))).toThrow('at least one value')
 		expect(() => compileGenerator(unionShape(), seededRandom(1))).toThrow('at least one variant')
+	})
+
+	it('throws on a pattern-constrained string shape it cannot satisfy (programmer error)', () => {
+		const shape = stringShape({ min: 4, max: 6, pattern: /^ZZZZZZ$/ })
+		expect(() => compileGenerator(shape, seededRandom(1))).toThrow('cannot be auto-generated')
 	})
 
 	it('falls back to the default random source when none is supplied', () => {

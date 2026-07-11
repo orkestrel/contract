@@ -25,26 +25,6 @@ export interface Failure<E> {
 /** Discriminated union for operations that can succeed or fail without throwing. */
 export type Result<T, E = Error> = Success<T> | Failure<E>
 
-// === Deferred
-
-/**
- * A manually-settled promise handle: the `promise` together with the `resolve`
- * and `reject` functions lifted out of its executor.
- *
- * @remarks
- * The standard captured-resolver idiom — construct one with {@link createDeferred}
- * when an operation must settle a promise from outside the executor body (a pump
- * that resolves on completion, a count-based completion gate). The returned
- * handle exposes the promise plus its settle functions so unrelated code can
- * drive it; the underlying promise still obeys native settle-once semantics
- * (the first `resolve` / `reject` wins, later calls are no-ops on the promise).
- */
-export interface DeferredInterface<T> {
-	readonly promise: Promise<T>
-	readonly resolve: (value: T) => void
-	readonly reject: (error: unknown) => void
-}
-
 // === Record access
 
 /**

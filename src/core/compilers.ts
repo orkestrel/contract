@@ -367,8 +367,9 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
  * The same shape and the same `random` source always produce the same value, so
  * seed data is reproducible. Defaults to a {@link seededRandom} source seeded
  * from the wall clock when none is supplied. Throws on a degenerate empty
- * `literalShape` / `unionShape` — a programmer error that cannot generate a
- * value (AGENTS §12).
+ * `literalShape` / `unionShape`, or on a pattern-constrained `stringShape`
+ * whose generated sample cannot satisfy the pattern — a programmer error that
+ * cannot generate a value (AGENTS §12).
  *
  * @param shape - The shape to generate from
  * @param random - A seeded random source (defaults to `seededRandom(Date.now())`)
@@ -383,10 +384,17 @@ export function compileGenerator(
 			const min = shape.min ?? 0
 			const max = shape.max ?? Math.max(min, 12)
 			const length = Math.max(min, Math.min(max, 8))
-			const suffix = Math.floor(random() * 1_000_000)
-				.toString()
-				.padStart(length, '0')
-			return `str_${suffix}`
+			const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
+			let value = ''
+			for (let index = 0; index < length; index += 1) {
+				value += alphabet[Math.floor(random() * alphabet.length)]
+			}
+			if (shape.pattern !== undefined && !shape.pattern.test(value)) {
+				throw new Error(
+					'compileGenerator: a pattern-constrained string shape cannot be auto-generated — supply or verify values another way',
+				)
+			}
+			return value
 		}
 		case 'number': {
 			const min = shape.min ?? 0
