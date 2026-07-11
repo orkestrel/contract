@@ -1,4 +1,4 @@
-# Contracts
+# Contract
 
 > The contract & validation surface — runtime type guards, guard combinators, flat parsers, and a shape DSL. Narrow `unknown` safely, compose guards, coerce-and-extract a field, or declare a value's shape once and compile it into a guard, parser, JSON Schema, and generator that can never drift. Source: [`src/core`](../../src/core). Surfaced through the `@src/core` barrel.
 
@@ -297,7 +297,7 @@ The public methods of each behavioral interface — one table per type, keyed by
 
 These invariants hold across `src/core` ↔ `contract.md`:
 
-1. **DOC ↔ SOURCE bijection.** Every `function` / `type` row in the `## Surface` tables is a real export of the contracts source tree, and every contract-module export appears as a Surface row — exhaustive, both directions (AGENTS §22). Adding, renaming, or removing a guard breaks the parity gate until the doc is reconciled.
+1. **DOC ↔ SOURCE bijection.** Every `function` / `type` row in the `## Surface` tables is a real export of the contract source tree, and every contract-module export appears as a Surface row — exhaustive, both directions (AGENTS §22). Adding, renaming, or removing a guard breaks the parity gate until the doc is reconciled.
 2. **Guards are total (§14).** Every guard takes one `unknown`, returns a `boolean` type predicate, and **never throws** — adversarial input yields `false`. The only deferral is `lazyOf`, whose thunk runs per call; `whereOf` / `lazyOf` / `transformOf` contain a callback throw as a non-match via the core `attempt` helper.
 3. **Parse ↔ guard soundness (§14).** Each standalone leaf parser (`parseString`, …) pairs with the guard for its **output type**: a guard-valid input is returned unchanged (by identity, never rejected), and every non-`undefined` output satisfies that type guard. Coercion of otherwise-invalid inputs is a bonus on top, not a violation. The **compiled** contract goes further: `compileParser` (and thus `createContract`'s `parse`) re-applies every leaf REFINEMENT after coercion through the same combinators (`stringOf` / `boundsOf`) `compileGuard` uses — so a non-`undefined` `contract.parse` always satisfies `contract.is`, refinements (`min` / `max` / `pattern`) included, and the two cannot drift.
 4. **Types are the source of truth.** `Guard`, `Parser`, and the guard-shape types are declared in [`types.ts`](../../src/core/types.ts) first; guards and parsers conform to them, never the reverse.
