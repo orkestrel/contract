@@ -555,7 +555,7 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
  *
  * @example
  * ```ts
- * compileGenerator(stringShape({ min: 1, max: 4 })) // a deterministic random string
+ * compileGenerator(stringShape({ min: 1, max: 4 })) // a random string of 1-4 characters (seed a RandomFunction for determinism)
  * ```
  */
 export function compileGenerator(
