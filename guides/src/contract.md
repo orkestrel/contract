@@ -192,26 +192,26 @@ The lazy, safe JSON boundary — flat primitives, the recursive `JSONValue` meta
 
 ### Types
 
-| Type                     | Kind | Shape                                                                                                                                        |
-| ------------------------ | ---- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Failure`                | type | `{ success: false, error: E }` — the discriminated failure branch of a `Result`.                                                             |
-| `FieldPath`              | type | `string \| readonly string[]` — a single key, or a path descending nested records; consumed by `resolveField` and the `parse*Field` parsers. |
-| `Guard`                  | type | `(value: unknown) => value is T` — the core predicate.                                                                                       |
-| `GuardType`              | type | extracts `T` from a `Guard<T>`.                                                                                                              |
-| `GuardsShape`            | type | `Readonly<Record<string, Guard<unknown>>>` — a `recordOf` shape.                                                                             |
-| `FromGuards`             | type | the readonly record type a `GuardsShape` validates.                                                                                          |
-| `OptionalFromGuards`     | type | `FromGuards` with the listed keys made optional.                                                                                             |
-| `TupleFromGuards`        | type | the readonly tuple type a `tupleOf` guard list validates.                                                                                    |
-| `UnionToIntersection`    | type | distributes a union into an intersection (powers `IntersectionFromGuards`).                                                                  |
-| `IntersectionFromGuards` | type | the intersection type a guard list validates.                                                                                                |
-| `Parser`                 | type | `(value: unknown) => T \| undefined` — the parser shape.                                                                                     |
-| `Result`                 | type | `Success<T> \| Failure<E>` — discriminated union for operations that can succeed or fail without throwing.                                   |
-| `Success`                | type | `{ success: true, value: T }` — the discriminated success branch of a `Result`.                                                              |
-| `AnyConstructor`         | type | `new (...args: unknown[]) => T`.                                                                                                             |
-| `AnyFunction`            | type | `(...args: unknown[]) => unknown`.                                                                                                           |
-| `AnyAsyncFunction`       | type | `(...args: unknown[]) => Promise<unknown>`.                                                                                                  |
-| `ZeroArgFunction`        | type | `() => unknown`.                                                                                                                             |
-| `ZeroArgAsyncFunction`   | type | `() => Promise<unknown>`.                                                                                                                    |
+| Type                     | Kind      | Shape                                                                                                                                        |
+| ------------------------ | --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Failure`                | interface | `{ success: false, error: E }` — the discriminated failure branch of a `Result`.                                                             |
+| `FieldPath`              | type      | `string \| readonly string[]` — a single key, or a path descending nested records; consumed by `resolveField` and the `parse*Field` parsers. |
+| `Guard`                  | type      | `(value: unknown) => value is T` — the core predicate.                                                                                       |
+| `GuardType`              | type      | extracts `T` from a `Guard<T>`.                                                                                                              |
+| `GuardsShape`            | type      | `Readonly<Record<string, Guard<unknown>>>` — a `recordOf` shape.                                                                             |
+| `FromGuards`             | type      | the readonly record type a `GuardsShape` validates.                                                                                          |
+| `OptionalFromGuards`     | type      | `FromGuards` with the listed keys made optional.                                                                                             |
+| `TupleFromGuards`        | type      | the readonly tuple type a `tupleOf` guard list validates.                                                                                    |
+| `UnionToIntersection`    | type      | distributes a union into an intersection (powers `IntersectionFromGuards`).                                                                  |
+| `IntersectionFromGuards` | type      | the intersection type a guard list validates.                                                                                                |
+| `Parser`                 | type      | `(value: unknown) => T \| undefined` — the parser shape.                                                                                     |
+| `Result`                 | type      | `Success<T> \| Failure<E>` — discriminated union for operations that can succeed or fail without throwing.                                   |
+| `Success`                | interface | `{ success: true, value: T }` — the discriminated success branch of a `Result`.                                                              |
+| `AnyConstructor`         | type      | `new (...args: unknown[]) => T`.                                                                                                             |
+| `AnyFunction`            | type      | `(...args: unknown[]) => unknown`.                                                                                                           |
+| `AnyAsyncFunction`       | type      | `(...args: unknown[]) => Promise<unknown>`.                                                                                                  |
+| `ZeroArgFunction`        | type      | `() => unknown`.                                                                                                                             |
+| `ZeroArgAsyncFunction`   | type      | `() => Promise<unknown>`.                                                                                                                    |
 
 ### Shape builders
 

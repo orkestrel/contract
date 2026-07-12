@@ -68,6 +68,12 @@ import { parseBoolean, parseInteger, parseNumber, parseRecord, parseString } fro
  *
  * @param shape - The shape to validate
  * @throws {Error} When the shape is malformed
+ *
+ * @example
+ * ```ts
+ * validateShape(stringShape({ min: 1, max: 10 })) // does not throw
+ * validateShape(stringShape({ min: 10, max: 1 })) // throws
+ * ```
  */
 export function validateShape(shape: ContractShape): void {
 	switch (shape.type) {
@@ -150,6 +156,11 @@ export function validateShape(shape: ContractShape): void {
  *
  * @param shape - The shape to compile
  * @returns The emitted JSON Schema
+ *
+ * @example
+ * ```ts
+ * compileSchema(stringShape({ min: 1 })) // { type: 'string', minLength: 1 }
+ * ```
  */
 export function compileSchema(shape: ContractShape): JSONSchema {
 	switch (shape.type) {
@@ -248,6 +259,12 @@ export function compileSchema(shape: ContractShape): JSONSchema {
  *
  * @param shape - The shape to compile
  * @returns A guard narrowing to the shape's inferred type
+ *
+ * @example
+ * ```ts
+ * const isUser = compileGuard(objectShape({ name: stringShape() }))
+ * isUser({ name: 'Ada' }) // true
+ * ```
  */
 export function compileGuard(shape: ContractShape): Guard<unknown> {
 	switch (shape.type) {
@@ -356,6 +373,12 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
  *
  * @param shape - The shape to compile
  * @returns A parser yielding the shape's inferred type or `undefined`
+ *
+ * @example
+ * ```ts
+ * const parseUser = compileParser(objectShape({ name: stringShape() }))
+ * parseUser({ name: 'Ada' }) // { name: 'Ada' }
+ * ```
  */
 export function compileParser(shape: ContractShape): Parser<unknown> {
 	switch (shape.type) {
@@ -529,6 +552,11 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
  * @param shape - The shape to generate from
  * @param random - A seeded random source (defaults to `seededRandom(Date.now())`)
  * @returns A value matching the shape
+ *
+ * @example
+ * ```ts
+ * compileGenerator(stringShape({ min: 1, max: 4 })) // a deterministic random string
+ * ```
  */
 export function compileGenerator(
 	shape: ContractShape,

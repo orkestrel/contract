@@ -35,9 +35,25 @@ export const srcCore = (config?: UserConfig): UserConfig =>
 		config ?? {},
 	)
 
+// Extends srcCore: the guides-parity suite. Node env — it reads the real
+// guides/*.md and the documented source modules off disk — but resolves like core tests.
+export const guides = (config?: UserConfig): UserConfig =>
+	srcCore(
+		mergeConfig(
+			{
+				test: {
+					name: { label: 'guides', color: 'green' },
+					include: ['tests/guides/**/*.test.ts'],
+					exclude: ['tests/src/**/*.test.ts', 'tests/setup.test.ts'],
+				},
+			},
+			config ?? {},
+		),
+	)
+
 export default defineConfig({
 	resolve,
 	test: {
-		projects: [srcCore],
+		projects: [srcCore, guides],
 	},
 })

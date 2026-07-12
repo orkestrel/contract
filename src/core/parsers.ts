@@ -38,6 +38,13 @@ import { resolveField } from './helpers.js'
  *
  * @param value - The value to parse
  * @returns A string, or `undefined`
+ *
+ * @example
+ * ```ts
+ * parseString('hi') // 'hi'
+ * parseString(42)    // '42'
+ * parseString(true)  // undefined
+ * ```
  */
 export function parseString(value: unknown): string | undefined {
 	if (isString(value)) return value
@@ -55,6 +62,13 @@ export function parseString(value: unknown): string | undefined {
  *
  * @param value - The value to parse
  * @returns A finite number, or `undefined`
+ *
+ * @example
+ * ```ts
+ * parseNumber(42)    // 42
+ * parseNumber('42')  // 42
+ * parseNumber('abc') // undefined
+ * ```
  */
 export function parseNumber(value: unknown): number | undefined {
 	if (typeof value === 'number') {
@@ -77,6 +91,12 @@ export function parseNumber(value: unknown): number | undefined {
  *
  * @param value - The value to parse
  * @returns A finite integer, or `undefined`
+ *
+ * @example
+ * ```ts
+ * parseInteger(42)   // 42
+ * parseInteger(3.14) // undefined
+ * ```
  */
 export function parseInteger(value: unknown): number | undefined {
 	const parsed = parseNumber(value)
@@ -94,6 +114,13 @@ export function parseInteger(value: unknown): number | undefined {
  *
  * @param value - The value to parse
  * @returns A boolean, or `undefined`
+ *
+ * @example
+ * ```ts
+ * parseBoolean(true)   // true
+ * parseBoolean('1')    // true
+ * parseBoolean('nope') // undefined
+ * ```
  */
 export function parseBoolean(value: unknown): boolean | undefined {
 	if (typeof value === 'boolean') return value
@@ -112,6 +139,12 @@ export function parseBoolean(value: unknown): boolean | undefined {
  *
  * @param value - The value to parse
  * @returns `null` on a successful parse, or `undefined`
+ *
+ * @example
+ * ```ts
+ * parseNull(null)      // null
+ * parseNull(undefined) // undefined
+ * ```
  */
 export function parseNull(value: unknown): null | undefined {
 	return isNull(value) ? value : undefined
@@ -140,6 +173,12 @@ export function parseRecord(value: unknown): Record<string, unknown> | undefined
  * @param value - The value to parse
  * @param guard - Optional element guard
  * @returns The array, or `undefined`
+ *
+ * @example
+ * ```ts
+ * parseArray([1, 2])            // [1, 2]
+ * parseArray([1, 'x'], isNumber) // undefined
+ * ```
  */
 export function parseArray<T = unknown>(
 	value: unknown,
@@ -164,6 +203,12 @@ export function parseArray<T = unknown>(
  *
  * @param value - The value to parse
  * @returns The value, or `undefined` when it is not a valid JSON value
+ *
+ * @example
+ * ```ts
+ * parseJSONValue({ a: 1 })     // { a: 1 }
+ * parseJSONValue(Number.NaN)   // undefined
+ * ```
  */
 export function parseJSONValue(value: unknown): JSONValue | undefined {
 	return isJSONValue(value) ? value : undefined
@@ -183,6 +228,12 @@ export function parseJSONValue(value: unknown): JSONValue | undefined {
  * @param value - The value to parse
  * @param allowed - The permitted literal values
  * @returns The matched literal (by identity), or `undefined`
+ *
+ * @example
+ * ```ts
+ * parseEnum('b', ['a', 'b', 'c']) // 'b'
+ * parseEnum('z', ['a', 'b', 'c']) // undefined
+ * ```
  */
 export function parseEnum<const T extends string | number | boolean>(
 	value: unknown,
@@ -216,6 +267,12 @@ export function parseStringField(
  * @param record - The source record
  * @param path - A property key, or a key path descending into nested objects
  * @returns A finite number, or `undefined`
+ *
+ * @example
+ * ```ts
+ * parseNumberField({ age: '42' }, 'age') // 42
+ * parseNumberField({}, 'age')             // undefined
+ * ```
  */
 export function parseNumberField(
 	record: Record<string, unknown>,
@@ -244,6 +301,12 @@ export function parseIntegerField(
  * @param record - The source record
  * @param path - A property key, or a key path descending into nested objects
  * @returns A boolean, or `undefined`
+ *
+ * @example
+ * ```ts
+ * parseBooleanField({ on: 'true' }, 'on') // true
+ * parseBooleanField({}, 'on')              // undefined
+ * ```
  */
 export function parseBooleanField(
 	record: Record<string, unknown>,
@@ -262,6 +325,12 @@ export function parseBooleanField(
  * @param record - The source record
  * @param path - A property key, or a key path descending into nested objects
  * @returns `null` on a successful parse, or `undefined`
+ *
+ * @example
+ * ```ts
+ * parseNullField({ value: null }, 'value') // null
+ * parseNullField({}, 'value')              // undefined
+ * ```
  */
 export function parseNullField(record: Record<string, unknown>, path: FieldPath): null | undefined {
 	return parseNull(resolveField(record, path))
@@ -289,6 +358,12 @@ export function parseRecordField(
  * @param path - A property key, or a key path descending into nested objects
  * @param guard - Optional element guard
  * @returns An array, or `undefined`
+ *
+ * @example
+ * ```ts
+ * parseArrayField({ tags: [1, 2] }, 'tags') // [1, 2]
+ * parseArrayField({}, 'tags')                // undefined
+ * ```
  */
 export function parseArrayField<T = unknown>(
 	record: Record<string, unknown>,
@@ -325,6 +400,12 @@ export function parseEnumField<const T extends string | number | boolean>(
  * @param record - The source record
  * @param path - A property key, or a key path descending into nested objects
  * @returns The value, or `undefined`
+ *
+ * @example
+ * ```ts
+ * parseJSONValueField({ data: { a: 1 } }, 'data') // { a: 1 }
+ * parseJSONValueField({}, 'data')                  // undefined
+ * ```
  */
 export function parseJSONValueField(
 	record: Record<string, unknown>,

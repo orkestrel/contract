@@ -21,17 +21,39 @@ import { attempt, enumerableSymbolCount } from './helpers.js'
 
 // === Primitive guards
 
-/** Determine whether a value is `null`. */
+/** Determine whether a value is `null`.
+ *
+ * @example
+ * ```ts
+ * isNull(null)      // true
+ * isNull(undefined) // false
+ * ```
+ */
 export function isNull(value: unknown): value is null {
 	return value === null
 }
 
-/** Determine whether a value is `undefined`. */
+/** Determine whether a value is `undefined`.
+ *
+ * @example
+ * ```ts
+ * isUndefined(undefined) // true
+ * isUndefined(null)      // false
+ * ```
+ */
 export function isUndefined(value: unknown): value is undefined {
 	return value === undefined
 }
 
-/** Determine whether a value is defined (neither `null` nor `undefined`). */
+/** Determine whether a value is defined (neither `null` nor `undefined`).
+ *
+ * @example
+ * ```ts
+ * isDefined('hi')     // true
+ * isDefined(null)     // false
+ * isDefined(undefined) // false
+ * ```
+ */
 export function isDefined<T>(value: T | null | undefined): value is T {
 	return value !== null && value !== undefined
 }
@@ -56,52 +78,125 @@ export function isFiniteNumber(value: unknown): value is number {
 	return typeof value === 'number' && Number.isFinite(value)
 }
 
-/** Determine whether a value is a finite integer (excludes `NaN`, `±Infinity`, and fractional numbers). */
+/** Determine whether a value is a finite integer (excludes `NaN`, `±Infinity`, and fractional numbers).
+ *
+ * @example
+ * ```ts
+ * isInteger(3)   // true
+ * isInteger(3.5) // false
+ * ```
+ */
 export function isInteger(value: unknown): value is number {
 	return Number.isInteger(value)
 }
 
-/** Determine whether a value is a boolean. */
+/** Determine whether a value is a boolean.
+ *
+ * @example
+ * ```ts
+ * isBoolean(true) // true
+ * isBoolean(1)    // false
+ * ```
+ */
 export function isBoolean(value: unknown): value is boolean {
 	return typeof value === 'boolean'
 }
 
-/** Determine whether a value is exactly `true`. */
+/** Determine whether a value is exactly `true`.
+ *
+ * @example
+ * ```ts
+ * isTrue(true)  // true
+ * isTrue(false) // false
+ * ```
+ */
 export function isTrue(value: unknown): value is true {
 	return value === true
 }
 
-/** Determine whether a value is exactly `false`. */
+/** Determine whether a value is exactly `false`.
+ *
+ * @example
+ * ```ts
+ * isFalse(false) // true
+ * isFalse(true)  // false
+ * ```
+ */
 export function isFalse(value: unknown): value is false {
 	return value === false
 }
 
-/** Determine whether a value is a bigint. */
+/** Determine whether a value is a bigint.
+ *
+ * @example
+ * ```ts
+ * isBigInt(1n) // true
+ * isBigInt(1)  // false
+ * ```
+ */
 export function isBigInt(value: unknown): value is bigint {
 	return typeof value === 'bigint'
 }
 
-/** Determine whether a value is a symbol. */
+/** Determine whether a value is a symbol.
+ *
+ * @example
+ * ```ts
+ * isSymbol(Symbol('x')) // true
+ * isSymbol('x')         // false
+ * ```
+ */
 export function isSymbol(value: unknown): value is symbol {
 	return typeof value === 'symbol'
 }
 
-/** Determine whether a value is callable. */
+/** Determine whether a value is callable.
+ *
+ * @example
+ * ```ts
+ * isFunction(() => {}) // true
+ * isFunction({})       // false
+ * ```
+ */
 export function isFunction(value: unknown): value is AnyFunction {
 	return typeof value === 'function'
 }
 
-/** Determine whether a value is a string or `null`. */
+/** Determine whether a value is a string or `null`.
+ *
+ * @example
+ * ```ts
+ * isNullableString('hi') // true
+ * isNullableString(null) // true
+ * isNullableString(42)   // false
+ * ```
+ */
 export function isNullableString(value: unknown): value is string | null {
 	return value === null || isString(value)
 }
 
-/** Determine whether a value is a number or `null` (the number may be `NaN` / `±Infinity`). */
+/** Determine whether a value is a number or `null` (the number may be `NaN` / `±Infinity`).
+ *
+ * @example
+ * ```ts
+ * isNullableNumber(42)   // true
+ * isNullableNumber(null) // true
+ * isNullableNumber('hi') // false
+ * ```
+ */
 export function isNullableNumber(value: unknown): value is number | null {
 	return value === null || isNumber(value)
 }
 
-/** Determine whether a value is a boolean or `null`. */
+/** Determine whether a value is a boolean or `null`.
+ *
+ * @example
+ * ```ts
+ * isNullableBoolean(true) // true
+ * isNullableBoolean(null) // true
+ * isNullableBoolean(1)    // false
+ * ```
+ */
 export function isNullableBoolean(value: unknown): value is boolean | null {
 	return value === null || isBoolean(value)
 }
@@ -116,22 +211,50 @@ export function isNullableBoolean(value: unknown): value is boolean | null {
 // known, accepted limitation — cross-realm identity would require duck-typing
 // every built-in, which trades soundness for portability.
 
-/** Determine whether a value is a `Date`. */
+/** Determine whether a value is a `Date`.
+ *
+ * @example
+ * ```ts
+ * isDate(new Date()) // true
+ * isDate('2024-01-01') // false
+ * ```
+ */
 export function isDate(value: unknown): value is Date {
 	return value instanceof Date
 }
 
-/** Determine whether a value is a `RegExp`. */
+/** Determine whether a value is a `RegExp`.
+ *
+ * @example
+ * ```ts
+ * isRegExp(/a/) // true
+ * isRegExp('a') // false
+ * ```
+ */
 export function isRegExp(value: unknown): value is RegExp {
 	return value instanceof RegExp
 }
 
-/** Determine whether a value is an `Error`. */
+/** Determine whether a value is an `Error`.
+ *
+ * @example
+ * ```ts
+ * isError(new Error('boom')) // true
+ * isError('boom')             // false
+ * ```
+ */
 export function isError(value: unknown): value is Error {
 	return value instanceof Error
 }
 
-/** Determine whether a value is a native `Promise` (use {@link isPromiseLike} for any thenable). */
+/** Determine whether a value is a native `Promise` (use {@link isPromiseLike} for any thenable).
+ *
+ * @example
+ * ```ts
+ * isPromise(Promise.resolve()) // true
+ * isPromise({ then() {} })     // false
+ * ```
+ */
 export function isPromise<T = unknown>(value: unknown): value is Promise<T> {
 	return value instanceof Promise
 }
@@ -143,6 +266,13 @@ export function isPromise<T = unknown>(value: unknown): value is Promise<T> {
  * @remarks
  * Accepts any object with all three methods, not only native `Promise`
  * instances. Use {@link isPromise} when you specifically need `instanceof Promise`.
+ *
+ * @example
+ * ```ts
+ * isPromiseLike(Promise.resolve())                                // true
+ * isPromiseLike({ then() {}, catch() {}, finally() {} }) // true
+ * isPromiseLike({ then() {} })                            // false
+ * ```
  */
 export function isPromiseLike<T = unknown>(
 	value: unknown,
@@ -159,7 +289,14 @@ export function isPromiseLike<T = unknown>(
 	return outcome.success && outcome.value
 }
 
-/** Determine whether a value is an `ArrayBuffer`. */
+/** Determine whether a value is an `ArrayBuffer`.
+ *
+ * @example
+ * ```ts
+ * isArrayBuffer(new ArrayBuffer(8)) // true
+ * isArrayBuffer([])                 // false
+ * ```
+ */
 export function isArrayBuffer(value: unknown): value is ArrayBuffer {
 	return value instanceof ArrayBuffer
 }
@@ -170,6 +307,12 @@ export function isArrayBuffer(value: unknown): value is ArrayBuffer {
  * @remarks
  * Guards the global existence of `SharedArrayBuffer` first — safe where it is
  * absent or disabled (e.g. a context that is not cross-origin isolated).
+ *
+ * @example
+ * ```ts
+ * isSharedArrayBuffer(new SharedArrayBuffer(8)) // true
+ * isSharedArrayBuffer(new ArrayBuffer(8))       // false
+ * ```
  */
 export function isSharedArrayBuffer(value: unknown): value is SharedArrayBuffer {
 	return typeof SharedArrayBuffer !== 'undefined' && value instanceof SharedArrayBuffer
@@ -183,6 +326,13 @@ export function isSharedArrayBuffer(value: unknown): value is SharedArrayBuffer 
  * @remarks
  * Strings are explicitly included: a string has a callable `Symbol.iterator`
  * but is not an object, so the generic object path alone would miss it.
+ *
+ * @example
+ * ```ts
+ * isIterable([1, 2])       // true
+ * isIterable('abc')        // true
+ * isIterable({ a: 1 })     // false
+ * ```
  */
 export function isIterable<T = unknown>(value: unknown): value is Iterable<T> {
 	if (isString(value)) {
@@ -195,7 +345,14 @@ export function isIterable<T = unknown>(value: unknown): value is Iterable<T> {
 	return outcome.success && outcome.value
 }
 
-/** Determine whether a value implements the async iterable protocol (`Symbol.asyncIterator`). */
+/** Determine whether a value implements the async iterable protocol (`Symbol.asyncIterator`).
+ *
+ * @example
+ * ```ts
+ * isAsyncIterable({ [Symbol.asyncIterator]() {} }) // true
+ * isAsyncIterable([1, 2])                          // false
+ * ```
+ */
 export function isAsyncIterable<T = unknown>(value: unknown): value is AsyncIterable<T> {
 	if (!isObject(value)) {
 		return false
@@ -212,6 +369,13 @@ export function isAsyncIterable<T = unknown>(value: unknown): value is AsyncIter
  * @remarks
  * `true` for arrays, class instances, plain objects, `Map`, `Set`, etc. — use
  * {@link isRecord} when you need a plain-record check.
+ *
+ * @example
+ * ```ts
+ * isObject({})   // true
+ * isObject([])   // true
+ * isObject(null) // false
+ * ```
  */
 export function isObject(value: unknown): value is object {
 	return typeof value === 'object' && value !== null
@@ -246,84 +410,196 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 	return outcome.success && outcome.value
 }
 
-/** Determine whether a value is a `Map`. */
+/** Determine whether a value is a `Map`.
+ *
+ * @example
+ * ```ts
+ * isMap(new Map()) // true
+ * isMap({})        // false
+ * ```
+ */
 export function isMap<K = unknown, V = unknown>(value: unknown): value is ReadonlyMap<K, V> {
 	return value instanceof Map
 }
 
-/** Determine whether a value is a `Set`. */
+/** Determine whether a value is a `Set`.
+ *
+ * @example
+ * ```ts
+ * isSet(new Set()) // true
+ * isSet([])        // false
+ * ```
+ */
 export function isSet<T = unknown>(value: unknown): value is ReadonlySet<T> {
 	return value instanceof Set
 }
 
-/** Determine whether a value is a `WeakMap`. */
+/** Determine whether a value is a `WeakMap`.
+ *
+ * @example
+ * ```ts
+ * isWeakMap(new WeakMap()) // true
+ * isWeakMap({})            // false
+ * ```
+ */
 export function isWeakMap(value: unknown): value is WeakMap<object, unknown> {
 	return value instanceof WeakMap
 }
 
-/** Determine whether a value is a `WeakSet`. */
+/** Determine whether a value is a `WeakSet`.
+ *
+ * @example
+ * ```ts
+ * isWeakSet(new WeakSet()) // true
+ * isWeakSet({})            // false
+ * ```
+ */
 export function isWeakSet(value: unknown): value is WeakSet<object> {
 	return value instanceof WeakSet
 }
 
 // === Array & typed-array guards
 
-/** Determine whether a value is an array. */
+/** Determine whether a value is an array.
+ *
+ * @example
+ * ```ts
+ * isArray([1, 2]) // true
+ * isArray('12')   // false
+ * ```
+ */
 export function isArray<T = unknown>(value: unknown): value is readonly T[] {
 	return Array.isArray(value)
 }
 
-/** Determine whether a value is a `DataView`. */
+/** Determine whether a value is a `DataView`.
+ *
+ * @example
+ * ```ts
+ * isDataView(new DataView(new ArrayBuffer(8))) // true
+ * isDataView(new ArrayBuffer(8))                // false
+ * ```
+ */
 export function isDataView(value: unknown): value is DataView<ArrayBufferLike> {
 	return value instanceof DataView
 }
 
-/** Determine whether a value is an `ArrayBufferView` (any typed array or `DataView`). */
+/** Determine whether a value is an `ArrayBufferView` (any typed array or `DataView`).
+ *
+ * @example
+ * ```ts
+ * isArrayBufferView(new Uint8Array(4)) // true
+ * isArrayBufferView([1, 2, 3, 4])       // false
+ * ```
+ */
 export function isArrayBufferView(value: unknown): value is ArrayBufferView {
 	return ArrayBuffer.isView(value)
 }
 
-/** Determine whether a value is an `Int8Array`. */
+/** Determine whether a value is an `Int8Array`.
+ *
+ * @example
+ * ```ts
+ * isInt8Array(new Int8Array(2)) // true
+ * isInt8Array(new Uint8Array(2)) // false
+ * ```
+ */
 export function isInt8Array(value: unknown): value is Int8Array {
 	return value instanceof Int8Array
 }
 
-/** Determine whether a value is a `Uint8Array`. */
+/** Determine whether a value is a `Uint8Array`.
+ *
+ * @example
+ * ```ts
+ * isUint8Array(new Uint8Array(2)) // true
+ * isUint8Array(new Int8Array(2))  // false
+ * ```
+ */
 export function isUint8Array(value: unknown): value is Uint8Array {
 	return value instanceof Uint8Array
 }
 
-/** Determine whether a value is a `Uint8ClampedArray`. */
+/** Determine whether a value is a `Uint8ClampedArray`.
+ *
+ * @example
+ * ```ts
+ * isUint8ClampedArray(new Uint8ClampedArray(2)) // true
+ * isUint8ClampedArray(new Uint8Array(2))         // false
+ * ```
+ */
 export function isUint8ClampedArray(value: unknown): value is Uint8ClampedArray {
 	return value instanceof Uint8ClampedArray
 }
 
-/** Determine whether a value is an `Int16Array`. */
+/** Determine whether a value is an `Int16Array`.
+ *
+ * @example
+ * ```ts
+ * isInt16Array(new Int16Array(2)) // true
+ * isInt16Array(new Int8Array(2))  // false
+ * ```
+ */
 export function isInt16Array(value: unknown): value is Int16Array {
 	return value instanceof Int16Array
 }
 
-/** Determine whether a value is a `Uint16Array`. */
+/** Determine whether a value is a `Uint16Array`.
+ *
+ * @example
+ * ```ts
+ * isUint16Array(new Uint16Array(2)) // true
+ * isUint16Array(new Int16Array(2))   // false
+ * ```
+ */
 export function isUint16Array(value: unknown): value is Uint16Array {
 	return value instanceof Uint16Array
 }
 
-/** Determine whether a value is an `Int32Array`. */
+/** Determine whether a value is an `Int32Array`.
+ *
+ * @example
+ * ```ts
+ * isInt32Array(new Int32Array(2)) // true
+ * isInt32Array(new Int16Array(2)) // false
+ * ```
+ */
 export function isInt32Array(value: unknown): value is Int32Array {
 	return value instanceof Int32Array
 }
 
-/** Determine whether a value is a `Uint32Array`. */
+/** Determine whether a value is a `Uint32Array`.
+ *
+ * @example
+ * ```ts
+ * isUint32Array(new Uint32Array(2)) // true
+ * isUint32Array(new Int32Array(2))   // false
+ * ```
+ */
 export function isUint32Array(value: unknown): value is Uint32Array {
 	return value instanceof Uint32Array
 }
 
-/** Determine whether a value is a `Float32Array`. */
+/** Determine whether a value is a `Float32Array`.
+ *
+ * @example
+ * ```ts
+ * isFloat32Array(new Float32Array(2)) // true
+ * isFloat32Array(new Float64Array(2))  // false
+ * ```
+ */
 export function isFloat32Array(value: unknown): value is Float32Array {
 	return value instanceof Float32Array
 }
 
-/** Determine whether a value is a `Float64Array`. */
+/** Determine whether a value is a `Float64Array`.
+ *
+ * @example
+ * ```ts
+ * isFloat64Array(new Float64Array(2)) // true
+ * isFloat64Array(new Float32Array(2))  // false
+ * ```
+ */
 export function isFloat64Array(value: unknown): value is Float64Array {
 	return value instanceof Float64Array
 }
@@ -334,6 +610,12 @@ export function isFloat64Array(value: unknown): value is Float64Array {
  * @remarks
  * Guards the global existence of `BigInt64Array` first — safe in environments
  * that pre-date the BigInt typed-array additions.
+ *
+ * @example
+ * ```ts
+ * isBigInt64Array(new BigInt64Array(2)) // true
+ * isBigInt64Array(new Float64Array(2))   // false
+ * ```
  */
 export function isBigInt64Array(value: unknown): value is BigInt64Array {
 	return typeof BigInt64Array !== 'undefined' && value instanceof BigInt64Array
@@ -345,6 +627,12 @@ export function isBigInt64Array(value: unknown): value is BigInt64Array {
  * @remarks
  * Guards the global existence of `BigUint64Array` first — safe in environments
  * that pre-date the BigInt typed-array additions.
+ *
+ * @example
+ * ```ts
+ * isBigUint64Array(new BigUint64Array(2)) // true
+ * isBigUint64Array(new BigInt64Array(2))   // false
+ * ```
  */
 export function isBigUint64Array(value: unknown): value is BigUint64Array {
 	return typeof BigUint64Array !== 'undefined' && value instanceof BigUint64Array
@@ -352,17 +640,38 @@ export function isBigUint64Array(value: unknown): value is BigUint64Array {
 
 // === Emptiness guards
 
-/** Determine whether a value is the empty string `''`. */
+/** Determine whether a value is the empty string `''`.
+ *
+ * @example
+ * ```ts
+ * isEmptyString('')  // true
+ * isEmptyString('a') // false
+ * ```
+ */
 export function isEmptyString(value: unknown): value is '' {
 	return isString(value) && value.length === 0
 }
 
-/** Determine whether a value is an empty array. */
+/** Determine whether a value is an empty array.
+ *
+ * @example
+ * ```ts
+ * isEmptyArray([])    // true
+ * isEmptyArray([1])   // false
+ * ```
+ */
 export function isEmptyArray(value: unknown): value is readonly [] {
 	return isArray(value) && value.length === 0
 }
 
-/** Determine whether a value is an empty plain object (no own string or enumerable symbol keys). */
+/** Determine whether a value is an empty plain object (no own string or enumerable symbol keys).
+ *
+ * @example
+ * ```ts
+ * isEmptyObject({})      // true
+ * isEmptyObject({ a: 1 }) // false
+ * ```
+ */
 export function isEmptyObject(value: unknown): value is Record<string | symbol, never> {
 	if (!isRecord(value)) {
 		return false
@@ -370,27 +679,62 @@ export function isEmptyObject(value: unknown): value is Record<string | symbol, 
 	return Object.keys(value).length === 0 && enumerableSymbolCount(value) === 0
 }
 
-/** Determine whether a value is an empty `Map`. */
+/** Determine whether a value is an empty `Map`.
+ *
+ * @example
+ * ```ts
+ * isEmptyMap(new Map())            // true
+ * isEmptyMap(new Map([['a', 1]]))  // false
+ * ```
+ */
 export function isEmptyMap(value: unknown): value is ReadonlyMap<never, never> {
 	return value instanceof Map && value.size === 0
 }
 
-/** Determine whether a value is an empty `Set`. */
+/** Determine whether a value is an empty `Set`.
+ *
+ * @example
+ * ```ts
+ * isEmptySet(new Set())    // true
+ * isEmptySet(new Set([1])) // false
+ * ```
+ */
 export function isEmptySet(value: unknown): value is ReadonlySet<never> {
 	return value instanceof Set && value.size === 0
 }
 
-/** Determine whether a value is a non-empty string (at least one character). */
+/** Determine whether a value is a non-empty string (at least one character).
+ *
+ * @example
+ * ```ts
+ * isNonEmptyString('a') // true
+ * isNonEmptyString('')  // false
+ * ```
+ */
 export function isNonEmptyString(value: unknown): value is string {
 	return isString(value) && value.length > 0
 }
 
-/** Determine whether a value is a non-empty array (at least one element). */
+/** Determine whether a value is a non-empty array (at least one element).
+ *
+ * @example
+ * ```ts
+ * isNonEmptyArray([1]) // true
+ * isNonEmptyArray([])  // false
+ * ```
+ */
 export function isNonEmptyArray<T = unknown>(value: unknown): value is readonly [T, ...T[]] {
 	return isArray(value) && value.length > 0
 }
 
-/** Determine whether a value is a non-empty plain object (at least one own string or enumerable symbol key). */
+/** Determine whether a value is a non-empty plain object (at least one own string or enumerable symbol key).
+ *
+ * @example
+ * ```ts
+ * isNonEmptyObject({ a: 1 }) // true
+ * isNonEmptyObject({})       // false
+ * ```
+ */
 export function isNonEmptyObject(value: unknown): value is Record<string | symbol, unknown> {
 	if (!isRecord(value)) {
 		return false
@@ -398,21 +742,42 @@ export function isNonEmptyObject(value: unknown): value is Record<string | symbo
 	return Object.keys(value).length > 0 || enumerableSymbolCount(value) > 0
 }
 
-/** Determine whether a value is a non-empty `Map` (at least one entry). */
+/** Determine whether a value is a non-empty `Map` (at least one entry).
+ *
+ * @example
+ * ```ts
+ * isNonEmptyMap(new Map([['a', 1]])) // true
+ * isNonEmptyMap(new Map())            // false
+ * ```
+ */
 export function isNonEmptyMap<K = unknown, V = unknown>(
 	value: unknown,
 ): value is ReadonlyMap<K, V> {
 	return value instanceof Map && value.size > 0
 }
 
-/** Determine whether a value is a non-empty `Set` (at least one element). */
+/** Determine whether a value is a non-empty `Set` (at least one element).
+ *
+ * @example
+ * ```ts
+ * isNonEmptySet(new Set([1])) // true
+ * isNonEmptySet(new Set())    // false
+ * ```
+ */
 export function isNonEmptySet<T = unknown>(value: unknown): value is ReadonlySet<T> {
 	return value instanceof Set && value.size > 0
 }
 
 // === Function guards
 
-/** Determine whether a value is a function that declares zero parameters (`Function.length === 0`). */
+/** Determine whether a value is a function that declares zero parameters (`Function.length === 0`).
+ *
+ * @example
+ * ```ts
+ * isZeroArg(() => {})    // true
+ * isZeroArg((a) => a)    // false
+ * ```
+ */
 export function isZeroArg(value: unknown): value is ZeroArgFunction {
 	return isFunction(value) && value.length === 0
 }
@@ -424,38 +789,79 @@ export function isZeroArg(value: unknown): value is ZeroArgFunction {
  * Uses `constructor.name === 'AsyncFunction'` — not `instanceof`, which is
  * unreliable across realms. The `?.` keeps the guard total (§14): a function
  * whose `constructor` was nulled yields `undefined`, never a thrown `null.name`.
+ *
+ * @example
+ * ```ts
+ * isAsyncFunction(async () => {}) // true
+ * isAsyncFunction(() => {})       // false
+ * ```
  */
 export function isAsyncFunction(value: unknown): value is AnyAsyncFunction {
 	return isFunction(value) && value.constructor?.name === 'AsyncFunction'
 }
 
-/** Determine whether a value is a generator function (`function*`). */
+/** Determine whether a value is a generator function (`function*`).
+ *
+ * @example
+ * ```ts
+ * isGeneratorFunction(function* () {}) // true
+ * isGeneratorFunction(() => {})        // false
+ * ```
+ */
 export function isGeneratorFunction(
 	value: unknown,
 ): value is (...args: unknown[]) => Generator<unknown, unknown, unknown> {
 	return isFunction(value) && value.constructor?.name === 'GeneratorFunction'
 }
 
-/** Determine whether a value is an async generator function (`async function*`). */
+/** Determine whether a value is an async generator function (`async function*`).
+ *
+ * @example
+ * ```ts
+ * isAsyncGeneratorFunction(async function* () {}) // true
+ * isAsyncGeneratorFunction(function* () {})       // false
+ * ```
+ */
 export function isAsyncGeneratorFunction(
 	value: unknown,
 ): value is (...args: unknown[]) => AsyncGenerator<unknown, unknown, unknown> {
 	return isFunction(value) && value.constructor?.name === 'AsyncGeneratorFunction'
 }
 
-/** Determine whether a value is a zero-argument async function. */
+/** Determine whether a value is a zero-argument async function.
+ *
+ * @example
+ * ```ts
+ * isZeroArgAsync(async () => {}) // true
+ * isZeroArgAsync(async (a) => a) // false
+ * ```
+ */
 export function isZeroArgAsync(value: unknown): value is ZeroArgAsyncFunction {
 	return isZeroArg(value) && isAsyncFunction(value)
 }
 
-/** Determine whether a value is a zero-argument generator function. */
+/** Determine whether a value is a zero-argument generator function.
+ *
+ * @example
+ * ```ts
+ * isZeroArgGenerator(function* () {})  // true
+ * isZeroArgGenerator(function* (a) {}) // false
+ * ```
+ */
 export function isZeroArgGenerator(
 	value: unknown,
 ): value is () => Generator<unknown, unknown, unknown> {
 	return isZeroArg(value) && isGeneratorFunction(value)
 }
 
-/** Determine whether a value is a zero-argument async generator function. */
+/** Determine whether a value is a zero-argument async generator function.
+ *
+ * @example
+ * ```ts
+ * isZeroArgAsyncGenerator(async function* () {})  // true
+ * isZeroArgAsyncGenerator(async function* (a) {}) // false
+ * ```
+ */
 export function isZeroArgAsyncGenerator(
 	value: unknown,
 ): value is () => AsyncGenerator<unknown, unknown, unknown> {
@@ -469,6 +875,12 @@ export function isZeroArgAsyncGenerator(
  * Probes with `Reflect.construct(String, [], value)`: a real constructor
  * succeeds, while arrow functions, plain functions, and non-functions throw
  * and yield `false`. Never throws. Backs the `instanceOf` combinator.
+ *
+ * @example
+ * ```ts
+ * isConstructor(class X {}) // true
+ * isConstructor(() => {})    // false
+ * ```
  */
 export function isConstructor(value: unknown): value is AnyConstructor<object> {
 	if (!isFunction(value)) {

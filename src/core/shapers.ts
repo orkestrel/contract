@@ -62,6 +62,11 @@ export function stringShape(options?: StringShapeOptions): StringShape {
  *
  * @param options - Optional bounds (`min` / `max`), `integer`, and `description`
  * @returns A number shape
+ *
+ * @example
+ * ```ts
+ * const age = numberShape({ min: 0, max: 120 })
+ * ```
  */
 export function numberShape(options?: NumberShapeOptions): NumberShape {
 	return {
@@ -98,6 +103,11 @@ export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): Num
  *
  * @param options - Optional `description`
  * @returns A boolean shape
+ *
+ * @example
+ * ```ts
+ * const active = booleanShape({ description: 'Whether the record is active' })
+ * ```
  */
 export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
 	return {
@@ -111,6 +121,11 @@ export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
  *
  * @param options - Optional `description`
  * @returns A null shape
+ *
+ * @example
+ * ```ts
+ * const empty = nullShape()
+ * ```
  */
 export function nullShape(options?: NullShapeOptions): NullShape {
 	return { type: 'null', description: options?.description }
@@ -253,6 +268,12 @@ export function unionShape<V extends readonly ContractShape[]>(...variants: V): 
  *
  * @param variants - The candidate shapes
  * @returns A union shape with `mode: 'oneOf'`
+ *
+ * @example
+ * ```ts
+ * const id = oneOfShape(stringShape(), integerShape())
+ * // Infer<typeof id> = string | number
+ * ```
  */
 export function oneOfShape<V extends readonly ContractShape[]>(...variants: V): UnionShape<V> {
 	return { type: 'union', variants, mode: 'oneOf' }
@@ -277,6 +298,12 @@ export function optionalShape<S extends ContractShape>(inner: S): OptionalShape<
  *
  * @param inner - The wrapped shape
  * @returns A nullable shape
+ *
+ * @example
+ * ```ts
+ * const bio = nullableShape(stringShape())
+ * // Infer<typeof bio> = string | null
+ * ```
  */
 export function nullableShape<S extends ContractShape>(inner: S): NullableShape<S> {
 	return { type: 'nullable', inner }
@@ -294,6 +321,11 @@ export function nullableShape<S extends ContractShape>(inner: S): NullableShape<
  *
  * @param options - Optional `description`
  * @returns A JSON passthrough shape
+ *
+ * @example
+ * ```ts
+ * const payload = jsonShape({ description: 'Arbitrary JSON payload' })
+ * ```
  */
 export function jsonShape(options?: JSONShapeOptions): JSONShape {
 	return { type: 'json', description: options?.description }
@@ -308,6 +340,11 @@ export function jsonShape(options?: JSONShapeOptions): JSONShape {
  *
  * @param schema - The JSON Schema fragment to embed
  * @returns A raw shape
+ *
+ * @example
+ * ```ts
+ * const custom = rawShape({ type: 'string', format: 'uuid' })
+ * ```
  */
 export function rawShape(schema: JSONSchema): RawShape {
 	return { type: 'raw', schema }
