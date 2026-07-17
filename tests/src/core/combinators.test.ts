@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
 	andOf,
 	arrayOf,
@@ -33,7 +33,7 @@ import {
 	unionOf,
 	whereOf,
 } from '@src/core'
-import type { Guard } from '@src/core'
+import type { Guard, GuardsShape } from '@src/core'
 
 describe('element combinators', () => {
 	it('validates arrays and tuples', () => {
@@ -70,6 +70,37 @@ describe('literal and enum combinators', () => {
 		expect(color('RED')).toBe(true)
 		expect(color('BLUE')).toBe(true)
 		expect(color('GREEN')).toBe(false)
+	})
+
+	it('enumOf narrows an inline object literal argument to its literal value union (type-level)', () => {
+		const isDirection = enumOf({ Up: 'up', Down: 'down' })
+		expectTypeOf(isDirection).toEqualTypeOf<Guard<'up' | 'down'>>()
+		const value: unknown = 'up'
+		if (isDirection(value)) {
+			expectTypeOf(value).toEqualTypeOf<'up' | 'down'>()
+		}
+	})
+
+	it('enumOf keeps a wide record variable wide (type-level lock)', () => {
+		const values: Record<string, string> = { Up: 'up', Down: 'down' }
+		const isDirection = enumOf(values)
+		expectTypeOf(isDirection).toEqualTypeOf<Guard<string>>()
+		expect(isDirection('up')).toBe(true)
+		expect(isDirection('left')).toBe(false)
+	})
+
+	it('enumOf narrows a native enum argument to its member union (type-level lock)', () => {
+		enum Direction {
+			Up = 'up',
+			Down = 'down',
+		}
+		const isDirection = enumOf(Direction)
+		const value: unknown = Direction.Up
+		if (isDirection(value)) {
+			expectTypeOf(value).toEqualTypeOf<Direction>()
+		}
+		expect(isDirection('up')).toBe(true)
+		expect(isDirection('left')).toBe(false)
 	})
 
 	it('literalOf uses Object.is semantics', () => {
@@ -122,6 +153,44 @@ describe('recordOf, pickOf, omitOf', () => {
 		expect(recordOf(picked)({ id: 'x' })).toBe(false)
 		expect(recordOf(omitted)({ id: 'x', name: 'y' })).toBe(true)
 		expect(recordOf(omitted)({ id: 'x', name: 'y', age: 1 })).toBe(false)
+	})
+
+	it('lock: recordOf with an inline literal shape and bare optional literal marks only the listed key optional', () => {
+		const optionalUser = recordOf({ id: isString, note: isString }, ['note'])
+		expectTypeOf(optionalUser).toEqualTypeOf<
+			Guard<Readonly<{ id: string; note: string | undefined }>>
+		>()
+		const value: unknown = { id: 'u1' }
+		if (optionalUser(value)) {
+			expectTypeOf(value.id).toEqualTypeOf<string>()
+			expectTypeOf(value.note).toEqualTypeOf<string | undefined>()
+		}
+	})
+
+	it("lock: recordOf with a wide GuardsShape variable and bare ['a'] infers K as readonly ['a']", () => {
+		const wideShape: GuardsShape = { a: isString, b: isNumber }
+		const guard = recordOf(wideShape, ['a'])
+		const value: unknown = { a: 'x', b: 1 }
+		// A record missing the unlisted key `b` must still be rejected at runtime —
+		// proof that only 'a' was inferred as optional, not the whole wide shape.
+		expect(guard(value)).toBe(true)
+		expect(guard({ a: 'x' })).toBe(false)
+	})
+
+	it('lock: pickOf/omitOf preserve bare-literal key inference', () => {
+		const shape = { id: isString, age: isNumber, name: isString }
+		const picked = pickOf(shape, ['id', 'name'])
+		const omitted = omitOf(shape, ['age'])
+		expectTypeOf(picked).toEqualTypeOf<Pick<typeof shape, 'id' | 'name'>>()
+		expectTypeOf(omitted).toEqualTypeOf<Omit<typeof shape, 'age'>>()
+	})
+
+	it("lock (runtime): recordOf(wide, ['a']) rejects a record missing required 'b'", () => {
+		const wideShape: GuardsShape = { a: isString, b: isNumber }
+		const guard = recordOf(wideShape, ['a'])
+		expect(guard({ a: 'x', b: 1 })).toBe(true)
+		expect(guard({ a: 'x' })).toBe(false)
+		expect(guard({})).toBe(false)
 	})
 
 	describe('inherited-key semantics (own-property only)', () => {

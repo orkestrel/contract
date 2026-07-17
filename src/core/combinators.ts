@@ -146,7 +146,7 @@ export function instanceOf<C>(ctor: C): Guard<InstanceType<C & AnyConstructor<ob
  * isDirection('left') // false
  * ```
  */
-export function enumOf<E extends Record<string, string | number>>(
+export function enumOf<const E extends Record<string, string | number>>(
 	enumeration: E,
 ): Guard<E[keyof E]> {
 	const values = new Set(Object.values(enumeration))
