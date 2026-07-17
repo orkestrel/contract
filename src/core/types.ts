@@ -57,14 +57,22 @@ export type GuardsShape = Readonly<Record<string, Guard<unknown>>>
 export type FromGuards<G extends GuardsShape> = Readonly<{ [K in keyof G]: GuardType<G[K]> }>
 
 /**
- * Like {@link FromGuards}, but every key listed in `K` is made optional.
+ * Like {@link FromGuards}, but every key listed in `K` becomes a true optional
+ * member (`?`) rather than a required key widened with `| undefined`.
+ *
+ * @remarks
+ * A key present in `K` may be omitted entirely; if present, its value must
+ * still satisfy the key's guard — a present key holding `undefined` is not
+ * accepted.
  *
  * @typeParam S - The full guard shape
- * @typeParam K - Tuple of keys to widen with `| undefined`
+ * @typeParam K - Tuple of keys to make optional
  */
-export type OptionalFromGuards<S extends GuardsShape, K extends ReadonlyArray<keyof S>> = Readonly<{
-	[P in keyof S]: P extends K[number] ? FromGuards<S>[P] | undefined : FromGuards<S>[P]
-}>
+export type OptionalFromGuards<S extends GuardsShape, K extends ReadonlyArray<keyof S>> = Readonly<
+	{ [P in Exclude<keyof S, K[number]>]: FromGuards<S>[P] } & {
+		[P in Extract<keyof S, K[number]>]?: FromGuards<S>[P]
+	}
+>
 
 /** Map a tuple of element guards to a readonly tuple of their guarded types. */
 export type TupleFromGuards<Ts extends ReadonlyArray<Guard<unknown>>> = Readonly<{

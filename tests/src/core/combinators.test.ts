@@ -122,11 +122,13 @@ describe('recordOf, pickOf, omitOf', () => {
 		expect(optionalUser({ id: 'u1' })).toBe(true)
 		expect(optionalUser({ id: 'u1', note: 'hi' })).toBe(true)
 		expect(optionalUser({ id: 'u1', note: 1 })).toBe(false)
+		expect(optionalUser({ id: 'u1', note: undefined })).toBe(false)
 
 		const partialUser = recordOf({ id: isString, age: isNumber }, true)
 		expect(partialUser({})).toBe(true)
 		expect(partialUser({ id: 'x' })).toBe(true)
 		expect(partialUser({ id: 1 })).toBe(false)
+		expect(partialUser({ id: undefined })).toBe(false)
 	})
 
 	it('ignores extra symbol keys but rejects extra string keys', () => {
@@ -157,14 +159,17 @@ describe('recordOf, pickOf, omitOf', () => {
 
 	it('lock: recordOf with an inline literal shape and bare optional literal marks only the listed key optional', () => {
 		const optionalUser = recordOf({ id: isString, note: isString }, ['note'])
-		expectTypeOf(optionalUser).toEqualTypeOf<
-			Guard<Readonly<{ id: string; note: string | undefined }>>
-		>()
+		expectTypeOf(optionalUser).toEqualTypeOf<Guard<Readonly<{ id: string; note?: string }>>>()
 		const value: unknown = { id: 'u1' }
 		if (optionalUser(value)) {
 			expectTypeOf(value.id).toEqualTypeOf<string>()
 			expectTypeOf(value.note).toEqualTypeOf<string | undefined>()
 		}
+	})
+
+	it('lock: recordOf with optional: true marks every key as a true optional member', () => {
+		const partialUser = recordOf({ id: isString, age: isNumber }, true)
+		expectTypeOf(partialUser).toEqualTypeOf<Guard<Readonly<{ id?: string; age?: number }>>>()
 	})
 
 	it("lock: recordOf with a wide GuardsShape variable and bare ['a'] infers K as readonly ['a']", () => {

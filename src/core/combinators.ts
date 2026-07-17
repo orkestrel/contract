@@ -228,7 +228,7 @@ export function recordOf<S extends GuardsShape, K extends ReadonlyArray<keyof S 
 export function recordOf<S extends GuardsShape>(
 	shape: S,
 	optional: true,
-): Guard<Readonly<{ [P in keyof S]: FromGuards<S>[P] | undefined }>>
+): Guard<Readonly<{ [P in keyof S]?: FromGuards<S>[P] }>>
 
 /**
  * Build a guard that accepts plain records matching a guard shape.
@@ -264,7 +264,7 @@ export function recordOf<
 	optional?: K,
 ): Guard<
 	K extends true
-		? Readonly<{ [P in keyof S]: FromGuards<S>[P] | undefined }>
+		? Readonly<{ [P in keyof S]?: FromGuards<S>[P] }>
 		: K extends ReadonlyArray<keyof S & string>
 			? OptionalFromGuards<S, K>
 			: FromGuards<S>
@@ -282,7 +282,7 @@ export function recordOf<
 	return (
 		value: unknown,
 	): value is K extends true
-		? Readonly<{ [P in keyof S]: FromGuards<S>[P] | undefined }>
+		? Readonly<{ [P in keyof S]?: FromGuards<S>[P] }>
 		: K extends ReadonlyArray<keyof S & string>
 			? OptionalFromGuards<S, K>
 			: FromGuards<S> => {
