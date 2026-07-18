@@ -340,6 +340,16 @@ describe('compileGuard', () => {
 		expect(arr([1, 'x'])).toBe(false)
 	})
 
+	it('oneOfShape rejects a value matching more than one variant (exactly-one semantics)', () => {
+		const guard = compileGuard(oneOfShape(numberShape(), integerShape()))
+		// 3 is guard-valid against BOTH numberShape and integerShape — the emitted
+		// JSON Schema `oneOf` requires EXACTLY one match, so the compiled guard
+		// must reject it even though unionShape's anyOf semantics would accept it.
+		expect(guard(3)).toBe(false)
+		expect(guard(3.5)).toBe(true) // matches numberShape only
+		expect(guard('x')).toBe(false) // matches neither
+	})
+
 	it('raw accepts any value and the guard stays total on adversarial input', () => {
 		expect(compileGuard(rawShape({}))(Symbol('x'))).toBe(true)
 		const guard = compileGuard(objectShape({ name: stringShape() }))
@@ -419,6 +429,13 @@ describe('compileParser', () => {
 		expect(parse(37)).toBe(37) // guard-valid via integer variant — not coerced to '37'
 		expect(parse('37')).toBe('37') // already guard-valid via string variant — unchanged
 		expect(parse(true)).toBeUndefined() // guard-invalid against every variant
+	})
+
+	it('oneOfShape parse rejects an input matching more than one variant', () => {
+		const parse = compileParser(oneOfShape(numberShape(), integerShape()))
+		expect(parse(3)).toBeUndefined() // matches both variants — ambiguous, rejected
+		expect(parse(3.5)).toBe(3.5) // matches numberShape only
+		expect(parse('x')).toBeUndefined() // matches neither
 	})
 
 	it('union returns a guard-valid object by reference through the identity pass', () => {

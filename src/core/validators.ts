@@ -11,13 +11,19 @@ import { attempt, enumerableSymbolCount } from './helpers.js'
 
 // AGENTS §14: guards are total functions — a guard NEVER throws. Adversarial
 // input (hostile getters, exotic objects, cycles) returns `false`, never an
-// error. Most guards here are a single structural test with no user callbacks,
-// so totality is immediate. The reflective guards — those that probe a
-// property through `Reflect.get` or walk a structure (`isPromiseLike`,
-// `isIterable`, `isAsyncIterable`, `isJSONValue`, `isRecord`) can hit a hostile
-// getter or a revoked `Proxy` that throws mid-probe, so totality is NOT
-// automatic for them — each contains its probe/walk in `attempt` (see
-// ./helpers.js) and returns `false` on a caught throw.
+// error. Guards built from a single `typeof` / strict-equality test are
+// immediately total — no probe of the value's internals can throw. Every
+// OTHER guard here probes the value in some way — a property read through
+// `Reflect.get`, a structural walk (`isPromiseLike`, `isIterable`,
+// `isAsyncIterable`, `isJSONValue`, `isRecord`), an `instanceof` check (which
+// invokes the target's `[Symbol.hasInstance]` / triggers a `getPrototypeOf`
+// trap), or an own-key enumeration (`isEmptyObject` / `isNonEmptyObject`) —
+// so a hostile getter, a revoked `Proxy`, or an exotic trap can throw
+// mid-probe. Totality is NOT automatic for these: each contains its
+// probe/walk in `attempt` (see ./helpers.js) and returns `false` on a caught
+// throw. Every `instanceof`-based guard in this file routes through the
+// shared {@link isInstance} helper, which is the one place that containment
+// lives for that family.
 
 // === Primitive guards
 
@@ -58,7 +64,14 @@ export function isDefined<T>(value: T | null | undefined): value is T {
 	return value !== null && value !== undefined
 }
 
-/** Determine whether a value is a string. */
+/** Determine whether a value is a string.
+ *
+ * @example
+ * ```ts
+ * isString('hi') // true
+ * isString(42)   // false
+ * ```
+ */
 export function isString(value: unknown): value is string {
 	return typeof value === 'string'
 }
@@ -68,12 +81,27 @@ export function isString(value: unknown): value is string {
  *
  * @remarks
  * Includes `NaN` and `±Infinity` — use {@link isFiniteNumber} to exclude them.
+ *
+ * @example
+ * ```ts
+ * isNumber(42)         // true
+ * isNumber(Number.NaN) // true — NaN is still a number
+ * isNumber('42')       // false
+ * ```
  */
 export function isNumber(value: unknown): value is number {
 	return typeof value === 'number'
 }
 
-/** Determine whether a value is a finite number (excludes `NaN` and `±Infinity`). */
+/** Determine whether a value is a finite number (excludes `NaN` and `±Infinity`).
+ *
+ * @example
+ * ```ts
+ * isFiniteNumber(42)         // true
+ * isFiniteNumber(Number.NaN) // false
+ * isFiniteNumber(Infinity)   // false
+ * ```
+ */
 export function isFiniteNumber(value: unknown): value is number {
 	return typeof value === 'number' && Number.isFinite(value)
 }
@@ -211,6 +239,44 @@ export function isNullableBoolean(value: unknown): value is boolean | null {
 // known, accepted limitation — cross-realm identity would require duck-typing
 // every built-in, which trades soundness for portability.
 
+/**
+ * Determine whether a value is an instance of a constructor, contained against
+ * a throwing `instanceof` check.
+ *
+ * @remarks
+ * The low-level total helper every `instanceof`-based guard in this file (and
+ * the `instanceOf` combinator) routes through. A bare `value instanceof X` is
+ * NOT total (AGENTS §14): it invokes `getPrototypeOf` on `value` — which a
+ * revoked `Proxy` or a `getPrototypeOf`-trap `Proxy` throws from — and, when
+ * `X[Symbol.hasInstance]` is user-defined, can throw from arbitrary code. This
+ * wraps the check in {@link attempt} (see ./helpers.js) so any such throw
+ * yields `false` instead of escaping.
+ *
+ * @param value - The value to test
+ * @param ctor - The constructor to test against
+ * @returns `true` when `value instanceof ctor`, `false` on a non-match or a
+ *          contained throw
+ *
+ * @example
+ * ```ts
+ * isInstance(new Date(), Date) // true
+ * isInstance({}, Date)          // false
+ * ```
+ */
+export function isInstance<C>(
+	value: unknown,
+	ctor: C,
+): value is InstanceType<C & AnyConstructor<object>> {
+	// `ctor` is narrowed to a function through `isFunction` before the `instanceof`
+	// check — an unconstrained generic RHS loses TS's built-in instanceof leniency
+	// once nested inside another generic call (the `attempt` callback), so the
+	// narrowing keeps this call legal without a constraint that would reject
+	// combinators.ts's `instanceOf`, which validates `ctor` separately.
+	const target: unknown = ctor
+	const outcome = attempt(() => isFunction(target) && value instanceof target)
+	return outcome.success && outcome.value
+}
+
 /** Determine whether a value is a `Date`.
  *
  * @example
@@ -220,7 +286,7 @@ export function isNullableBoolean(value: unknown): value is boolean | null {
  * ```
  */
 export function isDate(value: unknown): value is Date {
-	return value instanceof Date
+	return isInstance(value, Date)
 }
 
 /** Determine whether a value is a `RegExp`.
@@ -232,7 +298,7 @@ export function isDate(value: unknown): value is Date {
  * ```
  */
 export function isRegExp(value: unknown): value is RegExp {
-	return value instanceof RegExp
+	return isInstance(value, RegExp)
 }
 
 /** Determine whether a value is an `Error`.
@@ -244,7 +310,7 @@ export function isRegExp(value: unknown): value is RegExp {
  * ```
  */
 export function isError(value: unknown): value is Error {
-	return value instanceof Error
+	return isInstance(value, Error)
 }
 
 /** Determine whether a value is a native `Promise` (use {@link isPromiseLike} for any thenable).
@@ -256,7 +322,7 @@ export function isError(value: unknown): value is Error {
  * ```
  */
 export function isPromise<T = unknown>(value: unknown): value is Promise<T> {
-	return value instanceof Promise
+	return isInstance(value, Promise)
 }
 
 /**
@@ -298,7 +364,7 @@ export function isPromiseLike<T = unknown>(
  * ```
  */
 export function isArrayBuffer(value: unknown): value is ArrayBuffer {
-	return value instanceof ArrayBuffer
+	return isInstance(value, ArrayBuffer)
 }
 
 /**
@@ -315,7 +381,7 @@ export function isArrayBuffer(value: unknown): value is ArrayBuffer {
  * ```
  */
 export function isSharedArrayBuffer(value: unknown): value is SharedArrayBuffer {
-	return typeof SharedArrayBuffer !== 'undefined' && value instanceof SharedArrayBuffer
+	return typeof SharedArrayBuffer !== 'undefined' && isInstance(value, SharedArrayBuffer)
 }
 
 // === Protocol guards
@@ -398,6 +464,14 @@ export function isObject(value: unknown): value is object {
  * instance's runs through the class's own prototype. The whole body runs
  * inside `attempt` (AGENTS §14) so a revoked `Proxy` or a hostile
  * `getPrototypeOf` trap cannot escape as a thrown error.
+ *
+ * @example
+ * ```ts
+ * isRecord({ a: 1 })         // true
+ * isRecord(Object.create(null)) // true
+ * isRecord([])               // false
+ * isRecord(new Date())       // false
+ * ```
  */
 export function isRecord(value: unknown): value is Record<string, unknown> {
 	const outcome = attempt(() => {
@@ -419,7 +493,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
  * ```
  */
 export function isMap<K = unknown, V = unknown>(value: unknown): value is ReadonlyMap<K, V> {
-	return value instanceof Map
+	return isInstance(value, Map)
 }
 
 /** Determine whether a value is a `Set`.
@@ -431,7 +505,7 @@ export function isMap<K = unknown, V = unknown>(value: unknown): value is Readon
  * ```
  */
 export function isSet<T = unknown>(value: unknown): value is ReadonlySet<T> {
-	return value instanceof Set
+	return isInstance(value, Set)
 }
 
 /** Determine whether a value is a `WeakMap`.
@@ -443,7 +517,7 @@ export function isSet<T = unknown>(value: unknown): value is ReadonlySet<T> {
  * ```
  */
 export function isWeakMap(value: unknown): value is WeakMap<object, unknown> {
-	return value instanceof WeakMap
+	return isInstance(value, WeakMap)
 }
 
 /** Determine whether a value is a `WeakSet`.
@@ -455,7 +529,7 @@ export function isWeakMap(value: unknown): value is WeakMap<object, unknown> {
  * ```
  */
 export function isWeakSet(value: unknown): value is WeakSet<object> {
-	return value instanceof WeakSet
+	return isInstance(value, WeakSet)
 }
 
 // === Array & typed-array guards
@@ -481,7 +555,7 @@ export function isArray<T = unknown>(value: unknown): value is readonly T[] {
  * ```
  */
 export function isDataView(value: unknown): value is DataView<ArrayBufferLike> {
-	return value instanceof DataView
+	return isInstance(value, DataView)
 }
 
 /** Determine whether a value is an `ArrayBufferView` (any typed array or `DataView`).
@@ -505,7 +579,7 @@ export function isArrayBufferView(value: unknown): value is ArrayBufferView {
  * ```
  */
 export function isInt8Array(value: unknown): value is Int8Array {
-	return value instanceof Int8Array
+	return isInstance(value, Int8Array)
 }
 
 /** Determine whether a value is a `Uint8Array`.
@@ -517,7 +591,7 @@ export function isInt8Array(value: unknown): value is Int8Array {
  * ```
  */
 export function isUint8Array(value: unknown): value is Uint8Array {
-	return value instanceof Uint8Array
+	return isInstance(value, Uint8Array)
 }
 
 /** Determine whether a value is a `Uint8ClampedArray`.
@@ -529,7 +603,7 @@ export function isUint8Array(value: unknown): value is Uint8Array {
  * ```
  */
 export function isUint8ClampedArray(value: unknown): value is Uint8ClampedArray {
-	return value instanceof Uint8ClampedArray
+	return isInstance(value, Uint8ClampedArray)
 }
 
 /** Determine whether a value is an `Int16Array`.
@@ -541,7 +615,7 @@ export function isUint8ClampedArray(value: unknown): value is Uint8ClampedArray 
  * ```
  */
 export function isInt16Array(value: unknown): value is Int16Array {
-	return value instanceof Int16Array
+	return isInstance(value, Int16Array)
 }
 
 /** Determine whether a value is a `Uint16Array`.
@@ -553,7 +627,7 @@ export function isInt16Array(value: unknown): value is Int16Array {
  * ```
  */
 export function isUint16Array(value: unknown): value is Uint16Array {
-	return value instanceof Uint16Array
+	return isInstance(value, Uint16Array)
 }
 
 /** Determine whether a value is an `Int32Array`.
@@ -565,7 +639,7 @@ export function isUint16Array(value: unknown): value is Uint16Array {
  * ```
  */
 export function isInt32Array(value: unknown): value is Int32Array {
-	return value instanceof Int32Array
+	return isInstance(value, Int32Array)
 }
 
 /** Determine whether a value is a `Uint32Array`.
@@ -577,7 +651,7 @@ export function isInt32Array(value: unknown): value is Int32Array {
  * ```
  */
 export function isUint32Array(value: unknown): value is Uint32Array {
-	return value instanceof Uint32Array
+	return isInstance(value, Uint32Array)
 }
 
 /** Determine whether a value is a `Float32Array`.
@@ -589,7 +663,7 @@ export function isUint32Array(value: unknown): value is Uint32Array {
  * ```
  */
 export function isFloat32Array(value: unknown): value is Float32Array {
-	return value instanceof Float32Array
+	return isInstance(value, Float32Array)
 }
 
 /** Determine whether a value is a `Float64Array`.
@@ -601,7 +675,7 @@ export function isFloat32Array(value: unknown): value is Float32Array {
  * ```
  */
 export function isFloat64Array(value: unknown): value is Float64Array {
-	return value instanceof Float64Array
+	return isInstance(value, Float64Array)
 }
 
 /**
@@ -618,7 +692,7 @@ export function isFloat64Array(value: unknown): value is Float64Array {
  * ```
  */
 export function isBigInt64Array(value: unknown): value is BigInt64Array {
-	return typeof BigInt64Array !== 'undefined' && value instanceof BigInt64Array
+	return typeof BigInt64Array !== 'undefined' && isInstance(value, BigInt64Array)
 }
 
 /**
@@ -635,7 +709,7 @@ export function isBigInt64Array(value: unknown): value is BigInt64Array {
  * ```
  */
 export function isBigUint64Array(value: unknown): value is BigUint64Array {
-	return typeof BigUint64Array !== 'undefined' && value instanceof BigUint64Array
+	return typeof BigUint64Array !== 'undefined' && isInstance(value, BigUint64Array)
 }
 
 // === Emptiness guards
@@ -676,7 +750,12 @@ export function isEmptyObject(value: unknown): value is Record<string | symbol, 
 	if (!isRecord(value)) {
 		return false
 	}
-	return Object.keys(value).length === 0 && enumerableSymbolCount(value) === 0
+	// Object.keys / getOwnPropertySymbols read the object's own-key list, which
+	// an `ownKeys` Proxy trap can throw from — contained via `attempt` (AGENTS §14).
+	const outcome = attempt(
+		() => Object.keys(value).length === 0 && enumerableSymbolCount(value) === 0,
+	)
+	return outcome.success && outcome.value
 }
 
 /** Determine whether a value is an empty `Map`.
@@ -688,7 +767,7 @@ export function isEmptyObject(value: unknown): value is Record<string | symbol, 
  * ```
  */
 export function isEmptyMap(value: unknown): value is ReadonlyMap<never, never> {
-	return value instanceof Map && value.size === 0
+	return isMap(value) && value.size === 0
 }
 
 /** Determine whether a value is an empty `Set`.
@@ -700,7 +779,7 @@ export function isEmptyMap(value: unknown): value is ReadonlyMap<never, never> {
  * ```
  */
 export function isEmptySet(value: unknown): value is ReadonlySet<never> {
-	return value instanceof Set && value.size === 0
+	return isSet(value) && value.size === 0
 }
 
 /** Determine whether a value is a non-empty string (at least one character).
@@ -739,7 +818,9 @@ export function isNonEmptyObject(value: unknown): value is Record<string | symbo
 	if (!isRecord(value)) {
 		return false
 	}
-	return Object.keys(value).length > 0 || enumerableSymbolCount(value) > 0
+	// Same containment as isEmptyObject — an `ownKeys` Proxy trap can throw.
+	const outcome = attempt(() => Object.keys(value).length > 0 || enumerableSymbolCount(value) > 0)
+	return outcome.success && outcome.value
 }
 
 /** Determine whether a value is a non-empty `Map` (at least one entry).
@@ -753,7 +834,7 @@ export function isNonEmptyObject(value: unknown): value is Record<string | symbo
 export function isNonEmptyMap<K = unknown, V = unknown>(
 	value: unknown,
 ): value is ReadonlyMap<K, V> {
-	return value instanceof Map && value.size > 0
+	return isMap(value) && value.size > 0
 }
 
 /** Determine whether a value is a non-empty `Set` (at least one element).
@@ -765,7 +846,7 @@ export function isNonEmptyMap<K = unknown, V = unknown>(
  * ```
  */
 export function isNonEmptySet<T = unknown>(value: unknown): value is ReadonlySet<T> {
-	return value instanceof Set && value.size > 0
+	return isSet(value) && value.size > 0
 }
 
 // === Function guards

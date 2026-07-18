@@ -342,8 +342,18 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
 				return outcome.success && outcome.value
 			}
 		}
-		case 'union':
-			return unionOf(...shape.variants.map((variant) => compileGuard(variant)))
+		case 'union': {
+			const guards = shape.variants.map((variant) => compileGuard(variant))
+			// A `oneOf`-mode union matches the emitted JSON Schema `oneOf` keyword —
+			// EXACTLY one variant must guard-accept the value, not "at least one"
+			// (unionOf's anyOf semantics). A value matching two-or-more variants is
+			// rejected, since it would violate the compiled schema.
+			if (shape.mode === 'oneOf') {
+				return (value: unknown): value is unknown =>
+					guards.filter((guard) => guard(value)).length === 1
+			}
+			return unionOf(...guards)
+		}
 		case 'optional':
 			return orOf(isUndefined, compileGuard(shape.inner))
 		case 'nullable':
@@ -507,6 +517,21 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 				parse: compileParser(variant),
 				guard: compileGuard(variant),
 			}))
+			// `oneOf` exactly-one semantics (documented on `oneOfShape`): judged on
+			// the RAW input's guard matches only — no coercion fallback. Exactly one
+			// variant's guard must accept the raw value; that variant's parser then
+			// runs (its parse must equal the already guard-valid input by clause A).
+			// Zero matches (no variant fits) or two-or-more matches (ambiguous —
+			// which variant the value belongs to isn't well-defined) both fail the
+			// parse, deliberately simpler than attempting a coercion-then-recheck
+			// resolution for ambiguous input.
+			if (shape.mode === 'oneOf') {
+				return (value) => {
+					const matches = variants.filter((variant) => variant.guard(value))
+					const [only] = matches
+					return matches.length === 1 && only !== undefined ? only.parse(value) : undefined
+				}
+			}
 			return (value) => {
 				// Identity pass first (AGENTS §14 clause A): a value already valid
 				// against ANY variant's guard is returned unchanged, so an earlier

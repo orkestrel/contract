@@ -488,6 +488,19 @@ describe('instanceOf', () => {
 		expect(instanceOf(Date)(new Date(0))).toBe(true)
 		expect(instanceOf(Date)('1970-01-01')).toBe(false)
 	})
+
+	it('is total against a revoked Proxy — never throws (AGENTS §14)', () => {
+		const isDateValue = instanceOf(Date)
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+		expect(() => isDateValue(proxy)).not.toThrow()
+		expect(isDateValue(proxy)).toBe(false)
+	})
+
+	it('preserves the concrete instance type at the type level', () => {
+		expectTypeOf(instanceOf(Date)).toEqualTypeOf<Guard<Date>>()
+		expectTypeOf(instanceOf(Map)).toEqualTypeOf<Guard<Map<unknown, unknown>>>()
+	})
 })
 
 describe('empty-collection and zero-guard edge cases', () => {

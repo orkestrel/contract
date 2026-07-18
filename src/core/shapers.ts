@@ -263,16 +263,32 @@ export function unionShape<V extends readonly ContractShape[]>(...variants: V): 
  * Build a {@link UnionShape} that emits `oneOf` (exactly one match) in JSON Schema.
  *
  * @remarks
- * Runtime behavior is identical to {@link unionShape} — only the emitted schema
- * keyword differs (`oneOf` vs `anyOf`).
+ * Unlike {@link unionShape} (`anyOf` — at least one variant matches),
+ * `oneOfShape`'s compiled guard and parser enforce EXACTLY one match:
+ *
+ * - **Guard**: accepts the value only when exactly one variant's guard
+ *   accepts it. A value matching two-or-more variants — which would violate
+ *   the emitted `oneOf` schema — is rejected, even though it would pass
+ *   {@link unionShape}'s guard.
+ * - **Parser**: judged on the RAW input's guard matches only, with NO
+ *   coercion fallback for an ambiguous input. When exactly one variant's
+ *   guard accepts the raw value, that variant's parser runs. Zero matches or
+ *   two-or-more matches both parse to `undefined` — a value ambiguous
+ *   between variants has no well-defined coercion target.
+ *
+ * Prefer {@link unionShape} when a value may legitimately satisfy more than
+ * one variant (e.g. overlapping shapes) and any match is acceptable. Prefer
+ * `oneOfShape` when overlap between variants indicates malformed input that
+ * must be rejected.
  *
  * @param variants - The candidate shapes
  * @returns A union shape with `mode: 'oneOf'`
  *
  * @example
  * ```ts
- * const id = oneOfShape(stringShape(), integerShape())
- * // Infer<typeof id> = string | number
+ * const id = oneOfShape(numberShape(), integerShape())
+ * // 3   fails — matches both numberShape and integerShape
+ * // 3.5 passes — matches numberShape only
  * ```
  */
 export function oneOfShape<V extends readonly ContractShape[]>(...variants: V): UnionShape<V> {

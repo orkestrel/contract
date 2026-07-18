@@ -26,6 +26,19 @@ import { resolveField } from './helpers.js'
 // combinators.ts) after coercion — the same source the compiled guard uses. So `createContract(...).parse` IS sound against the FULL
 // guard (refinements included); the split keeps each leaf parser small while the
 // compiler composes the full soundness.
+//
+// Coercion policy — which types cross into which:
+//   - number <-> string is BIDIRECTIONAL by design: parseNumber accepts a
+//     numeric string ('42' -> 42) and parseString accepts a finite number,
+//     stringifying it (42 -> '42'). Use isString / isFiniteNumber directly
+//     (never the parser) when you need STRICT type rejection with no coercion.
+//   - boolean is a coercion SINK, never a source: parseBoolean accepts
+//     'true'/'false'/'1'/'0' and 1/0 and coerces them TO a boolean, but
+//     parseNumber and parseString both reject booleans outright — a boolean
+//     never coerces INTO a number or string. This is intentional asymmetry:
+//     '1' meaning "the number one" and '1' meaning "true" are genuinely
+//     different domains, so only the boolean parser treats the numeric/string
+//     forms as booleans.
 
 // === Primitive parsers
 

@@ -355,6 +355,15 @@ export interface RawShape {
  * out until it aborts with TS2589. Bailing out lazily short-circuits that
  * fixed point (the untaken branch is never instantiated) while every narrow
  * shape and every partial union still flows through the exact chain below.
+ *
+ * The `ObjectShape` branch's `additionalProperties` guard (`[A] extends
+ * [boolean | ContractShape]`) is likewise wrapped in a tuple to stay
+ * non-distributive: a naked `A extends boolean | ContractShape` distributes
+ * over a union `A`, fanning a wide `additionalProperties` type into one
+ * {@link InferObject} instantiation per union member instead of one
+ * instantiation over the whole union — the same TS2589 risk under repeated
+ * nesting. {@link InferIndex} and {@link InferOpenIndex} apply the identical
+ * tuple guard to their own `A` parameter for the same reason.
  */
 export type Infer<S extends ContractShape> = [ContractShape] extends [S]
 	? unknown
@@ -376,7 +385,7 @@ export type Infer<S extends ContractShape> = [ContractShape] extends [S]
 								: never
 							: S extends ObjectShape<infer P, infer A>
 								? P extends Readonly<Record<string, ContractShape>>
-									? A extends boolean | ContractShape
+									? [A] extends [boolean | ContractShape]
 										? InferObject<P, A>
 										: never
 									: never
@@ -400,25 +409,40 @@ export type Infer<S extends ContractShape> = [ContractShape] extends [S]
  * {@link Infer} of an object shape's `properties` — the required keys, plus the
  * `optional`-wrapped keys as optional members, plus the index-signature
  * contribution of `additionalProperties` (see {@link InferIndex}).
+ *
+ * @remarks
+ * The `[keyof P] extends [never]` split is hoisted to the front (rather than
+ * folded into the intersection's second operand) so a pure record shape
+ * (`P` empty) short-circuits straight to {@link InferIndex} without ever
+ * building the `Readonly<{} & {}>` intersection shell — the clean
+ * `Readonly<Record<string, V>>` {@link InferIndex} already returns. A closed
+ * empty object (`P` empty, `A` `false`/absent) still resolves through
+ * {@link InferIndex}'s own `[A] extends [false]` branch to
+ * `Readonly<Record<never, never>>`, preserving the empty-closed-object result.
+ * A shape with fixed properties always routes through {@link InferOpenIndex}.
  */
 export type InferObject<
 	P extends Readonly<Record<string, ContractShape>>,
 	A extends boolean | ContractShape = false,
-> = Readonly<
-	{
-		[K in keyof P as P[K] extends { readonly type: 'optional' } ? never : K]: Infer<P[K]>
-	} & {
-		[K in keyof P as P[K] extends { readonly type: 'optional' } ? K : never]?: P[K] extends {
-			readonly type: 'optional'
-			readonly inner: infer I
-		}
-			? I extends ContractShape
-				? Infer<I>
-				: never
-			: never
-	}
-> &
-	([keyof P] extends [never] ? InferIndex<A> : InferOpenIndex<A>)
+> = [keyof P] extends [never]
+	? [A] extends [false]
+		? Readonly<Record<never, never>>
+		: InferIndex<A>
+	: Readonly<
+			{
+				[K in keyof P as P[K] extends { readonly type: 'optional' } ? never : K]: Infer<P[K]>
+			} & {
+				[K in keyof P as P[K] extends { readonly type: 'optional' } ? K : never]?: P[K] extends {
+					readonly type: 'optional'
+					readonly inner: infer I
+				}
+					? I extends ContractShape
+						? Infer<I>
+						: never
+					: never
+			}
+		> &
+			InferOpenIndex<A>
 
 /**
  * The index-signature contribution of a pure record shape's `additionalProperties`
@@ -431,12 +455,18 @@ export type InferObject<
  * {@link ContractShape} (open, constrained) contributes an index signature
  * typed to that shape's own `Infer` — sound here because there are no fixed
  * properties for the index to collide with.
+ *
+ * @remarks
+ * The final `[A] extends [ContractShape]` guard is tuple-wrapped to stay
+ * non-distributive, matching {@link Infer}'s own object-branch guard — see
+ * that type's remarks for why a naked `extends` here would fan a wide `A`
+ * into a union of `InferIndex` instantiations instead of one.
  */
 export type InferIndex<A extends boolean | ContractShape> = [A] extends [false]
 	? unknown
 	: [A] extends [true]
 		? { readonly [k: string]: unknown }
-		: A extends ContractShape
+		: [A] extends [ContractShape]
 			? { readonly [k: string]: Infer<A> }
 			: unknown
 
@@ -453,12 +483,18 @@ export type InferIndex<A extends boolean | ContractShape> = [A] extends [false]
  * `{ readonly [k: string]: unknown }`: the static type stops over-claiming the
  * extra-key type while the runtime guard still validates extras against `A`.
  * `false` / `true` behave exactly as {@link InferIndex}.
+ *
+ * @remarks
+ * The final `[A] extends [ContractShape]` guard is tuple-wrapped to stay
+ * non-distributive, matching {@link Infer}'s own object-branch guard and
+ * {@link InferIndex}'s tail — see {@link Infer}'s remarks for why a naked
+ * `extends` here would fan a wide `A` into a union of instantiations.
  */
 export type InferOpenIndex<A extends boolean | ContractShape> = [A] extends [false]
 	? unknown
 	: [A] extends [true]
 		? { readonly [k: string]: unknown }
-		: A extends ContractShape
+		: [A] extends [ContractShape]
 			? { readonly [k: string]: unknown }
 			: unknown
 
@@ -469,7 +505,7 @@ export type InferUnion<V extends readonly ContractShape[]> = V extends readonly 
 		: never
 	: never
 
-/** {@link Infer} with all `readonly` modifiers stripped — for consumers writing the parsed value. */
+/** {@link Infer} with its TOP-LEVEL `readonly` modifiers stripped (a shallow strip — nested object/array properties stay readonly) — for consumers writing the parsed value's own fields. */
 export type InferMutable<S extends ContractShape> = { -readonly [K in keyof Infer<S>]: Infer<S>[K] }
 
 // === Shape builder options

@@ -273,6 +273,28 @@ export function compileWidenedContract<S extends ContractShape>(
 	return createContract(shape)
 }
 
+// === Compile-time type equality
+//
+// A precision oracle stronger than assignability: `expectTypeOf(...).toEqualTypeOf`
+// covers most cases, but a hand-rolled identity check is used where a type-level
+// `Expect<Equal<...>>` assertion reads more directly alongside a hand-written
+// expected type (e.g. a deep structural snapshot lock).
+
+/**
+ * Strict type-level equality — `true` only when `X` and `Y` are identical types
+ * (mutual assignability is NOT enough; e.g. `{ a: string }` and `{ a: string; b?: never }`
+ * are mutually assignable but not `Equal`).
+ *
+ * @remarks
+ * The classic conditional-generic-identity trick: two distinct generic
+ * functions collapse to the same type only when `X` and `Y` are exactly equal.
+ */
+export type Equal<X, Y> =
+	(<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false
+
+/** Compile-time assertion — fails to typecheck unless `T` is exactly `true`. */
+export type Expect<T extends true> = T
+
 // === Roundtrip helpers
 
 /**

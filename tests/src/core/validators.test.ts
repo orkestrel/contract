@@ -26,6 +26,7 @@ import {
 	isFloat64Array,
 	isFunction,
 	isGeneratorFunction,
+	isInstance,
 	isInt16Array,
 	isInt32Array,
 	isInt8Array,
@@ -550,6 +551,59 @@ describe('reflective guards contain hostile getter/Proxy throws (AGENTS §14)', 
 		revoke()
 		expect(() => isJSONValue({ nested: proxy })).not.toThrow()
 		expect(isJSONValue({ nested: proxy })).toBe(false)
+	})
+})
+
+describe('instanceof-family guards are total against hostile Proxy input (AGENTS §14)', () => {
+	it('a revoked Proxy never throws — isDate, isMap, isPromise, a typed-array guard, isEmptyMap', () => {
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+		expect(() => isDate(proxy)).not.toThrow()
+		expect(isDate(proxy)).toBe(false)
+		expect(() => isMap(proxy)).not.toThrow()
+		expect(isMap(proxy)).toBe(false)
+		expect(() => isPromise(proxy)).not.toThrow()
+		expect(isPromise(proxy)).toBe(false)
+		expect(() => isUint8Array(proxy)).not.toThrow()
+		expect(isUint8Array(proxy)).toBe(false)
+		expect(() => isEmptyMap(proxy)).not.toThrow()
+		expect(isEmptyMap(proxy)).toBe(false)
+	})
+
+	it('isInstance is total against a revoked Proxy and a getPrototypeOf-throwing Proxy', () => {
+		const { proxy: revoked, revoke } = Proxy.revocable({}, {})
+		revoke()
+		expect(() => isInstance(revoked, Date)).not.toThrow()
+		expect(isInstance(revoked, Date)).toBe(false)
+
+		const hostile = new Proxy(
+			{},
+			{
+				getPrototypeOf() {
+					throw new Error('boom')
+				},
+			},
+		)
+		expect(() => isInstance(hostile, Date)).not.toThrow()
+		expect(isInstance(hostile, Date)).toBe(false)
+		expect(isInstance(new Date(), Date)).toBe(true)
+	})
+})
+
+describe('isEmptyObject / isNonEmptyObject are total against an ownKeys-throwing Proxy (AGENTS §14)', () => {
+	it('returns false, never throws, when Object.keys throws via an ownKeys trap', () => {
+		const hostile = new Proxy(
+			{},
+			{
+				ownKeys() {
+					throw new Error('boom')
+				},
+			},
+		)
+		expect(() => isEmptyObject(hostile)).not.toThrow()
+		expect(isEmptyObject(hostile)).toBe(false)
+		expect(() => isNonEmptyObject(hostile)).not.toThrow()
+		expect(isNonEmptyObject(hostile)).toBe(false)
 	})
 })
 

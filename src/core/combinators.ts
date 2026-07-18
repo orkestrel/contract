@@ -1,5 +1,4 @@
 import type {
-	AnyConstructor,
 	FromGuards,
 	Guard,
 	GuardsShape,
@@ -12,6 +11,7 @@ import {
 	isArray,
 	isConstructor,
 	isFiniteNumber,
+	isInstance,
 	isIterable,
 	isMap,
 	isNumber,
@@ -129,9 +129,11 @@ export function literalOf<const Literals extends ReadonlyArray<string | number |
  * isDateValue({})         // false
  * ```
  */
-export function instanceOf<C>(ctor: C): Guard<InstanceType<C & AnyConstructor<object>>> {
-	return (value: unknown): value is InstanceType<C & AnyConstructor<object>> =>
-		isConstructor(ctor) && isObject(value) && value instanceof ctor
+export function instanceOf<C extends abstract new (...args: never) => object>(
+	ctor: C,
+): Guard<InstanceType<C>> {
+	return (value: unknown): value is InstanceType<C> =>
+		isConstructor(ctor) && isObject(value) && isInstance(value, ctor)
 }
 
 /**

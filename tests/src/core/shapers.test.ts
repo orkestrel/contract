@@ -17,6 +17,7 @@ import {
 	stringShape,
 	unionShape,
 } from '@src/core'
+import type { Equal, Expect } from '../../setup.js'
 
 describe('shape builders', () => {
 	it('stringShape carries length / pattern / description', () => {
@@ -197,6 +198,13 @@ describe('Infer', () => {
 		const v: Infer<typeof o> = { id: 'x', whatever: 42 }
 		expect(v.id).toBe('x')
 	})
+
+	it('objectShape({}) infers a closed empty object, not unknown', () => {
+		const empty = objectShape({})
+		const value: Infer<typeof empty> = {}
+		expect(value).toEqual({})
+		type _Lock = Expect<Equal<Infer<typeof empty>, Readonly<Record<never, never>>>>
+	})
 })
 
 describe('InferMutable', () => {
@@ -212,5 +220,102 @@ describe('InferMutable', () => {
 		// @ts-expect-error — nested readonly is unchanged; `profile.bio` stays readonly
 		value.profile.bio = 'bye'
 		expect(value.profile.bio).toBe('bye')
+	})
+})
+
+describe('Infer depth-robustness tripwire', () => {
+	it('infers a deeply-nested (6+ level) realistic snapshot shape by exact identity', () => {
+		const textPart = objectShape({ via: literalShape(['text']), text: stringShape() })
+		const toolPart = objectShape({
+			via: literalShape(['tool']),
+			name: stringShape(),
+			args: recordShape(unionShape(stringShape(), numberShape(), booleanShape())),
+		})
+		const part = unionShape(textPart, toolPart)
+
+		const userMessage = objectShape({
+			role: literalShape(['user']),
+			parts: arrayShape(part),
+			at: numberShape(),
+		})
+		const assistantMessage = objectShape({
+			role: literalShape(['assistant']),
+			parts: arrayShape(part),
+			usage: optionalShape(objectShape({ input: numberShape(), output: numberShape() })),
+			stop: nullableShape(literalShape(['end', 'length', 'tool'])),
+		})
+		const message = unionShape(userMessage, assistantMessage)
+
+		const snapshot = objectShape({
+			id: stringShape(),
+			title: optionalShape(stringShape()),
+			messages: arrayShape(message),
+			metadata: recordShape(
+				objectShape({
+					key: stringShape(),
+					value: unionShape(stringShape(), numberShape(), booleanShape()),
+					tags: arrayShape(stringShape()),
+				}),
+			),
+			settings: objectShape({
+				model: stringShape(),
+				limits: objectShape({
+					tokens: objectShape({ input: numberShape(), output: numberShape() }),
+					nested: objectShape({ deep: objectShape({ deeper: stringShape() }) }),
+				}),
+			}),
+		})
+
+		type Snapshot = Infer<typeof snapshot>
+
+		type Part =
+			| { readonly via: 'text'; readonly text: string }
+			| {
+					readonly via: 'tool'
+					readonly name: string
+					readonly args: { readonly [k: string]: string | number | boolean }
+			  }
+		type UserMessage = {
+			readonly role: 'user'
+			readonly parts: readonly Part[]
+			readonly at: number
+		}
+		type AssistantMessage = {
+			readonly role: 'assistant'
+			readonly parts: readonly Part[]
+			readonly usage?: { readonly input: number; readonly output: number }
+			readonly stop: 'end' | 'length' | 'tool' | null
+		}
+		type Expected = {
+			readonly id: string
+			readonly title?: string
+			readonly messages: readonly (UserMessage | AssistantMessage)[]
+			readonly metadata: {
+				readonly [k: string]: {
+					readonly key: string
+					readonly value: string | number | boolean
+					readonly tags: readonly string[]
+				}
+			}
+			readonly settings: {
+				readonly model: string
+				readonly limits: {
+					readonly tokens: { readonly input: number; readonly output: number }
+					readonly nested: { readonly deep: { readonly deeper: string } }
+				}
+			}
+		}
+		type _Lock = Expect<Equal<Snapshot, Expected>>
+
+		const value: Snapshot = {
+			id: 'abc',
+			messages: [],
+			metadata: {},
+			settings: {
+				model: 'x',
+				limits: { tokens: { input: 0, output: 0 }, nested: { deep: { deeper: 'y' } } },
+			},
+		}
+		expect(value.id).toBe('abc')
 	})
 })
