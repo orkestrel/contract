@@ -64,7 +64,7 @@
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test"
 	},
 	"devDependencies": {
-		"@orkestrel/guide": "^0.0.1",
+		"@orkestrel/guide": "^0.0.3",
 		"@types/node": "^26.1.1",
 		"oxfmt": "^0.59.0",
 		"oxlint": "^1.74.0",
