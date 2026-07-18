@@ -201,10 +201,10 @@ export function arrayShape<S extends ContractShape>(
  * })
  * ```
  */
-export function objectShape<P extends Readonly<Record<string, ContractShape>>>(
-	properties: P,
-	options?: ObjectShapeOptions,
-): ObjectShape<P> {
+export function objectShape<
+	P extends Readonly<Record<string, ContractShape>>,
+	const A extends boolean | ContractShape = false,
+>(properties: P, options?: ObjectShapeOptions<A>): ObjectShape<P, A> {
 	return {
 		type: 'object',
 		properties,
@@ -232,7 +232,7 @@ export function objectShape<P extends Readonly<Record<string, ContractShape>>>(
 export function recordShape<S extends ContractShape>(
 	values: S,
 	options?: RecordShapeOptions,
-): ObjectShape {
+): ObjectShape<Record<never, never>, S> {
 	return {
 		type: 'object',
 		properties: {},

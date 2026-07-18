@@ -279,10 +279,11 @@ export interface ArrayShape<S extends ContractShape = ContractShape> {
  */
 export interface ObjectShape<
 	P extends Readonly<Record<string, ContractShape>> = Readonly<Record<string, ContractShape>>,
+	A extends boolean | ContractShape = boolean | ContractShape,
 > {
 	readonly type: 'object'
 	readonly properties: P
-	readonly additionalProperties?: boolean | ContractShape
+	readonly additionalProperties?: A
 	readonly description?: string
 }
 
@@ -373,9 +374,11 @@ export type Infer<S extends ContractShape> = [ContractShape] extends [S]
 							? I extends ContractShape
 								? readonly Infer<I>[]
 								: never
-							: S extends { readonly type: 'object'; readonly properties: infer P }
+							: S extends ObjectShape<infer P, infer A>
 								? P extends Readonly<Record<string, ContractShape>>
-									? InferObject<P>
+									? A extends boolean | ContractShape
+										? InferObject<P, A>
+										: never
 									: never
 								: S extends { readonly type: 'union'; readonly variants: infer V }
 									? V extends readonly ContractShape[]
@@ -395,9 +398,13 @@ export type Infer<S extends ContractShape> = [ContractShape] extends [S]
 
 /**
  * {@link Infer} of an object shape's `properties` — the required keys, plus the
- * `optional`-wrapped keys as optional members.
+ * `optional`-wrapped keys as optional members, plus the index-signature
+ * contribution of `additionalProperties` (see {@link InferIndex}).
  */
-export type InferObject<P extends Readonly<Record<string, ContractShape>>> = Readonly<
+export type InferObject<
+	P extends Readonly<Record<string, ContractShape>>,
+	A extends boolean | ContractShape = false,
+> = Readonly<
 	{
 		[K in keyof P as P[K] extends { readonly type: 'optional' } ? never : K]: Infer<P[K]>
 	} & {
@@ -410,7 +417,50 @@ export type InferObject<P extends Readonly<Record<string, ContractShape>>> = Rea
 				: never
 			: never
 	}
->
+> &
+	([keyof P] extends [never] ? InferIndex<A> : InferOpenIndex<A>)
+
+/**
+ * The index-signature contribution of a pure record shape's `additionalProperties`
+ * — the `recordShape` case, where `properties` is empty.
+ *
+ * @remarks
+ * `false` (closed) contributes `unknown`, which collapses away in an
+ * intersection — a closed object's {@link Infer} is unaffected. `true` (open,
+ * unconstrained) contributes an `unknown`-valued index signature. A
+ * {@link ContractShape} (open, constrained) contributes an index signature
+ * typed to that shape's own `Infer` — sound here because there are no fixed
+ * properties for the index to collide with.
+ */
+export type InferIndex<A extends boolean | ContractShape> = [A] extends [false]
+	? unknown
+	: [A] extends [true]
+		? { readonly [k: string]: unknown }
+		: A extends ContractShape
+			? { readonly [k: string]: Infer<A> }
+			: unknown
+
+/**
+ * The index-signature contribution of a MIXED object shape's
+ * `additionalProperties` — one with both fixed `properties` and an open tail.
+ *
+ * @remarks
+ * A typed index (`{ readonly [k: string]: Infer<A> }`) collapses any
+ * differently-typed fixed property to `never` on intersection and makes the
+ * object type unconstructable — TypeScript rejects assigning any property
+ * whose type differs from the index value type. So when `A` is a
+ * {@link ContractShape} here, the index is deliberately widened to
+ * `{ readonly [k: string]: unknown }`: the static type stops over-claiming the
+ * extra-key type while the runtime guard still validates extras against `A`.
+ * `false` / `true` behave exactly as {@link InferIndex}.
+ */
+export type InferOpenIndex<A extends boolean | ContractShape> = [A] extends [false]
+	? unknown
+	: [A] extends [true]
+		? { readonly [k: string]: unknown }
+		: A extends ContractShape
+			? { readonly [k: string]: unknown }
+			: unknown
 
 /** {@link Infer} of a union shape's `variants` — the union of each variant's inferred type. */
 export type InferUnion<V extends readonly ContractShape[]> = V extends readonly (infer U)[]
@@ -418,6 +468,9 @@ export type InferUnion<V extends readonly ContractShape[]> = V extends readonly 
 		? Infer<U>
 		: never
 	: never
+
+/** {@link Infer} with all `readonly` modifiers stripped — for consumers writing the parsed value. */
+export type InferMutable<S extends ContractShape> = { -readonly [K in keyof Infer<S>]: Infer<S>[K] }
 
 // === Shape builder options
 
@@ -465,8 +518,8 @@ export interface ArrayShapeOptions {
 }
 
 /** Options for {@link ObjectShape} (via `objectShape`). */
-export interface ObjectShapeOptions {
-	readonly additionalProperties?: boolean | ContractShape
+export interface ObjectShapeOptions<A extends boolean | ContractShape = boolean | ContractShape> {
+	readonly additionalProperties?: A
 	readonly description?: string
 }
 

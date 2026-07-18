@@ -623,4 +623,47 @@ describe('createContract', () => {
 		// The generator's output satisfies the contract's own guard.
 		expect(contract.is(contract.generate(seededRandom(3)))).toBe(true)
 	})
+
+	it('carries Infer<S> end-to-end from a recordShape (finding #7)', () => {
+		const c = createContract(recordShape(numberShape()))
+		const parsed = c.parse({})
+		expect(parsed).toBeDefined()
+		const record = parsed ?? {}
+		const one: number | undefined = record.k
+		expect(one).toBeUndefined()
+		// @ts-expect-error — generate returns a number-valued record, not a string-valued one
+		const bad: Readonly<Record<string, string>> = c.generate()
+		expect(bad).toBeDefined()
+	})
+})
+
+describe('compileGuard generic overload (finding #4)', () => {
+	it('narrows a Guard<Infer<S>> when the shape is a specific literal type', () => {
+		const g = compileGuard(objectShape({ name: stringShape() }))
+		const x: unknown = { name: 'Ada' }
+		expect(g(x)).toBe(true)
+		const guarded = g(x) ? x : { name: '' }
+		const nm: string = guarded.name
+		expect(nm).toBe('Ada')
+	})
+})
+
+describe('compileParser generic overload (finding #5)', () => {
+	it('narrows a Parser<Infer<S>> when the shape is a specific literal type', () => {
+		const p = compileParser(recordShape(numberShape()))
+		const r = p({})
+		const val: Readonly<Record<string, number>> | undefined = r
+		expect(val).toBeDefined()
+		// @ts-expect-error — parser result is a record, not string
+		const wrong: string | undefined = r
+		expect(wrong).toBeDefined()
+	})
+})
+
+describe('compileGenerator generic overload (finding #6)', () => {
+	it('narrows to Infer<S> when the shape is a specific literal type', () => {
+		const gen = compileGenerator(objectShape({ age: integerShape() }))
+		const a: number = gen.age
+		expect(a).toBeDefined()
+	})
 })

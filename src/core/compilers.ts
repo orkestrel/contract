@@ -266,6 +266,8 @@ export function compileSchema(shape: ContractShape): JSONSchema {
  * isUser({ name: 'Ada' }) // true
  * ```
  */
+export function compileGuard<S extends ContractShape>(shape: S): Guard<Infer<S>>
+export function compileGuard(shape: ContractShape): Guard<unknown>
 export function compileGuard(shape: ContractShape): Guard<unknown> {
 	switch (shape.type) {
 		case 'string':
@@ -308,7 +310,7 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
 					map[key] = compileGuard(child.inner)
 					optionalKeys.push(key)
 				} else {
-					map[key] = compileGuard(child)
+					map[key] = compileGuard<ContractShape>(child)
 				}
 			}
 			const extra = shape.additionalProperties
@@ -380,6 +382,8 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
  * parseUser({ name: 'Ada' }) // { name: 'Ada' }
  * ```
  */
+export function compileParser<S extends ContractShape>(shape: S): Parser<Infer<S>>
+export function compileParser(shape: ContractShape): Parser<unknown>
 export function compileParser(shape: ContractShape): Parser<unknown> {
 	switch (shape.type) {
 		case 'string': {
@@ -558,6 +562,11 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
  * compileGenerator(stringShape({ min: 1, max: 4 })) // a random string of 1-4 characters (seed a RandomFunction for determinism)
  * ```
  */
+export function compileGenerator<S extends ContractShape>(
+	shape: S,
+	random?: RandomFunction,
+): Infer<S>
+export function compileGenerator(shape: ContractShape, random?: RandomFunction): unknown
 export function compileGenerator(
 	shape: ContractShape,
 	random: RandomFunction = seededRandom(Date.now()),

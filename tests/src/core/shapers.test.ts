@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Infer, JSONValue } from '@src/core'
+import type { Infer, InferMutable, JSONValue } from '@src/core'
 import {
 	arrayShape,
 	booleanShape,
@@ -168,5 +168,49 @@ describe('Infer', () => {
 		expect(wrong).toBeDefined()
 		const check: JSONValue = value
 		expect(check).toBeDefined()
+	})
+
+	it('derives an index signature for recordShape values (finding #1)', () => {
+		const rec = recordShape(numberShape())
+		const v: Infer<typeof rec> = { a: 1 }
+		const n: number = v.a
+		expect(n).toBe(1)
+		// @ts-expect-error — recordShape values are number, string rejected
+		const bad: Infer<typeof rec> = { a: 'x' }
+		expect(bad).toBeDefined()
+	})
+
+	it('mixed shape keeps named props at their declared types and infers extras as unknown', () => {
+		const mixed = objectShape({ id: stringShape() }, { additionalProperties: numberShape() })
+		const v: Infer<typeof mixed> = { id: 'x', extra: 42 }
+		const id: string = v.id
+		expect(id).toBe('x')
+		const extra: unknown = v.extra
+		expect(extra).toBe(42)
+		// @ts-expect-error — an extra key must infer as unknown, not number
+		const bad: number = v.extra
+		expect(bad).toBeDefined()
+	})
+
+	it('additionalProperties: true widens to an open unknown index (finding #2)', () => {
+		const o = objectShape({ id: stringShape() }, { additionalProperties: true })
+		const v: Infer<typeof o> = { id: 'x', whatever: 42 }
+		expect(v.id).toBe('x')
+	})
+})
+
+describe('InferMutable', () => {
+	it('strips top-level readonly but leaves nested readonly unchanged', () => {
+		const shape = objectShape({
+			name: stringShape(),
+			profile: objectShape({ bio: stringShape() }),
+		})
+		const value: InferMutable<typeof shape> = { name: 'Ada', profile: { bio: 'hi' } }
+		// Top-level readonly is stripped — direct assignment compiles.
+		value.name = 'Grace'
+		expect(value.name).toBe('Grace')
+		// @ts-expect-error — nested readonly is unchanged; `profile.bio` stays readonly
+		value.profile.bio = 'bye'
+		expect(value.profile.bio).toBe('bye')
 	})
 })
