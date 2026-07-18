@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import type { Infer, InferMutable, JSONValue } from '@src/core'
+import type {
+	ContractShape,
+	Infer,
+	InferMutable,
+	JSONValue,
+	ObjectShape,
+	StringShape,
+} from '@src/core'
 import {
 	arrayShape,
 	booleanShape,
@@ -316,6 +323,26 @@ describe('Infer depth-robustness tripwire', () => {
 				limits: { tokens: { input: 0, output: 0 }, nested: { deep: { deeper: 'y' } } },
 			},
 		}
+		expect(value.id).toBe('abc')
+	})
+})
+
+describe('Infer wide-additionalProperties tuple-guard regression (0.0.4)', () => {
+	it('a wide/defaulted A stays shallow — no TS2589 depth error, and resolves to the closed row intersected with the unknown open index (InferOpenIndex)', () => {
+		// `ObjectShape<{ id: StringShape }, boolean | ContractShape>` — `A` is the
+		// FULL defaulted `additionalProperties` union, not narrowed to a specific
+		// `false` / `true` / `ContractShape`. Before the 0.0.4 tuple-A-guard fix, a
+		// naked `A extends boolean | ContractShape` here distributed over the wide
+		// union and fanned out into a TS2589 excessively-deep-instantiation error.
+		// This locks that the tuple-wrapped guard keeps it a single, shallow
+		// instantiation that resolves to `unknown` on the `InferOpenIndex` tail —
+		// i.e. the closed row `{ id: string }` intersected with `unknown`, so the
+		// extra-key index contributes nothing beyond the declared property.
+		type Locked = Infer<ObjectShape<{ id: StringShape }, boolean | ContractShape>>
+		type Expected = Readonly<{ id: string }>
+		type _Lock = Expect<Equal<Locked, Expected>>
+
+		const value: Locked = { id: 'abc' }
 		expect(value.id).toBe('abc')
 	})
 })

@@ -1,6 +1,8 @@
 import type {
 	ContractInterface,
 	ContractShape,
+	Fault,
+	FaultKind,
 	Guard,
 	Infer,
 	JSONSchema,
@@ -18,7 +20,8 @@ import {
 	isString,
 	isUndefined,
 } from './validators.js'
-import { attempt, seededRandom } from './helpers.js'
+import { attempt, preview, seededRandom, shapeToKind } from './helpers.js'
+import { FAULT_LIMIT } from './constants.js'
 import {
 	arrayOf,
 	boundsOf,
@@ -697,6 +700,266 @@ export function compileGenerator(
 	}
 }
 
+// === Reporter
+
+/**
+ * Compile a {@link ContractShape} into a structured fault report for a value —
+ * the diagnostic counterpart of {@link compileGuard} / {@link compileParser}.
+ *
+ * @remarks
+ * MIRROR-PARSE semantics: reuses the exact leaf parsers/guards
+ * {@link compileParser} uses (`parseString` / `parseNumber` / `parseBoolean` /
+ * `isJSONValue` / …), so the soundness invariant
+ * `compileReporter(shape, v).length === 0 ⟺ compileParser(shape)(v) !== undefined`
+ * holds structurally — `explain` mirrors `parse`, not the stricter `is` (a
+ * coercible value like `'42'` against a `numberShape` reports no fault, the
+ * same leniency `parse` grants, even though the strict guard would reject it).
+ *
+ * Faults are collected in stable pre-order (declared key/index order); every
+ * call — object, array, and union alike, including a union's `oneOf` "no
+ * match" / "no consensus" summary fault prepended to its closest variant's
+ * faults — slices its return to at most {@link FAULT_LIMIT} entries, so the
+ * bound holds at every level of nesting, not just the outermost container, on
+ * adversarial input (a huge array, a wide record, a wide union of wide
+ * records). A closed object's extra keys never
+ * fault — `parse` silently drops them, so `explain` mirrors that leniency; an
+ * open object with a constraining `additionalProperties` shape recurses extras
+ * against it instead. A hostile getter or throwing `Proxy` trap is contained
+ * via {@link attempt} and surfaces as a single top-level type fault, never a
+ * throw (AGENTS §14).
+ *
+ * @param shape - The shape to report against
+ * @param value - The value to check
+ * @param path - The path prefix for faults produced at this call (defaults to the root)
+ * @returns The faults found, empty when the value parses successfully
+ *
+ * @example
+ * ```ts
+ * const user = objectShape({ name: stringShape({ min: 1 }) })
+ * compileReporter(user, { name: '' })
+ * // [{ reason: 'constraint', path: ['name'], expected: 'string', constraint: 'min', limit: 1, received: '""' }]
+ * compileReporter(user, { name: 'Ada' }) // []
+ * ```
+ */
+export function compileReporter(
+	shape: ContractShape,
+	value: unknown,
+	path: string[] = [],
+): readonly Fault[] {
+	switch (shape.type) {
+		case 'string': {
+			const parsed = parseString(value)
+			if (parsed === undefined) {
+				return [{ reason: 'type', path, expected: 'string', received: preview(value) }]
+			}
+			const faults: Fault[] = []
+			if (shape.min !== undefined && parsed.length < shape.min) {
+				faults.push({
+					reason: 'constraint',
+					path,
+					expected: 'string',
+					constraint: 'min',
+					limit: shape.min,
+					received: preview(parsed),
+				})
+			}
+			if (shape.max !== undefined && parsed.length > shape.max) {
+				faults.push({
+					reason: 'constraint',
+					path,
+					expected: 'string',
+					constraint: 'max',
+					limit: shape.max,
+					received: preview(parsed),
+				})
+			}
+			if (shape.pattern !== undefined && !shape.pattern.test(parsed)) {
+				faults.push({
+					reason: 'constraint',
+					path,
+					expected: 'string',
+					constraint: 'pattern',
+					limit: shape.pattern.source,
+					received: preview(parsed),
+				})
+			}
+			return faults
+		}
+		case 'number': {
+			const kind: FaultKind = shape.integer === true ? 'integer' : 'number'
+			const parsed = parseNumber(value)
+			if (parsed === undefined) {
+				return [{ reason: 'type', path, expected: kind, received: preview(value) }]
+			}
+			const faults: Fault[] = []
+			if (shape.integer === true && !Number.isInteger(parsed)) {
+				faults.push({
+					reason: 'constraint',
+					path,
+					expected: kind,
+					constraint: 'integer',
+					received: preview(parsed),
+				})
+			}
+			if (shape.min !== undefined && parsed < shape.min) {
+				faults.push({
+					reason: 'constraint',
+					path,
+					expected: kind,
+					constraint: 'min',
+					limit: shape.min,
+					received: preview(parsed),
+				})
+			}
+			if (shape.max !== undefined && parsed > shape.max) {
+				faults.push({
+					reason: 'constraint',
+					path,
+					expected: kind,
+					constraint: 'max',
+					limit: shape.max,
+					received: preview(parsed),
+				})
+			}
+			return faults
+		}
+		case 'boolean':
+			return parseBoolean(value) === undefined
+				? [{ reason: 'type', path, expected: 'boolean', received: preview(value) }]
+				: []
+		case 'null':
+			return value === null
+				? []
+				: [{ reason: 'type', path, expected: 'null', received: preview(value) }]
+		case 'json':
+			return isJSONValue(value)
+				? []
+				: [{ reason: 'type', path, expected: 'json', received: preview(value) }]
+		case 'literal': {
+			const allowed = new Set<unknown>(shape.values)
+			const matched = allowed.has(value) || (isString(value) && allowed.has(value.trim()))
+			return matched
+				? []
+				: [{ reason: 'type', path, expected: 'literal', received: preview(value) }]
+		}
+		case 'array': {
+			if (!isArray(value)) {
+				return [{ reason: 'type', path, expected: 'array', received: preview(value) }]
+			}
+			const faults: Fault[] = []
+			const outcome = attempt(() => {
+				for (let index = 0; index < value.length; index += 1) {
+					if (faults.length >= FAULT_LIMIT) return
+					faults.push(...compileReporter(shape.items, value[index], [...path, String(index)]))
+				}
+			})
+			if (!outcome.success) {
+				return [{ reason: 'type', path, expected: 'array', received: preview(value) }]
+			}
+			if (shape.min !== undefined && value.length < shape.min) {
+				faults.push({
+					reason: 'constraint',
+					path,
+					expected: 'array',
+					constraint: 'min',
+					limit: shape.min,
+					received: String(value.length),
+				})
+			}
+			if (shape.max !== undefined && value.length > shape.max) {
+				faults.push({
+					reason: 'constraint',
+					path,
+					expected: 'array',
+					constraint: 'max',
+					limit: shape.max,
+					received: String(value.length),
+				})
+			}
+			return faults.length > FAULT_LIMIT ? faults.slice(0, FAULT_LIMIT) : faults
+		}
+		case 'object': {
+			if (!isRecord(value)) {
+				return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
+			}
+			const record = value
+			const faults: Fault[] = []
+			const known = new Set<string>()
+			const outcome = attempt(() => {
+				for (const key of Object.keys(shape.properties)) {
+					if (faults.length >= FAULT_LIMIT) return
+					const child = shape.properties[key]
+					if (child === undefined) continue
+					known.add(key)
+					const optional = child.type === 'optional'
+					const inner = optional ? child.inner : child
+					// Mirror the parser's presence gate exactly (compileParser,
+					// object branch, ~line 492): a property is "absent" when its
+					// VALUE is `undefined`, not when the key itself is missing
+					// (`Object.hasOwn`) — a present key with an explicit `undefined`
+					// value is treated identically to a missing one, so `explain`
+					// never faults (or recurses into the inner reporter) where
+					// `parse` silently skips it.
+					const raw = record[key]
+					if (raw === undefined) {
+						if (!optional) {
+							faults.push({ reason: 'missing', path: [...path, key], expected: shapeToKind(inner) })
+						}
+						continue
+					}
+					faults.push(...compileReporter(inner, raw, [...path, key]))
+				}
+				const extra = shape.additionalProperties
+				if (extra !== undefined && extra !== true && extra !== false) {
+					for (const key of Object.keys(record)) {
+						if (faults.length >= FAULT_LIMIT) return
+						if (known.has(key)) continue
+						faults.push(...compileReporter(extra, record[key], [...path, key]))
+					}
+				}
+			})
+			if (!outcome.success) {
+				return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
+			}
+			return faults.length > FAULT_LIMIT ? faults.slice(0, FAULT_LIMIT) : faults
+		}
+		case 'union': {
+			const perVariant = shape.variants.map((variant) => compileReporter(variant, value, path))
+			let bestIndex = 0
+			for (let index = 1; index < perVariant.length; index += 1) {
+				const current = perVariant[index]
+				const best = perVariant[bestIndex]
+				if (current !== undefined && best !== undefined && current.length < best.length) {
+					bestIndex = index
+				}
+			}
+			const closest = perVariant[bestIndex] ?? []
+			if (shape.mode === 'oneOf') {
+				let matched = 0
+				for (const variant of shape.variants) {
+					if (compileGuard(variant)(value)) matched += 1
+				}
+				if (matched === 1) return []
+				if (matched === 0) {
+					const summary: Fault = { reason: 'oneOf', path, matched: 0 }
+					return [summary, ...closest].slice(0, FAULT_LIMIT)
+				}
+				return [{ reason: 'oneOf', path, matched }]
+			}
+			const anyMatch = perVariant.some((variantFaults) => variantFaults.length === 0)
+			if (anyMatch) return []
+			const summary: Fault = { reason: 'variant', path, variants: shape.variants.length }
+			return [summary, ...closest].slice(0, FAULT_LIMIT)
+		}
+		case 'optional':
+			return value === undefined ? [] : compileReporter(shape.inner, value, path)
+		case 'nullable':
+			return value === null ? [] : compileReporter(shape.inner, value, path)
+		case 'raw':
+			return []
+	}
+}
+
 // === Contract
 
 /**
@@ -707,10 +970,12 @@ export function compileGenerator(
  * Runs {@link validateShape} first — a malformed shape throws immediately
  * rather than compiling into a silently-wrong contract (AGENTS §12). Then
  * precompiles the schema, guard, and parser once; `generate` walks the shape
- * per call with the supplied random source.
+ * per call with the supplied random source, and `explain` compiles the
+ * diagnostic report via {@link compileReporter} at zero added compile-time cost
+ * (it re-walks the shape per call, exactly like `generate`).
  *
  * @param shape - The shape to compile
- * @returns A contract bundling `schema` / `is` / `parse` / `generate`
+ * @returns A contract bundling `schema` / `is` / `parse` / `explain` / `generate`
  *
  * @example
  * ```ts
@@ -732,6 +997,9 @@ export function createContract(shape: ContractShape): ContractInterface<unknown>
 		is: guard,
 		parse(value: unknown): unknown {
 			return parser(value)
+		},
+		explain(value: unknown): readonly Fault[] {
+			return compileReporter(shape, value)
 		},
 		generate(random?: RandomFunction): unknown {
 			return compileGenerator(shape, random)

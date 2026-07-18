@@ -1,5 +1,21 @@
-import type { FieldPath, JSONSchema, RandomFunction, Result } from './types.js'
-import { isObject, isRecord, isString } from './validators.js'
+import type {
+	ContractShape,
+	FaultKind,
+	FieldPath,
+	JSONSchema,
+	RandomFunction,
+	Result,
+} from './types.js'
+import { PREVIEW_LIMIT } from './constants.js'
+import {
+	isBigInt,
+	isBoolean,
+	isNumber,
+	isObject,
+	isRecord,
+	isString,
+	isSymbol,
+} from './validators.js'
 
 // === Result helpers
 
@@ -170,4 +186,93 @@ export function schemaToParameters(
 	schema: JSONSchema,
 ): Readonly<Record<string, unknown>> | undefined {
 	return isRecord(schema) ? schema : undefined
+}
+
+// === Reporting
+
+/**
+ * Render a short, safe, TOTAL preview of an unknown value for a {@link Fault}'s
+ * `received` field.
+ *
+ * @remarks
+ * A primitive renders as its literal: a string is `JSON.stringify`-escaped and
+ * clipped to {@link PREVIEW_LIMIT} characters (with a trailing `…` when
+ * clipped); a number / boolean / bigint / symbol renders via `String`; `null`
+ * and `undefined` render as their own name. Everything else — a plain object,
+ * an array, a function, a class instance, a `Map` — is NEVER traversed or
+ * stringified; it renders as its bare `typeof` tag (`'object'` / `'function'`),
+ * so a hostile or enormous structure can never blow up the preview.
+ *
+ * @param value - The value to preview
+ * @returns A short descriptive string, always safe to embed in a diagnostic
+ *
+ * @example
+ * ```ts
+ * preview('hi')        // '"hi"'
+ * preview(42)           // '42'
+ * preview(null)         // 'null'
+ * preview({ a: 1 })     // 'object'
+ * preview([1, 2, 3])    // 'object'
+ * ```
+ */
+export function preview(value: unknown): string {
+	if (value === null) return 'null'
+	if (value === undefined) return 'undefined'
+	if (isString(value)) {
+		const text = JSON.stringify(value)
+		return text.length > PREVIEW_LIMIT ? `${text.slice(0, PREVIEW_LIMIT)}…` : text
+	}
+	if (isNumber(value) || isBoolean(value)) return String(value)
+	if (isBigInt(value)) return `${value}n`
+	if (isSymbol(value)) return value.toString()
+	return typeof value
+}
+
+/**
+ * Project a {@link ContractShape} to the {@link FaultKind} it describes.
+ *
+ * @remarks
+ * A structural mapping used by {@link compileReporter} to fill a `Fault`'s
+ * `expected` field: most shapes map to their own `type` (`numberShape` maps to
+ * `'integer'` when `integer: true`, else `'number'`); `optionalShape` /
+ * `nullableShape` project through to their inner shape's kind, and `rawShape`
+ * (an arbitrary embedded schema with no fixed kind) projects to `'json'`.
+ *
+ * @param shape - The shape to project
+ * @returns The shape's {@link FaultKind}
+ *
+ * @example
+ * ```ts
+ * shapeToKind(stringShape())            // 'string'
+ * shapeToKind(integerShape())           // 'integer'
+ * shapeToKind(optionalShape(nullShape())) // 'null'
+ * ```
+ */
+export function shapeToKind(shape: ContractShape): FaultKind {
+	switch (shape.type) {
+		case 'string':
+			return 'string'
+		case 'number':
+			return shape.integer === true ? 'integer' : 'number'
+		case 'boolean':
+			return 'boolean'
+		case 'null':
+			return 'null'
+		case 'literal':
+			return 'literal'
+		case 'array':
+			return 'array'
+		case 'object':
+			return 'object'
+		case 'union':
+			return 'union'
+		case 'json':
+			return 'json'
+		case 'optional':
+			return shapeToKind(shape.inner)
+		case 'nullable':
+			return shapeToKind(shape.inner)
+		case 'raw':
+			return 'json'
+	}
 }

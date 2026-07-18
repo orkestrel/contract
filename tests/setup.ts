@@ -58,6 +58,29 @@ export const SOUNDNESS_SAMPLE: readonly unknown[] = [
 	'1',
 	{},
 	{ a: 1 },
+	// A structurally-valid `compositeShape(2)` value except its optional `opt`
+	// leaf is present with an explicit `undefined` — the class of input that
+	// breaks the hasOwn-vs-value-undefined presence check between parse and
+	// explain (parse skips it as absent; a hasOwn-gated reporter used to
+	// recurse into the inner shape with `undefined` and fault).
+	(() => {
+		const leaf = {
+			str: 'a',
+			num: 1,
+			int: 1,
+			bool: true,
+			nul: null,
+			lit: 'a',
+			arr: ['x'],
+			uni: 'a',
+			one: true,
+			opt: undefined,
+			nullable: null,
+			rec: { x: 1 },
+			json: null,
+		}
+		return { nested: leaf, list: [leaf], dict: { a: leaf } }
+	})(),
 	[],
 	[1, 2],
 	[1, '2'],

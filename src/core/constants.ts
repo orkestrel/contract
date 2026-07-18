@@ -32,3 +32,27 @@ export const JSON_SCHEMA_TYPES: readonly JSONSchemaType[] = Object.freeze([
 	'integer',
 	'string',
 ])
+
+// Reporting-surface bounds (`compileReporter` / `ContractInterface.explain`).
+
+/**
+ * The maximum number of {@link Fault} entries a single `explain` report ever
+ * returns, frozen.
+ *
+ * @remarks
+ * Bounds the report against adversarial input (a giant array, a wide record) —
+ * `compileReporter` collects faults in stable pre-order and stops once this cap
+ * is reached, so the report size (and the work to build it) stays finite and
+ * deterministic regardless of the input's size.
+ */
+export const FAULT_LIMIT = 64
+
+/**
+ * The maximum character length of a {@link preview}-rendered string, frozen.
+ *
+ * @remarks
+ * A previewed string longer than this is clipped with a trailing `…` so a
+ * {@link Fault}'s `received` field never embeds an unbounded amount of
+ * untrusted text.
+ */
+export const PREVIEW_LIMIT = 64

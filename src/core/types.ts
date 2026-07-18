@@ -564,6 +564,59 @@ export interface RecordShapeOptions {
 	readonly description?: string
 }
 
+// === Contract reporting
+
+/** The kind of value a {@link Fault} expected — the shape-projected counterpart of a `ContractShape`'s `type`. */
+export type FaultKind =
+	| 'string'
+	| 'number'
+	| 'integer'
+	| 'boolean'
+	| 'null'
+	| 'literal'
+	| 'array'
+	| 'object'
+	| 'union'
+	| 'json'
+
+/** The refinement a {@link Fault} of reason `'constraint'` violates. */
+export type FaultConstraint = 'min' | 'max' | 'pattern' | 'integer'
+
+/**
+ * A single structured parse-failure diagnostic — one entry of an
+ * {@link ContractInterface.explain} report.
+ *
+ * @remarks
+ * A discriminated union on `reason`:
+ * - `'type'` — the value could not coerce to `expected` at all.
+ * - `'missing'` — a required object property was absent.
+ * - `'constraint'` — the value coerced to `expected` but violated one
+ *   refinement (`min` / `max` / `pattern` / `integer`); `limit` carries the
+ *   violated bound/pattern when applicable.
+ * - `'variant'` — an `anyOf`-mode union matched no variant; `variants` is the
+ *   variant count, followed (in the report) by the closest variant's own faults.
+ * - `'oneOf'` — a `oneOf`-mode union matched zero or two-or-more variants;
+ *   `matched` is the raw match count.
+ */
+export type Fault =
+	| {
+			readonly reason: 'type'
+			readonly path: FieldPath
+			readonly expected: FaultKind
+			readonly received: string
+	  }
+	| { readonly reason: 'missing'; readonly path: FieldPath; readonly expected: FaultKind }
+	| {
+			readonly reason: 'constraint'
+			readonly path: FieldPath
+			readonly expected: FaultKind
+			readonly constraint: FaultConstraint
+			readonly limit?: number | string
+			readonly received: string
+	  }
+	| { readonly reason: 'variant'; readonly path: FieldPath; readonly variants: number }
+	| { readonly reason: 'oneOf'; readonly path: FieldPath; readonly matched: number }
+
 // === Contract compilation
 
 /** A deterministic random source returning a value in `[0, 1)`. */
@@ -582,5 +635,18 @@ export interface ContractInterface<T> {
 	readonly schema: JSONSchema
 	readonly is: Guard<T>
 	parse(value: unknown): T | undefined
+	/**
+	 * Report every structured parse fault a value has against this contract.
+	 *
+	 * @remarks
+	 * An empty report means the value is valid. Soundness invariant:
+	 * `explain(v).length === 0` if and only if `parse(v) !== undefined` — explain
+	 * mirrors `parse`'s coercion, not the stricter `is`. Faults are listed in
+	 * stable pre-order (declared key/index order).
+	 *
+	 * @param value - The value to check
+	 * @returns The faults found, empty when the value parses successfully
+	 */
+	explain(value: unknown): readonly Fault[]
 	generate(random?: RandomFunction): T
 }
