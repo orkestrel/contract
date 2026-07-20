@@ -333,7 +333,7 @@ What ships for JSON is the **flat, lazy boundary** in the `### JSON` table above
 ### Narrowing `unknown`
 
 ```ts
-import { isFiniteNumber, isRecord, isString } from '@src/core'
+import { isFiniteNumber, isRecord, isString } from '@orkestrel/contract'
 
 function describe(value: unknown): string {
 	if (isString(value)) return value.toUpperCase() // value: string
@@ -348,7 +348,15 @@ function describe(value: unknown): string {
 Build a complex guard out of leaf guards — never hand-roll the structural walk. `recordOf` is **exact** (extra keys fail), and the shape it took is reusable: `pickOf` / `omitOf` derive a related guard from it without restating fields.
 
 ```ts
-import { arrayOf, isNumber, isString, literalOf, pickOf, recordOf, unionOf } from '@src/core'
+import {
+	arrayOf,
+	isNumber,
+	isString,
+	literalOf,
+	pickOf,
+	recordOf,
+	unionOf,
+} from '@orkestrel/contract'
 
 const userShape = {
 	id: isString,
@@ -371,8 +379,8 @@ const isId = unionOf(isString, isNumber) // Guard<string | number>
 `lazyOf` is the sanctioned recursion entry point — the thunk defers construction so a self-referential guard never references itself before it exists.
 
 ```ts
-import type { Guard } from '@src/core'
-import { arrayOf, isNumber, lazyOf, orOf } from '@src/core'
+import type { Guard } from '@orkestrel/contract'
+import { arrayOf, isNumber, lazyOf, orOf } from '@orkestrel/contract'
 
 // A number-tree: a number, or an array of trees.
 const isNumberTree: Guard<unknown> = orOf(isNumber, arrayOf(lazyOf(() => isNumberTree)))
@@ -383,7 +391,7 @@ isNumberTree(['x']) // false
 ### Guards narrow, parsers coerce
 
 ```ts
-import { isString, parseIntegerField, parseStringField } from '@src/core'
+import { isString, parseIntegerField, parseStringField } from '@orkestrel/contract'
 
 isString(36) // false — a guard never converts
 
@@ -408,7 +416,7 @@ import {
 	parseRecord,
 	parseRecordField,
 	recordOf,
-} from '@src/core'
+} from '@orkestrel/contract'
 
 // 1. Validate a known shape — only the guard's shape is walked.
 const isConfig = recordOf({ host: isString, tags: arrayOf(isString) })
@@ -426,7 +434,7 @@ if (blob) {
 ### Declaring a shape
 
 ```ts
-import type { Infer } from '@src/core'
+import type { Infer } from '@orkestrel/contract'
 import {
 	arrayShape,
 	integerShape,
@@ -434,7 +442,7 @@ import {
 	objectShape,
 	optionalShape,
 	stringShape,
-} from '@src/core'
+} from '@orkestrel/contract'
 
 const user = objectShape({
 	name: stringShape({ min: 1 }),
@@ -456,7 +464,13 @@ The compilers turn this one declaration into a guard, parser, JSON Schema, and g
 `createContract` is the typed entry point — one shape in, the four lockstep outputs out, on a single object.
 
 ```ts
-import { createContract, integerShape, objectShape, seededRandom, stringShape } from '@src/core'
+import {
+	createContract,
+	integerShape,
+	objectShape,
+	seededRandom,
+	stringShape,
+} from '@orkestrel/contract'
 
 const user = createContract(objectShape({ name: stringShape({ min: 1 }), age: integerShape() }))
 
