@@ -81,3 +81,31 @@ export const INFER_DEPTH_LIMIT = 32
  * Overridable per call via {@link ValueToSchemaOptions.maxProperties}.
  */
 export const INFER_BREADTH_LIMIT = 256
+
+/**
+ * The default maximum number of distinct values a multi-sample slot may hold
+ * before enum inference gives up and falls back to a bare `type`, frozen.
+ *
+ * @remarks
+ * Bounds how large an `enum` list {@link samplesToSchema} / {@link inferRecordSamples}
+ * will emit — a slot with distinct-value count at or above this limit is
+ * treated as unbounded (an ID column, not a category) and never gets an
+ * `enum` keyword. Overridable per call via {@link ValueToSchemaOptions.enum}
+ * (which gates whether enum inference runs at all).
+ */
+export const INFER_ENUM_LIMIT = 12
+
+/**
+ * Pure-regex matchers backing {@link stringToFormat}'s pattern-only formats
+ * (`uuid` / `email` / `uri`), frozen as data.
+ *
+ * @remarks
+ * The ISO-8601 date/time formats are NOT listed here — they additionally
+ * require an attempt-guarded `Date` validity check, so their pattern lives
+ * inline in `stringToFormat` rather than as reusable standalone data.
+ */
+export const FORMAT_PATTERNS: Readonly<Record<'uuid' | 'email' | 'uri', RegExp>> = Object.freeze({
+	uuid: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+	email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+	uri: /^[a-z][a-z0-9+.-]*:\/\//i,
+})

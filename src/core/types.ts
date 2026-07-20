@@ -172,9 +172,12 @@ export type JSONSchemaType =
  *
  * @remarks
  * Intentionally lean (not the full ~50-keyword vocabulary): it carries only the
- * keywords {@link Infer}-driven `compileSchema` produces. Recursive via `items` /
- * `properties` / `additionalProperties` / `anyOf` / `oneOf`, but every walk is
- * over a finite, developer-authored shape — there is no cycle/depth risk.
+ * keywords {@link Infer}-driven `compileSchema` produces, plus `format` —
+ * emitted by the {@link stringToFormat} / {@link samplesToFormat} inference
+ * heuristics (`valueToSchema` / `samplesToSchema`), never by `compileSchema`.
+ * Recursive via `items` / `properties` / `additionalProperties` / `anyOf` /
+ * `oneOf`, but every walk is over a finite, developer-authored shape — there
+ * is no cycle/depth risk.
  */
 export interface JSONSchema {
 	readonly type?: JSONSchemaType
@@ -183,6 +186,7 @@ export interface JSONSchema {
 	readonly minLength?: number
 	readonly maxLength?: number
 	readonly pattern?: string
+	readonly format?: string
 	readonly minimum?: number
 	readonly maximum?: number
 	readonly minItems?: number
@@ -196,6 +200,18 @@ export interface JSONSchema {
 }
 
 /**
+ * The closed set of string formats {@link stringToFormat} recognizes.
+ *
+ * @remarks
+ * Lowercase spec literals, matching the JSON Schema `format` vocabulary for
+ * the subset the inferers detect: `'date-time'` / `'date'` / `'time'` are
+ * ISO-8601 (validity-checked via `Date`, not pattern-only), `'uuid'` matches
+ * RFC-4122 hex layout, `'email'` and `'uri'` are pragmatic (not full-spec)
+ * shape checks. See {@link FORMAT_PATTERNS}.
+ */
+export type SchemaFormat = 'date-time' | 'date' | 'time' | 'uuid' | 'email' | 'uri'
+
+/**
  * Options for {@link valueToSchema} / {@link samplesToSchema}.
  *
  * @remarks
@@ -203,11 +219,20 @@ export interface JSONSchema {
  * `JSONSchema` from a developer-authored `ContractShape`, these bounds tame
  * inference from an unknown runtime value (or a set of example values), which
  * — unlike a shape tree — may be arbitrarily deep, wide, or cyclic.
+ *
+ * @remarks
+ * `format` (default `false`) emits a `format` keyword on a string leaf whose
+ * value(s) unanimously match one {@link SchemaFormat} via {@link stringToFormat}
+ * / {@link samplesToFormat}. `enum` (default `false`, multi-sample paths only)
+ * emits an `enum` keyword for a low-cardinality, repeated primitive slot
+ * instead of a bare `type`.
  */
 export interface ValueToSchemaOptions {
 	readonly maxDepth?: number
 	readonly maxProperties?: number
 	readonly closed?: boolean
+	readonly format?: boolean
+	readonly enum?: boolean
 }
 
 // === Contract shapes

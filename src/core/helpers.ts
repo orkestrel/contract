@@ -188,6 +188,40 @@ export function schemaToParameters(
 	return isRecord(schema) ? schema : undefined
 }
 
+/**
+ * Wrap a non-object `JSONSchema` root in a single-property object schema, so
+ * an inferred primitive/array/union schema can flow into {@link schemaToParameters}
+ * as an MCP-compatible `inputSchema`.
+ *
+ * @remarks
+ * Total and deterministic. `schema.type === 'object'` passes through
+ * unchanged; every other root (a primitive/array `type`, an `anyOf`/`enum`-only
+ * schema with no `type`, or the empty `{}`) is wrapped as a single required
+ * `value` property: `{ type: 'object', properties: { value: schema },
+ * required: ['value'], additionalProperties: false }`. Composition:
+ * `schemaToParameters(schemaToObject(valueToSchema(payload)))`.
+ *
+ * @param schema - The schema to wrap
+ * @returns `schema` unchanged when object-rooted, otherwise the wrapped object schema
+ *
+ * @example
+ * ```ts
+ * schemaToObject({ type: 'string' })
+ * // { type: 'object', properties: { value: { type: 'string' } },
+ * //   required: ['value'], additionalProperties: false }
+ * schemaToObject({ type: 'object', properties: {} }) // unchanged
+ * ```
+ */
+export function schemaToObject(schema: JSONSchema): JSONSchema {
+	if (schema.type === 'object') return schema
+	return {
+		type: 'object',
+		properties: { value: schema },
+		required: ['value'],
+		additionalProperties: false,
+	}
+}
+
 // === Reporting
 
 /**

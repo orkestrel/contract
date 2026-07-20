@@ -6,9 +6,11 @@ import {
 	enumerableSymbolCount,
 	objectShape,
 	resolveField,
+	schemaToObject,
 	schemaToParameters,
 	seededRandom,
 	stringShape,
+	valueToSchema,
 } from '@src/core'
 
 describe('attempt', () => {
@@ -158,5 +160,87 @@ describe('schemaToParameters', () => {
 		}
 		const notRecord: JSONSchema = new FakeSchema()
 		expect(schemaToParameters(notRecord)).toBeUndefined()
+	})
+})
+
+describe('schemaToObject', () => {
+	it('passes an object-rooted schema through unchanged', () => {
+		const schema: JSONSchema = {
+			type: 'object',
+			properties: { name: { type: 'string' } },
+			required: ['name'],
+			additionalProperties: false,
+		}
+		expect(schemaToObject(schema)).toBe(schema)
+	})
+
+	it('wraps a string-rooted schema as a single required "value" property', () => {
+		expect(schemaToObject({ type: 'string' })).toEqual({
+			type: 'object',
+			properties: { value: { type: 'string' } },
+			required: ['value'],
+			additionalProperties: false,
+		})
+	})
+
+	it('wraps a number-rooted schema', () => {
+		expect(schemaToObject({ type: 'number' })).toEqual({
+			type: 'object',
+			properties: { value: { type: 'number' } },
+			required: ['value'],
+			additionalProperties: false,
+		})
+	})
+
+	it('wraps an array-rooted schema', () => {
+		const schema: JSONSchema = { type: 'array', items: { type: 'string' } }
+		expect(schemaToObject(schema)).toEqual({
+			type: 'object',
+			properties: { value: schema },
+			required: ['value'],
+			additionalProperties: false,
+		})
+	})
+
+	it('wraps an anyOf/enum-only schema with no type', () => {
+		const anyOf: JSONSchema = { anyOf: [{ type: 'string' }, { type: 'number' }] }
+		expect(schemaToObject(anyOf)).toEqual({
+			type: 'object',
+			properties: { value: anyOf },
+			required: ['value'],
+			additionalProperties: false,
+		})
+		const literal: JSONSchema = { enum: ['a', 'b'] }
+		expect(schemaToObject(literal)).toEqual({
+			type: 'object',
+			properties: { value: literal },
+			required: ['value'],
+			additionalProperties: false,
+		})
+	})
+
+	it('wraps the empty schema {}', () => {
+		expect(schemaToObject({})).toEqual({
+			type: 'object',
+			properties: { value: {} },
+			required: ['value'],
+			additionalProperties: false,
+		})
+	})
+
+	it('is deterministic — same input yields byte-identical output', () => {
+		const schema: JSONSchema = { type: 'string', format: 'uuid' }
+		expect(JSON.stringify(schemaToObject(schema))).toBe(JSON.stringify(schemaToObject(schema)))
+	})
+
+	it('composes with schemaToParameters(schemaToObject(valueToSchema(...))) for a non-object payload', () => {
+		const schema = valueToSchema('hello')
+		const parameters = schemaToParameters(schemaToObject(schema))
+		expect(parameters).toEqual({
+			type: 'object',
+			properties: { value: { type: 'string' } },
+			required: ['value'],
+			additionalProperties: false,
+		})
 	})
 })
