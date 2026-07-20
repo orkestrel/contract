@@ -1,5 +1,6 @@
 import type { JSONSchema, SchemaFormat, ValueToSchemaOptions } from './types.js'
 import {
+	FORMAT_MAX_LENGTH,
 	FORMAT_PATTERNS,
 	INFER_BREADTH_LIMIT,
 	INFER_DEPTH_LIMIT,
@@ -16,7 +17,7 @@ import {
 	isRecord,
 	isString,
 } from './validators.js'
-import { attempt } from './helpers.js'
+import { attempt, sanitizeBudget } from './helpers.js'
 
 // The inferers walk an UNKNOWN, possibly adversarial runtime value (or a set
 // of example values) and emit a JSONSchema — the reverse direction of
@@ -153,9 +154,12 @@ export function isValidISOInstant(value: string): boolean {
  * stringToFormat('2024-01-15')                             // 'date'
  * stringToFormat('2020-13-45')                             // undefined — invalid date
  * stringToFormat('ada@example.com')                        // 'email'
+ * stringToFormat('10:30:00')                                // undefined — RFC 3339 time requires an offset
+ * stringToFormat('10:30:00+02:00')                          // 'time'
  * ```
  */
 export function stringToFormat(value: string): SchemaFormat | undefined {
+	if (value.length > FORMAT_MAX_LENGTH) return undefined
 	if (FORMAT_PATTERNS.uuid.test(value)) return 'uuid'
 	if (
 		/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(value) &&
@@ -166,9 +170,11 @@ export function stringToFormat(value: string): SchemaFormat | undefined {
 	if (/^\d{4}-\d{2}-\d{2}$/.test(value) && isValidISOInstant(value)) {
 		return 'date'
 	}
-	if (/^\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/.test(value)) {
-		const suffixed = /(Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}Z`
-		if (isValidISOInstant(`1970-01-01T${suffixed}`)) return 'time'
+	if (
+		/^\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(value) &&
+		isValidISOInstant(`1970-01-01T${value}`)
+	) {
+		return 'time'
 	}
 	if (FORMAT_PATTERNS.email.test(value)) return 'email'
 	if (FORMAT_PATTERNS.uri.test(value)) return 'uri'
@@ -280,11 +286,13 @@ export function inferPrimitiveEnum(
  * @param closed - Whether descended objects emit `additionalProperties: false`
  * @param format - Whether a string/`Date` leaf gains a `format` keyword
  * @param visited - The ancestor set guarding against cycles
+ * @param memo - A per-call `(object, remaining depth) → schema` cache guarding
+ *               against exponential re-inference of a shared-reference DAG
  * @returns The inferred schema fragment for `value`
  *
  * @example
  * ```ts
- * inferValue(42, 32, 256, true, false, new WeakSet()) // { type: 'integer' }
+ * inferValue(42, 32, 256, true, false, new WeakSet(), new WeakMap()) // { type: 'integer' }
  * ```
  */
 export function inferValue(
@@ -294,6 +302,7 @@ export function inferValue(
 	closed: boolean,
 	format: boolean,
 	visited: WeakSet<object>,
+	memo: WeakMap<object, Map<number, JSONSchema>>,
 ): JSONSchema {
 	if (isNull(value)) return { type: 'null' }
 	if (isBoolean(value)) return { type: 'boolean' }
@@ -307,8 +316,8 @@ export function inferValue(
 		}
 		return { type: 'string' }
 	}
-	if (isArray(value)) return inferArray(value, depth, breadth, closed, format, visited)
-	if (isRecord(value)) return inferObject(value, depth, breadth, closed, format, visited)
+	if (isArray(value)) return inferArray(value, depth, breadth, closed, format, visited, memo)
+	if (isRecord(value)) return inferObject(value, depth, breadth, closed, format, visited, memo)
 	if (isDate(value)) return format ? { type: 'string', format: 'date-time' } : { type: 'string' }
 	return {}
 }
@@ -322,7 +331,21 @@ export function inferValue(
  * depth) and unified with {@link unifySchemas}: a single distinct element
  * schema becomes `items` directly; multiple distinct schemas become
  * `items: { anyOf: [...] }`. Depth exhaustion or a cyclic re-encounter of
- * `value` both yield the empty schema `{}` instead of descending.
+ * `value` both yield the empty schema `{}` instead of descending. A sparse
+ * array (holes, e.g. `[1, , 3]`) is densified via `Array.from` before
+ * sampling so every slot — including a hole — is visited as an explicit
+ * `undefined` leaf (which {@link inferValue} maps to `{}`), rather than left
+ * as a hole that would otherwise reach {@link unifySchemas} as `undefined`.
+ *
+ * ALL reads of `value` — including its `length` — happen inside
+ * {@link attempt}: a hostile `length` getter (e.g. a Proxy-over-array whose
+ * `get` trap throws) is exactly as contained as a throwing own-getter element
+ * or a Proxy-over-array element access, and cannot escape as a thrown error.
+ * On failure — or when the sampled/classified list ends up empty — this
+ * returns `{ type: 'array' }` (no `items`), since `value` is still known to
+ * be an array, mirroring the empty-array emission. A same-object
+ * re-inference at the same remaining `depth` is served from `memo` instead
+ * of recomputing (guards a shared-reference DAG against exponential blowup).
  *
  * @param value - The array to infer from
  * @param depth - Remaining descent budget
@@ -330,11 +353,13 @@ export function inferValue(
  * @param closed - Threaded through to nested object elements
  * @param format - Threaded through to nested string/`Date` elements
  * @param visited - The ancestor set guarding against cycles
+ * @param memo - A per-call `(object, remaining depth) → schema` cache guarding
+ *               against exponential re-inference of a shared-reference DAG
  * @returns The inferred array schema
  *
  * @example
  * ```ts
- * inferArray([1, 2.5], 32, 256, true, false, new WeakSet())
+ * inferArray([1, 2.5], 32, 256, true, false, new WeakSet(), new WeakMap())
  * // { type: 'array', items: { type: 'number' } }
  * ```
  */
@@ -345,16 +370,35 @@ export function inferArray(
 	closed: boolean,
 	format: boolean,
 	visited: WeakSet<object>,
+	memo: WeakMap<object, Map<number, JSONSchema>>,
 ): JSONSchema {
-	if (value.length === 0) return { type: 'array' }
-	if (depth <= 0 || visited.has(value)) return {}
+	if (!(depth > 0) || visited.has(value)) return {}
+	// At a node reached through a cycle at the SAME remaining depth via two
+	// different paths, the memo may serve the first traversal's already
+	// cycle-truncated fragment (`{}`) to the second path instead of a fully
+	// re-descended schema — a sound, deterministic over-approximation, never
+	// a false-reject (a schema too permissive, never too strict).
+	const cached = memo.get(value)?.get(depth)
+	if (cached) return cached
 	visited.add(value)
-	const sampled = value.slice(0, breadth)
-	const itemSchemas = sampled.map((entry) =>
-		inferValue(entry, depth - 1, breadth, closed, format, visited),
-	)
+	const outcome = attempt(() => {
+		const sampled = Array.from(value.slice(0, breadth))
+		return sampled.map((entry) =>
+			inferValue(entry, depth - 1, breadth, closed, format, visited, memo),
+		)
+	})
 	visited.delete(value)
-	return { type: 'array', items: unifySchemas(itemSchemas) }
+	const schema: JSONSchema =
+		outcome.success && outcome.value.length > 0
+			? { type: 'array', items: unifySchemas(outcome.value) }
+			: { type: 'array' }
+	let depths = memo.get(value)
+	if (!depths) {
+		depths = new Map()
+		memo.set(value, depths)
+	}
+	depths.set(depth, schema)
+	return schema
 }
 
 /**
@@ -369,8 +413,15 @@ export function inferArray(
  * included) is treated as ABSENT — it contributes neither a `properties`
  * entry nor a `required` entry. Every other present key is required (single-
  * value mode). Emits `additionalProperties: false` when `closed`, `true`
- * otherwise — mirroring {@link compileSchema}'s object-emission convention.
- * Depth exhaustion or a cyclic re-encounter of `value` both yield `{}`.
+ * otherwise — mirroring {@link compileSchema}'s object-emission convention —
+ * EXCEPT when the own-key list exceeds `breadth`: a truncated key list means
+ * the sampled schema no longer describes every property `value` actually
+ * carries, so `additionalProperties` is forced to `true` regardless of
+ * `closed` (a closed schema built from a truncated sample would otherwise
+ * reject the very object it was inferred from). Depth exhaustion or a cyclic
+ * re-encounter of `value` both yield `{}`. A same-object re-inference at the
+ * same remaining `depth` is served from `memo` instead of recomputing
+ * (guards a shared-reference DAG against exponential blowup).
  *
  * @param value - The record to infer from
  * @param depth - Remaining descent budget
@@ -378,11 +429,13 @@ export function inferArray(
  * @param closed - Whether the emitted schema closes to unknown keys
  * @param format - Threaded through to nested string/`Date` properties
  * @param visited - The ancestor set guarding against cycles
+ * @param memo - A per-call `(object, remaining depth) → schema` cache guarding
+ *               against exponential re-inference of a shared-reference DAG
  * @returns The inferred object schema
  *
  * @example
  * ```ts
- * inferObject({ id: 1 }, 32, 256, true, false, new WeakSet())
+ * inferObject({ id: 1 }, 32, 256, true, false, new WeakSet(), new WeakMap())
  * // { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'],
  * //   additionalProperties: false }
  * ```
@@ -394,15 +447,20 @@ export function inferObject(
 	closed: boolean,
 	format: boolean,
 	visited: WeakSet<object>,
+	memo: WeakMap<object, Map<number, JSONSchema>>,
 ): JSONSchema {
-	if (depth <= 0 || visited.has(value)) return {}
+	if (!(depth > 0) || visited.has(value)) return {}
+	const cached = memo.get(value)?.get(depth)
+	if (cached) return cached
 	visited.add(value)
 	// Contain the whole key-enumeration + value-read walk — a hostile ownKeys
 	// trap or property getter on `value` must yield {} for this object, never
 	// throw (AGENTS §14) — mirroring compileGuard's object branch
 	// (compilers.ts).
 	const outcome = attempt(() => {
-		const keys = Object.keys(value).sort().slice(0, breadth)
+		const allKeys = Object.keys(value).sort()
+		const keys = allKeys.slice(0, breadth)
+		const truncated = allKeys.length > breadth
 		// Honest typing: a null-prototype accumulator so a property literally
 		// named '__proto__' becomes an own data key instead of mutating the
 		// prototype — the same pattern compileGuard / compileParser use
@@ -412,20 +470,27 @@ export function inferObject(
 		for (const key of keys) {
 			const propertyValue = value[key]
 			if (propertyValue === undefined) continue
-			properties[key] = inferValue(propertyValue, depth - 1, breadth, closed, format, visited)
+			properties[key] = inferValue(propertyValue, depth - 1, breadth, closed, format, visited, memo)
 			required.push(key)
 		}
-		return { properties, required }
+		return { properties, required, truncated }
 	})
 	visited.delete(value)
 	if (!outcome.success) return {}
-	const { properties, required } = outcome.value
-	return {
+	const { properties, required, truncated } = outcome.value
+	const schema: JSONSchema = {
 		type: 'object',
 		...(Object.keys(properties).length > 0 ? { properties } : {}),
 		...(required.length > 0 ? { required } : {}),
-		additionalProperties: !closed,
+		additionalProperties: truncated ? true : !closed,
 	}
+	let depths = memo.get(value)
+	if (!depths) {
+		depths = new Map()
+		memo.set(value, depths)
+	}
+	depths.set(depth, schema)
+	return schema
 }
 
 /**
@@ -445,6 +510,12 @@ export function inferObject(
  * expect an object-shaped `inputSchema`; wrap a non-object payload with
  * {@link schemaToObject} before advertising it as a tool's parameters.
  *
+ * `maxDepth` / `maxProperties` are sanitized via {@link sanitizeBudget} to a
+ * finite non-negative integer, falling back to {@link INFER_DEPTH_LIMIT} /
+ * {@link INFER_BREADTH_LIMIT} for anything else (`NaN`, `Infinity`, negative,
+ * fractional) — a hostile or malformed budget can never defeat the depth
+ * guard or corrupt the sampled key/element list.
+ *
  * @param value - The value to infer a schema from
  * @param options - Optional `maxDepth` / `maxProperties` / `closed` / `format` bounds
  * @returns The inferred `JSONSchema`
@@ -458,11 +529,11 @@ export function inferObject(
  * ```
  */
 export function valueToSchema(value: unknown, options?: ValueToSchemaOptions): JSONSchema {
-	const maxDepth = options?.maxDepth ?? INFER_DEPTH_LIMIT
-	const maxProperties = options?.maxProperties ?? INFER_BREADTH_LIMIT
+	const maxDepth = sanitizeBudget(options?.maxDepth, INFER_DEPTH_LIMIT)
+	const maxProperties = sanitizeBudget(options?.maxProperties, INFER_BREADTH_LIMIT)
 	const closed = options?.closed ?? true
 	const format = options?.format ?? false
-	return inferValue(value, maxDepth, maxProperties, closed, format, new WeakSet())
+	return inferValue(value, maxDepth, maxProperties, closed, format, new WeakSet(), new WeakMap())
 }
 
 // === Multi-sample inference
@@ -515,7 +586,7 @@ export function inferSamples(
 		if (enumSchema) return enumSchema
 	}
 	const schemas = samples.map((sample) =>
-		inferValue(sample, depth, breadth, closed, false, new WeakSet()),
+		inferValue(sample, depth, breadth, closed, false, new WeakSet(), new WeakMap()),
 	)
 	const unified = unifySchemas(schemas)
 	if (format && unified.type === 'string' && Object.keys(unified).length === 1) {
@@ -541,7 +612,14 @@ export function inferSamples(
  * {@link inferArray}, this path carries no `visited` `WeakSet` — a value
  * shared by reference across multiple sample rows is legitimate (not a
  * cycle back to an ancestor), so termination on cyclic row data relies on
- * the decrementing `depth` budget alone.
+ * the decrementing `depth` budget alone. When the union of sample keys
+ * exceeds `breadth`, the key list is truncated and `additionalProperties` is
+ * forced to `true` regardless of `closed` — the same truncation-opens-the-
+ * schema rule {@link inferObject} applies, so a closed schema built from a
+ * truncated key union never rejects the very rows it was inferred from. A
+ * hostile getter on ONE sample row drops that key for ALL rows (the whole
+ * per-key value collection is a single {@link attempt}-contained walk) —
+ * this is a deliberate all-or-nothing scope, not a per-row partial failure.
  *
  * @param samples - The plain-record samples
  * @param depth - Remaining descent budget
@@ -566,7 +644,7 @@ export function inferRecordSamples(
 	format: boolean,
 	enumOn: boolean,
 ): JSONSchema {
-	if (depth <= 0) return {}
+	if (!(depth > 0)) return {}
 	// Contain the whole key-enumeration walk — a hostile ownKeys trap on any
 	// sample must yield an empty key set for this branch, never throw
 	// (AGENTS §14).
@@ -575,9 +653,11 @@ export function inferRecordSamples(
 		for (const sample of samples) {
 			for (const key of Object.keys(sample)) keySet.add(key)
 		}
-		return [...keySet].sort().slice(0, breadth)
+		const allKeys = [...keySet].sort()
+		return { keys: allKeys.slice(0, breadth), truncated: allKeys.length > breadth }
 	})
-	const keys = keysOutcome.success ? keysOutcome.value : []
+	const keys = keysOutcome.success ? keysOutcome.value.keys : []
+	const truncated = keysOutcome.success && keysOutcome.value.truncated
 	// Honest typing: a null-prototype accumulator so a key literally named
 	// '__proto__' becomes an own data key instead of mutating the prototype —
 	// the same pattern compileGuard / compileParser use (compilers.ts).
@@ -609,7 +689,7 @@ export function inferRecordSamples(
 		type: 'object',
 		...(Object.keys(properties).length > 0 ? { properties } : {}),
 		...(required.length > 0 ? { required } : {}),
-		additionalProperties: !closed,
+		additionalProperties: truncated ? true : !closed,
 	}
 }
 
@@ -628,7 +708,9 @@ export function inferRecordSamples(
  * `anyOf` ordering {@link inferArray} applies to element schemas). `format`
  * and `enum` (both default `false`) opt a low-cardinality/unanimous-format
  * slot into the corresponding keyword — see {@link inferSamples} for the
- * precedence and the multi-sample format-disabling seam.
+ * precedence and the multi-sample format-disabling seam. `maxDepth` /
+ * `maxProperties` are sanitized via {@link sanitizeBudget} the same way
+ * {@link valueToSchema} sanitizes them — see there for why.
  *
  * @param samples - The example values to infer a schema from
  * @param options - Optional `maxDepth` / `maxProperties` / `closed` / `format` / `enum` bounds
@@ -646,8 +728,8 @@ export function samplesToSchema(
 	samples: readonly unknown[],
 	options?: ValueToSchemaOptions,
 ): JSONSchema {
-	const maxDepth = options?.maxDepth ?? INFER_DEPTH_LIMIT
-	const maxProperties = options?.maxProperties ?? INFER_BREADTH_LIMIT
+	const maxDepth = sanitizeBudget(options?.maxDepth, INFER_DEPTH_LIMIT)
+	const maxProperties = sanitizeBudget(options?.maxProperties, INFER_BREADTH_LIMIT)
 	const closed = options?.closed ?? true
 	const format = options?.format ?? false
 	const enumOn = options?.enum ?? false

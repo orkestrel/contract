@@ -96,6 +96,20 @@ export const INFER_BREADTH_LIMIT = 256
 export const INFER_ENUM_LIMIT = 12
 
 /**
+ * The maximum string length {@link stringToFormat} attempts to classify,
+ * frozen.
+ *
+ * @remarks
+ * Bounds per-string format-detection work: a value longer than this returns
+ * `undefined` immediately, before any pattern match runs. 128 sits
+ * comfortably above the longest real format token — an RFC 3339 date-time
+ * with fractional seconds and a UTC offset — so no legitimate classification
+ * changes; only pathologically long strings (a multi-megabyte payload passed
+ * as a candidate email/URI) are skipped.
+ */
+export const FORMAT_MAX_LENGTH = 128
+
+/**
  * Pure-regex matchers backing {@link stringToFormat}'s pattern-only formats
  * (`uuid` / `email` / `uri`), frozen as data.
  *

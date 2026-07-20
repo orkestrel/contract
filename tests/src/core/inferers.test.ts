@@ -1,17 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import {
+	canonicalStringify,
 	compileSchema,
 	integerShape,
 	INFER_BREADTH_LIMIT,
 	INFER_DEPTH_LIMIT,
 	INFER_ENUM_LIMIT,
+	isValidISOInstant,
 	literalShape,
 	objectShape,
 	samplesToFormat,
 	samplesToSchema,
+	schemaToObject,
 	schemaToParameters,
 	stringShape,
 	stringToFormat,
+	unifySchemas,
 	valueToSchema,
 } from '@src/core'
 
@@ -331,9 +335,20 @@ describe('stringToFormat — direct classification', () => {
 		expect(stringToFormat('2020-13-45')).toBeUndefined()
 	})
 
-	it('matches a time', () => {
-		expect(stringToFormat('10:30:00')).toBe('time')
+	it('requires an offset for a time (RFC 3339 full-time) — offset-less falls through', () => {
+		expect(stringToFormat('10:30:00')).toBeUndefined()
+	})
+
+	it('matches a time with a Z offset', () => {
 		expect(stringToFormat('10:30:00Z')).toBe('time')
+	})
+
+	it('matches a time with a numeric offset', () => {
+		expect(stringToFormat('10:30:00+02:00')).toBe('time')
+	})
+
+	it('rejects an impossible time even with a valid offset shape', () => {
+		expect(stringToFormat('25:61:61Z')).toBeUndefined()
 	})
 
 	it('matches an email', () => {
@@ -592,5 +607,456 @@ describe('samplesToSchema — hostile input with enum/format on', () => {
 		const row: Record<string, unknown> = { name: 'root' }
 		row.self = row
 		expect(() => samplesToSchema([row], { enum: true, format: true })).not.toThrow()
+	})
+})
+
+describe('inferArray — hostile own-getter / Proxy-over-array totality (C1)', () => {
+	it('does not throw when a throwing own-getter sits at array index 0', () => {
+		const hostile: unknown[] = [1, 2, 3]
+		Object.defineProperty(hostile, 0, {
+			get() {
+				throw new Error('hostile getter')
+			},
+			enumerable: true,
+			configurable: true,
+		})
+		expect(() => valueToSchema(hostile)).not.toThrow()
+		expect(valueToSchema(hostile)).toEqual({ type: 'array' })
+	})
+
+	it('does not throw for a Proxy-over-array (isArray === Array.isArray)', () => {
+		const hostile = new Proxy([1, 2, 3], {
+			get(target, property, receiver) {
+				if (property === '0') throw new Error('hostile proxy element')
+				return Reflect.get(target, property, receiver)
+			},
+		})
+		expect(() => valueToSchema(hostile)).not.toThrow()
+		expect(valueToSchema(hostile)).toEqual({ type: 'array' })
+	})
+
+	it('does not throw for a hostile element nested inside an array of arrays', () => {
+		const inner: unknown[] = [1]
+		Object.defineProperty(inner, 0, {
+			get() {
+				throw new Error('hostile nested getter')
+			},
+			enumerable: true,
+			configurable: true,
+		})
+		const outer = [inner]
+		expect(() => valueToSchema(outer)).not.toThrow()
+	})
+
+	it('does not throw for a hostile array element with format: true', () => {
+		const hostile: unknown[] = [1]
+		Object.defineProperty(hostile, 0, {
+			get() {
+				throw new Error('hostile getter')
+			},
+			enumerable: true,
+			configurable: true,
+		})
+		expect(() => valueToSchema(hostile, { format: true })).not.toThrow()
+		expect(valueToSchema(hostile, { format: true })).toEqual({ type: 'array' })
+	})
+
+	it('does not throw for a hostile array element via samplesToSchema', () => {
+		const hostile: unknown[] = [1]
+		Object.defineProperty(hostile, 0, {
+			get() {
+				throw new Error('hostile getter')
+			},
+			enumerable: true,
+			configurable: true,
+		})
+		expect(() => samplesToSchema([hostile])).not.toThrow()
+	})
+
+	it('does not throw for a Proxy-over-array whose `length` getter is hostile', () => {
+		const hostile = new Proxy([1, 2, 3], {
+			get(target, property, receiver) {
+				if (property === 'length') throw new Error('hostile')
+				return Reflect.get(target, property, receiver)
+			},
+		})
+		expect(() => valueToSchema(hostile)).not.toThrow()
+		expect(valueToSchema(hostile)).toEqual({ type: 'array' })
+	})
+
+	it('does not throw for a hostile-`length` Proxy-over-array nested as an object property', () => {
+		const hostile = new Proxy([1, 2, 3], {
+			get(target, property, receiver) {
+				if (property === 'length') throw new Error('hostile')
+				return Reflect.get(target, property, receiver)
+			},
+		})
+		expect(() => valueToSchema({ items: hostile })).not.toThrow()
+	})
+
+	it('does not throw for a hostile-`length` Proxy-over-array nested as an outer array element', () => {
+		const hostile = new Proxy([1, 2, 3], {
+			get(target, property, receiver) {
+				if (property === 'length') throw new Error('hostile')
+				return Reflect.get(target, property, receiver)
+			},
+		})
+		expect(() => valueToSchema([hostile])).not.toThrow()
+	})
+})
+
+describe('valueToSchema / samplesToSchema — option sanitization (C2)', () => {
+	it('does not hang on a 40000-deep array chain with a valid budget', () => {
+		let current: unknown = 'leaf'
+		for (let level = 0; level < 40000; level += 1) current = [current]
+		expect(() => valueToSchema(current)).not.toThrow()
+	})
+
+	it.each([Number.NaN, Number.POSITIVE_INFINITY, 1e9, -1, 2.5])(
+		'never hangs or throws for a hostile maxDepth of %s',
+		(maxDepth) => {
+			let current: unknown = 'leaf'
+			for (let level = 0; level < 500; level += 1) current = { child: current }
+			expect(() => valueToSchema(current, { maxDepth })).not.toThrow()
+		},
+	)
+
+	it.each([Number.NaN, -1, -5])(
+		'keeps properties/required in sync under a hostile maxProperties of %s (no dropped-required leak)',
+		(maxProperties) => {
+			const wide: Record<string, unknown> = { a: 1, b: 2, c: 3, d: 4, e: 5 }
+			const schema = valueToSchema(wide, { maxProperties })
+			expect(Object.keys(schema.properties ?? {}).sort()).toEqual(
+				[...(schema.required ?? [])].sort(),
+			)
+		},
+	)
+
+	it('a negative maxProperties never drops the last sorted key (sanitized back to the default budget)', () => {
+		const wide: Record<string, unknown> = { a: 1, b: 2, c: 3, d: 4, e: 5 }
+		const schema = valueToSchema(wide, { maxProperties: -5 })
+		// -5 sanitizes to INFER_BREADTH_LIMIT (no truncation for 5 keys), so
+		// every key survives and the schema stays closed — the pre-fix bug was
+		// slice(0, -5) silently dropping the last sorted keys.
+		expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['a', 'b', 'c', 'd', 'e'])
+		expect(schema.additionalProperties).toBe(false)
+	})
+
+	it('falls back to INFER_DEPTH_LIMIT / INFER_BREADTH_LIMIT for a hostile budget (sanitizeBudget)', () => {
+		const shallow = valueToSchema({ a: { b: { c: 1 } } }, { maxDepth: Number.NaN })
+		const withDefault = valueToSchema({ a: { b: { c: 1 } } })
+		expect(shallow).toEqual(withDefault)
+	})
+})
+
+describe('valueToSchema — truncation opens the schema (C3)', () => {
+	it('does not close additionalProperties when maxProperties truncates the key list', () => {
+		const schema = valueToSchema({ a: 1, b: 2, c: 3, d: 4 }, { maxProperties: 2 })
+		expect(schema.additionalProperties).not.toBe(false)
+		expect(schema.additionalProperties).toBe(true)
+		const properties = Object.keys(schema.properties ?? {})
+		for (const key of schema.required ?? []) {
+			expect(properties).toContain(key)
+		}
+	})
+
+	it('keeps additionalProperties: false when the object is NOT truncated', () => {
+		const schema = valueToSchema({ a: 1, b: 2 }, { maxProperties: 2 })
+		expect(schema.additionalProperties).toBe(false)
+	})
+})
+
+describe('samplesToSchema — truncation opens the schema for record samples (C3)', () => {
+	it('does not close additionalProperties when the sample key union is truncated', () => {
+		const schema = samplesToSchema([{ a: 1, b: 2, c: 3, d: 4 }], { maxProperties: 2 })
+		expect(schema.additionalProperties).not.toBe(false)
+		expect(schema.additionalProperties).toBe(true)
+		const properties = Object.keys(schema.properties ?? {})
+		for (const key of schema.required ?? []) {
+			expect(properties).toContain(key)
+		}
+	})
+
+	it('keeps additionalProperties: false when the sample key union is NOT truncated', () => {
+		const schema = samplesToSchema([{ a: 1 }, { b: 2 }], { maxProperties: 2 })
+		expect(schema.additionalProperties).toBe(false)
+	})
+})
+
+describe('valueToSchema — shared-subtree DAG (C4)', () => {
+	it('resolves a depth-24 diamond DAG quickly with a deterministic schema', () => {
+		let node: unknown = { leaf: 1 }
+		for (let level = 0; level < 24; level += 1) {
+			node = { a: node, b: node }
+		}
+		const start = Date.now()
+		const schema = valueToSchema(node)
+		const elapsed = Date.now() - start
+		expect(elapsed).toBeLessThan(5000)
+		expect(schema.type).toBe('object')
+		// The memo dedupes identical (object, remaining-depth) re-inference: the
+		// 'a' and 'b' branches share the same child object at the same depth, so
+		// their computed schemas are the SAME reference, not merely equal —
+		// this is what keeps a fan-2/depth-24 DAG from costing 2^24 re-inferences.
+		expect(schema.properties?.a).toBe(schema.properties?.b)
+	})
+
+	it('resolves a fan-3 shared-reference DAG quickly', () => {
+		let node: unknown = { leaf: 1 }
+		for (let level = 0; level < 16; level += 1) {
+			node = { a: node, b: node, c: node }
+		}
+		const start = Date.now()
+		expect(() => valueToSchema(node)).not.toThrow()
+		expect(Date.now() - start).toBeLessThan(5000)
+	})
+})
+
+describe('stringToFormat — length bound (C5)', () => {
+	it('returns undefined for a multi-MB almost-email string', () => {
+		const huge = `${'a'.repeat(5_000_000)}@example.com`
+		expect(stringToFormat(huge)).toBeUndefined()
+	})
+
+	it('still classifies a real UUID, date, and email within the bound', () => {
+		expect(stringToFormat('550e8400-e29b-41d4-a716-446655440000')).toBe('uuid')
+		expect(stringToFormat('2024-01-15')).toBe('date')
+		expect(stringToFormat('ada@example.com')).toBe('email')
+	})
+})
+
+describe('valueToSchema — sparse arrays (C7)', () => {
+	it('emits a valid items schema (no undefined/null anyOf member) for a sparse array', () => {
+		const sparse = [1, undefined, 3]
+		delete sparse[1]
+		const schema = valueToSchema(sparse)
+		expect(schema).toEqual({
+			type: 'array',
+			items: { anyOf: [{ type: 'integer' }, {}] },
+		})
+	})
+})
+
+describe('unifySchemas — direct', () => {
+	it('returns {} for an empty list', () => {
+		expect(unifySchemas([])).toEqual({})
+	})
+
+	it('subsumes integer into number alongside a third distinct schema', () => {
+		const result = unifySchemas([{ type: 'integer' }, { type: 'number' }, { type: 'string' }])
+		expect(result).toEqual({
+			anyOf: [{ type: 'number' }, { type: 'string' }],
+		})
+	})
+
+	it('de-duplicates structurally-equal schemas regardless of key order', () => {
+		const result = unifySchemas([
+			{ type: 'object', properties: {} },
+			{ properties: {}, type: 'object' },
+		])
+		expect(result).toEqual({ type: 'object', properties: {} })
+	})
+
+	it('sorts a multi-member anyOf deterministically', () => {
+		const first = unifySchemas([{ type: 'string' }, { type: 'boolean' }, { type: 'null' }])
+		const second = unifySchemas([{ type: 'null' }, { type: 'boolean' }, { type: 'string' }])
+		expect(JSON.stringify(first)).toBe(JSON.stringify(second))
+		expect(first.anyOf).toHaveLength(3)
+	})
+})
+
+describe('canonicalStringify — direct', () => {
+	it('sorts nested object keys recursively at every level', () => {
+		const value = { b: { d: 1, c: 2 }, a: 1 }
+		expect(canonicalStringify(value)).toBe('{"a":1,"b":{"c":2,"d":1}}')
+	})
+
+	it('preserves array element order', () => {
+		expect(canonicalStringify([3, 1, 2])).toBe('[3,1,2]')
+	})
+
+	it('renders NaN as null (JSON.stringify semantics)', () => {
+		expect(canonicalStringify(Number.NaN)).toBe('null')
+	})
+})
+
+describe('isValidISOInstant — direct', () => {
+	it('returns true for a valid date string', () => {
+		expect(isValidISOInstant('2024-01-15')).toBe(true)
+	})
+
+	it('returns false for an impossible date', () => {
+		expect(isValidISOInstant('2020-13-45')).toBe(false)
+	})
+
+	it('is total (never throws) for a hostile string', () => {
+		expect(() => isValidISOInstant(' '.repeat(1000))).not.toThrow()
+	})
+})
+
+describe('samplesToSchema — enum boundary and ordering', () => {
+	it('fires exactly at the INFER_ENUM_LIMIT distinct-value boundary', () => {
+		const values = Array.from({ length: INFER_ENUM_LIMIT }, (_, index) => `v${index}`)
+		const repeated = [...values, values[0]]
+		const result = samplesToSchema(repeated, { enum: true })
+		expect(result.enum).toBeDefined()
+		expect(result.enum).toHaveLength(INFER_ENUM_LIMIT)
+	})
+
+	it('orders a numeric enum lexicographically by canonical string key, not ascending', () => {
+		const result = samplesToSchema([2, 10, 1, 2], { enum: true })
+		expect(result).toEqual({ enum: [1, 10, 2] })
+	})
+})
+
+describe('samplesToSchema / valueToSchema — depth and property boundary coverage', () => {
+	it('returns {} for samplesToSchema with maxDepth: 0', () => {
+		expect(samplesToSchema([{ a: 1 }], { maxDepth: 0 })).toEqual({})
+	})
+
+	it('returns an object schema with no properties for maxProperties: 0', () => {
+		const result = samplesToSchema([{ a: 1 }], { maxProperties: 0 })
+		expect(result).toEqual({ type: 'object', additionalProperties: true })
+	})
+
+	it('threads closed: false through record samples', () => {
+		const result = samplesToSchema([{ a: 1 }], { closed: false })
+		expect(result.additionalProperties).toBe(true)
+	})
+
+	it('returns {} for valueToSchema with maxDepth: 0 on an object root', () => {
+		expect(valueToSchema({ a: 1 }, { maxDepth: 0 })).toEqual({})
+	})
+
+	it('returns {} for valueToSchema with maxDepth: 0 on an array root', () => {
+		expect(valueToSchema([1, 2], { maxDepth: 0 })).toEqual({})
+	})
+})
+
+describe('samplesToSchema — nested containers and mixed sample shapes', () => {
+	it('locks the actual behavior for a nested array-of-dates column: per-row arrays unify without a re-attached format', () => {
+		// Each row's `dates` array is itself a sample column value, inferred via
+		// inferSamples' non-record branch — which forces `format` OFF for each
+		// row's array (the multi-sample format-disabling seam applies one level
+		// down too, since the unified result is `{ type: 'array', ... }`, not
+		// `{ type: 'string' }`, so samplesToFormat reattachment never triggers).
+		const result = samplesToSchema(
+			[{ dates: ['2024-01-01', '2024-02-02'] }, { dates: ['2024-03-03'] }],
+			{ format: true },
+		)
+		expect(result.properties?.dates).toEqual({
+			type: 'array',
+			items: { type: 'string' },
+		})
+	})
+
+	it('unifies arrays-of-records as samples independently per row (no per-key row merge)', () => {
+		// Top-level samples are arrays, not records, so inferSamples takes the
+		// non-record branch: each row's array is classified independently via
+		// inferValue and the results are unified with anyOf — unlike
+		// inferRecordSamples' per-key merge for record-shaped rows.
+		const result = samplesToSchema([[{ a: 1 }], [{ a: 2, b: 'x' }]])
+		// The two rows infer distinct array schemas (different item shapes), so
+		// unifySchemas wraps them as a top-level anyOf rather than merging their
+		// item shapes the way inferRecordSamples merges record rows.
+		expect(result.anyOf).toBeDefined()
+		expect(result.anyOf).toHaveLength(2)
+		for (const member of result.anyOf ?? []) {
+			expect(member.type).toBe('array')
+			expect(member.items?.type).toBe('object')
+		}
+	})
+
+	it('combines closed / format / enum through a nested object column', () => {
+		const result = samplesToSchema(
+			[
+				{ profile: { status: 'active' } },
+				{ profile: { status: 'inactive' } },
+				{ profile: { status: 'active' } },
+			],
+			{ closed: false, format: true, enum: true },
+		)
+		expect(result.properties?.profile).toEqual({
+			type: 'object',
+			properties: { status: { enum: ['active', 'inactive'] } },
+			required: ['status'],
+			additionalProperties: true,
+		})
+	})
+
+	it('is total for a hostile ownKeys Proxy used as an array element', () => {
+		const hostile = new Proxy(
+			{},
+			{
+				ownKeys() {
+					throw new Error('hostile')
+				},
+			},
+		)
+		expect(() => valueToSchema([hostile])).not.toThrow()
+		expect(() => samplesToSchema([[hostile]])).not.toThrow()
+	})
+
+	it('includes an own "__proto__" key inside a heterogeneous array element via anyOf unification', () => {
+		const node: unknown = JSON.parse('[{"__proto__":1,"a":2},"text"]')
+		const schema = valueToSchema(node)
+		const objectMember = schema.items?.anyOf?.find((member) => member.type === 'object')
+		expect(objectMember?.properties).toHaveProperty('__proto__')
+	})
+
+	it('one hostile-getter row drops that key for ALL rows (all-or-nothing scope)', () => {
+		const good = { a: 1, b: 2 }
+		const hostile: Record<string, unknown> = { a: 1 }
+		Object.defineProperty(hostile, 'b', {
+			get() {
+				throw new Error('hostile getter')
+			},
+			enumerable: true,
+			configurable: true,
+		})
+		const schema = samplesToSchema([good, hostile])
+		expect(schema.properties).toHaveProperty('a')
+		expect(schema.properties).not.toHaveProperty('b')
+	})
+})
+
+describe('composition seam — schemaToParameters(schemaToObject(samplesToSchema(...)))', () => {
+	it('wraps a non-object enum root as { value: { enum: [...] } }', () => {
+		const schema = samplesToSchema(['a', 'a', 'b'], { enum: true })
+		const wrapped = schemaToObject(schema)
+		const parameters = schemaToParameters(wrapped)
+		expect(parameters).toEqual({
+			type: 'object',
+			properties: { value: { enum: ['a', 'b'] } },
+			required: ['value'],
+			additionalProperties: false,
+		})
+	})
+})
+
+describe('valueToSchema — Date leaf at the depth boundary under format: true', () => {
+	it('infers a Date leaf when it lands exactly at the last usable depth', () => {
+		const schema = valueToSchema(
+			{ createdAt: new Date('2024-01-01T00:00:00Z') },
+			{ maxDepth: 1, format: true },
+		)
+		expect(schema.properties?.createdAt).toEqual({ type: 'string', format: 'date-time' })
+	})
+
+	it('emits {} for a Date leaf one level beyond the depth boundary', () => {
+		const schema = valueToSchema(
+			{ nested: { createdAt: new Date() } },
+			{
+				maxDepth: 1,
+				format: true,
+			},
+		)
+		expect(schema.properties?.nested).toEqual({})
+	})
+})
+
+describe('samplesToFormat — single-sample unanimity', () => {
+	it('classifies a single-element date list', () => {
+		expect(samplesToFormat(['2024-01-01'])).toBe('date')
 	})
 })

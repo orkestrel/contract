@@ -222,6 +222,39 @@ export function schemaToObject(schema: JSONSchema): JSONSchema {
 	}
 }
 
+// === Inference option sanitization
+
+/**
+ * Sanitize a user-supplied inference budget (`maxDepth` / `maxProperties`) to
+ * a finite non-negative integer, falling back to a default for anything else.
+ *
+ * @remarks
+ * Guards {@link valueToSchema} / {@link samplesToSchema} against a hostile or
+ * malformed budget: an unclamped `NaN` defeats every `depth <= 0` guard
+ * (`NaN <= 0` is `false`, so recursion never halts), and a negative
+ * `maxProperties` makes `slice(0, -1)` silently drop the LAST sorted key
+ * instead of capping the list (a fractional value has a similarly undefined
+ * `slice` bound). `Infinity` is rejected too — `Number.isInteger(Infinity)`
+ * is `false` — since an unbounded budget is exactly the adversarial case the
+ * caps exist to prevent. A valid finite non-negative integer passes through
+ * unchanged.
+ *
+ * @param value - The candidate budget value
+ * @param fallback - The default to use when `value` is not a finite
+ *                    non-negative integer
+ * @returns A finite non-negative integer budget
+ *
+ * @example
+ * ```ts
+ * sanitizeBudget(Number.NaN, INFER_DEPTH_LIMIT) // INFER_DEPTH_LIMIT
+ * sanitizeBudget(-1, INFER_BREADTH_LIMIT)       // INFER_BREADTH_LIMIT
+ * sanitizeBudget(4, INFER_DEPTH_LIMIT)          // 4
+ * ```
+ */
+export function sanitizeBudget(value: number | undefined, fallback: number): number {
+	return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : fallback
+}
+
 // === Reporting
 
 /**
