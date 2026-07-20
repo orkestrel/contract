@@ -64,10 +64,13 @@
 		"build:src:core": "vite build --config configs/src/vite.core.config.ts && npm run copy dist/src/core/index.d.ts dist/src/core/index.d.cts",
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test"
 	},
+	"dependencies": {},
 	"devDependencies": {
-		"@orkestrel/guide": "^0.0.3",
-		"@orkestrel/scaffold": "^0.0.1",
+		"@microsoft/api-extractor": "^7.58.11",
+		"@orkestrel/guide": "^0.0.5",
+		"@orkestrel/scaffold": "^0.0.2",
 		"@types/node": "^26.1.1",
+		"@vitest/browser-playwright": "^4.1.10",
 		"oxfmt": "^0.59.0",
 		"oxlint": "^1.74.0",
 		"typescript": "^6.0.3",
