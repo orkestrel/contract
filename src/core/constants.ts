@@ -56,3 +56,28 @@ export const FAULT_LIMIT = 64
  * untrusted text.
  */
 export const PREVIEW_LIMIT = 64
+
+// Value-to-schema inference bounds (`valueToSchema` / `samplesToSchema`).
+
+/**
+ * The default maximum object/array nesting depth {@link valueToSchema} walks,
+ * frozen.
+ *
+ * @remarks
+ * Bounds inference against adversarial or cyclic runtime input — once the
+ * remaining depth budget reaches zero, inference stops descending and emits
+ * the empty accept-anything schema `{}` for that branch instead of recursing
+ * further. Overridable per call via {@link ValueToSchemaOptions.maxDepth}.
+ */
+export const INFER_DEPTH_LIMIT = 32
+
+/**
+ * The default maximum number of object properties / array elements
+ * {@link valueToSchema} samples per container, frozen.
+ *
+ * @remarks
+ * Bounds the work (and the emitted schema's size) against a wide record or a
+ * huge array — properties/elements beyond this cap are never inspected.
+ * Overridable per call via {@link ValueToSchemaOptions.maxProperties}.
+ */
+export const INFER_BREADTH_LIMIT = 256

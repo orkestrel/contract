@@ -195,6 +195,21 @@ export interface JSONSchema {
 	readonly oneOf?: readonly JSONSchema[]
 }
 
+/**
+ * Options for {@link valueToSchema} / {@link samplesToSchema}.
+ *
+ * @remarks
+ * The reverse direction of {@link compileSchema}: instead of emitting a
+ * `JSONSchema` from a developer-authored `ContractShape`, these bounds tame
+ * inference from an unknown runtime value (or a set of example values), which
+ * — unlike a shape tree — may be arbitrarily deep, wide, or cyclic.
+ */
+export interface ValueToSchemaOptions {
+	readonly maxDepth?: number
+	readonly maxProperties?: number
+	readonly closed?: boolean
+}
+
 // === Contract shapes
 
 /**
