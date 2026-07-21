@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/contract",
-	"version": "0.0.5",
+	"version": "0.0.6",
 	"description": "Zero-dependency contract toolkit — type guards, combinators, parsers, and a shape DSL that compiles one contract shape into a guard, parser, JSON Schema, and generator. The foundation package of the @orkestrel line.",
 	"keywords": [
 		"contract",
