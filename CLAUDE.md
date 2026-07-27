@@ -18,8 +18,8 @@ One workflow runs across both providers. Each engine has one job, and no engine 
 | --------------- | --------------------------------------------------------------- | ------------------------------------------------- |
 | **Fable**       | Top-level orchestration and final acceptance in Claude Code     | Owns the goal, plan, reconciliation, and decision |
 | **Cursor Grok** | Research, scouting, context-heavy reading, distillation         | Read-only; returns evidence, never decisions      |
-| **Opus 5**      | Subjective design, design-fit review, and implementation        | Proposes, audits, and implements; never accepts   |
-| **GPT-5.6 Sol** | Objective analysis, correctness audit, and implementation       | Proposes, audits, and implements; never accepts   |
+| **Opus 5**      | Subjective and creative design, design-fit review, and implementation        | Proposes, audits, and implements; never accepts   |
+| **GPT-5.6 Sol** | Objective and realistic analysis, correctness audit, and implementation       | Proposes, audits, and implements; never accepts   |
 
 - **Fable orchestrates and accepts, and does nothing else.** It is never a subagent, never a
   Codex route, and Codex must never invoke it.
@@ -142,10 +142,10 @@ formatter and build races, cache phantoms, and validation cross-talk:
    in parallel, without showing either the other's answer. Reconcile them yourself into one
    plan: units, dependencies, ownership, parallel/serial order, acceptance criteria, risks.
    Surface the plan before dispatch.
-3. **Implement.** Route each nontrivial unit to Sol (`codex` route `implementer`) or Opus
-   (`implementer`) — whichever engine's strengths fit the unit — always in the main checkout
-   as the sole serial writer. Route a fully specified, taste-free unit to `builder` or
-   `application`. Never route implementation to an engine the unit's judgment load exceeds.
+3. **Implement.** Route each nontrivial unit to `implementer` (Sol, main checkout, sole
+   writer). Route a fully
+   specified, taste-free unit to `builder` or `application`. Never route implementation to an
+   engine the unit's judgment load exceeds.
 4. **Integrate.** Evaluate each distillate against its acceptance criteria; apply shared-file
    patches serially; route cross-cutting findings.
 5. **Audit adversarially.** Every nontrivial implementation gets `reviewer` (Opus 5, design
@@ -223,9 +223,6 @@ fallback when it is not.
   only explicitly mechanical, taste-free roles. `gpt-5.6-luna` requires a proven repeatable,
   high-volume workload.
 - The bridge never commits, pushes, installs, authenticates, or reads credentials.
-- **The bridge is patient.** One foreground `codex exec` invocation with a generous timeout;
-  never poll, background, restart, or kill a running exec. When it returns, verify the result
-  with direct evidence (git status, diff, scoped gates) and report once, completely.
 - Claude Code Cloud setup installs `@openai/codex` globally but never authenticates; the
   snapshotted setup state must contain no Codex credentials.
 - At the start of each live Cloud session the user runs `codex login --device-auth` and
@@ -246,11 +243,9 @@ CODEX_IMPLEMENTER_EFFORT=high
 
 ### Claude Opus from Codex
 
-- Reached through the Codex `planner`, `reviewer`, and `implementer` (route `opus`) bridges,
-  which invoke the local Claude CLI pinned to `--model opus`.
-- `planner` and `reviewer` are read-only: the bridge passes a brief and returns the response.
-- The `opus` implementation route runs the Claude CLI with edit permission in the main
-  checkout as the sole serial writer, under the same brief laws as the Sol implementer.
+- Reached only through the Codex `planner` and `reviewer` bridges, which invoke the local
+  Claude CLI pinned to `--model opus`.
+- Read-only: the bridge passes a brief and returns the response; it applies nothing.
 - Never pin `fable` and never route orchestration or acceptance across the bridge.
 - Fallback when the CLI or authentication is unavailable: state the gap, run the design or
   design-audit pass in the Sol main session, and record that the subjective adversary was
@@ -260,7 +255,7 @@ CODEX_IMPLEMENTER_EFFORT=high
 
 - No writer's and no external engine's self-assessment is authoritative.
 - Do not let a lower-cost native agent stand in for Grok, Opus 5, or Sol; do not spend Opus 5
-  on discovery or mechanical edits; route judgment-bearing implementation only to Sol or Opus.
+  on discovery or mechanical edits; do not route judgment-bearing implementation away from Sol.
 - Do not run the design adversaries on different briefs, or show either one the other's answer
   before both have returned.
 - Do not accept unreviewed implementation, unverified hypotheses, shared-tree writing races,
