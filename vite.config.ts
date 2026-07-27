@@ -23,7 +23,6 @@ import {
 } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path'
 
-
 export function resolveWorkspacePath(relativePath: string): string {
 	return fileURLToPath(new URL(relativePath, import.meta.url))
 }
@@ -125,8 +124,6 @@ export function containedPath(root: string, target: string): boolean {
 		(relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath))
 	)
 }
-
-
 
 export function packageNameOf(source: string): string | undefined {
 	const [sourcePath] = source.replaceAll('\\', '/').split(/[?#]/)

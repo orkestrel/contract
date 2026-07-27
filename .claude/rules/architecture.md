@@ -23,6 +23,7 @@ paths:
 | Owned snapshots           | `*/cloners.ts`                               |
 | Coercers                  | `*/parsers.ts`                               |
 | Shape values              | `*/shapers.ts`                               |
+| Value inferers            | `*/inferers.ts`                              |
 | Shape/algorithm compilers | `*/compilers.ts`                             |
 | Entity/value factories    | `*/factories.ts`                             |
 | Middleware factories      | `*/middlewares.ts`                           |
@@ -69,7 +70,7 @@ A wrapper survives only when it adds a real boundary, invariant, composition, tr
 
 - Never declare or assign a function inside another function or method.
 - This bans local `function`, `function*`, and `const fn = () => ...`, regardless of caller count.
-- The only in-body function expression allowed is an anonymous callback passed directly as an argument.
+- The only in-body function expressions allowed are an anonymous callback passed directly as an argument and an anonymous function returned directly as the result (the factory/combinator pattern).
 - Instance-bound work that reaches state or sibling methods is a method, not a free function.
 
 Separate three roles:

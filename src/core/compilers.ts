@@ -276,7 +276,11 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
 		case 'string':
 			// `stringOf` returns bare `isString` when unrefined, else composes the
 			// length-bounds + pattern refinement — the same guard the parser re-applies.
-			return stringOf({ min: shape.min, max: shape.max, pattern: shape.pattern })
+			return stringOf({
+				...(shape.min === undefined ? {} : { min: shape.min }),
+				...(shape.max === undefined ? {} : { max: shape.max }),
+				...(shape.pattern === undefined ? {} : { pattern: shape.pattern }),
+			})
 		case 'number': {
 			const base = shape.integer === true ? isInteger : isFiniteNumber
 			if (shape.min === undefined && shape.max === undefined) return base
@@ -406,7 +410,11 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 			// Coerce by type, then re-apply the SAME refinement the guard enforces (the
 			// identical `stringOf`) — a value that parses but violates a bound or the
 			// pattern fails the parse (returns `undefined`).
-			const guard = stringOf({ min: shape.min, max: shape.max, pattern: shape.pattern })
+			const guard = stringOf({
+				...(shape.min === undefined ? {} : { min: shape.min }),
+				...(shape.max === undefined ? {} : { max: shape.max }),
+				...(shape.pattern === undefined ? {} : { pattern: shape.pattern }),
+			})
 			return (value) => {
 				const parsed = parseString(value)
 				return parsed !== undefined && guard(parsed) ? parsed : undefined
@@ -687,7 +695,11 @@ export function compileGenerator(
 			if (shape.variants.length === 0) {
 				throw new Error('compileGenerator: a union shape needs at least one variant')
 			}
-			return compileGenerator(shape.variants[Math.floor(random() * shape.variants.length)], random)
+			const variant = shape.variants[Math.floor(random() * shape.variants.length)]
+			if (variant === undefined) {
+				throw new Error('compileGenerator: a random source must return a value in [0, 1)')
+			}
+			return compileGenerator(variant, random)
 		}
 		case 'optional':
 			return compileGenerator(shape.inner, random)

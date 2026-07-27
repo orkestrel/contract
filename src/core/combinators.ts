@@ -309,7 +309,7 @@ export function recordOf<
 				}
 				if (present) {
 					const guard = shape[key]
-					if (!guard(value[key])) {
+					if (guard === undefined || !guard(value[key])) {
 						return false
 					}
 				}

@@ -13,6 +13,7 @@ export const CENTRAL_SOURCE_FILES: readonly string[] = Object.freeze([
 	'factories.ts',
 	'helpers.ts',
 	'handlers.ts',
+	'inferers.ts',
 	'middlewares.ts',
 	'parsers.ts',
 	'relations.ts',
@@ -33,6 +34,7 @@ export const FUNCTION_SOURCE_FILES: readonly string[] = Object.freeze([
 	'factories.ts',
 	'handlers.ts',
 	'helpers.ts',
+	'inferers.ts',
 	'middlewares.ts',
 	'parsers.ts',
 	'relations.ts',
@@ -100,6 +102,23 @@ export function isDirectCallback(node: ts.ArrowFunction | ts.FunctionExpression)
 	)
 }
 
+/**
+ * Whether an arrow/function expression is returned directly as a factory or combinator result.
+ *
+ * @param node - The function expression to inspect
+ * @returns `true` when the node is a direct return value, including one parenthesized layer
+ */
+export function isDirectReturn(node: ts.ArrowFunction | ts.FunctionExpression): boolean {
+	const parent = node.parent
+	if (ts.isReturnStatement(parent)) return true
+	if (ts.isArrowFunction(parent) && parent.body === node) return true
+	if (!ts.isParenthesizedExpression(parent)) return false
+	const container = parent.parent
+	return (
+		ts.isReturnStatement(container) || (ts.isArrowFunction(container) && container.body === parent)
+	)
+}
+
 /** Whether a function expression is assigned by one module-scope variable declaration. */
 export function isModuleFunction(node: ts.ArrowFunction | ts.FunctionExpression): boolean {
 	const declaration = node.parent
@@ -111,6 +130,18 @@ export function isModuleFunction(node: ts.ArrowFunction | ts.FunctionExpression)
 		ts.isVariableStatement(statement) &&
 		ts.isSourceFile(statement.parent)
 	)
+}
+
+/**
+ * Format a syntax node's source position as a one-based line and character.
+ *
+ * @param node - The syntax node whose starting position to format
+ * @returns The node's one-based `line:character` position
+ */
+export function formatPolicyPosition(node: ts.Node): string {
+	const source = node.getSourceFile()
+	const position = source.getLineAndCharacterOfPosition(node.getStart())
+	return `${String(position.line + 1)}:${String(position.character + 1)}`
 }
 
 /** Whether a property signature belongs to a centralized interface or type alias contract. */
@@ -162,10 +193,10 @@ export function inspectCodingNode(path: string, node: ts.Node, violations: strin
 		ts.isTypeAssertionExpression(node) ||
 		ts.isNonNullExpression(node)
 	) {
-		violations.push(`${path}:${node.getStart()} forbids type/non-null assertions`)
+		violations.push(`${path}:${formatPolicyPosition(node)} forbids type/non-null assertions`)
 	}
 	if (node.kind === ts.SyntaxKind.AnyKeyword) {
-		violations.push(`${path}:${node.getStart()} forbids any`)
+		violations.push(`${path}:${formatPolicyPosition(node)} forbids any`)
 	}
 	if (
 		(ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
@@ -173,14 +204,14 @@ export function inspectCodingNode(path: string, node: ts.Node, violations: strin
 		ts.isStringLiteral(node.moduleSpecifier) &&
 		isUnsupportedModuleSpecifier(node.moduleSpecifier.text)
 	) {
-		violations.push(`${path}:${node.getStart()} forbids non-Node URL module specifiers`)
+		violations.push(`${path}:${formatPolicyPosition(node)} forbids non-Node URL module specifiers`)
 	}
 	if (
 		ts.isPropertySignature(node) &&
 		isContractProperty(node) &&
 		!hasModifier(node, ts.SyntaxKind.ReadonlyKeyword)
 	) {
-		violations.push(`${path}:${node.getStart()} requires readonly contract properties`)
+		violations.push(`${path}:${formatPolicyPosition(node)} requires readonly contract properties`)
 	}
 	if (
 		ts.isCallExpression(node) &&
@@ -188,7 +219,7 @@ export function inspectCodingNode(path: string, node: ts.Node, violations: strin
 		(node.arguments.length !== 1 || !node.arguments.every(ts.isStringLiteral))
 	) {
 		violations.push(
-			`${path}:${node.getStart()} requires dynamic imports to use string literals so import policy remains enforceable`,
+			`${path}:${formatPolicyPosition(node)} requires dynamic imports to use string literals so import policy remains enforceable`,
 		)
 	}
 	if (
@@ -198,17 +229,18 @@ export function inspectCodingNode(path: string, node: ts.Node, violations: strin
 		node.arguments.every(ts.isStringLiteral) &&
 		isUnsupportedModuleSpecifier(node.arguments[0]?.text ?? '')
 	) {
-		violations.push(`${path}:${node.getStart()} forbids non-Node URL module specifiers`)
+		violations.push(`${path}:${formatPolicyPosition(node)} forbids non-Node URL module specifiers`)
 	}
 	if (ts.isFunctionDeclaration(node) && !ts.isSourceFile(node.parent)) {
-		violations.push(`${path}:${node.getStart()} forbids nested function declarations`)
+		violations.push(`${path}:${formatPolicyPosition(node)} forbids nested function declarations`)
 	}
 	if (
 		(ts.isArrowFunction(node) || ts.isFunctionExpression(node)) &&
 		!isDirectCallback(node) &&
+		!isDirectReturn(node) &&
 		!isModuleFunction(node)
 	) {
-		violations.push(`${path}:${node.getStart()} forbids hidden function assignments`)
+		violations.push(`${path}:${formatPolicyPosition(node)} forbids hidden function assignments`)
 	}
 	ts.forEachChild(node, (child) => inspectCodingNode(path, child, violations))
 }
@@ -290,14 +322,18 @@ export function inspectCodingLaw(path: string, content: string): readonly string
 					!ts.isIdentifier(declaration.name) ||
 					!/^[A-Z][A-Z0-9_]*$/u.test(declaration.name.text)
 				) {
-					violations.push(`${path}:${declaration.getStart()} requires UPPER_SNAKE_CASE constants`)
+					violations.push(
+						`${path}:${formatPolicyPosition(declaration)} requires UPPER_SNAKE_CASE constants`,
+					)
 				}
 				if (
 					declaration.initializer !== undefined &&
 					(ts.isArrayLiteralExpression(declaration.initializer) ||
 						ts.isObjectLiteralExpression(declaration.initializer))
 				) {
-					violations.push(`${path}:${declaration.getStart()} freezes collection constants`)
+					violations.push(
+						`${path}:${formatPolicyPosition(declaration)} freezes collection constants`,
+					)
 				}
 			}
 		}
@@ -321,7 +357,7 @@ export function inspectCodingLaw(path: string, content: string): readonly string
 		}
 		for (const member of classes[0]?.members ?? []) {
 			if (hasModifier(member, ts.SyntaxKind.PrivateKeyword)) {
-				violations.push(`${path}:${member.getStart()} uses runtime # privacy`)
+				violations.push(`${path}:${formatPolicyPosition(member)} uses runtime # privacy`)
 			}
 		}
 	}

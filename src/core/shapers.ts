@@ -53,10 +53,10 @@ import { isArray, isBoolean, isFiniteNumber, isInteger, isRecord, isString } fro
 export function stringShape(options?: StringShapeOptions): StringShape {
 	return {
 		type: 'string',
-		min: options?.min,
-		max: options?.max,
-		pattern: options?.pattern,
-		description: options?.description,
+		...(options?.min === undefined ? {} : { min: options.min }),
+		...(options?.max === undefined ? {} : { max: options.max }),
+		...(options?.pattern === undefined ? {} : { pattern: options.pattern }),
+		...(options?.description === undefined ? {} : { description: options.description }),
 	}
 }
 
@@ -74,10 +74,10 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 export function numberShape(options?: NumberShapeOptions): NumberShape {
 	return {
 		type: 'number',
-		min: options?.min,
-		max: options?.max,
-		integer: options?.integer,
-		description: options?.description,
+		...(options?.min === undefined ? {} : { min: options.min }),
+		...(options?.max === undefined ? {} : { max: options.max }),
+		...(options?.integer === undefined ? {} : { integer: options.integer }),
+		...(options?.description === undefined ? {} : { description: options.description }),
 	}
 }
 
@@ -95,9 +95,9 @@ export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): Num
 	return {
 		type: 'number',
 		integer: true,
-		min: options?.min,
-		max: options?.max,
-		description: options?.description,
+		...(options?.min === undefined ? {} : { min: options.min }),
+		...(options?.max === undefined ? {} : { max: options.max }),
+		...(options?.description === undefined ? {} : { description: options.description }),
 	}
 }
 
@@ -115,7 +115,7 @@ export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): Num
 export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
 	return {
 		type: 'boolean',
-		description: options?.description,
+		...(options?.description === undefined ? {} : { description: options.description }),
 	}
 }
 
@@ -131,7 +131,10 @@ export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
  * ```
  */
 export function nullShape(options?: NullShapeOptions): NullShape {
-	return { type: 'null', description: options?.description }
+	return {
+		type: 'null',
+		...(options?.description === undefined ? {} : { description: options.description }),
+	}
 }
 
 /**
@@ -153,7 +156,11 @@ export function literalShape<const T extends readonly (string | number | boolean
 	values: T,
 	options?: LiteralShapeOptions,
 ): LiteralShape<T> {
-	return { type: 'literal', values, description: options?.description }
+	return {
+		type: 'literal',
+		values,
+		...(options?.description === undefined ? {} : { description: options.description }),
+	}
 }
 
 // === Collections
@@ -177,9 +184,9 @@ export function arrayShape<S extends ContractShape>(
 	return {
 		type: 'array',
 		items,
-		min: options?.min,
-		max: options?.max,
-		description: options?.description,
+		...(options?.min === undefined ? {} : { min: options.min }),
+		...(options?.max === undefined ? {} : { max: options.max }),
+		...(options?.description === undefined ? {} : { description: options.description }),
 	}
 }
 
@@ -211,8 +218,10 @@ export function objectShape<
 	return {
 		type: 'object',
 		properties,
-		additionalProperties: options?.additionalProperties,
-		description: options?.description,
+		...(options?.additionalProperties === undefined
+			? {}
+			: { additionalProperties: options.additionalProperties }),
+		...(options?.description === undefined ? {} : { description: options.description }),
 	}
 }
 
@@ -240,7 +249,7 @@ export function recordShape<S extends ContractShape>(
 		type: 'object',
 		properties: {},
 		additionalProperties: values,
-		description: options?.description,
+		...(options?.description === undefined ? {} : { description: options.description }),
 	}
 }
 
@@ -347,7 +356,10 @@ export function nullableShape<S extends ContractShape>(inner: S): NullableShape<
  * ```
  */
 export function jsonShape(options?: JSONShapeOptions): JSONShape {
-	return { type: 'json', description: options?.description }
+	return {
+		type: 'json',
+		...(options?.description === undefined ? {} : { description: options.description }),
+	}
 }
 
 /**
@@ -415,7 +427,10 @@ export function deriveLengthBounds(
 	const lo = isInteger(min) && min >= 0 ? min : undefined
 	const hi = isInteger(max) && max >= 0 ? max : undefined
 	if (lo !== undefined && hi !== undefined && lo > hi) return {}
-	return { min: lo, max: hi }
+	return {
+		...(lo === undefined ? {} : { min: lo }),
+		...(hi === undefined ? {} : { max: hi }),
+	}
 }
 
 /**
@@ -445,7 +460,10 @@ export function deriveRangeBounds(
 	const lo = isFiniteNumber(min) ? min : undefined
 	const hi = isFiniteNumber(max) ? max : undefined
 	if (lo !== undefined && hi !== undefined && lo > hi) return {}
-	return { min: lo, max: hi }
+	return {
+		...(lo === undefined ? {} : { min: lo }),
+		...(hi === undefined ? {} : { max: hi }),
+	}
 }
 
 /**
@@ -534,7 +552,10 @@ export function buildObjectShape(
 			: isRecord(extra)
 				? schemaNodeToShape(extra, depth - 1, visited, memo)
 				: true
-	return objectShape(properties, { additionalProperties, description })
+	return objectShape(properties, {
+		additionalProperties,
+		...(description === undefined ? {} : { description }),
+	})
 }
 
 /**
@@ -614,19 +635,25 @@ export function buildShapeFromNode(
 			(entry): entry is string | number | boolean =>
 				isString(entry) || isFiniteNumber(entry) || isBoolean(entry),
 		)
-		if (literals.length > 0) return literalShape(literals, { description })
+		if (literals.length > 0) {
+			return literalShape(literals, description === undefined ? undefined : { description })
+		}
 	}
 
 	if (isArray(schema.oneOf)) {
 		const records = schema.oneOf.filter((entry): entry is JSONSchema => isRecord(entry))
-		if (records.length > INFER_BREADTH_LIMIT) return jsonShape({ description })
+		if (records.length > INFER_BREADTH_LIMIT) {
+			return jsonShape(description === undefined ? undefined : { description })
+		}
 		const variants = records.map((entry) => schemaNodeToShape(entry, depth - 1, visited, memo))
 		if (variants.length > 0) return oneOfShape(...variants)
 	}
 
 	if (isArray(schema.anyOf)) {
 		const records = schema.anyOf.filter((entry): entry is JSONSchema => isRecord(entry))
-		if (records.length > INFER_BREADTH_LIMIT) return jsonShape({ description })
+		if (records.length > INFER_BREADTH_LIMIT) {
+			return jsonShape(description === undefined ? undefined : { description })
+		}
 		const variants = records.map((entry) => schemaNodeToShape(entry, depth - 1, visited, memo))
 		if (variants.length > 0) return unionShape(...variants)
 	}
@@ -635,11 +662,17 @@ export function buildShapeFromNode(
 
 	if (type === 'string') {
 		const bounds = deriveLengthBounds(schema.minLength, schema.maxLength)
-		return stringShape({ min: bounds.min, max: bounds.max, description })
+		return stringShape({
+			...bounds,
+			...(description === undefined ? {} : { description }),
+		})
 	}
 	if (type === 'number') {
 		const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
-		return numberShape({ min: bounds.min, max: bounds.max, description })
+		return numberShape({
+			...bounds,
+			...(description === undefined ? {} : { description }),
+		})
 	}
 	if (type === 'integer') {
 		const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
@@ -647,25 +680,39 @@ export function buildShapeFromNode(
 			Math.ceil(bounds.min ?? Number.NEGATIVE_INFINITY) >
 			Math.floor(bounds.max ?? Number.POSITIVE_INFINITY)
 		return integerShape(
-			emptyRange ? { description } : { min: bounds.min, max: bounds.max, description },
+			emptyRange
+				? description === undefined
+					? undefined
+					: { description }
+				: {
+						...bounds,
+						...(description === undefined ? {} : { description }),
+					},
 		)
 	}
-	if (type === 'boolean') return booleanShape({ description })
-	if (type === 'null') return nullShape({ description })
+	if (type === 'boolean') {
+		return booleanShape(description === undefined ? undefined : { description })
+	}
+	if (type === 'null') {
+		return nullShape(description === undefined ? undefined : { description })
+	}
 
 	if (type === 'array') {
 		const items = isRecord(schema.items)
 			? schemaNodeToShape(schema.items, depth - 1, visited, memo)
 			: jsonShape()
 		const bounds = deriveLengthBounds(schema.minItems, schema.maxItems)
-		return arrayShape(items, { min: bounds.min, max: bounds.max, description })
+		return arrayShape(items, {
+			...bounds,
+			...(description === undefined ? {} : { description }),
+		})
 	}
 
 	if (type === 'object' || (type === undefined && isRecord(schema.properties))) {
 		return buildObjectShape(schema, depth, visited, memo, description)
 	}
 
-	return jsonShape({ description })
+	return jsonShape(description === undefined ? undefined : { description })
 }
 
 /**

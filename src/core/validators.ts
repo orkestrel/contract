@@ -7,7 +7,7 @@ import type {
 	ZeroArgAsyncFunction,
 	ZeroArgFunction,
 } from './types.js'
-import { attempt, enumerableSymbolCount } from './helpers.js'
+import { attempt, enumerableSymbolCount, matchesJSONValue } from './helpers.js'
 
 // AGENTS §14: guards are total functions — a guard NEVER throws. Adversarial
 // input (hostile getters, exotic objects, cycles) returns `false`, never an
@@ -998,24 +998,7 @@ export function isConstructor(value: unknown): value is AnyConstructor<object> {
  * ```
  */
 export function isJSONValue(value: unknown): value is JSONValue {
-	const ancestors = new WeakSet<object>()
-	const check = (entry: unknown): entry is JSONValue => {
-		if (entry === null || isString(entry) || isBoolean(entry) || isFiniteNumber(entry)) return true
-		if (Array.isArray(entry)) {
-			if (ancestors.has(entry)) return false
-			ancestors.add(entry)
-			const valid = entry.every(check)
-			ancestors.delete(entry)
-			return valid
-		}
-		if (!isRecord(entry)) return false
-		if (ancestors.has(entry)) return false
-		ancestors.add(entry)
-		const valid = Object.values(entry).every(check)
-		ancestors.delete(entry)
-		return valid
-	}
-	const outcome = attempt(() => check(value))
+	const outcome = attempt(() => matchesJSONValue(value, new WeakSet()))
 	return outcome.success && outcome.value
 }
 

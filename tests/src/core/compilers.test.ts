@@ -498,9 +498,9 @@ describe('compileParser', () => {
 			objectShape({ tag: stringShape({ min: 1 }), score: integerShape({ min: 0, max: 100 }) }),
 		]
 		const violations: string[] = []
-		for (let shapeIndex = 0; shapeIndex < shapes.length; shapeIndex += 1) {
-			const parse = compileParser(shapes[shapeIndex])
-			const guard = compileGuard(shapes[shapeIndex])
+		for (const [shapeIndex, shape] of shapes.entries()) {
+			const parse = compileParser(shape)
+			const guard = compileGuard(shape)
 			for (let index = 0; index < SOUNDNESS_SAMPLE.length; index += 1) {
 				const parsed = parse(SOUNDNESS_SAMPLE[index])
 				if (parsed !== undefined && !guard(parsed)) violations.push(`shape${shapeIndex}@${index}`)

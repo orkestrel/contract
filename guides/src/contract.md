@@ -190,6 +190,7 @@ The lazy, safe JSON boundary — flat primitives, the recursive `JSONValue` meta
 | ----------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `attempt`               | function | The sanctioned never-throw boundary — runs a callback and returns a `Result<T>`: `{ success: true, value }` on return, `{ success: false, error }` (wrapped in an `Error` if not already one) on throw.                                                                                                                                                |
 | `enumerableSymbolCount` | function | Count of a value's own enumerable **symbol** keys — backs `isEmptyObject` / `isNonEmptyObject` (string-key counts alone miss symbol-keyed records).                                                                                                                                                                                                    |
+| `matchesJSONValue`      | function | Cycle-safe structural JSON predicate used internally by `isJSONValue`: `entry` is the `unknown` candidate and `ancestors` is the active `WeakSet<object>` path; returns a `boolean`.                                                                                                                                                                   |
 | `resolveField`          | function | Total lookup of a (possibly nested) field from a record by a `FieldPath` — a single string is **one** key (no dot-split); an array descends nested objects. Returns `undefined` off-path. Backs the `parse*Field` parsers.                                                                                                                             |
 | `seededRandom`          | function | Build a deterministic mulberry32 `RandomFunction` from a numeric seed — the default seed source for `compileGenerator` / `createContract`'s `generate`.                                                                                                                                                                                                |
 | `schemaToParameters`    | function | Narrow a compiled `JSONSchema` to the open tool-parameters record via `isRecord` (§14, never `as`) — the single sanctioned crossing from a compiled contract schema, written once rather than per call site.                                                                                                                                           |
@@ -220,7 +221,7 @@ The lazy, safe JSON boundary — flat primitives, the recursive `JSONValue` meta
 
 ### Shape builders
 
-Declarative constructors for the `ContractShape` union (`src/core/shapers.ts`). One shape compiles into a guard, parser, schema, and generator (see the compilers, below).
+Declarative constructors for the `ContractShape` union (`src/core/shapers.ts`). One shape compiles into a guard, parser, schema, and generator (see the compilers, below). Builders omit absent options from the produced shape object: an option left `undefined` is not present as a key, so `Object.keys`, `in` checks, and spreads see only the options actually provided.
 
 | Builder              | Kind     | Builds                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | -------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -502,6 +503,16 @@ if (blob) {
 	parseEnumField(blob, ['schema', 'type'], JSON_SCHEMA_TYPES) // 'object' (a JSONSchemaType)
 	parseRecordField(blob, ['schema', 'properties']) // {} (a nested record), or undefined
 }
+```
+
+### Checking structural JSON safely
+
+`matchesJSONValue(entry, ancestors)` is the cycle-safe structural JSON predicate used internally by `isJSONValue`. Pass the `unknown` candidate as `entry` and the active parent path as `ancestors: WeakSet<object>`; it returns a `boolean`.
+
+```ts
+import { matchesJSONValue } from '@orkestrel/contract'
+
+matchesJSONValue({ nested: [1, 'x', null] }, new WeakSet()) // true
 ```
 
 ### Declaring a shape

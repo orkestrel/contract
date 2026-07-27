@@ -120,7 +120,7 @@ describe('shape builders', () => {
 	})
 
 	it('nullShape returns a bare null shape and threads its description', () => {
-		expect(nullShape()).toEqual({ type: 'null', description: undefined })
+		expect(nullShape()).toEqual({ type: 'null' })
 		expect(nullShape({ description: 'nothing' })).toEqual({
 			type: 'null',
 			description: 'nothing',
@@ -128,7 +128,7 @@ describe('shape builders', () => {
 	})
 
 	it('jsonShape returns a bare json shape and threads its description', () => {
-		expect(jsonShape()).toEqual({ type: 'json', description: undefined })
+		expect(jsonShape()).toEqual({ type: 'json' })
 		expect(jsonShape({ description: 'any JSON value' })).toEqual({
 			type: 'json',
 			description: 'any JSON value',
@@ -188,8 +188,10 @@ describe('Infer', () => {
 	it('derives an index signature for recordShape values (finding #1)', () => {
 		const rec = recordShape(numberShape())
 		const v: Infer<typeof rec> = { a: 1 }
-		const n: number = v.a
-		expect(n).toBe(1)
+		const n = v.a
+		if (n === undefined) throw new Error('recordShape omitted the seeded property')
+		const checked: number = n
+		expect(checked).toBe(1)
 		// @ts-expect-error — recordShape values are number, string rejected
 		const bad: Infer<typeof rec> = { a: 'x' }
 		expect(bad).toBeDefined()

@@ -4,6 +4,7 @@ import {
 	attempt,
 	createContract,
 	enumerableSymbolCount,
+	matchesJSONValue,
 	objectShape,
 	resolveField,
 	schemaToObject,
@@ -101,6 +102,43 @@ describe('resolveField', () => {
 		}
 		expect(() => resolveField(hostile, ['user', 'name'])).not.toThrow()
 		expect(resolveField(hostile, ['user', 'name'])).toBeUndefined()
+	})
+})
+
+describe('matchesJSONValue', () => {
+	it('accepts JSON leaves and nested structures', () => {
+		expect(matchesJSONValue(null, new WeakSet())).toBe(true)
+		expect(matchesJSONValue('value', new WeakSet())).toBe(true)
+		expect(matchesJSONValue(false, new WeakSet())).toBe(true)
+		expect(matchesJSONValue(0, new WeakSet())).toBe(true)
+		expect(
+			matchesJSONValue(
+				{
+					array: [1, 'two', null, { nested: true }],
+					record: { empty: {} },
+				},
+				new WeakSet(),
+			),
+		).toBe(true)
+	})
+
+	it('rejects non-finite numbers and non-JSON leaves', () => {
+		expect(matchesJSONValue(Number.NaN, new WeakSet())).toBe(false)
+		expect(matchesJSONValue(Number.POSITIVE_INFINITY, new WeakSet())).toBe(false)
+		expect(matchesJSONValue(Number.NEGATIVE_INFINITY, new WeakSet())).toBe(false)
+		expect(matchesJSONValue(() => 1, new WeakSet())).toBe(false)
+		expect(matchesJSONValue(Symbol('value'), new WeakSet())).toBe(false)
+		expect(matchesJSONValue(undefined, new WeakSet())).toBe(false)
+	})
+
+	it('rejects direct and nested cycles', () => {
+		const direct: unknown[] = []
+		direct.push(direct)
+		expect(matchesJSONValue(direct, new WeakSet())).toBe(false)
+
+		const nested: { child?: unknown } = {}
+		nested.child = { parent: nested }
+		expect(matchesJSONValue(nested, new WeakSet())).toBe(false)
 	})
 })
 

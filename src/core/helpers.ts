@@ -10,6 +10,7 @@ import { PREVIEW_LIMIT } from './constants.js'
 import {
 	isBigInt,
 	isBoolean,
+	isFiniteNumber,
 	isNumber,
 	isObject,
 	isRecord,
@@ -96,6 +97,43 @@ export function resolveField(record: Readonly<Record<string, unknown>>, path: Fi
 		current = outcome.value
 	}
 	return current
+}
+
+/**
+ * Match an unknown value against the recursive JSON value structure.
+ *
+ * @remarks
+ * The caller-owned ancestor set tracks only the active traversal path, so
+ * cycles fail while shared references across sibling branches remain valid.
+ * The set belongs to one traversal from one entry point; passing a shared or
+ * pre-populated set is unsupported. Arrays and plain records recurse through
+ * this helper; class instances and non-finite numbers are rejected.
+ *
+ * @param entry - The value to inspect
+ * @param ancestors - Objects on the active traversal path
+ * @returns `true` when the value is a cycle-free JSON value
+ *
+ * @example
+ * ```ts
+ * matchesJSONValue({ nested: [1, 'x', null] }, new WeakSet()) // true
+ * matchesJSONValue(Number.NaN, new WeakSet())                 // false
+ * ```
+ */
+export function matchesJSONValue(entry: unknown, ancestors: WeakSet<object>): boolean {
+	if (entry === null || isString(entry) || isBoolean(entry) || isFiniteNumber(entry)) return true
+	if (Array.isArray(entry)) {
+		if (ancestors.has(entry)) return false
+		ancestors.add(entry)
+		const valid = entry.every((value) => matchesJSONValue(value, ancestors))
+		ancestors.delete(entry)
+		return valid
+	}
+	if (!isRecord(entry)) return false
+	if (ancestors.has(entry)) return false
+	ancestors.add(entry)
+	const valid = Object.values(entry).every((value) => matchesJSONValue(value, ancestors))
+	ancestors.delete(entry)
+	return valid
 }
 
 // === Random

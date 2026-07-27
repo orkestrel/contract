@@ -65,7 +65,7 @@ configs/  thin target wrappers around root Vite/TypeScript configuration
 - **Named discriminants.** Name the axis that varies (`relationship`, `command`, `category`), never `kind` or `type`.
 - **Centralize by kind.** Types, constants, helpers, validators, parsers, factories, errors, and similar declarations live in their designated centralized files. Implementation files contain one class plus imports.
 - **Export and test reusable logic.** No hidden module helpers or declarations; fold trivial one-use logic into its caller or export it from the correct centralized module and test it.
-- **No nested functions.** Extract function declarations/assignments from bodies. Anonymous callbacks passed directly as arguments are the sole exception.
+- **No nested functions.** Extract function declarations/assignments from bodies. Anonymous callbacks passed directly as arguments and anonymous functions returned directly as results are the sole exceptions.
 - **Functional core, imperative shell.** Export pure leaves; retain stateful or defining orchestration as class methods. Classes must compose behavior, not forward 1:1 to helpers.
 - **No superfluous wrappers.** A wrapper must add a boundary, invariant, composition, translation, lifecycle, or materially narrower contract. Otherwise use or rename the real symbol and update every consumer.
 - **Minimal public API.** Add capability with its real consumer; do not speculate. Prefer one minimal interface and one shared engine, allowing native backend overrides only for genuine faster paths.
