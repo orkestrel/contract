@@ -219,6 +219,10 @@ fallback when it is not.
   journal head goes in every bridge report so follow-ups continue the same session via
   `codex exec resume <session-id>` with context intact. `--output-schema` is available when
   the Orchestrator wants a machine-checkable return shape.
+- **MCP wiring:** `.mcp.json` registers `codex mcp-server` as a project MCP server, so Codex
+  is also reachable as first-class tools with progress streamed into the client UI. The CLI
+  journal protocol above remains the default for bench dispatches; the MCP surface is for
+  interactive and tool-native use.
 - `analyst` runs `gpt-5.6-sol` at high effort with `--sandbox read-only` in the current
   checkout, for objective analysis, the adversarial design argument, diagnosis, and the
   post-implementation correctness audit.
