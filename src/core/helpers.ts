@@ -136,10 +136,7 @@ export function matchesJSONValue(entry: unknown, ancestors: WeakSet<object>): bo
 		ancestors.add(entry)
 		let valid = true
 		for (let index = 0; index < entry.length; index += 1) {
-			if (
-				!Object.hasOwn(entry, index) ||
-				!matchesJSONValue(entry[index], ancestors)
-			) {
+			if (!Object.hasOwn(entry, index) || !matchesJSONValue(entry[index], ancestors)) {
 				valid = false
 				break
 			}

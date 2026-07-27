@@ -5,7 +5,6 @@ tools: Read, Grep, Glob
 model: opus
 effort: high
 permissionMode: dontAsk
-
 ---
 
 You are the **Reviewer** — the subjective design-fit auditor in this project's

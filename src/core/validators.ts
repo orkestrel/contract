@@ -416,9 +416,7 @@ export function isIterable<T = unknown>(value: unknown): value is Iterable<T> {
  * ```
  */
 export function isAsyncIterable<T = unknown>(value: unknown): value is AsyncIterable<T> {
-	return holds(
-		() => isObject(value) && isFunction(Reflect.get(value, Symbol.asyncIterator)),
-	)
+	return holds(() => isObject(value) && isFunction(Reflect.get(value, Symbol.asyncIterator)))
 }
 
 // === Object & collection guards
@@ -741,10 +739,7 @@ export function isEmptyArray(value: unknown): value is readonly [] {
  */
 export function isEmptyObject(value: unknown): value is Record<string | symbol, never> {
 	return holds(
-		() =>
-			isRecord(value) &&
-			Object.keys(value).length === 0 &&
-			enumerableSymbolCount(value) === 0,
+		() => isRecord(value) && Object.keys(value).length === 0 && enumerableSymbolCount(value) === 0,
 	)
 }
 
@@ -806,9 +801,7 @@ export function isNonEmptyArray<T = unknown>(value: unknown): value is readonly 
  */
 export function isNonEmptyObject(value: unknown): value is Record<string | symbol, unknown> {
 	return holds(
-		() =>
-			isRecord(value) &&
-			(Object.keys(value).length > 0 || enumerableSymbolCount(value) > 0),
+		() => isRecord(value) && (Object.keys(value).length > 0 || enumerableSymbolCount(value) > 0),
 	)
 }
 
@@ -895,9 +888,7 @@ export function isGeneratorFunction(
 export function isAsyncGeneratorFunction(
 	value: unknown,
 ): value is (...args: unknown[]) => AsyncGenerator<unknown, unknown, unknown> {
-	return holds(
-		() => isFunction(value) && value.constructor?.name === 'AsyncGeneratorFunction',
-	)
+	return holds(() => isFunction(value) && value.constructor?.name === 'AsyncGeneratorFunction')
 }
 
 /** Determine whether a value is a zero-argument async function.

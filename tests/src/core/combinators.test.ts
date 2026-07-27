@@ -609,26 +609,14 @@ describe('user-callback throw containment (AGENTS §14)', () => {
 			[andOf(isString, throwHostileAccess), 'value'],
 			[orOf(throwHostileAccess, isString), 'value'],
 			[notOf(throwHostileAccess), 'value'],
-			[
-				complementOf(
-					isString,
-					(_value: string): _value is never => throwHostileAccess(),
-				),
-				'value',
-			],
+			[complementOf(isString, (_value: string): _value is never => throwHostileAccess()), 'value'],
 			[unionOf(throwHostileAccess, isString), 'value'],
 			[intersectionOf(isString, throwHostileAccess), 'value'],
 			[whereOf(isString, throwHostileAccess), 'value'],
 			[lazyOf(throwHostileAccess), 'value'],
 			[transformOf(isString, throwHostileAccess, isString), 'value'],
-			[
-				nullableOf((_value: unknown): _value is string => throwHostileAccess()),
-				'value',
-			],
-			[
-				optionalOf((_value: unknown): _value is string => throwHostileAccess()),
-				'value',
-			],
+			[nullableOf((_value: unknown): _value is string => throwHostileAccess()), 'value'],
+			[optionalOf((_value: unknown): _value is string => throwHostileAccess()), 'value'],
 		]
 
 		for (const [guard, value] of guards) {

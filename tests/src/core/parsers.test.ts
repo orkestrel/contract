@@ -130,16 +130,10 @@ describe('structural parsers', () => {
 		expect(() => parseArray(hostile, isString)).not.toThrow()
 		expect(parseArray(hostile, isString)).toBeUndefined()
 		expect(() =>
-			parseArray(
-				['value'],
-				(_value: unknown): _value is string => throwHostileAccess(),
-			),
+			parseArray(['value'], (_value: unknown): _value is string => throwHostileAccess()),
 		).not.toThrow()
 		expect(
-			parseArray(
-				['value'],
-				(_value: unknown): _value is string => throwHostileAccess(),
-			),
+			parseArray(['value'], (_value: unknown): _value is string => throwHostileAccess()),
 		).toBeUndefined()
 	})
 
@@ -335,15 +329,13 @@ describe('JSON parsers', () => {
 
 	it('parseJSONAs returns undefined when the supplied guard throws', () => {
 		expect(() =>
-			parseJSONAs(
-				'{"value":true}',
-				(_value: unknown): _value is { readonly value: boolean } => throwHostileAccess(),
+			parseJSONAs('{"value":true}', (_value: unknown): _value is { readonly value: boolean } =>
+				throwHostileAccess(),
 			),
 		).not.toThrow()
 		expect(
-			parseJSONAs(
-				'{"value":true}',
-				(_value: unknown): _value is { readonly value: boolean } => throwHostileAccess(),
+			parseJSONAs('{"value":true}', (_value: unknown): _value is { readonly value: boolean } =>
+				throwHostileAccess(),
 			),
 		).toBeUndefined()
 	})

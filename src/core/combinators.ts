@@ -89,11 +89,7 @@ export function tupleOf(
 			}
 			for (let index = 0; index < guards.length; index += 1) {
 				const guard = guards[index]
-				if (
-					!Object.hasOwn(value, index) ||
-					guard === undefined ||
-					!guard(value[index])
-				) {
+				if (!Object.hasOwn(value, index) || guard === undefined || !guard(value[index])) {
 					return false
 				}
 			}
@@ -342,9 +338,7 @@ export function keyOf<const O extends Readonly<Record<PropertyKey, unknown>>>(
 ): Guard<keyof O> {
 	return (entry: unknown): entry is keyof O =>
 		holds(
-			() =>
-				(isString(entry) || isSymbol(entry) || isNumber(entry)) &&
-				Object.hasOwn(value, entry),
+			() => (isString(entry) || isSymbol(entry) || isNumber(entry)) && Object.hasOwn(value, entry),
 		)
 }
 
@@ -432,8 +426,7 @@ export function andOf(
 	left: (value: unknown) => boolean,
 	right: (value: unknown) => boolean,
 ): Guard<unknown> {
-	return (value: unknown): value is unknown =>
-		holds(() => left(value) && right(value))
+	return (value: unknown): value is unknown => holds(() => left(value) && right(value))
 }
 
 /**
@@ -454,8 +447,7 @@ export function orOf(
 	left: (value: unknown) => boolean,
 	right: (value: unknown) => boolean,
 ): Guard<unknown> {
-	return (value: unknown): value is unknown =>
-		holds(() => left(value) || right(value))
+	return (value: unknown): value is unknown => holds(() => left(value) || right(value))
 }
 
 /**
@@ -507,8 +499,7 @@ export function unionOf<const Gs extends ReadonlyArray<Guard<unknown>>>(
 ): Guard<GuardType<Gs[number]>>
 export function unionOf(...predicates: ReadonlyArray<(value: unknown) => boolean>): Guard<unknown>
 export function unionOf(...guards: ReadonlyArray<(value: unknown) => boolean>): Guard<unknown> {
-	return (value: unknown): value is unknown =>
-		holds(() => guards.some((guard) => guard(value)))
+	return (value: unknown): value is unknown => holds(() => guards.some((guard) => guard(value)))
 }
 
 /**
@@ -529,8 +520,7 @@ export function intersectionOf(
 export function intersectionOf(
 	...guards: ReadonlyArray<(value: unknown) => boolean>
 ): Guard<unknown> {
-	return (value: unknown): value is unknown =>
-		holds(() => guards.every((guard) => guard(value)))
+	return (value: unknown): value is unknown => holds(() => guards.every((guard) => guard(value)))
 }
 
 /**
@@ -560,8 +550,7 @@ export function whereOf<T, U extends T>(
 ): Guard<U>
 export function whereOf<T>(base: Guard<T>, predicate: (value: T) => boolean): Guard<T>
 export function whereOf<T>(base: Guard<T>, predicate: (value: T) => boolean): Guard<T> {
-	return (value: unknown): value is T =>
-		holds(() => base(value) && predicate(value))
+	return (value: unknown): value is T => holds(() => base(value) && predicate(value))
 }
 
 /**
@@ -637,8 +626,7 @@ export function transformOf<T>(
 	project: (value: T) => unknown,
 	target: (value: unknown) => boolean,
 ): Guard<T> {
-	return (value: unknown): value is T =>
-		holds(() => base(value) && target(project(value)))
+	return (value: unknown): value is T => holds(() => base(value) && target(project(value)))
 }
 
 /**
@@ -688,10 +676,7 @@ export function boundsOf(min?: number, max?: number): Guard<number> {
  * ```
  */
 export function matchOf(pattern: RegExp): Guard<string> {
-	const owned = new RegExp(
-		pattern.source,
-		pattern.flags.replaceAll('g', '').replaceAll('y', ''),
-	)
+	const owned = new RegExp(pattern.source, pattern.flags.replaceAll('g', '').replaceAll('y', ''))
 	return whereOf(isString, (value) => owned.test(value))
 }
 
@@ -754,8 +739,7 @@ export function stringOf(options?: {
  * ```
  */
 export function nullableOf<T>(guard: Guard<T>): Guard<T | null> {
-	return (value: unknown): value is T | null =>
-		holds(() => value === null || guard(value))
+	return (value: unknown): value is T | null => holds(() => value === null || guard(value))
 }
 
 /**

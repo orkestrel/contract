@@ -114,11 +114,7 @@ export function validateShape(shape: ContractShape): void {
 
 		switch (current.type) {
 			case 'string':
-				if (
-					current.min !== undefined &&
-					current.max !== undefined &&
-					current.min > current.max
-				) {
+				if (current.min !== undefined && current.max !== undefined && current.min > current.max) {
 					throw new ContractError('validateShape: a string shape has min greater than max', {
 						code: 'range',
 						context: { path: frame.path, shape: 'string' },
@@ -126,11 +122,7 @@ export function validateShape(shape: ContractShape): void {
 				}
 				break
 			case 'number':
-				if (
-					current.min !== undefined &&
-					current.max !== undefined &&
-					current.min > current.max
-				) {
+				if (current.min !== undefined && current.max !== undefined && current.min > current.max) {
 					throw new ContractError('validateShape: a number shape has min greater than max', {
 						code: 'range',
 						context: {
@@ -178,11 +170,7 @@ export function validateShape(shape: ContractShape): void {
 				}
 				break
 			case 'array':
-				if (
-					current.min !== undefined &&
-					current.max !== undefined &&
-					current.min > current.max
-				) {
+				if (current.min !== undefined && current.max !== undefined && current.min > current.max) {
 					throw new ContractError('validateShape: an array shape has min greater than max', {
 						code: 'range',
 						context: { path: frame.path, shape: 'array' },
@@ -839,13 +827,10 @@ export function compileGenerator(
 				const outcome = attempt(() => compileGenerator(variant, random))
 				if (outcome.success && guard(outcome.value)) return outcome.value
 			}
-			throw new ContractError(
-				'compileGenerator: no union candidate satisfied the compiled guard',
-				{
-					code: 'generate',
-					context: { shape: 'union', limit: GENERATION_ATTEMPT_LIMIT },
-				},
-			)
+			throw new ContractError('compileGenerator: no union candidate satisfied the compiled guard', {
+				code: 'generate',
+				context: { shape: 'union', limit: GENERATION_ATTEMPT_LIMIT },
+			})
 		}
 		case 'optional':
 			return compileGenerator(shape.inner, random)

@@ -14,12 +14,12 @@ dispatch-named skill and its required references, and the governing guide/spec b
 
 One workflow runs across both providers. Each engine has one job, and no engine takes another's.
 
-| Engine          | Job                                                             | Posture                                           |
-| --------------- | --------------------------------------------------------------- | ------------------------------------------------- |
-| **Fable**       | Top-level orchestration and final acceptance in Claude Code     | Owns the goal, plan, reconciliation, and decision |
-| **Cursor Grok** | Research, scouting, context-heavy reading, distillation         | Read-only; returns evidence, never decisions      |
-| **Opus 5**      | Subjective and creative design, design-fit review, and implementation        | Proposes, audits, and implements; never accepts   |
-| **GPT-5.6 Sol** | Objective and realistic analysis, correctness audit, and implementation       | Proposes, audits, and implements; never accepts   |
+| Engine          | Job                                                                     | Posture                                           |
+| --------------- | ----------------------------------------------------------------------- | ------------------------------------------------- |
+| **Fable**       | Top-level orchestration and final acceptance in Claude Code             | Owns the goal, plan, reconciliation, and decision |
+| **Cursor Grok** | Research, scouting, context-heavy reading, distillation                 | Read-only; returns evidence, never decisions      |
+| **Opus 5**      | Subjective and creative design, design-fit review, and implementation   | Proposes, audits, and implements; never accepts   |
+| **GPT-5.6 Sol** | Objective and realistic analysis, correctness audit, and implementation | Proposes, audits, and implements; never accepts   |
 
 - **Fable orchestrates and accepts, and does nothing else.** It is never a subagent, never a
   Codex route, and Codex must never invoke it.

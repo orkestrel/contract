@@ -106,9 +106,7 @@ export function cloneShape(shape: ContractShape): ContractShape {
 					...(source.pattern === undefined
 						? {}
 						: {
-								pattern: Object.freeze(
-									new RegExp(source.pattern.source, source.pattern.flags),
-								),
+								pattern: Object.freeze(new RegExp(source.pattern.source, source.pattern.flags)),
 							}),
 					...(source.description === undefined ? {} : { description: source.description }),
 				}
