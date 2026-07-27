@@ -1,4 +1,4 @@
-import type { ContractShape, JSONSchema } from './types.js'
+import type { ContractShape, JSONSchema, StringShape } from './types.js'
 import { ContractError, isContractError } from './errors.js'
 import { attempt, enumerableKeys } from './helpers.js'
 
@@ -101,6 +101,8 @@ export function cloneSchema(schema: JSONSchema): JSONSchema {
  * Uses an explicit memo to preserve shared-child identity and close cyclic
  * edges onto their cloned nodes. Shape-node shells are created iteratively,
  * then their structural edges are wired and their copied collections frozen.
+ * String patterns are captured by source and flags behind an enumerable
+ * accessor that returns a fresh frozen zero-state `RegExp` on every read.
  * A raw schema delegates to {@link cloneSchema}; every shape-graph read is
  * contained, so hostile traversal throws only a clone-coded
  * {@link ContractError}.
@@ -116,6 +118,8 @@ export function cloneSchema(schema: JSONSchema): JSONSchema {
  * clone.type === 'object' && clone.properties.first === clone.properties.second // true
  * ```
  */
+export function cloneShape(shape: StringShape): StringShape
+export function cloneShape(shape: ContractShape): ContractShape
 export function cloneShape(shape: ContractShape): ContractShape {
 	try {
 		const memo = new Map<ContractShape, ContractShape>()
@@ -129,19 +133,28 @@ export function cloneShape(shape: ContractShape): ContractShape {
 
 			let clone: ContractShape
 			switch (source.type) {
-				case 'string':
-					clone = {
+				case 'string': {
+					const pattern = source.pattern
+					const fields: StringShape = {
 						type: 'string',
 						...(source.min === undefined ? {} : { min: source.min }),
 						...(source.max === undefined ? {} : { max: source.max }),
-						...(source.pattern === undefined
-							? {}
-							: {
-									pattern: Object.freeze(new RegExp(source.pattern.source, source.pattern.flags)),
-								}),
 						...(source.description === undefined ? {} : { description: source.description }),
 					}
+					if (pattern === undefined) {
+						clone = fields
+					} else {
+						const patternSource = pattern.source
+						const patternFlags = pattern.flags
+						clone = {
+							...fields,
+							get pattern() {
+								return Object.freeze(new RegExp(patternSource, patternFlags))
+							},
+						}
+					}
 					break
+				}
 				case 'number':
 					clone = {
 						type: 'number',
@@ -305,12 +318,13 @@ export function cloneShape(shape: ContractShape): ContractShape {
  * frozen, otherwise a {@link cloneShape} snapshot of its graph.
  *
  * @remarks
- * Frozen means owned: the shape builders and `cloneShape` both produce frozen
- * nodes with frozen `properties` / `variants` / `values` collections and owned
- * pattern snapshots, so a frozen node cannot drift under a caller who still
- * holds an input reference, and copying it again would only cost work. An
- * unfrozen node is caller-owned and therefore snapshotted before anything reads
- * it.
+ * Builder- and `cloneShape`-produced frozen means owned: those nodes have frozen
+ * `properties` / `variants` / `values` collections and pattern accessors that
+ * return fresh frozen snapshots, so they cannot drift under a caller who still
+ * holds an input reference or a previously read pattern. `Object.freeze` on a
+ * hand-authored pattern shape is not an ownership marker because it cannot
+ * protect `RegExp` internal slots; leave that shape unfrozen for this function
+ * to snapshot, or pass it through {@link cloneShape} first.
  *
  * Every compiler entry point (`compileSchema` / `compileGuard` /
  * `compileParser` / `compileGenerator` / `compileReporter`) opens with this

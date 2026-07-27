@@ -11,7 +11,10 @@ import type {
 import {
 	arrayShape,
 	booleanShape,
+	compileGenerator,
 	compileGuard,
+	compileParser,
+	compileReporter,
 	compileSchema,
 	ContractError,
 	createContract,
@@ -120,6 +123,31 @@ describe('shape builders', () => {
 		expect(guard('drift')).toBe(false)
 		expect(contract.is('stable')).toBe(true)
 		expect(contract.schema.pattern).toBe('^stable$')
+	})
+
+	it('keeps its owned pattern stable after compile mutation through the shape', () => {
+		const shape = stringShape({ pattern: /^stable$/ })
+
+		expect(shape.pattern).not.toBe(shape.pattern)
+		expect(Object.isFrozen(shape.pattern)).toBe(true)
+		expect(() => shape.pattern?.compile('^owned-drift$')).toThrowError(TypeError)
+		expect(shape.pattern?.source).toBe('^stable$')
+		expect(shape.pattern?.lastIndex).toBe(0)
+		expect(compileSchema(shape).pattern).toBe('^stable$')
+
+		const guard = compileGuard(shape)
+		expect(guard('stable')).toBe(true)
+		expect(guard('owned-drift')).toBe(false)
+		expect(compileParser(shape)('stable')).toBe('stable')
+		expect(compileParser(shape)('owned-drift')).toBeUndefined()
+		expect(compileReporter(shape, 'stable')).toEqual([])
+		expect(compileReporter(shape, 'owned-drift')).toEqual([
+			expect.objectContaining({ reason: 'constraint', constraint: 'pattern', limit: '^stable$' }),
+		])
+
+		const generated = stringShape({ min: 1, max: 1, pattern: /^[a-z0-9]$/ })
+		expect(() => generated.pattern?.compile('^owned-drift$')).toThrowError(TypeError)
+		expect(compileGenerator(generated, () => 0)).toBe('a')
 	})
 
 	it('freezes roots from every shape builder', () => {

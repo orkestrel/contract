@@ -23,7 +23,7 @@ import type {
 	StringShapeOptions,
 	UnionShape,
 } from './types.js'
-import { cloneSchema } from './cloners.js'
+import { cloneSchema, cloneShape } from './cloners.js'
 import { INFER_BREADTH_LIMIT, INFER_DEPTH_LIMIT } from './constants.js'
 import { ContractError } from './errors.js'
 import { attempt } from './helpers.js'
@@ -45,8 +45,9 @@ import { isArray, isBoolean, isFiniteNumber, isInteger, isRecord, isString } fro
  * Build a string {@link StringShape}.
  *
  * @remarks
- * A supplied pattern is snapshotted by source and flags so later mutation of
- * the caller's `RegExp` cannot change the built shape or compiled artifacts.
+ * A supplied pattern is captured by source and flags. The shape exposes a fresh
+ * frozen zero-state `RegExp` on every `pattern` read, so neither the caller's
+ * original nor a value read from the shape can drift later compiled artifacts.
  *
  * @param options - Optional length (`min` / `max`), `pattern`, and `description`
  * @returns A string shape
@@ -58,6 +59,7 @@ import { isArray, isBoolean, isFiniteNumber, isInteger, isRecord, isString } fro
  * ```
  */
 export function stringShape(options?: StringShapeOptions): StringShape {
+	const pattern = options?.pattern
 	if (options?.min !== undefined && (!Number.isSafeInteger(options.min) || options.min < 0)) {
 		throw new ContractError('stringShape: min must be a non-negative safe integer', {
 			code: 'bound',
@@ -78,24 +80,20 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 			},
 		})
 	}
-	if (options?.pattern !== undefined && options.pattern.flags.length > 0) {
+	if (pattern !== undefined && pattern.flags.length > 0) {
 		throw new ContractError(
 			'stringShape: pattern must not use flags; use inline pattern constructs instead',
 			{
 				code: 'pattern',
-				context: { shape: 'string', received: options.pattern.toString() },
+				context: { shape: 'string', received: pattern.toString() },
 			},
 		)
 	}
-	return Object.freeze({
+	return cloneShape({
 		type: 'string',
 		...(options?.min === undefined ? {} : { min: options.min }),
 		...(options?.max === undefined ? {} : { max: options.max }),
-		...(options?.pattern === undefined
-			? {}
-			: {
-					pattern: Object.freeze(new RegExp(options.pattern.source, options.pattern.flags)),
-				}),
+		...(pattern === undefined ? {} : { pattern }),
 		...(options?.description === undefined ? {} : { description: options.description }),
 	})
 }

@@ -3,6 +3,8 @@ import {
 	arrayShape,
 	cloneSchema,
 	cloneShape,
+	compileGuard,
+	compileSchema,
 	ContractError,
 	createContract,
 	objectShape,
@@ -105,6 +107,23 @@ describe('cloneShape', () => {
 		expect(Object.isFrozen(clone.properties)).toBe(true)
 		expect(Object.isFrozen(clone.properties.name)).toBe(true)
 		expect(Object.isFrozen(clone.properties.tags)).toBe(true)
+	})
+
+	it('keeps a cloned pattern stable after compile mutation through the clone', () => {
+		const clone = cloneShape(stringShape({ pattern: /^stable$/ }))
+
+		expect(clone.type).toBe('string')
+		if (clone.type !== 'string') return
+		expect(clone.pattern).not.toBe(clone.pattern)
+		expect(Object.isFrozen(clone.pattern)).toBe(true)
+		expect(() => clone.pattern?.compile('^owned-drift$')).toThrowError(TypeError)
+		expect(clone.pattern?.source).toBe('^stable$')
+		expect(clone.pattern?.lastIndex).toBe(0)
+		expect(compileSchema(clone).pattern).toBe('^stable$')
+
+		const guard = compileGuard(clone)
+		expect(guard('stable')).toBe(true)
+		expect(guard('owned-drift')).toBe(false)
 	})
 
 	it('preserves shared-child identity in a cloned DAG', () => {

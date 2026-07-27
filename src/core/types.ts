@@ -315,6 +315,7 @@ export interface StringShape {
 	readonly type: 'string'
 	readonly min?: number
 	readonly max?: number
+	/** A pattern constraint; builders and cloners expose an owned fresh frozen zero-state copy per read. */
 	readonly pattern?: RegExp
 	readonly description?: string
 }
