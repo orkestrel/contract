@@ -343,6 +343,15 @@ describe('createContract — explain wiring', () => {
 		expect(faults[0]).toMatchObject({ reason: 'missing', path: ['k'] })
 	})
 
+	it('top-level raw undefined reports the parser failure sentinel', () => {
+		const shape = rawShape({})
+
+		expect(compileParser(shape)(undefined)).toBeUndefined()
+		expect(compileReporter(shape, undefined)).toEqual([
+			{ reason: 'type', path: [], expected: 'json', received: 'undefined' },
+		])
+	})
+
 	it('caps total faults at FAULT_LIMIT even across nested union variant concatenation', () => {
 		const wide = objectShape(
 			Object.fromEntries(

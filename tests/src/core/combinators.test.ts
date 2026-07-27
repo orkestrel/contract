@@ -467,6 +467,16 @@ describe('matchOf', () => {
 		expect(guard(null)).toBe(false)
 		expect(guard(['a'])).toBe(false)
 	})
+
+	it('clones a global pattern into a stateless guard without mutating the caller', () => {
+		const pattern = /^a+$/g
+		pattern.lastIndex = 1
+		const guard = matchOf(pattern)
+
+		expect(guard('aaa')).toBe(true)
+		expect(guard('aaa')).toBe(true)
+		expect(pattern.lastIndex).toBe(1)
+	})
 })
 
 describe('stringOf', () => {
@@ -493,6 +503,16 @@ describe('stringOf', () => {
 		expect(guard('hello')).toBe(true)
 		expect(guard('Hello')).toBe(false)
 		expect(guard('h3llo')).toBe(false)
+	})
+
+	it('clones a sticky pattern into a stateless guard without mutating the caller', () => {
+		const pattern = /^a+$/y
+		pattern.lastIndex = 1
+		const guard = stringOf({ pattern })
+
+		expect(guard('aaa')).toBe(true)
+		expect(guard('aaa')).toBe(true)
+		expect(pattern.lastIndex).toBe(1)
 	})
 
 	it('combines length and pattern (both must hold)', () => {

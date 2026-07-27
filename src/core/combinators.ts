@@ -667,6 +667,13 @@ export function boundsOf(min?: number, max?: number): Guard<number> {
 /**
  * Build a guard that accepts strings matching a regular expression.
  *
+ * @remarks
+ * Clones the pattern for the guard and strips the stateful `g` / `y` flags, so
+ * repeated checks are stable and never change the caller's `lastIndex`.
+ *
+ * @param pattern - The regular expression to own and apply
+ * @returns A stateless string guard
+ *
  * @example
  * ```ts
  * const isHex = matchOf(/^[0-9a-f]+$/)
@@ -675,7 +682,11 @@ export function boundsOf(min?: number, max?: number): Guard<number> {
  * ```
  */
 export function matchOf(pattern: RegExp): Guard<string> {
-	return whereOf(isString, (value) => pattern.test(value))
+	const owned = new RegExp(
+		pattern.source,
+		pattern.flags.replaceAll('g', '').replaceAll('y', ''),
+	)
+	return whereOf(isString, (value) => owned.test(value))
 }
 
 /**
@@ -684,10 +695,14 @@ export function matchOf(pattern: RegExp): Guard<string> {
  *
  * @remarks
  * Composes {@link isString} with {@link boundsOf} on the string's `.length` and
- * an inline `pattern.test` (the same refinement {@link matchOf} performs). When all three options are absent it returns
- * the bare {@link isString} guard (the unconstrained fast path), so an
- * unrefined string leaf pays no wrapping cost. The single source of the string
- * refinement shared by the compiled guard and parser (compilers.ts).
+ * an owned stateless pattern (the same refinement {@link matchOf} performs).
+ * When all three options are absent it returns the bare {@link isString} guard
+ * (the unconstrained fast path), so an unrefined string leaf pays no wrapping
+ * cost. The single source of the string refinement shared by the compiled guard
+ * and parser (compilers.ts).
+ *
+ * @param options - Optional length bounds and regular expression refinement
+ * @returns A string guard enforcing the requested refinements
  *
  * @example
  * ```ts
@@ -706,7 +721,11 @@ export function stringOf(options?: {
 }): Guard<string> {
 	const min = options?.min
 	const max = options?.max
-	const pattern = options?.pattern
+	const source = options?.pattern
+	const pattern =
+		source === undefined
+			? undefined
+			: new RegExp(source.source, source.flags.replaceAll('g', '').replaceAll('y', ''))
 	if (min === undefined && max === undefined && pattern === undefined) {
 		return isString
 	}

@@ -382,6 +382,17 @@ describe('compileSchema', () => {
 			description: 'x',
 		})
 	})
+
+	it('emits a __proto__ property as schema data', () => {
+		const properties: Record<string, ContractShape> = Object.create(null)
+		properties['__proto__'] = integerShape()
+		const schema = compileSchema(objectShape(properties))
+
+		expect(schema.properties).toBeDefined()
+		expect(Object.hasOwn(schema.properties ?? {}, '__proto__')).toBe(true)
+		expect(schema.properties?.['__proto__']).toEqual({ type: 'integer' })
+		expect(schema.required).toEqual(['__proto__'])
+	})
 })
 
 describe('compileGuard', () => {
@@ -428,6 +439,26 @@ describe('compileGuard', () => {
 		expect(arr([1, 'x'])).toBe(false)
 	})
 
+	it('uses SameValueZero for a compiled signed-zero literal round trip', () => {
+		const shape = literalShape([-0])
+		const guard = compileGuard(shape)
+		const parse = compileParser(shape)
+		const parsed = parse(+0)
+
+		expect(guard(+0)).toBe(true)
+		expect(parsed).toBe(0)
+		expect(parsed !== undefined && guard(parsed)).toBe(true)
+	})
+
+	it('rejects top-level undefined for a raw shape in guard/parser agreement', () => {
+		const shape = rawShape({})
+		const guard = compileGuard(shape)
+		const parse = compileParser(shape)
+
+		expect(guard(undefined)).toBe(false)
+		expect(parse(undefined)).toBeUndefined()
+	})
+
 	it('oneOfShape rejects a value matching more than one variant (exactly-one semantics)', () => {
 		const guard = compileGuard(oneOfShape(numberShape(), integerShape()))
 		// 3 is guard-valid against BOTH numberShape and integerShape — the emitted
@@ -438,7 +469,7 @@ describe('compileGuard', () => {
 		expect(guard('x')).toBe(false) // matches neither
 	})
 
-	it('raw accepts any value and the guard stays total on adversarial input', () => {
+	it('raw accepts defined values and the guard stays total on adversarial input', () => {
 		expect(compileGuard(rawShape({}))(Symbol('x'))).toBe(true)
 		const guard = compileGuard(objectShape({ name: stringShape() }))
 		expect(() => guard(null)).not.toThrow()
@@ -485,6 +516,23 @@ describe('compileGuard', () => {
 		expect(Object.hasOwn(record, '__proto__')).toBe(true)
 		expect(record['__proto__']).toBe(5)
 		expect(JSON.stringify(record)).toBe('{"__proto__":5}')
+	})
+
+	it('round-trips a __proto__-keyed object through schema, guard, parser, and generator', () => {
+		const properties: Record<string, ContractShape> = Object.create(null)
+		properties['__proto__'] = literalShape(['safe'])
+		const shape = objectShape(properties)
+		const schema = compileSchema(shape)
+		const guard = compileGuard(shape)
+		const parse = compileParser(shape)
+		const generated = compileGenerator(shape, seededRandom(1))
+		const input: unknown = JSON.parse('{"__proto__":"safe"}')
+
+		expect(Object.hasOwn(schema.properties ?? {}, '__proto__')).toBe(true)
+		expect(guard(input)).toBe(true)
+		expect(parse(input)).toEqual(input)
+		expect(Object.hasOwn(generated, '__proto__')).toBe(true)
+		expect(guard(generated)).toBe(true)
 	})
 })
 
@@ -692,6 +740,26 @@ describe('compileGenerator', () => {
 		}
 	})
 
+	it('honors a one-sided negative maximum across one thousand seeds', () => {
+		const shape = numberShape({ max: -1 })
+		const guard = compileGuard(shape)
+		for (let seed = 0; seed < 1000; seed += 1) {
+			expect(guard(compileGenerator(shape, seededRandom(seed)))).toBe(true)
+		}
+	})
+
+	it('throws generate when no oneOf candidate can satisfy the compiled guard', () => {
+		const shape = oneOfShape(literalShape(['same']), literalShape(['same']))
+
+		expect(() => compileGenerator(shape, seededRandom(1))).toThrowError(ContractError)
+		try {
+			compileGenerator(shape, seededRandom(1))
+		} catch (error) {
+			expect(isContractError(error)).toBe(true)
+			if (isContractError(error)) expect(error.code).toBe('generate')
+		}
+	})
+
 	it('throws on a raw shape (cannot be auto-generated)', () => {
 		expect(() => compileGenerator(rawShape({ type: 'string' }), seededRandom(1))).toThrow(
 			'compileGenerator: a raw shape embeds an arbitrary JSON Schema and cannot be auto-generated — supply values another way',
@@ -727,6 +795,31 @@ describe('createContract', () => {
 		expect(contract.parse({ name: 'Ada', age: '36' })).toEqual({ name: 'Ada', age: 36 })
 		// The generator's output satisfies the contract's own guard.
 		expect(contract.is(contract.generate(seededRandom(3)))).toBe(true)
+	})
+
+	it('owns one immutable snapshot of a hand-authored mutable shape graph', () => {
+		const values: (string | number | boolean)[] = ['stable']
+		const items = { type: 'literal', values } satisfies ContractShape
+		const array = { type: 'array', items } satisfies ContractShape
+		const variants: ContractShape[] = [array]
+		const shape: ContractShape = { type: 'union', variants }
+		const contract = createContract<ContractShape>(shape)
+		const schema = contract.schema
+
+		values[0] = 'drift'
+		array.items = { type: 'literal', values: ['drift'] }
+		variants[0] = { type: 'number' }
+
+		expect(contract.schema).toBe(schema)
+		expect(contract.schema).toEqual({
+			anyOf: [{ type: 'array', items: { enum: ['stable'] } }],
+		})
+		expect(contract.is(['stable'])).toBe(true)
+		expect(contract.is(['drift'])).toBe(false)
+		expect(contract.parse(['stable'])).toEqual(['stable'])
+		expect(contract.parse(['drift'])).toBeUndefined()
+		expect(contract.is(contract.generate(seededRandom(4)))).toBe(true)
+		expect(contract.generate(seededRandom(4))).toEqual(['stable'])
 	})
 
 	it('carries Infer<S> end-to-end from a recordShape (finding #7)', () => {
