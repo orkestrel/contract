@@ -30,11 +30,12 @@ import {
 } from './helpers.js'
 import { COMPILE_DEPTH_LIMIT, FAULT_LIMIT, GENERATION_ATTEMPT_LIMIT } from './constants.js'
 import { ContractError } from './errors.js'
-import { cloneSchema, cloneShape } from './cloners.js'
+import { cloneSchema, cloneShape, ownShape } from './cloners.js'
 import {
 	arrayOf,
 	boundsOf,
 	intersectionOf,
+	literalOf,
 	matchOf,
 	nullableOf,
 	orOf,
@@ -46,8 +47,12 @@ import { parseBoolean, parseInteger, parseNumber, parseRecord, parseString } fro
 
 // The compilers walk a finite, developer-authored shape tree (never cyclic) and
 // recurse on themselves — branches are kept inline and public per AGENTS §5,
-// never hidden behind private helpers. `compileGuard` / `compileParser` reuse the
-// existing combinators and parsers rather than re-implementing them.
+// never hidden behind private helpers. `compileGuard` / `compileParser` /
+// `compileReporter` reuse the existing combinators and parsers rather than
+// re-implementing them — including `literalOf` for literal membership, so
+// SameValueZero matching has one implementation package-wide. Every entry point
+// opens with `ownShape` (cloners.ts), the one place the frozen-means-owned
+// invariant lives.
 
 // === Validation
 
@@ -320,60 +325,60 @@ export function validateShape(shape: ContractShape): void {
  * ```
  */
 export function compileSchema(shape: ContractShape): JSONSchema {
-	if (!Object.isFrozen(shape)) return compileSchema(cloneShape(shape))
-	switch (shape.type) {
+	const owned = ownShape(shape)
+	switch (owned.type) {
 		case 'string':
 			return Object.freeze({
 				type: 'string',
-				...(shape.min !== undefined ? { minLength: shape.min } : {}),
-				...(shape.max !== undefined ? { maxLength: shape.max } : {}),
-				...(shape.pattern !== undefined ? { pattern: shape.pattern.source } : {}),
-				...(shape.description !== undefined ? { description: shape.description } : {}),
+				...(owned.min !== undefined ? { minLength: owned.min } : {}),
+				...(owned.max !== undefined ? { maxLength: owned.max } : {}),
+				...(owned.pattern !== undefined ? { pattern: owned.pattern.source } : {}),
+				...(owned.description !== undefined ? { description: owned.description } : {}),
 			})
 		case 'number':
 			return Object.freeze({
-				type: shape.integer === true ? 'integer' : 'number',
-				...(shape.min !== undefined ? { minimum: shape.min } : {}),
-				...(shape.max !== undefined ? { maximum: shape.max } : {}),
-				...(shape.description !== undefined ? { description: shape.description } : {}),
+				type: owned.integer === true ? 'integer' : 'number',
+				...(owned.min !== undefined ? { minimum: owned.min } : {}),
+				...(owned.max !== undefined ? { maximum: owned.max } : {}),
+				...(owned.description !== undefined ? { description: owned.description } : {}),
 			})
 		case 'boolean':
 			return Object.freeze({
 				type: 'boolean',
-				...(shape.description !== undefined ? { description: shape.description } : {}),
+				...(owned.description !== undefined ? { description: owned.description } : {}),
 			})
 		case 'null':
 			return Object.freeze({
 				type: 'null',
-				...(shape.description !== undefined ? { description: shape.description } : {}),
+				...(owned.description !== undefined ? { description: owned.description } : {}),
 			})
 		case 'json':
 			return Object.freeze({
-				...(shape.description !== undefined ? { description: shape.description } : {}),
+				...(owned.description !== undefined ? { description: owned.description } : {}),
 			})
 		case 'literal':
 			return Object.freeze({
-				enum: Object.freeze([...shape.values]),
-				...(shape.description !== undefined ? { description: shape.description } : {}),
+				enum: Object.freeze([...owned.values]),
+				...(owned.description !== undefined ? { description: owned.description } : {}),
 			})
 		case 'array':
 			return Object.freeze({
 				type: 'array',
-				items: compileSchema(shape.items),
-				...(shape.min !== undefined ? { minItems: shape.min } : {}),
-				...(shape.max !== undefined ? { maxItems: shape.max } : {}),
-				...(shape.description !== undefined ? { description: shape.description } : {}),
+				items: compileSchema(owned.items),
+				...(owned.min !== undefined ? { minItems: owned.min } : {}),
+				...(owned.max !== undefined ? { maxItems: owned.max } : {}),
+				...(owned.description !== undefined ? { description: owned.description } : {}),
 			})
 		case 'object': {
 			const properties: Record<string, JSONSchema> = Object.create(null)
 			const required: string[] = []
-			for (const key of Object.keys(shape.properties)) {
-				const child = shape.properties[key]
+			for (const key of Object.keys(owned.properties)) {
+				const child = owned.properties[key]
 				if (child === undefined) continue
 				properties[key] = compileSchema(child)
 				if (child.type !== 'optional') required.push(key)
 			}
-			const extra = shape.additionalProperties
+			const extra = owned.additionalProperties
 			const additionalProperties: boolean | JSONSchema =
 				extra === true
 					? true
@@ -385,28 +390,28 @@ export function compileSchema(shape: ContractShape): JSONSchema {
 				...(Object.keys(properties).length > 0 ? { properties: Object.freeze(properties) } : {}),
 				...(required.length > 0 ? { required: Object.freeze(required) } : {}),
 				additionalProperties,
-				...(shape.description !== undefined ? { description: shape.description } : {}),
+				...(owned.description !== undefined ? { description: owned.description } : {}),
 			})
 		}
 		case 'union':
 			return Object.freeze({
-				...(shape.mode === 'oneOf'
+				...(owned.mode === 'oneOf'
 					? {
-							oneOf: Object.freeze(shape.variants.map((variant) => compileSchema(variant))),
+							oneOf: Object.freeze(owned.variants.map((variant) => compileSchema(variant))),
 						}
 					: {
-							anyOf: Object.freeze(shape.variants.map((variant) => compileSchema(variant))),
+							anyOf: Object.freeze(owned.variants.map((variant) => compileSchema(variant))),
 						}),
-				...(shape.description !== undefined ? { description: shape.description } : {}),
+				...(owned.description !== undefined ? { description: owned.description } : {}),
 			})
 		case 'optional':
-			return compileSchema(shape.inner)
+			return compileSchema(owned.inner)
 		case 'nullable':
 			return Object.freeze({
-				anyOf: Object.freeze([compileSchema(shape.inner), Object.freeze({ type: 'null' })]),
+				anyOf: Object.freeze([compileSchema(owned.inner), Object.freeze({ type: 'null' })]),
 			})
 		case 'raw':
-			return cloneSchema(shape.schema)
+			return cloneSchema(owned.schema)
 	}
 }
 
@@ -416,12 +421,13 @@ export function compileSchema(shape: ContractShape): JSONSchema {
  * Compile a {@link ContractShape} into a runtime type guard.
  *
  * @remarks
- * Reuses the combinators for structural and refined shapes, and uses an owned
- * `Set` for SameValueZero literal matching. Compiled object shapes observe own
- * enumerable string keys through {@link enumerableKeys}, matching their
- * parser, reporter, and inference view for both open and closed objects. Like
- * every guard it is total — it never throws (AGENTS §14). An unfrozen
- * caller-owned shape is first compiled from an owned snapshot.
+ * Reuses the combinators for structural and refined shapes, including
+ * {@link literalOf} for SameValueZero literal matching. Compiled object shapes
+ * observe own enumerable string keys through {@link enumerableKeys}, matching
+ * their parser, reporter, and inference view for both open and closed objects.
+ * Like every guard it is total — it never throws (AGENTS §14). The shape is
+ * taken through {@link ownShape} first, so an unfrozen caller-owned graph
+ * compiles from a snapshot.
  *
  * @param shape - The shape to compile
  * @returns A guard narrowing to the shape's inferred type
@@ -435,24 +441,24 @@ export function compileSchema(shape: ContractShape): JSONSchema {
 export function compileGuard<S extends ContractShape>(shape: S): Guard<Infer<S>>
 export function compileGuard(shape: ContractShape): Guard<unknown>
 export function compileGuard(shape: ContractShape): Guard<unknown> {
-	if (!Object.isFrozen(shape)) return compileGuard(cloneShape(shape))
-	switch (shape.type) {
+	const owned = ownShape(shape)
+	switch (owned.type) {
 		case 'string':
 			// `stringOf` returns bare `isString` when unrefined, else composes the
 			// length-bounds + pattern refinement — the same guard the parser re-applies.
 			return stringOf({
-				...(shape.min === undefined ? {} : { min: shape.min }),
-				...(shape.max === undefined ? {} : { max: shape.max }),
-				...(shape.pattern === undefined ? {} : { pattern: shape.pattern }),
+				...(owned.min === undefined ? {} : { min: owned.min }),
+				...(owned.max === undefined ? {} : { max: owned.max }),
+				...(owned.pattern === undefined ? {} : { pattern: owned.pattern }),
 			})
 		case 'number': {
-			const base = shape.integer === true ? isInteger : isFiniteNumber
-			if (shape.min === undefined && shape.max === undefined) return base
+			const base = owned.integer === true ? isInteger : isFiniteNumber
+			if (owned.min === undefined && owned.max === undefined) return base
 			// `boundsOf` already refines `isFiniteNumber`; intersect with `isInteger`
 			// when the leaf is an integer so both the integrality and the bounds hold.
-			return shape.integer === true
-				? intersectionOf(isInteger, boundsOf(shape.min, shape.max))
-				: boundsOf(shape.min, shape.max)
+			return owned.integer === true
+				? intersectionOf(isInteger, boundsOf(owned.min, owned.max))
+				: boundsOf(owned.min, owned.max)
 		}
 		case 'boolean':
 			return isBoolean
@@ -460,14 +466,15 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
 			return isNull
 		case 'json':
 			return isJSONValue
-		case 'literal': {
-			const allowed = new Set<unknown>(shape.values)
-			return (value: unknown): value is unknown => allowed.has(value)
-		}
+		case 'literal':
+			// `literalOf` IS the package's literal match (SameValueZero over an owned
+			// `Set`); the array form takes a machine-generated vocabulary no spread
+			// could carry.
+			return literalOf(owned.values)
 		case 'array': {
-			const base = arrayOf(compileGuard(shape.items))
-			if (shape.min === undefined && shape.max === undefined) return base
-			const withinLength = boundsOf(shape.min, shape.max)
+			const base = arrayOf(compileGuard(owned.items))
+			if (owned.min === undefined && owned.max === undefined) return base
+			const withinLength = boundsOf(owned.min, owned.max)
 			return whereOf(base, (value) => withinLength(value.length))
 		}
 		case 'object': {
@@ -476,8 +483,8 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
 			// prototype — the same pattern `pickOf` uses (combinators.ts).
 			const map: Record<string, Guard<unknown>> = Object.create(null)
 			const optionalKeys: string[] = []
-			for (const key of Object.keys(shape.properties)) {
-				const child = shape.properties[key]
+			for (const key of Object.keys(owned.properties)) {
+				const child = owned.properties[key]
 				if (child === undefined) continue
 				if (child.type === 'optional') {
 					map[key] = compileGuard(child.inner)
@@ -486,7 +493,7 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
 					map[key] = compileGuard<ContractShape>(child)
 				}
 			}
-			const extra = shape.additionalProperties
+			const extra = owned.additionalProperties
 			const closed = extra === undefined || extra === false
 			const additional = closed || extra === true ? undefined : compileGuard(extra)
 			const required = Object.keys(map).filter((key) => !optionalKeys.includes(key))
@@ -517,21 +524,21 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
 			}
 		}
 		case 'union': {
-			const guards = shape.variants.map((variant) => compileGuard(variant))
+			const guards = owned.variants.map((variant) => compileGuard(variant))
 			// A `oneOf`-mode union matches the emitted JSON Schema `oneOf` keyword —
 			// EXACTLY one variant must guard-accept the value, not "at least one"
 			// (unionOf's anyOf semantics). A value matching two-or-more variants is
 			// rejected, since it would violate the compiled schema.
-			if (shape.mode === 'oneOf') {
+			if (owned.mode === 'oneOf') {
 				return (value: unknown): value is unknown =>
 					guards.filter((guard) => guard(value)).length === 1
 			}
 			return unionOf(...guards)
 		}
 		case 'optional':
-			return orOf(isUndefined, compileGuard(shape.inner))
+			return orOf(isUndefined, compileGuard(owned.inner))
 		case 'nullable':
-			return nullableOf(compileGuard(shape.inner))
+			return nullableOf(compileGuard(owned.inner))
 		case 'raw':
 			return (value: unknown): value is unknown => value !== undefined
 	}
@@ -549,13 +556,15 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
  * unchanged, otherwise the first variant that both parses and guards wins.
  *
  * After coercing a leaf, it re-applies that leaf's REFINEMENTS through the same
- * combinators `compileGuard` uses — `stringOf` for a string's length/pattern and
- * `boundsOf` for a number's value and an array's length — so a value that coerces
- * but violates a bound parses to `undefined`. The result is full parse↔guard
- * soundness (AGENTS §14): a non-`undefined` parse always satisfies the contract's
- * `is`, refinements included. Object presence and extra-key processing use the
- * same own-enumerable-string snapshot as the guard, reporter, and inference.
- * An unfrozen caller-owned shape is first compiled from an owned snapshot.
+ * combinators `compileGuard` uses — `stringOf` for a string's length/pattern,
+ * `boundsOf` for a number's value and an array's length, and {@link literalOf}
+ * for literal membership — so a value that coerces but violates a bound parses
+ * to `undefined`. The result is full parse↔guard soundness (AGENTS §14): a
+ * non-`undefined` parse always satisfies the contract's `is`, refinements
+ * included. Object presence and extra-key processing use the same
+ * own-enumerable-string snapshot as the guard, reporter, and inference. The
+ * shape is taken through {@link ownShape} first, so an unfrozen caller-owned
+ * graph compiles from a snapshot.
  *
  * @param shape - The shape to compile
  * @returns A parser yielding the shape's inferred type or `undefined`
@@ -569,19 +578,19 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
 export function compileParser<S extends ContractShape>(shape: S): Parser<Infer<S>>
 export function compileParser(shape: ContractShape): Parser<unknown>
 export function compileParser(shape: ContractShape): Parser<unknown> {
-	if (!Object.isFrozen(shape)) return compileParser(cloneShape(shape))
-	switch (shape.type) {
+	const owned = ownShape(shape)
+	switch (owned.type) {
 		case 'string': {
-			if (shape.min === undefined && shape.max === undefined && shape.pattern === undefined) {
+			if (owned.min === undefined && owned.max === undefined && owned.pattern === undefined) {
 				return parseString
 			}
 			// Coerce by type, then re-apply the SAME refinement the guard enforces (the
 			// identical `stringOf`) — a value that parses but violates a bound or the
 			// pattern fails the parse (returns `undefined`).
 			const guard = stringOf({
-				...(shape.min === undefined ? {} : { min: shape.min }),
-				...(shape.max === undefined ? {} : { max: shape.max }),
-				...(shape.pattern === undefined ? {} : { pattern: shape.pattern }),
+				...(owned.min === undefined ? {} : { min: owned.min }),
+				...(owned.max === undefined ? {} : { max: owned.max }),
+				...(owned.pattern === undefined ? {} : { pattern: owned.pattern }),
 			})
 			return (value) => {
 				const parsed = parseString(value)
@@ -589,11 +598,11 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 			}
 		}
 		case 'number': {
-			const base = shape.integer === true ? parseInteger : parseNumber
-			if (shape.min === undefined && shape.max === undefined) return base
+			const base = owned.integer === true ? parseInteger : parseNumber
+			if (owned.min === undefined && owned.max === undefined) return base
 			// The same bound check the guard applies (integrality is already enforced by
 			// `parseInteger`, so only the bounds need re-checking after coercion).
-			const within = boundsOf(shape.min, shape.max)
+			const within = boundsOf(owned.min, owned.max)
 			return (value) => {
 				const parsed = base(value)
 				return parsed !== undefined && within(parsed) ? parsed : undefined
@@ -607,23 +616,24 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 			return (value) => (isJSONValue(value) ? value : undefined)
 		// The literal parser trims a matching string but never numeric-coerces —
 		// `'42'` never parses to the literal `42`; only an exact (post-trim) match
-		// of one of `shape.values` succeeds. This is an intended leniency, not a
-		// soundness gap: a coerced value is always re-checked against `allowed`.
+		// of one of the shape's `values` succeeds. This is an intended leniency,
+		// not a soundness gap: a trimmed value is re-checked against `allowed`,
+		// the same `literalOf` guard the compiled guard uses.
 		case 'literal': {
-			const allowed = new Set<unknown>(shape.values)
+			const allowed = literalOf(owned.values)
 			return (value) => {
-				if (allowed.has(value)) return value
+				if (allowed(value)) return value
 				if (isString(value)) {
 					const trimmed = value.trim()
-					if (allowed.has(trimmed)) return trimmed
+					if (allowed(trimmed)) return trimmed
 				}
 				return undefined
 			}
 		}
 		case 'array': {
-			const item = compileParser(shape.items)
-			const unbounded = shape.min === undefined && shape.max === undefined
-			const withinLength = boundsOf(shape.min, shape.max)
+			const item = compileParser(owned.items)
+			const unbounded = owned.min === undefined && owned.max === undefined
+			const withinLength = boundsOf(owned.min, owned.max)
 			return (value) => {
 				if (!isArray(value)) return undefined
 				const result: unknown[] = []
@@ -643,14 +653,14 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 		// matters for guard-invalid inputs handed to `parse`).
 		case 'object': {
 			const entries: { key: string; parse: Parser<unknown>; optional: boolean }[] = []
-			for (const key of Object.keys(shape.properties)) {
-				const child = shape.properties[key]
+			for (const key of Object.keys(owned.properties)) {
+				const child = owned.properties[key]
 				if (child === undefined) continue
 				const optional = child.type === 'optional'
 				entries.push({ key, parse: compileParser(optional ? child.inner : child), optional })
 			}
 			const known = new Set(entries.map((entry) => entry.key))
-			const extra = shape.additionalProperties
+			const extra = owned.additionalProperties
 			const additional =
 				extra === undefined || extra === false || extra === true ? undefined : compileParser(extra)
 			const open = extra === true || additional !== undefined
@@ -699,7 +709,7 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 			}
 		}
 		case 'union': {
-			const variants = shape.variants.map((variant) => ({
+			const variants = owned.variants.map((variant) => ({
 				parse: compileParser(variant),
 				guard: compileGuard(variant),
 			}))
@@ -711,7 +721,7 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 			// which variant the value belongs to isn't well-defined) both fail the
 			// parse, deliberately simpler than attempting a coercion-then-recheck
 			// resolution for ambiguous input.
-			if (shape.mode === 'oneOf') {
+			if (owned.mode === 'oneOf') {
 				return (value) => {
 					const matches = variants.filter((variant) => variant.guard(value))
 					const [only] = matches
@@ -735,11 +745,11 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 			}
 		}
 		case 'optional': {
-			const inner = compileParser(shape.inner)
+			const inner = compileParser(owned.inner)
 			return (value) => (value === undefined ? undefined : inner(value))
 		}
 		case 'nullable': {
-			const inner = compileParser(shape.inner)
+			const inner = compileParser(owned.inner)
 			return (value) => (value === null ? null : inner(value))
 		}
 		case 'raw':
@@ -787,37 +797,37 @@ export function compileGenerator(
 	shape: ContractShape,
 	random: RandomFunction = seededRandom(Date.now()),
 ): unknown {
-	if (!Object.isFrozen(shape)) return compileGenerator(cloneShape(shape), random)
-	switch (shape.type) {
+	const owned = ownShape(shape)
+	switch (owned.type) {
 		case 'string': {
-			const min = shape.min ?? 0
-			const max = shape.max ?? Math.max(min, 12)
+			const min = owned.min ?? 0
+			const max = owned.max ?? Math.max(min, 12)
 			const length = Math.max(min, Math.min(max, 8))
 			const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
 			let value = ''
 			for (let index = 0; index < length; index += 1) {
 				value += alphabet[Math.floor(drawRandom(random, 'string') * alphabet.length)]
 			}
-			if (shape.pattern !== undefined && !matchOf(shape.pattern)(value)) {
+			if (owned.pattern !== undefined && !matchOf(owned.pattern)(value)) {
 				throw new ContractError(
 					'compileGenerator: a pattern-constrained string shape cannot be auto-generated — supply or verify values another way',
 					{
 						code: 'generate',
-						context: { shape: 'string', limit: shape.pattern.source },
+						context: { shape: 'string', limit: owned.pattern.source },
 					},
 				)
 			}
 			return value
 		}
 		case 'number': {
-			const sample = drawRandom(random, shape.integer === true ? 'integer' : 'number')
-			if (shape.integer === true) {
-				const lo = Math.ceil(shape.min ?? Math.min(-100, shape.max ?? -100))
-				const hi = Math.floor(shape.max ?? Math.max(100, shape.min ?? 100))
+			const sample = drawRandom(random, owned.integer === true ? 'integer' : 'number')
+			if (owned.integer === true) {
+				const lo = Math.ceil(owned.min ?? Math.min(-100, owned.max ?? -100))
+				const hi = Math.floor(owned.max ?? Math.max(100, owned.min ?? 100))
 				return lo === hi ? lo : Math.floor(sample * (hi - lo + 1)) + lo
 			}
-			const lo = shape.min ?? Math.min(-100, shape.max ?? -100)
-			const hi = shape.max ?? Math.max(100, shape.min ?? 100)
+			const lo = owned.min ?? Math.min(-100, owned.max ?? -100)
+			const hi = owned.max ?? Math.max(100, owned.min ?? 100)
 			return lo === hi ? lo : lo + sample * (hi - lo)
 		}
 		case 'boolean':
@@ -840,28 +850,32 @@ export function compileGenerator(
 			return { value: Math.floor(drawRandom(random, 'json') * 1000) }
 		}
 		case 'literal': {
-			if (shape.values.length === 0) {
+			if (owned.values.length === 0) {
 				throw new ContractError('compileGenerator: a literal shape needs at least one value', {
 					code: 'generate',
 					context: { shape: 'literal', limit: 1 },
 				})
 			}
-			return shape.values[Math.floor(drawRandom(random, 'literal') * shape.values.length)]
+			return owned.values[Math.floor(drawRandom(random, 'literal') * owned.values.length)]
 		}
 		case 'array': {
-			const lo = shape.min ?? Math.min(1, shape.max ?? 1)
-			const hi = shape.max ?? Math.max(lo, 3)
+			const lo = owned.min ?? Math.min(1, owned.max ?? 1)
+			const hi = owned.max ?? Math.max(lo, 3)
 			const length = Math.floor(drawRandom(random, 'array') * (hi - lo + 1)) + lo
 			const result: unknown[] = []
 			for (let index = 0; index < length; index += 1) {
-				result.push(compileGenerator(shape.items, random))
+				result.push(compileGenerator(owned.items, random))
 			}
 			return result
 		}
 		case 'object': {
+			// Honest typing: generated data is a value the caller keeps, so unlike the
+			// guard's and parser's null-prototype property views it carries the normal
+			// object prototype — `defineProperty` (never assignment) still lands a
+			// '__proto__' key as an own data key rather than mutating that prototype.
 			const result: Record<string, unknown> = {}
-			for (const key of Object.keys(shape.properties)) {
-				const child = shape.properties[key]
+			for (const key of Object.keys(owned.properties)) {
+				const child = owned.properties[key]
 				if (child === undefined) continue
 				if (child.type === 'optional' && drawRandom(random, 'object') < 0.3) continue
 				Object.defineProperty(result, key, {
@@ -874,7 +888,7 @@ export function compileGenerator(
 			// An open object (additionalProperties is a shape, not a boolean) also
 			// generates synthetic extra entries so the shape does not trivially
 			// generate as `{}` — skip any collision with a declared property name.
-			const extra = shape.additionalProperties
+			const extra = owned.additionalProperties
 			if (extra !== undefined && extra !== true && extra !== false) {
 				const count = 1 + Math.floor(drawRandom(random, 'object') * 2)
 				for (let index = 0; index < count; index += 1) {
@@ -891,17 +905,17 @@ export function compileGenerator(
 			return result
 		}
 		case 'union': {
-			if (shape.variants.length === 0) {
+			if (owned.variants.length === 0) {
 				throw new ContractError('compileGenerator: a union shape needs at least one variant', {
 					code: 'generate',
 					context: { shape: 'union', limit: 1 },
 				})
 			}
-			const guard = compileGuard<ContractShape>(shape)
-			const attempts = Math.max(GENERATION_ATTEMPT_LIMIT, shape.variants.length)
-			const start = Math.floor(drawRandom(random, 'union') * shape.variants.length)
+			const guard = compileGuard<ContractShape>(owned)
+			const attempts = Math.max(GENERATION_ATTEMPT_LIMIT, owned.variants.length)
+			const start = Math.floor(drawRandom(random, 'union') * owned.variants.length)
 			for (let attemptIndex = 0; attemptIndex < attempts; attemptIndex += 1) {
-				const variant = shape.variants[(start + attemptIndex) % shape.variants.length]
+				const variant = owned.variants[(start + attemptIndex) % owned.variants.length]
 				if (variant === undefined) continue
 				const outcome = attempt(() => compileGenerator(variant, random))
 				if (outcome.success && guard(outcome.value)) return outcome.value
@@ -912,9 +926,9 @@ export function compileGenerator(
 			})
 		}
 		case 'optional':
-			return compileGenerator(shape.inner, random)
+			return compileGenerator(owned.inner, random)
 		case 'nullable':
-			return drawRandom(random, 'nullable') < 0.2 ? null : compileGenerator(shape.inner, random)
+			return drawRandom(random, 'nullable') < 0.2 ? null : compileGenerator(owned.inner, random)
 		case 'raw':
 			throw new ContractError(
 				'compileGenerator: a raw shape embeds an arbitrary JSON Schema and cannot be auto-generated — supply values another way',
@@ -972,54 +986,54 @@ export function compileReporter(
 	value: unknown,
 	path: string[] = [],
 ): readonly Fault[] {
-	if (!Object.isFrozen(shape)) return compileReporter(cloneShape(shape), value, path)
-	switch (shape.type) {
+	const owned = ownShape(shape)
+	switch (owned.type) {
 		case 'string': {
 			const parsed = parseString(value)
 			if (parsed === undefined) {
 				return [{ reason: 'type', path, expected: 'string', received: preview(value) }]
 			}
 			const faults: Fault[] = []
-			if (shape.min !== undefined && parsed.length < shape.min) {
+			if (owned.min !== undefined && parsed.length < owned.min) {
 				faults.push({
 					reason: 'constraint',
 					path,
 					expected: 'string',
 					constraint: 'min',
-					limit: shape.min,
+					limit: owned.min,
 					received: preview(parsed),
 				})
 			}
-			if (shape.max !== undefined && parsed.length > shape.max) {
+			if (owned.max !== undefined && parsed.length > owned.max) {
 				faults.push({
 					reason: 'constraint',
 					path,
 					expected: 'string',
 					constraint: 'max',
-					limit: shape.max,
+					limit: owned.max,
 					received: preview(parsed),
 				})
 			}
-			if (shape.pattern !== undefined && !matchOf(shape.pattern)(parsed)) {
+			if (owned.pattern !== undefined && !matchOf(owned.pattern)(parsed)) {
 				faults.push({
 					reason: 'constraint',
 					path,
 					expected: 'string',
 					constraint: 'pattern',
-					limit: shape.pattern.source,
+					limit: owned.pattern.source,
 					received: preview(parsed),
 				})
 			}
 			return faults
 		}
 		case 'number': {
-			const kind: FaultKind = shape.integer === true ? 'integer' : 'number'
+			const kind: FaultKind = owned.integer === true ? 'integer' : 'number'
 			const parsed = parseNumber(value)
 			if (parsed === undefined) {
 				return [{ reason: 'type', path, expected: kind, received: preview(value) }]
 			}
 			const faults: Fault[] = []
-			if (shape.integer === true && !Number.isInteger(parsed)) {
+			if (owned.integer === true && !Number.isInteger(parsed)) {
 				faults.push({
 					reason: 'constraint',
 					path,
@@ -1028,23 +1042,23 @@ export function compileReporter(
 					received: preview(parsed),
 				})
 			}
-			if (shape.min !== undefined && parsed < shape.min) {
+			if (owned.min !== undefined && parsed < owned.min) {
 				faults.push({
 					reason: 'constraint',
 					path,
 					expected: kind,
 					constraint: 'min',
-					limit: shape.min,
+					limit: owned.min,
 					received: preview(parsed),
 				})
 			}
-			if (shape.max !== undefined && parsed > shape.max) {
+			if (owned.max !== undefined && parsed > owned.max) {
 				faults.push({
 					reason: 'constraint',
 					path,
 					expected: kind,
 					constraint: 'max',
-					limit: shape.max,
+					limit: owned.max,
 					received: preview(parsed),
 				})
 			}
@@ -1063,8 +1077,8 @@ export function compileReporter(
 				? []
 				: [{ reason: 'type', path, expected: 'json', received: preview(value) }]
 		case 'literal': {
-			const allowed = new Set<unknown>(shape.values)
-			const matched = allowed.has(value) || (isString(value) && allowed.has(value.trim()))
+			const allowed = literalOf(owned.values)
+			const matched = allowed(value) || (isString(value) && allowed(value.trim()))
 			return matched
 				? []
 				: [{ reason: 'type', path, expected: 'literal', received: preview(value) }]
@@ -1077,29 +1091,29 @@ export function compileReporter(
 			const outcome = attempt(() => {
 				for (let index = 0; index < value.length; index += 1) {
 					if (faults.length >= FAULT_LIMIT) return
-					faults.push(...compileReporter(shape.items, value[index], [...path, String(index)]))
+					faults.push(...compileReporter(owned.items, value[index], [...path, String(index)]))
 				}
 			})
 			if (!outcome.success) {
 				return [{ reason: 'type', path, expected: 'array', received: preview(value) }]
 			}
-			if (shape.min !== undefined && value.length < shape.min) {
+			if (owned.min !== undefined && value.length < owned.min) {
 				faults.push({
 					reason: 'constraint',
 					path,
 					expected: 'array',
 					constraint: 'min',
-					limit: shape.min,
+					limit: owned.min,
 					received: String(value.length),
 				})
 			}
-			if (shape.max !== undefined && value.length > shape.max) {
+			if (owned.max !== undefined && value.length > owned.max) {
 				faults.push({
 					reason: 'constraint',
 					path,
 					expected: 'array',
 					constraint: 'max',
-					limit: shape.max,
+					limit: owned.max,
 					received: String(value.length),
 				})
 			}
@@ -1118,9 +1132,9 @@ export function compileReporter(
 			const faults: Fault[] = []
 			const known = new Set<string>()
 			const outcome = attempt(() => {
-				for (const key of Object.keys(shape.properties)) {
+				for (const key of Object.keys(owned.properties)) {
 					if (faults.length >= FAULT_LIMIT) return
-					const child = shape.properties[key]
+					const child = owned.properties[key]
 					if (child === undefined) continue
 					known.add(key)
 					const optional = child.type === 'optional'
@@ -1144,7 +1158,7 @@ export function compileReporter(
 					}
 					faults.push(...compileReporter(inner, raw, [...path, key]))
 				}
-				const extra = shape.additionalProperties
+				const extra = owned.additionalProperties
 				if (extra !== undefined && extra !== true && extra !== false) {
 					for (const key of keys) {
 						if (faults.length >= FAULT_LIMIT) return
@@ -1159,7 +1173,7 @@ export function compileReporter(
 			return faults.length > FAULT_LIMIT ? faults.slice(0, FAULT_LIMIT) : faults
 		}
 		case 'union': {
-			const perVariant = shape.variants.map((variant) => compileReporter(variant, value, path))
+			const perVariant = owned.variants.map((variant) => compileReporter(variant, value, path))
 			let bestIndex = 0
 			for (let index = 1; index < perVariant.length; index += 1) {
 				const current = perVariant[index]
@@ -1169,9 +1183,9 @@ export function compileReporter(
 				}
 			}
 			const closest = perVariant[bestIndex] ?? []
-			if (shape.mode === 'oneOf') {
+			if (owned.mode === 'oneOf') {
 				let matched = 0
-				for (const variant of shape.variants) {
+				for (const variant of owned.variants) {
 					if (compileGuard(variant)(value)) matched += 1
 				}
 				if (matched === 1) return []
@@ -1183,13 +1197,13 @@ export function compileReporter(
 			}
 			const anyMatch = perVariant.some((variantFaults) => variantFaults.length === 0)
 			if (anyMatch) return []
-			const summary: Fault = { reason: 'variant', path, variants: shape.variants.length }
+			const summary: Fault = { reason: 'variant', path, variants: owned.variants.length }
 			return [summary, ...closest].slice(0, FAULT_LIMIT)
 		}
 		case 'optional':
-			return value === undefined ? [] : compileReporter(shape.inner, value, path)
+			return value === undefined ? [] : compileReporter(owned.inner, value, path)
 		case 'nullable':
-			return value === null ? [] : compileReporter(shape.inner, value, path)
+			return value === null ? [] : compileReporter(owned.inner, value, path)
 		case 'raw':
 			return value === undefined
 				? [{ reason: 'type', path, expected: 'json', received: preview(value) }]
@@ -1200,13 +1214,14 @@ export function compileReporter(
 // === Contract
 
 /**
- * Compile a {@link ContractShape} into a {@link ContractInterface} — the four
+ * Compile a {@link ContractShape} into a {@link ContractInterface} — the five
  * lockstep outputs from one declaration.
  *
  * @remarks
  * Runs {@link validateShape} first — a malformed shape throws immediately
- * rather than compiling into a silently-wrong contract (AGENTS §12). It takes
- * one owned snapshot and hands that same graph to every artifact compiler.
+ * rather than compiling into a silently-wrong contract (AGENTS §12). It always
+ * takes its own {@link cloneShape} snapshot — never merely a frozen node's word
+ * — and hands that same graph to every artifact compiler.
  * Then it precompiles the deeply frozen owned schema, guard, and parser once;
  * `generate` walks the
  * snapshot per call with the supplied random source, and `explain` compiles the

@@ -30,6 +30,7 @@ import {
 } from '@src/core'
 import {
 	buildDeepShape,
+	buildWideVocabulary,
 	captureContractError,
 	createNonEnumerableRecord,
 	SOUNDNESS_SAMPLE,
@@ -477,6 +478,21 @@ describe('compileGuard', () => {
 		expect(guard(+0)).toBe(true)
 		expect(parsed).toBe(0)
 		expect(parsed !== undefined && guard(parsed)).toBe(true)
+	})
+
+	it('compiles a machine-scale literal vocabulary that no spread could carry', () => {
+		// An untrusted schema's `enum` converts to a literalShape of whatever size
+		// it declares, so every compiled literal artifact must match membership
+		// without spreading the vocabulary into arguments.
+		const vocabulary = buildWideVocabulary()
+		const shape = literalShape(vocabulary)
+		const contract = createContract(shape)
+
+		expect(contract.is('value0')).toBe(true)
+		expect(contract.is('absent')).toBe(false)
+		expect(contract.parse(' value1 ')).toBe('value1')
+		expect(contract.explain('absent')).toHaveLength(1)
+		expect(contract.schema.enum).toHaveLength(vocabulary.length)
 	})
 
 	it('rejects top-level undefined for a raw shape in guard/parser agreement', () => {
@@ -930,6 +946,30 @@ describe('createContract', () => {
 		// @ts-expect-error — generate returns a number-valued record, not a string-valued one
 		const bad: Readonly<Record<string, string>> = c.generate()
 		expect(bad).toBeDefined()
+	})
+})
+
+describe('compiler shape ownership', () => {
+	it('owns an unfrozen caller graph at every compiler entry point', () => {
+		const values: (string | number | boolean)[] = ['stable']
+		const items: ContractShape = { type: 'literal', values }
+		const shape: ContractShape = { type: 'array', items }
+
+		const schema = compileSchema(shape)
+		const guard = compileGuard(shape)
+		const parse = compileParser(shape)
+		const generated = compileGenerator(shape, seededRandom(7))
+		const faults = compileReporter(shape, ['drift'])
+
+		values[0] = 'drift'
+
+		expect(schema).toEqual({ type: 'array', items: { enum: ['stable'] } })
+		expect(guard(['stable'])).toBe(true)
+		expect(guard(['drift'])).toBe(false)
+		expect(parse(['stable'])).toEqual(['stable'])
+		expect(parse(['drift'])).toBeUndefined()
+		expect(guard(generated)).toBe(true)
+		expect(faults).toHaveLength(1)
 	})
 })
 

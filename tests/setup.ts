@@ -165,6 +165,62 @@ export function createThrowingGetter(): Readonly<Record<string, unknown>> {
 }
 
 /**
+ * Create a record whose own getter returns a different value on every read.
+ *
+ * @remarks
+ * The unstable-read fixture: inference samples a value once and the compiled
+ * guard reads it again, so a property that answers `1` to the first read and
+ * `'drifted'` to every read after belongs to no single schema. The change is
+ * one-way (never alternating) so the outcome does not depend on how many walks
+ * ran before.
+ *
+ * @returns A record whose `value` getter drifts after its first read
+ *
+ * @example
+ * ```ts
+ * const record = createStatefulGetter()
+ * record.value // 1
+ * record.value // 'drifted'
+ * ```
+ */
+export function createStatefulGetter(): Readonly<Record<string, unknown>> {
+	const record: Record<string, unknown> = {}
+	let read = false
+	return Object.defineProperty(record, 'value', {
+		get: () => {
+			const first = !read
+			read = true
+			return first ? 1 : 'drifted'
+		},
+		enumerable: true,
+	})
+}
+
+/**
+ * Create an array whose own `slice` reports elements it does not hold.
+ *
+ * @remarks
+ * The array-side unstable read: inference samples through `slice`, while the
+ * compiled guard walks the real indices, so an overridden reader makes the two
+ * views disagree by construction.
+ *
+ * @returns An array of numbers whose `slice` yields strings
+ *
+ * @example
+ * ```ts
+ * const array = createUnstableArray()
+ * array[0]          // 1
+ * array.slice(0, 2) // ['lie', 'lie']
+ * ```
+ */
+export function createUnstableArray(): readonly unknown[] {
+	const array: unknown[] = [1, 2, 3]
+	return Object.defineProperty(array, 'slice', {
+		value: () => ['lie', 'lie'],
+	})
+}
+
+/**
  * Create an object whose own-key reflection traps always throw.
  *
  * @returns A Proxy hostile to own-key and descriptor inspection
@@ -202,6 +258,32 @@ export function buildDeepNest(depth: number): unknown {
 		value = layer % 2 === 0 ? [value] : { value }
 	}
 	return value
+}
+
+/**
+ * Build a machine-scale literal vocabulary — larger than the engine's
+ * spread-argument limit.
+ *
+ * @remarks
+ * The realistic source of such a list is inference, not authorship: an
+ * untrusted schema's `enum` keyword converts to a `literalShape` of whatever
+ * size it carries. The default count is above the point where
+ * `guard(...vocabulary)` throws a `RangeError` on V8, so any literal machinery
+ * that spreads its vocabulary into arguments fails this corpus while the
+ * array-taking form passes.
+ *
+ * @param count - The number of distinct string literals to build
+ * @returns The vocabulary, in generation order
+ *
+ * @example
+ * ```ts
+ * buildWideVocabulary(3) // ['value0', 'value1', 'value2']
+ * ```
+ */
+export function buildWideVocabulary(count = 200_000): readonly string[] {
+	const values: string[] = []
+	for (let index = 0; index < count; index += 1) values.push(`value${index}`)
+	return values
 }
 
 /**

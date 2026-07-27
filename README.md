@@ -29,7 +29,7 @@ const user = createContract(
 
 user.is({ name: 'Ada', age: 36 }) // true
 user.parse({ name: 'Ada', age: '36' }) // { name: 'Ada', age: 36 } — coerces, or undefined
-user.schema // the compiled JSON Schema
+user.schema // the owned, deeply frozen compiled JSON Schema
 ```
 
 ## Guide

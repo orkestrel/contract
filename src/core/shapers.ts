@@ -445,11 +445,18 @@ export function jsonShape(options?: JSONShapeOptions): JSONShape {
  * Build a {@link RawShape} from a JSON Schema fragment.
  *
  * @remarks
- * For values the shape DSL can't express. The compiled guard accepts any value;
- * the parser passes it through; the schema is emitted verbatim.
+ * For values the shape DSL can't express. The compiled guard accepts every
+ * DEFINED value — `undefined` alone fails, because it is the parser's failure
+ * sentinel; wrap the shape in {@link optionalShape} to admit absence. The
+ * parser passes a defined value through unchanged, and the fragment is
+ * deep-cloned into an owned frozen snapshot ({@link cloneSchema}), so
+ * `rawShape(fragment).schema !== fragment` and later edits to the caller's
+ * fragment cannot reach the shape. `compileSchema` re-emits that snapshot
+ * structurally verbatim; `compileGenerator` throws, since an arbitrary embedded
+ * schema has no auto-generatable sample.
  *
  * @param schema - The JSON Schema fragment to embed
- * @returns A raw shape
+ * @returns A raw shape owning a frozen copy of the fragment
  *
  * @example
  * ```ts

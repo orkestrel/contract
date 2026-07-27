@@ -289,3 +289,35 @@ export function cloneShape(shape: ContractShape): ContractShape {
 
 	return root
 }
+
+/**
+ * Take ownership of a contract shape node — the node itself when it is already
+ * frozen, otherwise a {@link cloneShape} snapshot of its graph.
+ *
+ * @remarks
+ * Frozen means owned: the shape builders and `cloneShape` both produce frozen
+ * nodes with frozen `properties` / `variants` / `values` collections, so a
+ * frozen node cannot drift under a caller who still holds a reference, and
+ * copying it again would only cost work. An unfrozen node is caller-owned and
+ * therefore snapshotted before anything reads it.
+ *
+ * Every compiler entry point (`compileSchema` / `compileGuard` /
+ * `compileParser` / `compileGenerator` / `compileReporter`) opens with this
+ * call, and the check applies per node as the recursion descends: a frozen
+ * parent is trusted for its own fields while each child is owned again at its
+ * own level, so a hand-assembled graph that froze only part of itself is still
+ * compiled from owned data.
+ *
+ * @param shape - The contract shape to own
+ * @returns The shape itself when frozen, otherwise a deeply cloned frozen snapshot
+ *
+ * @example
+ * ```ts
+ * const authored = stringShape() // builders freeze
+ * ownShape(authored) === authored // true
+ * ownShape({ type: 'string' }) // a frozen snapshot — the literal is caller-owned
+ * ```
+ */
+export function ownShape(shape: ContractShape): ContractShape {
+	return Object.isFrozen(shape) ? shape : cloneShape(shape)
+}

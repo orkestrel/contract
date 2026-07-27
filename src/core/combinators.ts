@@ -102,9 +102,15 @@ export function tupleOf(
  * comparison.
  *
  * @remarks
- * Signed zero compares equal, while `NaN` compares equal to `NaN`.
+ * Signed zero compares equal, while `NaN` compares equal to `NaN`. Two call
+ * forms, one meaning: list the literals inline, or hand in one array of them.
+ * The array form exists for a vocabulary that is machine-generated rather than
+ * hand-written — a `literalShape` built from an untrusted schema's `enum`, say
+ * — where spreading a list of tens of thousands of entries would exhaust the
+ * engine's argument limit. `compileGuard` / `compileParser` / `compileReporter`
+ * take the array form for exactly that reason.
  *
- * @param literals - The permitted literal primitives
+ * @param literals - The permitted literal primitives, listed inline or as one array
  * @returns A guard narrowing to the provided literal union
  *
  * @example
@@ -112,13 +118,23 @@ export function tupleOf(
  * const isRole = literalOf('admin', 'member', 'guest')
  * isRole('admin') // true
  * isRole('owner') // false
+ *
+ * const isSameRole = literalOf(['admin', 'member', 'guest']) // the same guard, from an array
  * ```
  */
 export function literalOf<const Literals extends ReadonlyArray<string | number | boolean>>(
+	literals: Literals,
+): Guard<Literals[number]>
+export function literalOf<const Literals extends ReadonlyArray<string | number | boolean>>(
 	...literals: Literals
-): Guard<Literals[number]> {
-	const allowed = new Set<unknown>(literals)
-	return (value: unknown): value is Literals[number] => allowed.has(value)
+): Guard<Literals[number]>
+export function literalOf(
+	...literals: ReadonlyArray<string | number | boolean | ReadonlyArray<string | number | boolean>>
+): Guard<string | number | boolean> {
+	const [first] = literals
+	const values: readonly unknown[] = literals.length === 1 && isArray(first) ? first : literals
+	const allowed = new Set<unknown>(values)
+	return (value: unknown): value is string | number | boolean => allowed.has(value)
 }
 
 /**

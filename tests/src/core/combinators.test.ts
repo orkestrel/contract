@@ -38,6 +38,7 @@ import {
 	buildCyclicRecord,
 	buildDeepNest,
 	buildSparseArray,
+	buildWideVocabulary,
 	createHostileKeys,
 	createRevokedArrayProxy,
 	createRevokedProxy,
@@ -123,6 +124,39 @@ describe('literal and enum combinators', () => {
 		expect(literalOf(0)(-0)).toBe(true)
 		expect(literalOf(-0)(0)).toBe(true)
 		expect(literalOf(-0)(-0)).toBe(true)
+	})
+
+	it('literalOf accepts one array of literals as the same guard the listed form builds', () => {
+		const vocabulary = ['a', 'b', 1, true] as const
+		const listed = literalOf(...vocabulary)
+		const collected = literalOf(vocabulary)
+
+		for (const value of [...vocabulary, 'c', 0, false, null, undefined, ['a']]) {
+			expect(collected(value)).toBe(listed(value))
+		}
+		expect(collected('a')).toBe(true)
+		expect(collected('c')).toBe(false)
+	})
+
+	it('literalOf keeps SameValueZero semantics in the array form', () => {
+		expect(literalOf([Number.NaN])(Number.NaN)).toBe(true)
+		expect(literalOf([0])(-0)).toBe(true)
+		expect(literalOf([-0])(0)).toBe(true)
+	})
+
+	it('literalOf narrows the array form to the same literal union as the listed form (type-level)', () => {
+		const listed = literalOf('admin', 'member')
+		const collected = literalOf(['admin', 'member'])
+		expectTypeOf(collected).toEqualTypeOf<typeof listed>()
+	})
+
+	it('literalOf takes a vocabulary too large to spread into arguments', () => {
+		const vocabulary = buildWideVocabulary()
+		const guard = literalOf(vocabulary)
+
+		expect(guard('value0')).toBe(true)
+		expect(guard(vocabulary[vocabulary.length - 1])).toBe(true)
+		expect(guard('absent')).toBe(false)
 	})
 })
 

@@ -715,14 +715,14 @@ export type Fault =
 export type RandomFunction = () => number
 
 /**
- * A compiled contract — the four lockstep outputs derived from one shape.
+ * A compiled contract — the five lockstep outputs derived from one shape.
  *
  * @remarks
  * Built by `createContract`: `is` narrows, `parse` coerces (returning the typed
  * value or `undefined`), `schema` is an owned deeply frozen emitted JSON
- * Schema, and `generate` produces deterministic seed data from a
- * {@link RandomFunction} (defaulting to a wall-clock-seeded source when none
- * is supplied).
+ * Schema, `explain` reports the structured faults behind a failed `parse`, and
+ * `generate` produces deterministic seed data from a {@link RandomFunction}
+ * (defaulting to a wall-clock-seeded source when none is supplied).
  */
 export interface ContractInterface<T> {
 	readonly schema: JSONSchema

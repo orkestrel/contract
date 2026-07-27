@@ -44,7 +44,9 @@ import {
 	createClassInstance,
 	createHostileKeys,
 	createNonEnumerableRecord,
+	createStatefulGetter,
 	createThrowingGetter,
+	createUnstableArray,
 	SOUNDNESS_SAMPLE,
 } from '../../setup.js'
 
@@ -565,6 +567,17 @@ describe('schemaToShape — round-trip law: compileGuard(schemaToShape(valueToSc
 
 	it('round-trips a nest deeper than INFER_DEPTH_LIMIT (both walks bottom out at the same budget)', () => {
 		expect(roundTrips(buildDeepNest(INFER_DEPTH_LIMIT + 8))).toEqual([true, true])
+	})
+
+	it('does NOT round-trip a value whose own reads differ between the two walks', () => {
+		// The third documented limit: inference samples the value once and the
+		// compiled guard reads it again, so a property whose getter drifts — or an
+		// element reader that reports what the indices do not hold — describes no
+		// single schema. This is a property of the VALUE, not a widening the
+		// conversion could repair.
+		const drifting = createStatefulGetter()
+		expect(compileGuard(schemaToShape(valueToSchema(drifting)))(drifting)).toBe(false)
+		expect(roundTrips(createUnstableArray())).toEqual([false, false])
 	})
 
 	// The whole-corpus invariant: the guard inferred from ANY sample accepts that

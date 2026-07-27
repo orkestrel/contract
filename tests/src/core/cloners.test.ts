@@ -5,6 +5,7 @@ import {
 	cloneShape,
 	ContractError,
 	objectShape,
+	ownShape,
 	stringShape,
 	unionShape,
 } from '@src/core'
@@ -150,5 +151,50 @@ describe('cloneShape', () => {
 		const shape: ContractShape = raw
 
 		expect(() => cloneShape(shape)).toThrowError(ContractError)
+	})
+})
+
+describe('ownShape', () => {
+	it('returns a builder-produced shape unchanged — frozen means owned', () => {
+		const shape = objectShape({ name: stringShape({ min: 1 }) })
+
+		expect(ownShape(shape)).toBe(shape)
+	})
+
+	it('snapshots an unfrozen caller-owned shape so later edits cannot reach it', () => {
+		const values: (string | number | boolean)[] = ['stable']
+		const shape: ContractShape = { type: 'literal', values }
+		const owned = ownShape(shape)
+
+		values[0] = 'drift'
+		expect(owned).not.toBe(shape)
+		expect(Object.isFrozen(owned)).toBe(true)
+		expect(owned.type).toBe('literal')
+		if (owned.type !== 'literal') return
+		expect(owned.values).toEqual(['stable'])
+	})
+
+	it('owns an unfrozen graph deeply, including a shared child', () => {
+		const child: ContractShape = { type: 'string' }
+		const shape: ContractShape = { type: 'object', properties: { first: child, second: child } }
+		const owned = ownShape(shape)
+
+		expect(owned.type).toBe('object')
+		if (owned.type !== 'object') return
+		expect(owned.properties.first).not.toBe(child)
+		expect(owned.properties.first).toBe(owned.properties.second)
+		expect(Object.isFrozen(owned.properties)).toBe(true)
+	})
+
+	it('leaves an unfrozen child of a frozen node to be owned at its own level', () => {
+		const child: ContractShape = { type: 'string' }
+		const shape = Object.freeze({ type: 'array', items: child }) satisfies ContractShape
+		const owned = ownShape(shape)
+
+		expect(owned).toBe(shape)
+		expect(owned.type).toBe('array')
+		if (owned.type !== 'array') return
+		expect(ownShape(owned.items)).not.toBe(child)
+		expect(Object.isFrozen(ownShape(owned.items))).toBe(true)
 	})
 })
