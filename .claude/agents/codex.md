@@ -50,9 +50,12 @@ protocol below when the MCP tools are unavailable.
 - The `--json` journal at `tmp/codex/<unit>.jsonl` is the live progress record —
   the user tails it; never re-print the stream into your report.
 - Read Sol's answer from the `--output-last-message` file, not from stdout.
-- Record the session id from the journal's opening events and include it in every
-  report. Follow-ups continue the same session with its context intact:
+- Record the session id (`thread_id` in the journal's opening events) and include
+  it in every report. Follow-ups continue the same session with its context intact:
   `codex exec resume <session-id> --json --output-last-message tmp/codex/<unit>-followup-last.md "<follow-up>" > tmp/codex/<unit>-followup.jsonl`
+- `resume` REJECTS configuration flags — no `--sandbox`, `--model`, or `-c`; the
+  session's original sandbox, model, and effort are inherited and cannot change.
+  Only the output flags above and the prompt are valid on a resume.
 - When the Orchestrator supplies a JSON Schema for the return shape, pass it with
   `--output-schema <file>` so the final message is machine-checkable.
 
