@@ -133,6 +133,7 @@ From [`types.ts`](../../src/core/types.ts).
 | `BuildFormat`          | type      |
 | `SrcDefinition`        | interface |
 | `AppDefinition`        | interface |
+| `ViteMachinery`        | interface |
 | `Origin`               | type      |
 | `Group`                | type      |
 | `Category`             | type      |
@@ -182,6 +183,12 @@ is `'INVALID' | 'BLOCKED' | 'DESTROYED' | 'TARGET' | 'WRITE' | 'FETCH'`.
 `SrcDefinition` and `AppDefinition` are the per-environment matrix rows: the configuration files an
 environment contributes, its test-project label, and — on the `src` axis — its `exports` subpath
 and build formats, or — on the `app` axis — its optional runtime entry.
+
+`ViteMachinery` names the three host-specific pipelines a workspace's generated `vite.config.ts` may
+carry: `browser` for the CSS pipeline and the Playwright-backed browser test project, `vue` for the
+single-file-component, HTML, and development-server machinery an application browser environment
+needs, and `output` for build-output containment. It never selects a boundary guarantee — those ship
+in every shape, as the compilers section sets out.
 
 `Blueprint` is the closed input spec:
 
@@ -946,6 +953,7 @@ From [`compilers.ts`](../../src/core/compilers.ts).
 | `devDependenciesFor`    | function |
 | `packageManifest`       | function |
 | `rootTsconfig`          | function |
+| `viteMachinery`         | function |
 | `viteHeader`            | function |
 | `policyViteProject`     | function |
 | `singleSrcViteConfig`   | function |
@@ -987,10 +995,33 @@ optional metadata, and engines.
 `rootTsconfig` emits the root compiler options and one path alias per declared environment;
 `coreTsconfig`, `srcTsconfig`, and `appTsconfig` emit the scoped configurations that remove the
 wrong host's globals from each environment. `viteHeader` renders the shared header — the alias block
-derived from the tsconfig paths, plus the environment-boundary plugin. `coreViteConfig`,
-`srcViteConfig`, and `appViteConfig` emit the thin per-target wrappers; `rootViteConfig`,
-`singleSrcViteConfig`, and `applicationViteConfig` emit the root configuration for a
-library-only, single non-core `src` environment, and application-bearing workspace respectively;
+derived from the tsconfig paths, plus the environment-boundary plugin — and `viteMachinery` is the
+one place the header's axes are derived, read by `rootViteConfig`, `singleSrcViteConfig`,
+`applicationViteConfig`, and `configArtifacts` alike so no caller can invent a fourth answer.
+
+**The boundary guarantees do not vary by blueprint.** Every generated `vite.config.ts` — a
+`core`-only library, an application of `app/core` alone, or the full six-environment workspace —
+emits `environmentBoundary`, its `resolveId` / `load` / `buildEnd` walks, the module-graph AST audit
+(`environmentAssetSources`, `parseSync`, `Visitor`), and stylesheet rejection (`isStylesheetPath`
+plus its `environmentPathError` / `environmentSourceError` clauses). Those enforce owner-independent
+laws: core stays host-independent whatever else the workspace declares, a server module never
+imports a stylesheet, and a `@vite-ignore` dynamic import — which `resolveId` never sees and the
+module graph never records — has no other enforcement point. Only host-specific pipelines vary,
+along the three `ViteMachinery` axes:
+
+| Machinery                                                         | Emitted when                         |
+| ----------------------------------------------------------------- | ------------------------------------ |
+| CSS pipeline (`ENVIRONMENT_CSS`, `preprocessCSS`, `isCSSRequest`) | a `src` or `app` browser environment |
+| Playwright provider and `hasChromium`                             | a `src` or `app` browser environment |
+| Vue plugin, HTML boundary, browser development server             | an `app` browser environment         |
+| Output containment (`outputBoundary`, `enforceOutputPath`)        | anything the workspace builds        |
+
+An application of `app/core` alone is the sole shape that builds nothing, so it is the sole shape
+without output containment — and it still carries every boundary guarantee above.
+
+`coreViteConfig`, `srcViteConfig`, and `appViteConfig` emit the thin per-target wrappers;
+`rootViteConfig`, `singleSrcViteConfig`, and `applicationViteConfig` emit the root configuration for
+a library-only, single non-core `src` environment, and application-bearing workspace respectively;
 `policyViteProject` emits the dedicated Node-only repository-policy test project.
 
 `configArtifacts`, `sourceArtifacts`, `applicationArtifacts`, `testArtifacts`, and `guideArtifacts`
@@ -1924,6 +1955,7 @@ import {
 	srcTsconfig,
 	srcViteConfig,
 	viteHeader,
+	viteMachinery,
 } from '@orkestrel/scaffold'
 
 rootTsconfig(['core'], ['core', 'server'])
@@ -1931,7 +1963,9 @@ coreTsconfig()
 srcTsconfig('server')
 appTsconfig('browser', true)
 
-viteHeader(true, true) // the shared header, with browser and Vue support
+viteMachinery(['core']) // { browser: false, vue: false, output: true }
+viteMachinery([], ['core', 'browser']) // { browser: true, vue: true, output: true }
+viteHeader(viteMachinery([], ['core', 'browser'])) // the shared header, with browser and Vue support
 coreViteConfig()
 srcViteConfig('browser')
 appViteConfig('server')

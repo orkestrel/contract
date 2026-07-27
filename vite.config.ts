@@ -1,12 +1,5 @@
-import type {
-	CSSOptions,
-	HtmlAssetSource,
-	HTMLOptions,
-	Plugin,
-	ResolvedConfig,
-	UserConfig,
-} from 'vite'
-import { isCSSRequest, parseAst, preprocessCSS, transformWithOxc, Visitor } from 'vite'
+import type { Plugin, UserConfig } from 'vite'
+import { parseSync, transformWithOxc, Visitor } from 'vite'
 import { defineConfig, mergeConfig } from 'vitest/config'
 import tsconfig from './tsconfig.json' with { type: 'json' }
 import { fileURLToPath, URL } from 'node:url'
@@ -43,42 +36,10 @@ const resolve = {
 	}, {}),
 }
 
-export const ENVIRONMENT_CSS = Object.freeze({
-	transformer: 'lightningcss',
-	lightningcss: {
-		visitor: () => {
-			let sources: readonly string[] = []
-			let source: string | undefined
-			return {
-				StyleSheet(stylesheet) {
-					sources = stylesheet.sources
-				},
-				Rule(rule) {
-					source =
-						'value' in rule && rule.value !== null && 'loc' in rule.value
-							? sources[rule.value.loc.source_index]
-							: undefined
-					if (rule.type !== 'import') return
-					const error = stylesheetAssetError(source, rule.value.url)
-					if (error !== undefined) {
-						throw new Error(`[orkestrel-environment-boundary] ${error}`)
-					}
-				},
-				Url(asset) {
-					const error = stylesheetAssetError(source, asset.url)
-					if (error !== undefined) {
-						throw new Error(`[orkestrel-environment-boundary] ${error}`)
-					}
-				},
-			}
-		},
-	},
-} satisfies CSSOptions)
 export const PACKAGE_MANIFEST_BYTES = 1_048_576
 export const ENVIRONMENT_MODULE_BYTES = 8_388_608
 
 const WORKSPACE_ROOT = realpathSync.native(dirname(fileURLToPath(import.meta.url)))
-export const IMPORT_META_ENV_PREFIX = 'import.meta.env.'
 
 export function physicalPath(path: string): string {
 	const [pathWithoutQuery] = path.split('?')
@@ -334,53 +295,6 @@ export function environmentSourceError(owner: string, source: string): string | 
 	return undefined
 }
 
-export function stylesheetAssetError(
-	source: string | undefined,
-	value: string,
-): string | undefined {
-	if (source === undefined) return 'Stylesheet asset source could not be resolved'
-	const decoded = decodeAssetSource(value)
-	if (decoded === undefined) return 'Stylesheet asset URLs must use valid URI encoding'
-	if (decoded.includes('\\')) return 'Stylesheet asset URLs must use forward slashes'
-	const [assetPath] = decoded.split(/[?#]/)
-	if (
-		assetPath === undefined ||
-		assetPath.length === 0 ||
-		decoded.startsWith('#') ||
-		decoded.startsWith('//') ||
-		(assetPath.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(assetPath))
-	) {
-		return undefined
-	}
-	const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(assetPath)
-	const fileScheme = /^file:/i.test(assetPath)
-	if (scheme && !fileScheme && !/^[A-Za-z]:[\\/]/.test(assetPath)) {
-		return undefined
-	}
-	let physicalAsset: string
-	try {
-		physicalAsset = physicalPath(
-			fileScheme ? fileURLToPath(assetPath) : resolvePath(dirname(physicalPath(source)), assetPath),
-		)
-	} catch {
-		return 'Stylesheet asset URLs must use valid local paths'
-	}
-	const sourceTarget = workspacePath(source)
-	const assetTarget = workspacePath(physicalAsset)
-	if (sourceTarget !== undefined) {
-		if (assetTarget === undefined) {
-			return 'Environment modules cannot import files outside the workspace'
-		}
-		const [layer, environment] = sourceTarget.split('/')
-		return environmentPathError(`${layer}/${environment}`, assetTarget)
-	}
-	const packageRoot = packageRootForResolved(source)
-	if (packageRoot === undefined || !containedPath(packageRoot, physicalAsset)) {
-		return 'Dependency modules cannot import files outside their physical package root'
-	}
-	return undefined
-}
-
 export function enforceOutputPath(configured: string, expected: string): void {
 	if (relative(expected, configured) !== '') {
 		throw new Error(
@@ -453,207 +367,6 @@ export function decodeAssetSource(source: string): string | undefined {
 		return decodeURI(source)
 	} catch {
 		return undefined
-	}
-}
-
-export function filterHtmlAssetSource(
-	data: Parameters<NonNullable<HtmlAssetSource['filter']>>[0],
-): boolean {
-	const decoded = decodeAssetSource(data.value)
-	if (decoded === undefined) {
-		throw new Error('[orkestrel-environment-boundary] HTML asset URLs must use valid URI encoding')
-	}
-	if (decoded.includes('\\')) {
-		throw new Error('[orkestrel-environment-boundary] HTML asset URLs must use forward slashes')
-	}
-	if (/[?&]inline\b/.test(decoded)) {
-		throw new Error(
-			'[orkestrel-environment-boundary] HTML asset URLs cannot force inlining outside the auditable output graph',
-		)
-	}
-	return false
-}
-
-export function filterHtmlScriptSource(
-	data: Parameters<NonNullable<HtmlAssetSource['filter']>>[0],
-): boolean {
-	filterHtmlAssetSource(data)
-	if (data.attributes.type !== 'module') {
-		throw new Error(
-			'[orkestrel-environment-boundary] Classic external scripts are not permitted; use a module script',
-		)
-	}
-	const decoded = decodeAssetSource(data.value)
-	const source = decoded?.trim()
-	if (source !== undefined && hasAsciiUrlControl(source)) {
-		throw new Error(
-			'[orkestrel-environment-boundary] Environment module URLs cannot contain ASCII controls',
-		)
-	}
-	if (
-		source === undefined ||
-		source.length === 0 ||
-		source !== decoded ||
-		/&#(?:[0-9]+|[xX][0-9A-Fa-f]+);?/u.test(source) ||
-		/&[A-Za-z][A-Za-z0-9]+;/u.test(source) ||
-		source.includes('\t') ||
-		source.includes('\n') ||
-		source.includes('\r') ||
-		source.startsWith('#') ||
-		source.startsWith('//') ||
-		/^[A-Za-z][A-Za-z0-9+.-]*:/u.test(source)
-	) {
-		throw new Error(
-			'[orkestrel-environment-boundary] Module script URLs must remain in the local Vite graph',
-		)
-	}
-	return false
-}
-
-export function filterHtmlMetaSource(
-	data: Parameters<NonNullable<HtmlAssetSource['filter']>>[0],
-): boolean {
-	const name = data.attributes.name?.trim().toLowerCase()
-	const property = data.attributes.property?.trim().toLowerCase()
-	const asset =
-		name === 'msapplication-tileimage' ||
-		name === 'msapplication-square70x70logo' ||
-		name === 'msapplication-square150x150logo' ||
-		name === 'msapplication-wide310x150logo' ||
-		name === 'msapplication-square310x310logo' ||
-		name === 'msapplication-config' ||
-		name === 'twitter:image' ||
-		property === 'og:image' ||
-		property === 'og:image:url' ||
-		property === 'og:image:secure_url' ||
-		property === 'og:audio' ||
-		property === 'og:audio:secure_url' ||
-		property === 'og:video' ||
-		property === 'og:video:secure_url'
-	return asset ? filterHtmlAssetSource(data) : false
-}
-
-export function environmentHtml(): HTMLOptions {
-	return {
-		additionalAssetSources: {
-			audio: { srcAttributes: ['src'], filter: filterHtmlAssetSource },
-			embed: { srcAttributes: ['src'], filter: filterHtmlAssetSource },
-			image: { srcAttributes: ['href', 'xlink:href'], filter: filterHtmlAssetSource },
-			img: {
-				srcAttributes: ['src'],
-				srcsetAttributes: ['srcset'],
-				filter: filterHtmlAssetSource,
-			},
-			input: { srcAttributes: ['src'], filter: filterHtmlAssetSource },
-			link: {
-				srcAttributes: ['href'],
-				srcsetAttributes: ['imagesrcset'],
-				filter: filterHtmlAssetSource,
-			},
-			meta: { srcAttributes: ['content'], filter: filterHtmlMetaSource },
-			object: { srcAttributes: ['data'], filter: filterHtmlAssetSource },
-			script: {
-				srcAttributes: ['href', 'src', 'xlink:href'],
-				filter: filterHtmlScriptSource,
-			},
-			source: {
-				srcAttributes: ['src'],
-				srcsetAttributes: ['srcset'],
-				filter: filterHtmlAssetSource,
-			},
-			track: { srcAttributes: ['src'], filter: filterHtmlAssetSource },
-			use: { srcAttributes: ['href', 'xlink:href'], filter: filterHtmlAssetSource },
-			video: { srcAttributes: ['src', 'poster'], filter: filterHtmlAssetSource },
-		},
-	}
-}
-
-export const HTML_SECURITY_POLICY =
-	"base-uri 'none'; object-src 'none'; script-src 'self'; script-src-attr 'none'"
-export const HTML_SECURITY_META =
-	'<meta\n\t\t\thttp-equiv="Content-Security-Policy"\n\t\t\tcontent="' +
-	HTML_SECURITY_POLICY +
-	'"\n\t\t/>'
-export const HTML_SECURITY_PREFIX =
-	'<!doctype html>\n<html lang="en">\n\t<head>\n\t\t' + HTML_SECURITY_META + '\n'
-
-export function maskIgnoredHtml(environmentKeys: ReadonlySet<string>, html: string): string {
-	if (!html.replaceAll('\r\n', '\n').startsWith(HTML_SECURITY_PREFIX)) {
-		throw new Error(
-			'[orkestrel-environment-boundary] Browser HTML must preserve the generated security prologue',
-		)
-	}
-	for (const match of html.matchAll(/%(\S+?)%/gu)) {
-		const key = match[1]
-		if (key !== undefined && environmentKeys.has(key)) {
-			throw new Error(
-				'[orkestrel-environment-boundary] HTML environment substitution is not permitted; import environment values from a module',
-			)
-		}
-	}
-	const escaped = html.replace(
-		/(?<prefix>[vV][iI][tT][eE])&#(?<zeros>0*)45;(?<suffix>[iI][gG][nN][oO][rR][eE])/gu,
-		'$<prefix>&#0$<zeros>45;$<suffix>',
-	)
-	return escaped.replace(
-		/(?<prefix>[vV][iI][tT][eE])-(?<suffix>[iI][gG][nN][oO][rR][eE])/gu,
-		'$<prefix>&#45;$<suffix>',
-	)
-}
-
-export function restoreIgnoredHtml(code: string): string {
-	const literals = code.replace(
-		/(?<prefix>[vV][iI][tT][eE])&#45;(?<suffix>[iI][gG][nN][oO][rR][eE])/gu,
-		'$<prefix>-$<suffix>',
-	)
-	return literals.replace(
-		/(?<prefix>[vV][iI][tT][eE])&#0(?<zeros>0*)45;(?<suffix>[iI][gG][nN][oO][rR][eE])/gu,
-		'$<prefix>&#$<zeros>45;$<suffix>',
-	)
-}
-
-export function prepareHtml(): Plugin {
-	const environmentKeys = new Set<string>()
-	return {
-		name: 'orkestrel-html-boundary-prepare',
-		enforce: 'post',
-		configResolved(config) {
-			for (const key of Object.keys(config.env)) environmentKeys.add(key)
-			for (const key of Object.keys(config.define ?? {})) {
-				if (key.startsWith(IMPORT_META_ENV_PREFIX)) {
-					environmentKeys.add(key.slice(IMPORT_META_ENV_PREFIX.length))
-				}
-			}
-		},
-		transformIndexHtml: {
-			order: 'pre',
-			handler: maskIgnoredHtml.bind(undefined, environmentKeys),
-		},
-	}
-}
-
-export function restoreHtml(): Plugin {
-	return {
-		name: 'orkestrel-html-boundary-restore',
-		enforce: 'pre',
-		transformIndexHtml: restoreIgnoredHtml,
-	}
-}
-
-export function finalizeHtml(): Plugin {
-	return {
-		name: 'orkestrel-html-boundary-finalize',
-		enforce: 'post',
-		transformIndexHtml: {
-			order: 'post',
-			handler(html) {
-				if (!html.includes(HTML_SECURITY_META)) {
-					throw new Error(
-						'[orkestrel-environment-boundary] Browser HTML must retain its security policy',
-					)
-				}
-			},
-		},
 	}
 }
 
@@ -742,7 +455,7 @@ export async function environmentAssetSources(
 			}
 		},
 	})
-	visitor.visit(parseAst(transformed.code, null, path))
+	visitor.visit(parseSync(path, transformed.code).program)
 	return sources
 }
 
@@ -751,13 +464,11 @@ export function environmentBoundary(
 ): Plugin {
 	const trustedPackageRoots = new Set<string>()
 	let environmentRoot = WORKSPACE_ROOT
-	let resolvedConfig: ResolvedConfig | undefined
 	return {
 		name: 'orkestrel-environment-boundary',
 		enforce: 'pre',
 		configResolved(config) {
 			environmentRoot = physicalPath(config.root)
-			resolvedConfig = config
 		},
 		async resolveId(source, importer) {
 			if (importer === undefined) return null
@@ -927,7 +638,6 @@ export function environmentBoundary(
 		transform: {
 			order: 'pre',
 			async handler(code, id) {
-				const restored = /[?&]html-proxy(?:[=&]|$)/.test(id) ? restoreIgnoredHtml(code) : code
 				const target = workspacePath(id)
 				const physicalImporter = physicalPath(id)
 				const importerPackageRoot = trustedPackageRootFor(physicalImporter, trustedPackageRoots)
@@ -941,29 +651,8 @@ export function environmentBoundary(
 				}
 				const environmentModule =
 					target !== undefined && /^(?:app|src)\/(?:core|browser|server)\//.test(target)
-				if (!environmentModule && importerPackageRoot === undefined) {
-					return restored === code ? null : restored
-				}
-				if (isCSSRequest(id)) {
-					const config = resolvedConfig
-					if (config === undefined) {
-						this.error('Environment boundary requires resolved Vite configuration')
-					}
-					const stylesheet = await preprocessCSS(restored, id, config)
-					for (const dependency of stylesheet.deps ?? []) {
-						const physicalDependency = physicalPath(dependency)
-						const dependencyTarget = workspacePath(physicalDependency)
-						if (dependencyTarget === undefined) {
-							if (trustedPackageRootFor(physicalDependency, trustedPackageRoots) === undefined) {
-								this.error('Environment modules cannot import files outside the workspace')
-							}
-							continue
-						}
-						const dependencyError = environmentPathError(owner, dependencyTarget)
-						if (dependencyError !== undefined) this.error(dependencyError)
-					}
-				}
-				for (const source of await environmentAssetSources(restored, id)) {
+				if (!environmentModule && importerPackageRoot === undefined) return null
+				for (const source of await environmentAssetSources(code, id)) {
 					const normalizedSource = source.replaceAll('\\', '/')
 					const sourceError = environmentSourceError(owner, normalizedSource)
 					if (sourceError !== undefined) this.error(sourceError)
@@ -1006,7 +695,7 @@ export function environmentBoundary(
 					const assetError = environmentPathError(owner, resolvedSource)
 					if (assetError !== undefined) this.error(assetError)
 				}
-				return restored === code ? null : restored
+				return null
 			},
 		},
 	}

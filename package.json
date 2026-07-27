@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/contract",
-	"version": "0.0.7",
+	"version": "0.0.8",
 	"description": "Zero-dependency contract toolkit — type guards, combinators, parsers, and a shape DSL that compiles one contract shape into a guard, parser, JSON Schema, and generator. The foundation package of the @orkestrel line.",
 	"keywords": [
 		"contract",
@@ -67,7 +67,7 @@
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.58.12",
 		"@orkestrel/guide": "^0.0.5",
-		"@orkestrel/scaffold": "^0.0.4",
+		"@orkestrel/scaffold": "^0.0.5",
 		"@types/node": "^26.1.2",
 		"oxfmt": "^0.61.0",
 		"oxlint": "^1.76.0",
