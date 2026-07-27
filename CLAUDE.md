@@ -181,6 +181,11 @@ Workflow failures use the same ladder; do not absorb their raw logs into the mai
 
 ## Dispatch mechanism
 
+- **Native first.** A model native to the running harness launches through that harness's own
+  agent and workflow mechanism — in Claude Code, Claude subagents via the Agent tool and
+  Workflows; in a Codex session, Codex-native agents; in Cursor, Cursor-native sessions. MCP
+  and CLI transports exist solely to reach a model that is NOT native to the running harness;
+  never route a native model through its own CLI or an MCP loopback.
 - Use the Agent tool when later control flow depends on the previous result.
 - Use a Workflow for a known deterministic fan-out, staged pipeline, or loop; serialize
   writing nodes — never two concurrent writers in the tree.
@@ -204,7 +209,8 @@ Every dispatch contains:
 External engines widen capacity; they never inherit authority. Their output is a proposal or
 hypothesis until it is verified against source and accepted by the Orchestrator. Every bridge
 verifies its CLI is present before running and stops with a deviation report naming the
-fallback when it is not.
+fallback when it is not. Benches are cross-provider reach only: a model native to the running
+harness never crosses a bridge.
 
 Three bench laws apply to every external engine:
 
