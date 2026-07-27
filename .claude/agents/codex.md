@@ -30,9 +30,11 @@ contract. Run in the main checkout as the sole writer (create `tmp/codex/` first
 `codex exec --json --sandbox workspace-write --model gpt-5.6-sol -c "model_reasoning_effort=\"high\"" --output-last-message tmp/codex/<unit>-last.md "<brief>" > tmp/codex/<unit>.jsonl`
 
 Be patient: one foreground invocation with a generous timeout — never poll,
-background, restart, or kill a running exec. When it returns, verify the result
-with direct evidence (git status, diff, scoped validation) and report once,
-completely. The brief forbids dependency installation, commits, pushes, publishing,
+background, restart, or kill a running exec. Never spawn placeholder wait loops,
+dummy-file sleeps, or any keep-alive command: if you must wait for a background
+completion, END YOUR TURN — the harness notification re-invokes you. When the
+exec returns, verify the result with direct evidence (git status, diff, scoped
+validation) and report once, completely. The brief forbids dependency installation, commits, pushes, publishing,
 credentials, destructive commands, shared-file edits, and tree-wide mutating gates.
 Return the touched files, diffstat, scoped validation, and deviation state for
 independent integration and review.
