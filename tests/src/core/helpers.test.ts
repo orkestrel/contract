@@ -1,9 +1,13 @@
 import type { JSONSchema } from '@src/core'
-import { buildSparseArray, createRevokedProxy, createThrowingGetter } from '../../setup.js'
+import {
+	buildSparseArray,
+	captureContractError,
+	createRevokedProxy,
+	createThrowingGetter,
+} from '../../setup.js'
 import { describe, expect, it } from 'vitest'
 import {
 	attempt,
-	ContractError,
 	createContract,
 	drawRandom,
 	enumerableKeys,
@@ -138,13 +142,18 @@ describe('drawRandom', () => {
 		expect(drawRandom(() => 0.999, 'number')).toBe(0.999)
 	})
 
-	it('throws a generate ContractError for invalid or throwing sources', () => {
-		expect(() => drawRandom(() => 1, 'union')).toThrowError(ContractError)
-		expect(() =>
+	it('throws a random ContractError with drawRandom diagnostics for invalid or throwing sources', () => {
+		const invalid = captureContractError(() => drawRandom(() => 1, 'union'))
+		const throwing = captureContractError(() =>
 			drawRandom(() => {
 				throw new Error('source')
 			}, 'union'),
-		).toThrowError(ContractError)
+		)
+
+		expect(invalid.code).toBe('random')
+		expect(invalid.message).toContain('drawRandom:')
+		expect(throwing.code).toBe('random')
+		expect(throwing.message).toContain('drawRandom:')
 	})
 })
 

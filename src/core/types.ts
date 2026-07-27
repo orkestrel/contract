@@ -57,6 +57,8 @@ export type ContractCode =
 	| 'pattern'
 	/** Identifies a generation contract error. */
 	| 'generate'
+	/** Identifies a random-source contract error. */
+	| 'random'
 	/** Identifies an owned-clone contract error. */
 	| 'clone'
 	/** Identifies a compilation-depth contract error. */
@@ -410,7 +412,7 @@ export interface NullableShape<S extends ContractShape = ContractShape> {
  * functions, `NaN`, and `±Infinity`); the parser gates through that guard; the
  * schema is the empty schema `{}` (matches any JSON instance); the generator
  * emits a small deterministic {@link JSONValue}. Unlike {@link RawShape}, whose
- * guard accepts anything, this shape validates that a value is real JSON.
+ * guard accepts every defined value, this shape validates that a value is real JSON.
  */
 export interface JSONShape {
 	readonly type: 'json'

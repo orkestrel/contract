@@ -26,13 +26,14 @@ import {
  * a throw escape.
  *
  * @remarks
- * The single sanctioned never-throw boundary for the guards (AGENTS §14). The
+ * The sanctioned never-throw boundary for the guards (AGENTS §14). The
  * `whereOf`, `lazyOf`, and `transformOf` combinators invoke caller-supplied
  * callbacks *inside* a guard body, yet a guard must NEVER throw — it returns a
  * `boolean`. This converts a throwing callback into a `Failure` so the
  * surrounding guard can treat it as a non-match instead of propagating the
  * exception, written once and shared rather than copy-pasted as ad-hoc
- * `try`/`catch`.
+ * `try`/`catch`. The sole hand-written exception is {@link isContractError},
+ * whose local boundary avoids an `errors` → `helpers` dependency inversion.
  *
  * @param callback - The callback to invoke with no arguments
  * @returns A `Success` carrying the return value, or a `Failure` carrying the
@@ -112,16 +113,16 @@ export function enumerableKeys(value: object): readonly string[] | undefined {
 export function drawRandom(random: RandomFunction, shape: string): number {
 	const outcome = attempt(random)
 	if (!outcome.success) {
-		throw new ContractError('compileGenerator: the random source threw', {
-			code: 'generate',
+		throw new ContractError('drawRandom: the random source threw', {
+			code: 'random',
 			context: { shape, limit: '[0, 1)', received: 'threw' },
 			cause: outcome.error,
 		})
 	}
 	const sample = outcome.value
 	if (!isFiniteNumber(sample) || sample < 0 || sample >= 1) {
-		throw new ContractError('compileGenerator: the random source must return a value in [0, 1)', {
-			code: 'generate',
+		throw new ContractError('drawRandom: the random source must return a value in [0, 1)', {
+			code: 'random',
 			context: { shape, limit: '[0, 1)', received: String(sample) },
 		})
 	}

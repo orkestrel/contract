@@ -263,7 +263,7 @@ export function parseJSONValue(value: unknown): JSONValue | undefined {
  *
  * @param value - The value to parse
  * @param allowed - The permitted literal values
- * @returns The matched literal (by identity), or `undefined`
+ * @returns The input when it matches an allowed literal by SameValueZero, or `undefined`
  *
  * @example
  * ```ts

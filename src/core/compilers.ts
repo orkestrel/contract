@@ -29,7 +29,7 @@ import {
 	shapeToKind,
 } from './helpers.js'
 import { COMPILE_DEPTH_LIMIT, FAULT_LIMIT, GENERATION_ATTEMPT_LIMIT } from './constants.js'
-import { ContractError } from './errors.js'
+import { ContractError, isContractError } from './errors.js'
 import { cloneSchema, cloneShape, ownShape } from './cloners.js'
 import {
 	arrayOf,
@@ -57,6 +57,89 @@ import { parseBoolean, parseInteger, parseNumber, parseRecord, parseString } fro
 // === Validation
 
 /**
+ * Gate recursive compiler work on shape depth and structural cycles.
+ *
+ * @remarks
+ * Walks the shape graph iteratively in linear time and stack space, tracking
+ * active ancestors so shared children remain legal. Every standalone compiler
+ * calls this gate before its recursive branch begins. The depth check runs
+ * before the active-ancestor check, so a back-edge first reached beyond
+ * {@link COMPILE_DEPTH_LIMIT} reports `depth`; a shallower cycle reports
+ * `cycle`.
+ *
+ * @param shape - The shape graph to gate
+ * @returns Nothing; successful return means recursive compilation is depth-safe
+ * @throws {ContractError} When the shape is cyclic or exceeds the compilation depth limit
+ */
+export function validateShapeDepth(shape: ContractShape): void {
+	const active = new WeakSet<ContractShape>()
+	const stack: (
+		| { readonly operation: 'enter'; readonly shape: ContractShape; readonly depth: number }
+		| { readonly operation: 'exit'; readonly shape: ContractShape }
+	)[] = [{ operation: 'enter', shape, depth: 0 }]
+
+	while (stack.length > 0) {
+		const frame = stack.pop()
+		if (frame === undefined) continue
+		if (frame.operation === 'exit') {
+			active.delete(frame.shape)
+			continue
+		}
+
+		const current = frame.shape
+		if (frame.depth > COMPILE_DEPTH_LIMIT) {
+			throw new ContractError('validateShapeDepth: a shape exceeds the compilation depth limit', {
+				code: 'depth',
+				context: { shape: current.type, limit: COMPILE_DEPTH_LIMIT },
+			})
+		}
+		if (active.has(current)) {
+			throw new ContractError('validateShapeDepth: a shape graph may not contain a cycle', {
+				code: 'cycle',
+			})
+		}
+		active.add(current)
+		stack.push({ operation: 'exit', shape: current })
+
+		switch (current.type) {
+			case 'array':
+				stack.push({ operation: 'enter', shape: current.items, depth: frame.depth + 1 })
+				break
+			case 'object': {
+				const extra = current.additionalProperties
+				if (extra !== undefined && extra !== true && extra !== false) {
+					stack.push({ operation: 'enter', shape: extra, depth: frame.depth + 1 })
+				}
+				const keys = Object.keys(current.properties)
+				for (let index = keys.length - 1; index >= 0; index -= 1) {
+					const key = keys[index]
+					if (key === undefined) continue
+					const child = current.properties[key]
+					if (child !== undefined) {
+						stack.push({ operation: 'enter', shape: child, depth: frame.depth + 1 })
+					}
+				}
+				break
+			}
+			case 'union':
+				for (let index = current.variants.length - 1; index >= 0; index -= 1) {
+					const variant = current.variants[index]
+					if (variant !== undefined) {
+						stack.push({ operation: 'enter', shape: variant, depth: frame.depth + 1 })
+					}
+				}
+				break
+			case 'optional':
+			case 'nullable':
+				stack.push({ operation: 'enter', shape: current.inner, depth: frame.depth + 1 })
+				break
+			default:
+				break
+		}
+	}
+}
+
+/**
  * Validate that a {@link ContractShape} graph is well-formed before
  * compilation.
  *
@@ -82,7 +165,9 @@ import { parseBoolean, parseInteger, parseNumber, parseRecord, parseString } fro
  * - An integer {@link NumberShape} (`integer: true`) needs a non-empty integer
  *   range: `Math.ceil(min ?? -Infinity) <= Math.floor(max ?? Infinity)`.
  * - Shape nesting may not exceed {@link COMPILE_DEPTH_LIMIT}; excessive depth
- *   fails before recursive artifact compilation begins.
+ *   fails before recursive artifact compilation begins. Because the depth check
+ *   runs before the active-ancestor check, a back-edge first reached beyond the
+ *   limit reports `depth`; a cycle reached within the limit reports `cycle`.
  * - `null` / `json` / `raw` / `boolean` are always-valid leaves. Recursion
  *   continues into array items, object properties (and `additionalProperties`
  *   when it is a shape), union variants, and optional/nullable inner shapes.
@@ -314,7 +399,8 @@ export function validateShape(shape: ContractShape): void {
  * required keys in `required`; nullable shapes emit an `anyOf` with `{ type:
  * 'null' }`. The result is an owned deeply frozen graph; raw schemas are cloned
  * rather than retained by reference. Emission only — it never inspects a
- * runtime value.
+ * runtime value. {@link validateShapeDepth} iteratively rejects excessive
+ * nesting or cycles before recursive emission begins.
  *
  * @param shape - The shape to compile
  * @returns The emitted JSON Schema
@@ -326,6 +412,7 @@ export function validateShape(shape: ContractShape): void {
  */
 export function compileSchema(shape: ContractShape): JSONSchema {
 	const owned = ownShape(shape)
+	validateShapeDepth(owned)
 	switch (owned.type) {
 		case 'string':
 			return Object.freeze({
@@ -427,7 +514,8 @@ export function compileSchema(shape: ContractShape): JSONSchema {
  * their parser, reporter, and inference view for both open and closed objects.
  * Like every guard it is total — it never throws (AGENTS §14). The shape is
  * taken through {@link ownShape} first, so an unfrozen caller-owned graph
- * compiles from a snapshot.
+ * compiles from a snapshot. {@link validateShapeDepth} iteratively rejects
+ * excessive nesting or cycles before recursive guard compilation begins.
  *
  * @param shape - The shape to compile
  * @returns A guard narrowing to the shape's inferred type
@@ -442,6 +530,7 @@ export function compileGuard<S extends ContractShape>(shape: S): Guard<Infer<S>>
 export function compileGuard(shape: ContractShape): Guard<unknown>
 export function compileGuard(shape: ContractShape): Guard<unknown> {
 	const owned = ownShape(shape)
+	validateShapeDepth(owned)
 	switch (owned.type) {
 		case 'string':
 			// `stringOf` returns bare `isString` when unrefined, else composes the
@@ -564,7 +653,8 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
  * included. Object presence and extra-key processing use the same
  * own-enumerable-string snapshot as the guard, reporter, and inference. The
  * shape is taken through {@link ownShape} first, so an unfrozen caller-owned
- * graph compiles from a snapshot.
+ * graph compiles from a snapshot. {@link validateShapeDepth} iteratively
+ * rejects excessive nesting or cycles before recursive parser compilation.
  *
  * @param shape - The shape to compile
  * @returns A parser yielding the shape's inferred type or `undefined`
@@ -579,6 +669,7 @@ export function compileParser<S extends ContractShape>(shape: S): Parser<Infer<S
 export function compileParser(shape: ContractShape): Parser<unknown>
 export function compileParser(shape: ContractShape): Parser<unknown> {
 	const owned = ownShape(shape)
+	validateShapeDepth(owned)
 	switch (owned.type) {
 		case 'string': {
 			if (owned.min === undefined && owned.max === undefined && owned.pattern === undefined) {
@@ -765,13 +856,15 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
  * @remarks
  * The same shape and the same `random` source always produce the same value, so
  * seed data is reproducible. Defaults to a {@link seededRandom} source seeded
- * from the wall clock when none is supplied. Every generation failure throws a
- * {@link ContractError} with code `'generate'` and context naming the shape
- * category plus the failed pattern, attempt count, or random-source range.
+ * from the wall clock when none is supplied. Shape-generation failures throw a
+ * {@link ContractError} with code `'generate'`; {@link drawRandom} failures use
+ * code `'random'` and retain the consuming shape category in context.
  * Failures include a degenerate empty `literalShape` / `unionShape`, a
  * pattern-constrained `stringShape` whose generated sample cannot satisfy the
  * pattern, an invalid random sample, and a `rawShape` whose arbitrary embedded
- * schema cannot be auto-generated. `createContract` runs
+ * schema cannot be auto-generated. {@link validateShapeDepth} iteratively
+ * rejects excessive nesting or cycles before recursive generation begins.
+ * `createContract` runs
  * {@link validateShape} first, so a degenerate `literalShape` / `unionShape` /
  * bounded shape is normally caught there; these throws remain here as defense
  * for standalone `compileGenerator` use. Union candidates are bounded by
@@ -798,6 +891,7 @@ export function compileGenerator(
 	random: RandomFunction = seededRandom(Date.now()),
 ): unknown {
 	const owned = ownShape(shape)
+	validateShapeDepth(owned)
 	switch (owned.type) {
 		case 'string': {
 			const min = owned.min ?? 0
@@ -822,13 +916,13 @@ export function compileGenerator(
 		case 'number': {
 			const sample = drawRandom(random, owned.integer === true ? 'integer' : 'number')
 			if (owned.integer === true) {
-				const lo = Math.ceil(owned.min ?? Math.min(-100, owned.max ?? -100))
-				const hi = Math.floor(owned.max ?? Math.max(100, owned.min ?? 100))
-				return lo === hi ? lo : Math.floor(sample * (hi - lo + 1)) + lo
+				const lo = Math.ceil(owned.min ?? (owned.max === undefined ? -100 : owned.max - 100))
+				const hi = Math.floor(owned.max ?? (owned.min === undefined ? 100 : owned.min + 100))
+				return lo === hi ? lo : Math.floor(lo * (1 - sample) + hi * sample)
 			}
-			const lo = owned.min ?? Math.min(-100, owned.max ?? -100)
-			const hi = owned.max ?? Math.max(100, owned.min ?? 100)
-			return lo === hi ? lo : lo + sample * (hi - lo)
+			const lo = owned.min ?? (owned.max === undefined ? -100 : owned.max - 100)
+			const hi = owned.max ?? (owned.min === undefined ? 100 : owned.min + 100)
+			return lo === hi ? lo : lo * (1 - sample) + hi * sample
 		}
 		case 'boolean':
 			return drawRandom(random, 'boolean') >= 0.5
@@ -918,6 +1012,9 @@ export function compileGenerator(
 				const variant = owned.variants[(start + attemptIndex) % owned.variants.length]
 				if (variant === undefined) continue
 				const outcome = attempt(() => compileGenerator(variant, random))
+				if (!outcome.success && isContractError(outcome.error) && outcome.error.code === 'random') {
+					throw outcome.error
+				}
 				if (outcome.success && guard(outcome.value)) return outcome.value
 			}
 			throw new ContractError('compileGenerator: no union candidate satisfied the compiled guard', {
@@ -966,7 +1063,8 @@ export function compileGenerator(
  * open object with a constraining `additionalProperties` shape recurses extras
  * against it instead. A hostile getter or throwing `Proxy` trap is contained
  * via {@link attempt} and surfaces as a single top-level type fault, never a
- * throw (AGENTS §14).
+ * throw (AGENTS §14). {@link validateShapeDepth} iteratively rejects excessive
+ * shape nesting or cycles before recursive reporting begins.
  *
  * @param shape - The shape to report against
  * @param value - The value to check
@@ -987,6 +1085,7 @@ export function compileReporter(
 	path: string[] = [],
 ): readonly Fault[] {
 	const owned = ownShape(shape)
+	validateShapeDepth(owned)
 	switch (owned.type) {
 		case 'string': {
 			const parsed = parseString(value)

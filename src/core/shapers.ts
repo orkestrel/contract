@@ -44,6 +44,10 @@ import { isArray, isBoolean, isFiniteNumber, isInteger, isRecord, isString } fro
 /**
  * Build a string {@link StringShape}.
  *
+ * @remarks
+ * A supplied pattern is snapshotted by source and flags so later mutation of
+ * the caller's `RegExp` cannot change the built shape or compiled artifacts.
+ *
  * @param options - Optional length (`min` / `max`), `pattern`, and `description`
  * @returns A string shape
  * @throws {ContractError} When a present bound is invalid or `pattern` has flags
@@ -87,7 +91,11 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 		type: 'string',
 		...(options?.min === undefined ? {} : { min: options.min }),
 		...(options?.max === undefined ? {} : { max: options.max }),
-		...(options?.pattern === undefined ? {} : { pattern: options.pattern }),
+		...(options?.pattern === undefined
+			? {}
+			: {
+					pattern: Object.freeze(new RegExp(options.pattern.source, options.pattern.flags)),
+				}),
 		...(options?.description === undefined ? {} : { description: options.description }),
 	})
 }
@@ -423,8 +431,8 @@ export function nullableShape<S extends ContractShape>(inner: S): NullableShape<
  *
  * @remarks
  * The sound counterpart of {@link rawShape}: `rawShape` embeds an arbitrary
- * schema fragment and accepts anything at runtime, while `jsonShape` validates
- * that a value is real JSON (via {@link isJSONValue}).
+ * schema fragment and accepts every defined value at runtime, while `jsonShape`
+ * validates that a value is real JSON (via {@link isJSONValue}).
  *
  * @param options - Optional `description`
  * @returns A JSON passthrough shape

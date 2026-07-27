@@ -105,6 +105,23 @@ describe('shape builders', () => {
 		expect(Object.isFrozen(object.properties.role)).toBe(true)
 	})
 
+	it('snapshots a caller-owned RegExp so post-build compile mutation cannot drift artifacts', () => {
+		const pattern = /^stable$/
+		const shape = stringShape({ pattern })
+		const guard = compileGuard(shape)
+		const schema = compileSchema(shape)
+		const contract = createContract(shape)
+
+		pattern.compile('^drift$')
+
+		expect(shape.pattern?.source).toBe('^stable$')
+		expect(schema.pattern).toBe('^stable$')
+		expect(guard('stable')).toBe(true)
+		expect(guard('drift')).toBe(false)
+		expect(contract.is('stable')).toBe(true)
+		expect(contract.schema.pattern).toBe('^stable$')
+	})
+
 	it('freezes roots from every shape builder', () => {
 		const shapes: readonly ContractShape[] = [
 			stringShape(),

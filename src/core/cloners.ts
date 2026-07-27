@@ -1,5 +1,5 @@
 import type { ContractShape, JSONSchema } from './types.js'
-import { ContractError } from './errors.js'
+import { ContractError, isContractError } from './errors.js'
 import { attempt, enumerableKeys } from './helpers.js'
 
 /**
@@ -101,12 +101,13 @@ export function cloneSchema(schema: JSONSchema): JSONSchema {
  * Uses an explicit memo to preserve shared-child identity and close cyclic
  * edges onto their cloned nodes. Shape-node shells are created iteratively,
  * then their structural edges are wired and their copied collections frozen.
- * A raw schema delegates to {@link cloneSchema}; hostile raw-schema traversal
- * throws a clone-coded {@link ContractError}.
+ * A raw schema delegates to {@link cloneSchema}; every shape-graph read is
+ * contained, so hostile traversal throws only a clone-coded
+ * {@link ContractError}.
  *
  * @param shape - The contract shape graph to snapshot
  * @returns A deeply cloned and frozen shape graph
- * @throws {ContractError} When hostile raw-schema traversal prevents ownership
+ * @throws {ContractError} When hostile shape or raw-schema traversal prevents ownership
  *
  * @example
  * ```ts
@@ -116,178 +117,187 @@ export function cloneSchema(schema: JSONSchema): JSONSchema {
  * ```
  */
 export function cloneShape(shape: ContractShape): ContractShape {
-	const memo = new Map<ContractShape, ContractShape>()
-	const pending: ContractShape[] = [shape]
-	const sources: ContractShape[] = []
-	let root = shape
+	try {
+		const memo = new Map<ContractShape, ContractShape>()
+		const pending: ContractShape[] = [shape]
+		const sources: ContractShape[] = []
+		let root = shape
 
-	while (pending.length > 0) {
-		const source = pending.pop()
-		if (source === undefined || memo.has(source)) continue
+		while (pending.length > 0) {
+			const source = pending.pop()
+			if (source === undefined || memo.has(source)) continue
 
-		let clone: ContractShape
-		switch (source.type) {
-			case 'string':
-				clone = {
-					type: 'string',
-					...(source.min === undefined ? {} : { min: source.min }),
-					...(source.max === undefined ? {} : { max: source.max }),
-					...(source.pattern === undefined
-						? {}
-						: {
-								pattern: Object.freeze(new RegExp(source.pattern.source, source.pattern.flags)),
-							}),
-					...(source.description === undefined ? {} : { description: source.description }),
-				}
-				break
-			case 'number':
-				clone = {
-					type: 'number',
-					...(source.min === undefined ? {} : { min: source.min }),
-					...(source.max === undefined ? {} : { max: source.max }),
-					...(source.integer === undefined ? {} : { integer: source.integer }),
-					...(source.description === undefined ? {} : { description: source.description }),
-				}
-				break
-			case 'boolean':
-				clone = {
-					type: 'boolean',
-					...(source.description === undefined ? {} : { description: source.description }),
-				}
-				break
-			case 'null':
-				clone = {
-					type: 'null',
-					...(source.description === undefined ? {} : { description: source.description }),
-				}
-				break
-			case 'literal':
-				clone = {
-					type: 'literal',
-					values: Object.freeze([...source.values]),
-					...(source.description === undefined ? {} : { description: source.description }),
-				}
-				break
-			case 'array':
-				clone = {
-					type: 'array',
-					items: source.items,
-					...(source.min === undefined ? {} : { min: source.min }),
-					...(source.max === undefined ? {} : { max: source.max }),
-					...(source.description === undefined ? {} : { description: source.description }),
-				}
-				pending.push(source.items)
-				break
-			case 'object': {
-				const extra = source.additionalProperties
-				clone = {
-					type: 'object',
-					properties: Object.create(null),
-					...(extra === undefined || (extra !== true && extra !== false)
-						? {}
-						: { additionalProperties: extra }),
-					...(source.description === undefined ? {} : { description: source.description }),
-				}
-				for (const key of Object.keys(source.properties)) {
-					const child = source.properties[key]
-					if (child !== undefined) pending.push(child)
-				}
-				if (extra !== undefined && extra !== true && extra !== false) pending.push(extra)
-				break
-			}
-			case 'union':
-				clone = {
-					type: 'union',
-					variants: [],
-					...(source.mode === undefined ? {} : { mode: source.mode }),
-					...(source.description === undefined ? {} : { description: source.description }),
-				}
-				for (const variant of source.variants) pending.push(variant)
-				break
-			case 'optional':
-				clone = { type: 'optional', inner: source.inner }
-				pending.push(source.inner)
-				break
-			case 'nullable':
-				clone = { type: 'nullable', inner: source.inner }
-				pending.push(source.inner)
-				break
-			case 'json':
-				clone = {
-					type: 'json',
-					...(source.description === undefined ? {} : { description: source.description }),
-				}
-				break
-			case 'raw': {
-				const outcome = attempt(() => source.schema)
-				if (!outcome.success) {
-					throw new ContractError('cloneShape: raw schema access failed', {
-						code: 'clone',
-						context: { shape: 'raw' },
-						cause: outcome.error,
-					})
-				}
-				clone = { type: 'raw', schema: cloneSchema(outcome.value) }
-				break
-			}
-		}
-
-		memo.set(source, clone)
-		if (source === shape) root = clone
-		sources.push(source)
-	}
-
-	for (const source of sources) {
-		const clone = memo.get(source)
-		if (clone === undefined) continue
-
-		switch (source.type) {
-			case 'array': {
-				const items = memo.get(source.items)
-				if (items !== undefined) Reflect.set(clone, 'items', items)
-				break
-			}
-			case 'object': {
-				const properties: Record<string, ContractShape> = Object.create(null)
-				for (const key of Object.keys(source.properties)) {
-					const child = source.properties[key]
-					if (child === undefined) continue
-					const clonedChild = memo.get(child)
-					if (clonedChild !== undefined) properties[key] = clonedChild
-				}
-				Reflect.set(clone, 'properties', Object.freeze(properties))
-				const extra = source.additionalProperties
-				if (extra !== undefined && extra !== true && extra !== false) {
-					const clonedExtra = memo.get(extra)
-					if (clonedExtra !== undefined) {
-						Reflect.set(clone, 'additionalProperties', clonedExtra)
+			let clone: ContractShape
+			switch (source.type) {
+				case 'string':
+					clone = {
+						type: 'string',
+						...(source.min === undefined ? {} : { min: source.min }),
+						...(source.max === undefined ? {} : { max: source.max }),
+						...(source.pattern === undefined
+							? {}
+							: {
+									pattern: Object.freeze(new RegExp(source.pattern.source, source.pattern.flags)),
+								}),
+						...(source.description === undefined ? {} : { description: source.description }),
 					}
+					break
+				case 'number':
+					clone = {
+						type: 'number',
+						...(source.min === undefined ? {} : { min: source.min }),
+						...(source.max === undefined ? {} : { max: source.max }),
+						...(source.integer === undefined ? {} : { integer: source.integer }),
+						...(source.description === undefined ? {} : { description: source.description }),
+					}
+					break
+				case 'boolean':
+					clone = {
+						type: 'boolean',
+						...(source.description === undefined ? {} : { description: source.description }),
+					}
+					break
+				case 'null':
+					clone = {
+						type: 'null',
+						...(source.description === undefined ? {} : { description: source.description }),
+					}
+					break
+				case 'literal':
+					clone = {
+						type: 'literal',
+						values: Object.freeze([...source.values]),
+						...(source.description === undefined ? {} : { description: source.description }),
+					}
+					break
+				case 'array':
+					clone = {
+						type: 'array',
+						items: source.items,
+						...(source.min === undefined ? {} : { min: source.min }),
+						...(source.max === undefined ? {} : { max: source.max }),
+						...(source.description === undefined ? {} : { description: source.description }),
+					}
+					pending.push(source.items)
+					break
+				case 'object': {
+					const extra = source.additionalProperties
+					clone = {
+						type: 'object',
+						properties: Object.create(null),
+						...(extra === undefined || (extra !== true && extra !== false)
+							? {}
+							: { additionalProperties: extra }),
+						...(source.description === undefined ? {} : { description: source.description }),
+					}
+					for (const key of Object.keys(source.properties)) {
+						const child = source.properties[key]
+						if (child !== undefined) pending.push(child)
+					}
+					if (extra !== undefined && extra !== true && extra !== false) pending.push(extra)
+					break
 				}
-				break
-			}
-			case 'union': {
-				const variants: ContractShape[] = []
-				for (const variant of source.variants) {
-					const clonedVariant = memo.get(variant)
-					if (clonedVariant !== undefined) variants.push(clonedVariant)
+				case 'union':
+					clone = {
+						type: 'union',
+						variants: [],
+						...(source.mode === undefined ? {} : { mode: source.mode }),
+						...(source.description === undefined ? {} : { description: source.description }),
+					}
+					for (const variant of source.variants) pending.push(variant)
+					break
+				case 'optional':
+					clone = { type: 'optional', inner: source.inner }
+					pending.push(source.inner)
+					break
+				case 'nullable':
+					clone = { type: 'nullable', inner: source.inner }
+					pending.push(source.inner)
+					break
+				case 'json':
+					clone = {
+						type: 'json',
+						...(source.description === undefined ? {} : { description: source.description }),
+					}
+					break
+				case 'raw': {
+					const outcome = attempt(() => source.schema)
+					if (!outcome.success) {
+						throw new ContractError('cloneShape: raw schema access failed', {
+							code: 'clone',
+							context: { shape: 'raw' },
+							cause: outcome.error,
+						})
+					}
+					clone = { type: 'raw', schema: cloneSchema(outcome.value) }
+					break
 				}
-				Reflect.set(clone, 'variants', Object.freeze(variants))
-				break
 			}
-			case 'optional':
-			case 'nullable': {
-				const inner = memo.get(source.inner)
-				if (inner !== undefined) Reflect.set(clone, 'inner', inner)
-				break
-			}
-			default:
-				break
+
+			memo.set(source, clone)
+			if (source === shape) root = clone
+			sources.push(source)
 		}
 
-		Object.freeze(clone)
-	}
+		for (const source of sources) {
+			const clone = memo.get(source)
+			if (clone === undefined) continue
 
-	return root
+			switch (source.type) {
+				case 'array': {
+					const items = memo.get(source.items)
+					if (items !== undefined) Reflect.set(clone, 'items', items)
+					break
+				}
+				case 'object': {
+					const properties: Record<string, ContractShape> = Object.create(null)
+					for (const key of Object.keys(source.properties)) {
+						const child = source.properties[key]
+						if (child === undefined) continue
+						const clonedChild = memo.get(child)
+						if (clonedChild !== undefined) properties[key] = clonedChild
+					}
+					Reflect.set(clone, 'properties', Object.freeze(properties))
+					const extra = source.additionalProperties
+					if (extra !== undefined && extra !== true && extra !== false) {
+						const clonedExtra = memo.get(extra)
+						if (clonedExtra !== undefined) {
+							Reflect.set(clone, 'additionalProperties', clonedExtra)
+						}
+					}
+					break
+				}
+				case 'union': {
+					const variants: ContractShape[] = []
+					for (const variant of source.variants) {
+						const clonedVariant = memo.get(variant)
+						if (clonedVariant !== undefined) variants.push(clonedVariant)
+					}
+					Reflect.set(clone, 'variants', Object.freeze(variants))
+					break
+				}
+				case 'optional':
+				case 'nullable': {
+					const inner = memo.get(source.inner)
+					if (inner !== undefined) Reflect.set(clone, 'inner', inner)
+					break
+				}
+				default:
+					break
+			}
+
+			Object.freeze(clone)
+		}
+
+		return root
+	} catch (reason) {
+		if (isContractError(reason) && reason.code === 'clone') throw reason
+		throw new ContractError('cloneShape: failed to create an owned shape snapshot', {
+			code: 'clone',
+			context: { shape: 'shape' },
+			cause: reason,
+		})
+	}
 }
 
 /**
@@ -296,10 +306,11 @@ export function cloneShape(shape: ContractShape): ContractShape {
  *
  * @remarks
  * Frozen means owned: the shape builders and `cloneShape` both produce frozen
- * nodes with frozen `properties` / `variants` / `values` collections, so a
- * frozen node cannot drift under a caller who still holds a reference, and
- * copying it again would only cost work. An unfrozen node is caller-owned and
- * therefore snapshotted before anything reads it.
+ * nodes with frozen `properties` / `variants` / `values` collections and owned
+ * pattern snapshots, so a frozen node cannot drift under a caller who still
+ * holds an input reference, and copying it again would only cost work. An
+ * unfrozen node is caller-owned and therefore snapshotted before anything reads
+ * it.
  *
  * Every compiler entry point (`compileSchema` / `compileGuard` /
  * `compileParser` / `compileGenerator` / `compileReporter`) opens with this

@@ -201,6 +201,21 @@ describe('validateShape', () => {
 		expect(error.context?.limit).toBe(COMPILE_DEPTH_LIMIT)
 	})
 
+	it('rejects excessive depth at every standalone compiler entry before recursion', () => {
+		const shape = buildDeepShape(5_000)
+		const schemaError = captureContractError(() => compileSchema(shape))
+		const guardError = captureContractError(() => compileGuard(shape))
+		const parserError = captureContractError(() => compileParser(shape))
+		const generatorError = captureContractError(() => compileGenerator(shape, () => 0))
+		const reporterError = captureContractError(() => compileReporter(shape, undefined))
+
+		for (const error of [schemaError, guardError, parserError, generatorError, reporterError]) {
+			expect(error.code).toBe('depth')
+			expect(error).not.toBeInstanceOf(RangeError)
+			expect(error.context?.limit).toBe(COMPILE_DEPTH_LIMIT)
+		}
+	})
+
 	it('throws on an array shape with min greater than max', () => {
 		expect(() => validateShape(arrayShape(stringShape(), { min: 5, max: 1 }))).toThrow(
 			'validateShape: an array shape has min greater than max',
@@ -816,6 +831,34 @@ describe('compileGenerator', () => {
 		expect(compileGenerator(integer, () => 0.5)).toBe(15)
 	})
 
+	it('generates guard-valid finite values across extreme numeric bounds without overflow', () => {
+		const shapes = [
+			numberShape({ min: -Number.MAX_VALUE, max: Number.MAX_VALUE }),
+			integerShape({ min: -Number.MAX_VALUE, max: Number.MAX_VALUE }),
+			numberShape({ min: Number.MAX_VALUE }),
+			integerShape({ max: -Number.MAX_VALUE }),
+		]
+
+		for (const shape of shapes) {
+			const guard = compileGuard(shape)
+			const value = compileGenerator(shape, () => 0.5)
+			expect(Number.isFinite(value)).toBe(true)
+			expect(guard(value)).toBe(true)
+		}
+	})
+
+	it('uses a span-relative synthetic range for one-sided number and integer bounds', () => {
+		const shapes = [numberShape({ min: 500 }), integerShape({ max: -500 })]
+
+		for (const shape of shapes) {
+			const first = compileGenerator(shape, () => 0)
+			const second = compileGenerator(shape, () => 0.5)
+			expect(first).not.toBe(second)
+			expect(compileGuard(shape)(first)).toBe(true)
+			expect(compileGuard(shape)(second)).toBe(true)
+		}
+	})
+
 	it('rotates through union and oneOf variants so an ungeneratable first variant cannot starve siblings', () => {
 		expect(compileGenerator(unionShape(rawShape({}), literalShape(['ok'])), () => 0)).toBe('ok')
 		expect(
@@ -831,12 +874,35 @@ describe('compileGenerator', () => {
 			compileGenerator(unionShape(stringShape(), integerShape()), () => 1),
 		)
 
-		expect(error.code).toBe('generate')
+		expect(error.code).toBe('random')
 		expect(error.context).toEqual({
 			shape: 'union',
 			limit: '[0, 1)',
 			received: '1',
 		})
+	})
+
+	it('propagates invalid and throwing random samples from inside a union variant', () => {
+		let invalidDraw = 0
+		const invalid = captureContractError(() =>
+			compileGenerator(unionShape(stringShape(), nullShape()), () => {
+				invalidDraw += 1
+				return invalidDraw === 1 ? 0 : 1
+			}),
+		)
+		let throwingDraw = 0
+		const throwing = captureContractError(() =>
+			compileGenerator(unionShape(stringShape(), nullShape()), () => {
+				throwingDraw += 1
+				if (throwingDraw > 1) throw new Error('later draw')
+				return 0
+			}),
+		)
+
+		expect(invalid.code).toBe('random')
+		expect(invalid.context?.shape).toBe('string')
+		expect(throwing.code).toBe('random')
+		expect(throwing.context?.shape).toBe('string')
 	})
 
 	it('uses ContractError generate for every direct generator failure category', () => {

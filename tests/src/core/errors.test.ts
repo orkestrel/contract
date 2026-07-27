@@ -51,6 +51,7 @@ describe('ContractError', () => {
 			'cycle',
 			'pattern',
 			'generate',
+			'random',
 			'clone',
 			'depth',
 		]

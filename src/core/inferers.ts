@@ -792,20 +792,19 @@ export function inferRecordSamples(
 	// Contain the whole key-enumeration walk — a hostile ownKeys trap on any
 	// sample must yield an empty key set for this branch, never throw
 	// (AGENTS §14).
-	const keysOutcome = attempt(() => {
-		const keySet = new Set<string>()
-		for (const sample of samples) {
-			for (const key of Object.keys(sample)) keySet.add(key)
-		}
-		const allKeys = [...keySet].sort()
-		return { keys: allKeys.slice(0, breadth), truncated: allKeys.length > breadth }
-	})
+	const keySet = new Set<string>()
+	for (const sample of samples) {
+		const sampleKeys = enumerableKeys(sample)
+		if (sampleKeys === undefined) return {}
+		for (const key of sampleKeys) keySet.add(key)
+	}
+	const allKeys = [...keySet].sort()
+	const keys = allKeys.slice(0, breadth)
+	const truncated = allKeys.length > breadth
 	// A failed key walk means nothing at all is known about these rows — not even
 	// that they behave like readable objects — so the slot widens to `{}` rather
 	// than claiming `type: 'object'`, whose compiled guard re-enumerates the same
 	// hostile keys and would reject the very rows it was inferred from.
-	if (!keysOutcome.success) return {}
-	const { keys, truncated } = keysOutcome.value
 	// Honest typing: a null-prototype accumulator so a key literally named
 	// '__proto__' becomes an own data key instead of mutating the prototype —
 	// the same pattern compileGuard / compileParser use (compilers.ts).

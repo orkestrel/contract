@@ -4,11 +4,13 @@ import {
 	cloneSchema,
 	cloneShape,
 	ContractError,
+	createContract,
 	objectShape,
 	ownShape,
 	stringShape,
 	unionShape,
 } from '@src/core'
+import { captureContractError } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
 
 describe('cloneSchema', () => {
@@ -151,6 +153,35 @@ describe('cloneShape', () => {
 		const shape: ContractShape = raw
 
 		expect(() => cloneShape(shape)).toThrowError(ContractError)
+	})
+
+	it('contains every hostile shape-graph read as a clone-coded ContractError', () => {
+		const revokedSource: ContractShape = JSON.parse('{"type":"string"}')
+		const revoked = Proxy.revocable(revokedSource, {})
+		revoked.revoke()
+
+		const getterSource = JSON.parse('{"type":"number"}')
+		Object.defineProperty(getterSource, 'min', {
+			enumerable: true,
+			get() {
+				throw new ContractError('hostile getter', { code: 'bound' })
+			},
+		})
+		const getterShape: ContractShape = getterSource
+
+		const properties = Proxy.revocable<Record<string, ContractShape>>({ value: stringShape() }, {})
+		const propertiesShape: ContractShape = {
+			type: 'object',
+			properties: properties.proxy,
+		}
+		properties.revoke()
+
+		for (const shape of [revoked.proxy, getterShape, propertiesShape]) {
+			const cloneError = captureContractError(() => cloneShape(shape))
+			const contractError = captureContractError(() => createContract(shape))
+			expect(cloneError.code).toBe('clone')
+			expect(contractError.code).toBe('clone')
+		}
 	})
 })
 
