@@ -41,8 +41,9 @@ nontrivial unit to implementer (Sol), reserving builder/application for fully
 specified taste-free mechanics; integrate
 shared files serially; obtain an independent reviewer (Opus 5) design audit and an
 independent analyst (Sol) correctness audit plus a checker conformance pass; then
-run one verifier. Parallelize only independent units. Writing agents use worktrees or
-disjoint owned files and never run tree-wide mutating commands concurrently.
+run one verifier. Parallelize only independent units. Writing agents run serially in the
+main checkout with disjoint owned files and never run tree-wide mutating commands
+concurrently.
 
 Every dispatch includes objective, context, AGENTS.md, applicable rules, governing
 skill name/path and required references (or explicit none), guide/spec, owned and

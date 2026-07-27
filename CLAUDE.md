@@ -96,8 +96,9 @@ Every role honours this floor and no dispatch may widen it.
     can request explicit approval. They receive no standing Bash allow rule.
   - `verifier` uses `default` because dispatched build and test gates may create declared
     artifacts; it still has no edit/write tools and never fixes a failure.
-- **Writing roles run under `isolation: worktree`.** Where a worktree is impossible they own
-  disjoint files and treat every shared file as report-only.
+- **Writing roles run in the main checkout, strictly serialized.** One writer at a time,
+  dispatched from a clean committed baseline; each owns disjoint files and treats every
+  shared file as report-only.
 - Every role carries a bounded `maxTurns`.
 - No role commits, pushes, tags, publishes, installs dependencies, or runs a destructive
   command.
@@ -124,8 +125,9 @@ Every role honours this floor and no dispatch may widen it.
 Concurrent executors share a filesystem unless isolated. Prevent clobbered edits, tree-wide
 formatter and build races, cache phantoms, and validation cross-talk:
 
-1. Prefer `isolation: worktree` for writing executors.
-2. Otherwise assign disjoint owned files plus explicit shared and off-limits files.
+1. Serialize writing executors in the main checkout; commit a checkpoint before each
+   writing dispatch so git is the rollback mechanism.
+2. Assign disjoint owned files plus explicit shared and off-limits files.
 3. Shared files are report-only; executors return exact patches for serial integration.
 4. Concurrent executors run only read-only, scoped validation. A tree-wide result may contain
    siblings' in-flight failures; an executor reports only its owned scope.
@@ -141,7 +143,8 @@ formatter and build races, cache phantoms, and validation cross-talk:
    in parallel, without showing either the other's answer. Reconcile them yourself into one
    plan: units, dependencies, ownership, parallel/serial order, acceptance criteria, risks.
    Surface the plan before dispatch.
-3. **Implement.** Route each nontrivial unit to `implementer` (Sol, worktree). Route a fully
+3. **Implement.** Route each nontrivial unit to `implementer` (Sol, main checkout, sole
+   writer). Route a fully
    specified, taste-free unit to `builder` or `application`. Never route implementation to an
    engine the unit's judgment load exceeds.
 4. **Integrate.** Evaluate each distillate against its acceptance criteria; apply shared-file
@@ -172,8 +175,8 @@ Workflow failures use the same ladder; do not absorb their raw logs into the mai
 ## Dispatch mechanism
 
 - Use the Agent tool when later control flow depends on the previous result.
-- Use a Workflow for a known deterministic fan-out, staged pipeline, or loop; isolate writing
-  nodes in worktrees.
+- Use a Workflow for a known deterministic fan-out, staged pipeline, or loop; serialize
+  writing nodes — never two concurrent writers in the tree.
 - Every node names a role and its engine.
 
 Every dispatch contains:
@@ -214,8 +217,9 @@ fallback when it is not.
 - `analyst` runs `gpt-5.6-sol` at high effort with `--sandbox read-only` in the current
   checkout, for objective analysis, the adversarial design argument, diagnosis, and the
   post-implementation correctness audit.
-- `implementer` runs `gpt-5.6-sol` at high effort with `--sandbox workspace-write` in a
-  detached worktree, for bounded implementation.
+- `implementer` runs `gpt-5.6-sol` at high effort with `--sandbox workspace-write` in the
+  main checkout as the sole writer from a clean committed baseline, for bounded
+  implementation.
 - Raise the analyst to `xhigh` only for a stated hard reasoning need. `gpt-5.6-terra` serves
   only explicitly mechanical, taste-free roles. `gpt-5.6-luna` requires a proven repeatable,
   high-volume workload.

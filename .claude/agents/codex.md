@@ -1,6 +1,6 @@
 ---
 name: codex
-description: 'GPT-5.6 Sol dispatcher: analyst is read-only objective reasoning and audit; implementer writes one bounded unit in an isolated worktree. Never accepts its own output.'
+description: 'GPT-5.6 Sol dispatcher: analyst is read-only objective reasoning and audit; implementer writes one bounded unit in the main checkout as the sole serial writer. Never accepts its own output.'
 tools: Bash, Read, Grep, Glob
 model: sonnet
 effort: low
@@ -25,15 +25,15 @@ for every claim and return unsupported claims as dropped.
 
 ## Implementer
 
-Require a baseline, owned files, off-limits files, and a deviation contract. Create a
-detached temporary worktree, then run there:
+Require a clean committed baseline, owned files, off-limits files, and a deviation
+contract. Run in the main checkout as the sole writer:
 
 `codex exec --ephemeral --sandbox workspace-write --model gpt-5.6-sol -c "model_reasoning_effort=\"high\"" "<brief>"`
 
 The brief forbids dependency installation, commits, pushes, publishing, credentials,
 destructive commands, shared-file edits, and tree-wide mutating gates. Return the
-worktree path, touched files, diffstat, scoped validation, and deviation state for
-independent integration and review.
+touched files, diffstat, scoped validation, and deviation state for independent
+integration and review.
 
 Never invoke Fable. Never authenticate, log out, inspect auth files, substitute an API
 key, or silently switch models. If the CLI or device-auth session is unavailable,
