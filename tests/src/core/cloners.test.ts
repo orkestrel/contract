@@ -1,12 +1,60 @@
-import type { ContractShape } from '@src/core'
+import type { ContractShape, JSONSchema } from '@src/core'
 import {
 	arrayShape,
+	cloneSchema,
 	cloneShape,
 	objectShape,
 	stringShape,
 	unionShape,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
+
+describe('cloneSchema', () => {
+	it('deep-clones and freezes a nested schema without touching the source', () => {
+		const leaf: JSONSchema = { type: 'string', description: 'source' }
+		const items: JSONSchema = { type: 'array', items: leaf }
+		const properties: Record<string, JSONSchema> = { values: items }
+		const source: JSONSchema = { type: 'object', properties }
+		const clone = cloneSchema(source)
+
+		expect(clone).toEqual(source)
+		expect(clone).not.toBe(source)
+		expect(clone.properties).not.toBe(properties)
+		expect(clone.properties?.values).not.toBe(items)
+		expect(clone.properties?.values?.items).not.toBe(leaf)
+		expect(Object.isFrozen(clone)).toBe(true)
+		expect(Object.isFrozen(clone.properties)).toBe(true)
+		expect(Object.isFrozen(clone.properties?.values)).toBe(true)
+		expect(Object.isFrozen(clone.properties?.values?.items)).toBe(true)
+		expect(Object.isFrozen(source)).toBe(false)
+		expect(Object.isFrozen(properties)).toBe(false)
+		expect(Object.isFrozen(items)).toBe(false)
+		expect(Object.isFrozen(leaf)).toBe(false)
+	})
+
+	it('preserves shared child identity in the owned schema graph', () => {
+		const child: JSONSchema = { type: 'integer' }
+		const source: JSONSchema = { anyOf: [child, child] }
+		const clone = cloneSchema(source)
+
+		expect(clone.anyOf?.[0]).toBe(clone.anyOf?.[1])
+		expect(clone.anyOf?.[0]).not.toBe(child)
+		expect(Object.isFrozen(clone.anyOf)).toBe(true)
+	})
+
+	it('tolerates a cycle and closes it onto the cloned schema', () => {
+		const raw = JSON.parse('{"type":"object","properties":{}}')
+		raw.properties.self = raw
+		const source: JSONSchema = raw
+		const clone = cloneSchema(source)
+
+		expect(clone.properties?.self).toBe(clone)
+		expect(clone).not.toBe(source)
+		expect(Object.isFrozen(clone)).toBe(true)
+		expect(Object.isFrozen(clone.properties)).toBe(true)
+		expect(Object.isFrozen(source)).toBe(false)
+	})
+})
 
 describe('cloneShape', () => {
 	it('deep-clones a shape into a frozen, deeply-equal snapshot', () => {

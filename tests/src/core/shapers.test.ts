@@ -144,6 +144,17 @@ describe('shape builders', () => {
 		})
 	})
 
+	it('literalShape copies primitive values before freezing them', () => {
+		const values: (string | number | boolean)[] = ['stable', 1, true]
+		const shape = literalShape(values)
+
+		values[0] = 'changed'
+		expect(shape.values).toEqual(['stable', 1, true])
+		expect(shape.values).not.toBe(values)
+		expect(Object.isFrozen(shape.values)).toBe(true)
+		expect(Object.isFrozen(values)).toBe(false)
+	})
+
 	it('literalShape attaches the description via options', () => {
 		expect(literalShape(['admin', 'guest'], { description: 'the user role' })).toEqual({
 			type: 'literal',
@@ -195,6 +206,24 @@ describe('shape builders', () => {
 			type: 'raw',
 			schema: { type: 'string', description: 'any' },
 		})
+	})
+
+	it('rawShape owns and freezes nested schema state against caller mutation', () => {
+		const child = { type: 'string', description: 'before' } satisfies JSONSchema
+		const properties: Record<string, JSONSchema> = { value: child }
+		const schema = { type: 'object', properties } satisfies JSONSchema
+		const shape = rawShape(schema)
+
+		child.description = 'after'
+		properties.extra = { type: 'boolean' }
+		expect(shape.schema.properties?.value?.description).toBe('before')
+		expect(shape.schema.properties?.extra).toBeUndefined()
+		expect(Object.isFrozen(shape.schema)).toBe(true)
+		expect(Object.isFrozen(shape.schema.properties)).toBe(true)
+		expect(Object.isFrozen(shape.schema.properties?.value)).toBe(true)
+		expect(Object.isFrozen(schema)).toBe(false)
+		expect(Object.isFrozen(properties)).toBe(false)
+		expect(Object.isFrozen(child)).toBe(false)
 	})
 
 	it('nullShape returns a bare null shape and threads its description', () => {

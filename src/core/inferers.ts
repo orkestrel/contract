@@ -37,7 +37,7 @@ import { attempt, sanitizeBudget } from './helpers.js'
  * ordering: unlike `JSON.stringify`, object keys are sorted before encoding
  * (recursively, at every nesting level), so two structurally-equal
  * `JSONSchema` fragments built independently always canonicalize to the same
- * string. Pure ECMAScript — no `structuredClone`, no `node:*` import.
+ * string. Pure host-independent ECMAScript with no environment-specific imports.
  *
  * @param value - The value to canonicalize (a `JSONSchema` fragment, or any
  *                nested piece of one)

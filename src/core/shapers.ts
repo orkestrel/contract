@@ -23,6 +23,7 @@ import type {
 	StringShapeOptions,
 	UnionShape,
 } from './types.js'
+import { cloneSchema } from './cloners.js'
 import { INFER_BREADTH_LIMIT, INFER_DEPTH_LIMIT } from './constants.js'
 import { ContractError } from './errors.js'
 import { attempt } from './helpers.js'
@@ -197,8 +198,12 @@ export function nullShape(options?: NullShapeOptions): NullShape {
 export function literalShape<const T extends readonly (string | number | boolean)[]>(
 	values: T,
 	options?: LiteralShapeOptions,
-): LiteralShape<Readonly<T>> {
-	const snapshot = Object.freeze(structuredClone(values))
+): LiteralShape<Readonly<T>>
+export function literalShape(
+	values: readonly (string | number | boolean)[],
+	options?: LiteralShapeOptions,
+): LiteralShape {
+	const snapshot = Object.freeze([...values])
 	return Object.freeze({
 		type: 'literal',
 		values: snapshot,
@@ -452,7 +457,7 @@ export function jsonShape(options?: JSONShapeOptions): JSONShape {
  * ```
  */
 export function rawShape(schema: JSONSchema): RawShape {
-	return Object.freeze({ type: 'raw', schema: Object.freeze({ ...schema }) })
+	return Object.freeze({ type: 'raw', schema: cloneSchema(schema) })
 }
 
 // === Schema inversion
