@@ -7,6 +7,7 @@ import type {
 	OptionalFromGuards,
 	TupleFromGuards,
 } from './types.js'
+import { GUARD_DEPTH_LIMIT } from './constants.js'
 import {
 	isArray,
 	isConstructor,
@@ -567,10 +568,10 @@ export function whereOf<T>(base: Guard<T>, predicate: (value: T) => boolean): Gu
  * self-referential recursive guards. Per §14 a throw from `thunk` (or the guard
  * it resolves to) is contained and reported as a non-match.
  *
- * A recursive guard built this way has no cycle/depth detection: a cyclic or
- * pathologically deep input is stack-bounded — the overflow is contained and the
- * guard returns `false` rather than throwing, but it is not validated correctly
- * past that bound.
+ * Each lazy guard tracks its active invocation depth. An invocation that would
+ * exceed {@link GUARD_DEPTH_LIMIT} returns `false` before resolving `thunk`; the
+ * counter always unwinds after the contained call, so one deep or cyclic input
+ * cannot poison later guard calls.
  *
  * @example
  * ```ts
@@ -580,7 +581,16 @@ export function whereOf<T>(base: Guard<T>, predicate: (value: T) => boolean): Gu
  * ```
  */
 export function lazyOf<T>(thunk: () => Guard<T>): Guard<T> {
-	return (value: unknown): value is T => holds(() => thunk()(value))
+	let depth = 0
+	return (value: unknown): value is T => {
+		if (depth >= GUARD_DEPTH_LIMIT) return false
+		depth += 1
+		try {
+			return holds(() => thunk()(value))
+		} finally {
+			depth -= 1
+		}
+	}
 }
 
 /**

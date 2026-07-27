@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import type { ContractShape } from '@src/core'
 import {
 	arrayShape,
 	booleanShape,
@@ -6,8 +6,10 @@ import {
 	compileGuard,
 	compileParser,
 	compileSchema,
+	ContractError,
 	createContract,
 	integerShape,
+	isContractError,
 	isRecord,
 	jsonShape,
 	literalShape,
@@ -25,8 +27,94 @@ import {
 	validateShape,
 } from '@src/core'
 import { SOUNDNESS_SAMPLE } from '../../setup.js'
+import { describe, expect, it } from 'vitest'
 
 describe('validateShape', () => {
+	it('throws coded ContractError categories for every malformed-shape policy', () => {
+		const malformedInteger: ContractShape = JSON.parse(
+			'{"type":"number","integer":true,"min":2.5,"max":2.6}',
+		)
+		const cases: readonly {
+			readonly shape: ContractShape
+			readonly code: 'range' | 'empty' | 'placement' | 'literal'
+		}[] = [
+			{ shape: stringShape({ min: 5, max: 1 }), code: 'range' },
+			{ shape: malformedInteger, code: 'range' },
+			{ shape: literalShape([]), code: 'empty' },
+			{ shape: unionShape(), code: 'empty' },
+			{ shape: optionalShape(stringShape()), code: 'placement' },
+			{ shape: literalShape([Number.NaN]), code: 'literal' },
+		]
+
+		for (const entry of cases) {
+			expect(() => validateShape(entry.shape)).toThrowError(ContractError)
+			try {
+				validateShape(entry.shape)
+			} catch (error) {
+				expect(isContractError(error)).toBe(true)
+				if (isContractError(error)) {
+					expect(error.code).toBe(entry.code)
+				}
+			}
+		}
+	})
+
+	it('raises a cycle ContractError with the item path for a self-referential array shape', () => {
+		const raw = JSON.parse('{"type":"array","items":{"type":"string"}}')
+		raw.items = raw
+		const shape: ContractShape = raw
+
+		expect(() => validateShape(shape)).toThrowError(ContractError)
+		try {
+			validateShape(shape)
+		} catch (error) {
+			expect(error).toBeInstanceOf(ContractError)
+			if (isContractError(error)) {
+				expect(error.code).toBe('cycle')
+				expect(error.context?.path).toEqual(['items'])
+			}
+		}
+	})
+
+	it('raises a cycle ContractError with the property path for a self-referential object shape', () => {
+		const raw = JSON.parse('{"type":"object","properties":{}}')
+		raw.properties.self = raw
+		const shape: ContractShape = raw
+
+		expect(() => validateShape(shape)).toThrowError(ContractError)
+		try {
+			validateShape(shape)
+		} catch (error) {
+			expect(error).toBeInstanceOf(ContractError)
+			if (isContractError(error)) {
+				expect(error.code).toBe('cycle')
+				expect(error.context?.path).toEqual(['properties', 'self'])
+			}
+		}
+	})
+
+	it('raises a cycle ContractError with the variant path for a self-referential union shape', () => {
+		const raw = JSON.parse('{"type":"union","variants":[]}')
+		raw.variants.push(raw)
+		const shape: ContractShape = raw
+
+		expect(() => validateShape(shape)).toThrowError(ContractError)
+		try {
+			validateShape(shape)
+		} catch (error) {
+			expect(error).toBeInstanceOf(ContractError)
+			if (isContractError(error)) {
+				expect(error.code).toBe('cycle')
+				expect(error.context?.path).toEqual(['variants', '0'])
+			}
+		}
+	})
+
+	it('allows a shared child reached through separate non-cyclic paths', () => {
+		const child = objectShape({ value: stringShape() })
+		expect(() => validateShape(objectShape({ first: child, second: child }))).not.toThrow()
+	})
+
 	it('throws on an optional shape used as an array item', () => {
 		expect(() => validateShape(arrayShape(optionalShape(stringShape())))).toThrow(
 			'validateShape: an optional shape may only appear as a direct object-property value',

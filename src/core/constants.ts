@@ -57,6 +57,39 @@ export const FAULT_LIMIT = 64
  */
 export const PREVIEW_LIMIT = 64
 
+// Runtime recursion and generation bounds.
+
+/**
+ * The maximum number of active {@link lazyOf} invocations for one lazy guard,
+ * frozen.
+ *
+ * @remarks
+ * Bounds explicitly recursive guards before the JavaScript call stack becomes
+ * the limiting mechanism. An invocation beyond this depth returns `false`, and
+ * the counter unwinds after every contained guard call.
+ *
+ * @example
+ * ```ts
+ * GUARD_DEPTH_LIMIT // 512
+ * ```
+ */
+export const GUARD_DEPTH_LIMIT = 512
+
+/**
+ * The maximum number of candidate-generation attempts for a constrained
+ * generated value, frozen.
+ *
+ * @remarks
+ * Provides one deterministic work bound for generators that must retry a
+ * candidate against a contract constraint.
+ *
+ * @example
+ * ```ts
+ * GENERATION_ATTEMPT_LIMIT // 32
+ * ```
+ */
+export const GENERATION_ATTEMPT_LIMIT = 32
+
 // Value-to-schema inference bounds (`valueToSchema` / `samplesToSchema`).
 
 /**

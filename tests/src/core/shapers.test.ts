@@ -12,6 +12,7 @@ import {
 	arrayShape,
 	booleanShape,
 	compileGuard,
+	ContractError,
 	createContract,
 	INFER_BREADTH_LIMIT,
 	integerShape,
@@ -34,6 +35,83 @@ import {
 import type { Equal, Expect } from '../../setup.js'
 
 describe('shape builders', () => {
+	it('rejects invalid string, array, and number bounds plus stateful patterns at construction', () => {
+		expect(() => stringShape({ min: -1 })).toThrowError(ContractError)
+		expect(() => stringShape({ max: 1.5 })).toThrowError(ContractError)
+		expect(() => arrayShape(stringShape(), { min: Number.MAX_SAFE_INTEGER + 1 })).toThrowError(
+			ContractError,
+		)
+		expect(() => numberShape({ max: Number.POSITIVE_INFINITY })).toThrowError(ContractError)
+		expect(() => stringShape({ pattern: /^value$/g })).toThrowError(ContractError)
+
+		try {
+			stringShape({ min: -1 })
+		} catch (error) {
+			expect(error).toBeInstanceOf(ContractError)
+			if (error instanceof ContractError) expect(error.code).toBe('bound')
+		}
+		try {
+			stringShape({ pattern: /^value$/g })
+		} catch (error) {
+			expect(error).toBeInstanceOf(ContractError)
+			if (error instanceof ContractError) {
+				expect(error.code).toBe('pattern')
+				expect(error.message).toContain('inline pattern constructs')
+			}
+		}
+	})
+
+	it('freezes every built shape and snapshots caller-owned collections', () => {
+		const values = ['admin', 'guest']
+		const literal = literalShape(values)
+		const properties: Record<string, ContractShape> = { role: literal }
+		const object = objectShape(properties)
+		const variants: ContractShape[] = [object, nullShape()]
+		const union = unionShape(...variants)
+
+		values.push('owner')
+		properties.extra = stringShape()
+		variants.push(booleanShape())
+
+		expect(literal.values).toEqual(['admin', 'guest'])
+		expect(Object.hasOwn(object.properties, 'extra')).toBe(false)
+		expect(union.variants).toHaveLength(2)
+		expect(Object.isFrozen(values)).toBe(false)
+		expect(Object.isFrozen(properties)).toBe(false)
+		expect(Object.isFrozen(variants)).toBe(false)
+		expect(Object.isFrozen(literal.values)).toBe(true)
+		expect(Object.isFrozen(object.properties)).toBe(true)
+		expect(Object.isFrozen(union.variants)).toBe(true)
+		expect(Object.isFrozen(literal)).toBe(true)
+		expect(Object.isFrozen(object)).toBe(true)
+		expect(Object.isFrozen(union)).toBe(true)
+		expect(Object.isFrozen(object.properties.role)).toBe(true)
+	})
+
+	it('freezes roots from every shape builder', () => {
+		const shapes: readonly ContractShape[] = [
+			stringShape(),
+			numberShape(),
+			integerShape(),
+			booleanShape(),
+			nullShape(),
+			literalShape(['value']),
+			arrayShape(stringShape()),
+			objectShape({ value: stringShape() }),
+			recordShape(stringShape()),
+			unionShape(stringShape()),
+			oneOfShape(stringShape()),
+			optionalShape(stringShape()),
+			nullableShape(stringShape()),
+			jsonShape(),
+			rawShape({ type: 'string' }),
+		]
+
+		for (const shape of shapes) {
+			expect(Object.isFrozen(shape)).toBe(true)
+		}
+	})
+
 	it('stringShape carries length / pattern / description', () => {
 		expect(stringShape()).toMatchObject({ type: 'string' })
 		const pattern = /^a+$/
@@ -732,6 +810,18 @@ describe('schemaToShape — createContract never throws (malformed schema sweep)
 		{
 			label: 'minimum of wrong type',
 			schema: JSON.parse('{"type":"number","minimum":"not a number"}'),
+		},
+		{
+			label: 'unsafe string length bound',
+			schema: { type: 'string', minLength: Number.MAX_SAFE_INTEGER + 1 },
+		},
+		{
+			label: 'unsafe array length bound',
+			schema: { type: 'array', minItems: Number.MAX_SAFE_INTEGER + 1 },
+		},
+		{
+			label: 'empty fractional integer range',
+			schema: { type: 'integer', minimum: 1.2, maximum: 1.8 },
 		},
 		{ label: 'unknown type string', schema: JSON.parse('{"type":"wat"}') },
 		{ label: 'empty schema', schema: {} },

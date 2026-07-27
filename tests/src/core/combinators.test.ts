@@ -5,6 +5,7 @@ import {
 	boundsOf,
 	complementOf,
 	enumOf,
+	GUARD_DEPTH_LIMIT,
 	instanceOf,
 	intersectionOf,
 	isBoolean,
@@ -376,6 +377,20 @@ describe('refinement, laziness, transforms, nullability', () => {
 		expect(isTree({ value: 1, children: [{ value: 2, children: [] }] })).toBe(true)
 		expect(isTree({ value: 'x', children: [] })).toBe(false)
 		expect(isTree({ value: 1, children: [{ value: 'y', children: [] }] })).toBe(false)
+	})
+
+	it('bounds lazyOf-rooted recursion by design and resets after each call', () => {
+		const cell: { guard: Guard<unknown> } = {
+			guard: (_value: unknown): _value is unknown => false,
+		}
+		const lazy = lazyOf(() => cell.guard)
+		cell.guard = unionOf(isString, arrayOf(lazy), recordOf({ value: lazy }))
+
+		expect(GUARD_DEPTH_LIMIT).toBe(512)
+		expect(() => cell.guard(buildDeepNest(10_000))).not.toThrow()
+		expect(cell.guard(buildDeepNest(10_000))).toBe(false)
+		expect(cell.guard(buildDeepNest(100))).toBe(true)
+		expect(cell.guard('leaf')).toBe(true)
 	})
 
 	it('guards a projected value with transformOf', () => {

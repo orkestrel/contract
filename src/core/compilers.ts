@@ -22,6 +22,7 @@ import {
 } from './validators.js'
 import { attempt, preview, seededRandom, shapeToKind } from './helpers.js'
 import { FAULT_LIMIT } from './constants.js'
+import { ContractError } from './errors.js'
 import {
 	arrayOf,
 	boundsOf,
@@ -44,13 +45,15 @@ import { parseBoolean, parseInteger, parseNumber, parseRecord, parseString } fro
 // === Validation
 
 /**
- * Validate that a {@link ContractShape} tree is well-formed — a pure recursive
- * prepass run before compilation.
+ * Validate that a {@link ContractShape} graph is well-formed before
+ * compilation.
  *
  * @remarks
  * Fail-fast, per AGENTS §12: a malformed shape is a programmer error, so this
- * throws a plain `Error` immediately rather than surfacing as a silently-wrong
- * guard, parser, schema, or generator later. Checks, recursively:
+ * throws a coded {@link ContractError} immediately rather than surfacing as a
+ * silently-wrong guard, parser, schema, or generator later. The iterative walk
+ * tracks active ancestors, so a structural cycle reports its precise path while
+ * a shared child reached through separate paths remains legal. Checks:
  *
  * - An {@link OptionalShape} is only legal as a direct object-property value —
  *   `optionalShape` wrapping an array item, a union variant, another
@@ -70,7 +73,7 @@ import { parseBoolean, parseInteger, parseNumber, parseRecord, parseString } fro
  *   when it is a shape), union variants, and optional/nullable inner shapes.
  *
  * @param shape - The shape to validate
- * @throws {Error} When the shape is malformed
+ * @throws {ContractError} When the shape is malformed or cyclic
  *
  * @example
  * ```ts
@@ -79,71 +82,187 @@ import { parseBoolean, parseInteger, parseNumber, parseRecord, parseString } fro
  * ```
  */
 export function validateShape(shape: ContractShape): void {
-	switch (shape.type) {
-		case 'string': {
-			if (shape.min !== undefined && shape.max !== undefined && shape.min > shape.max) {
-				throw new Error('validateShape: a string shape has min greater than max')
-			}
-			return
+	const active = new WeakSet<ContractShape>()
+	const stack: (
+		| {
+				readonly operation: 'enter'
+				readonly shape: ContractShape
+				readonly path: readonly string[]
+				readonly optional: boolean
+		  }
+		| { readonly operation: 'exit'; readonly shape: ContractShape }
+	)[] = [{ operation: 'enter', shape, path: [], optional: false }]
+
+	while (stack.length > 0) {
+		const frame = stack.pop()
+		if (frame === undefined) continue
+		if (frame.operation === 'exit') {
+			active.delete(frame.shape)
+			continue
 		}
-		case 'number': {
-			if (shape.min !== undefined && shape.max !== undefined && shape.min > shape.max) {
-				throw new Error('validateShape: a number shape has min greater than max')
-			}
-			if (shape.integer === true) {
-				const lo = Math.ceil(shape.min ?? Number.NEGATIVE_INFINITY)
-				const hi = Math.floor(shape.max ?? Number.POSITIVE_INFINITY)
-				if (lo > hi) {
-					throw new Error('validateShape: an integer number shape has an empty integer range')
+
+		const current = frame.shape
+		if (active.has(current)) {
+			throw new ContractError('validateShape: a shape graph may not contain a cycle', {
+				code: 'cycle',
+				context: { path: frame.path },
+			})
+		}
+		active.add(current)
+		stack.push({ operation: 'exit', shape: current })
+
+		switch (current.type) {
+			case 'string':
+				if (
+					current.min !== undefined &&
+					current.max !== undefined &&
+					current.min > current.max
+				) {
+					throw new ContractError('validateShape: a string shape has min greater than max', {
+						code: 'range',
+						context: { path: frame.path, shape: 'string' },
+					})
 				}
-			}
-			return
-		}
-		case 'boolean':
-		case 'null':
-		case 'json':
-		case 'raw':
-			return
-		case 'literal':
-			if (shape.values.length === 0) {
-				throw new Error('validateShape: a literal shape needs at least one value')
-			}
-			for (const value of shape.values) {
-				if (typeof value === 'number' && !Number.isFinite(value)) {
-					throw new Error('validateShape: a literal shape may not contain non-finite number values')
+				break
+			case 'number':
+				if (
+					current.min !== undefined &&
+					current.max !== undefined &&
+					current.min > current.max
+				) {
+					throw new ContractError('validateShape: a number shape has min greater than max', {
+						code: 'range',
+						context: {
+							path: frame.path,
+							shape: current.integer === true ? 'integer' : 'number',
+						},
+					})
 				}
+				if (current.integer === true) {
+					const lo = Math.ceil(current.min ?? Number.NEGATIVE_INFINITY)
+					const hi = Math.floor(current.max ?? Number.POSITIVE_INFINITY)
+					if (lo > hi) {
+						throw new ContractError(
+							'validateShape: an integer number shape has an empty integer range',
+							{
+								code: 'range',
+								context: { path: frame.path, shape: 'integer' },
+							},
+						)
+					}
+				}
+				break
+			case 'boolean':
+			case 'null':
+			case 'json':
+			case 'raw':
+				break
+			case 'literal':
+				if (current.values.length === 0) {
+					throw new ContractError('validateShape: a literal shape needs at least one value', {
+						code: 'empty',
+						context: { path: frame.path, shape: 'literal' },
+					})
+				}
+				for (const value of current.values) {
+					if (typeof value === 'number' && !Number.isFinite(value)) {
+						throw new ContractError(
+							'validateShape: a literal shape may not contain non-finite number values',
+							{
+								code: 'literal',
+								context: { path: frame.path, shape: 'literal', received: String(value) },
+							},
+						)
+					}
+				}
+				break
+			case 'array':
+				if (
+					current.min !== undefined &&
+					current.max !== undefined &&
+					current.min > current.max
+				) {
+					throw new ContractError('validateShape: an array shape has min greater than max', {
+						code: 'range',
+						context: { path: frame.path, shape: 'array' },
+					})
+				}
+				stack.push({
+					operation: 'enter',
+					shape: current.items,
+					path: [...frame.path, 'items'],
+					optional: false,
+				})
+				break
+			case 'object': {
+				const extra = current.additionalProperties
+				if (extra !== undefined && extra !== true && extra !== false) {
+					stack.push({
+						operation: 'enter',
+						shape: extra,
+						path: [...frame.path, 'additionalProperties'],
+						optional: false,
+					})
+				}
+				const keys = Object.keys(current.properties)
+				for (let index = keys.length - 1; index >= 0; index -= 1) {
+					const key = keys[index]
+					if (key === undefined) continue
+					const child = current.properties[key]
+					if (child === undefined) continue
+					stack.push({
+						operation: 'enter',
+						shape: child,
+						path: [...frame.path, 'properties', key],
+						optional: true,
+					})
+				}
+				break
 			}
-			return
-		case 'array': {
-			if (shape.min !== undefined && shape.max !== undefined && shape.min > shape.max) {
-				throw new Error('validateShape: an array shape has min greater than max')
-			}
-			validateShape(shape.items)
-			return
+			case 'union':
+				if (current.variants.length === 0) {
+					throw new ContractError('validateShape: a union shape needs at least one variant', {
+						code: 'empty',
+						context: { path: frame.path, shape: 'union' },
+					})
+				}
+				for (let index = current.variants.length - 1; index >= 0; index -= 1) {
+					const variant = current.variants[index]
+					if (variant === undefined) continue
+					stack.push({
+						operation: 'enter',
+						shape: variant,
+						path: [...frame.path, 'variants', String(index)],
+						optional: false,
+					})
+				}
+				break
+			case 'optional':
+				if (!frame.optional) {
+					throw new ContractError(
+						'validateShape: an optional shape may only appear as a direct object-property value',
+						{
+							code: 'placement',
+							context: { path: frame.path, shape: 'optional' },
+						},
+					)
+				}
+				stack.push({
+					operation: 'enter',
+					shape: current.inner,
+					path: [...frame.path, 'inner'],
+					optional: false,
+				})
+				break
+			case 'nullable':
+				stack.push({
+					operation: 'enter',
+					shape: current.inner,
+					path: [...frame.path, 'inner'],
+					optional: false,
+				})
+				break
 		}
-		case 'object': {
-			for (const key of Object.keys(shape.properties)) {
-				const child = shape.properties[key]
-				if (child === undefined) continue
-				validateShape(child.type === 'optional' ? child.inner : child)
-			}
-			const extra = shape.additionalProperties
-			if (extra !== undefined && extra !== true && extra !== false) validateShape(extra)
-			return
-		}
-		case 'union':
-			if (shape.variants.length === 0) {
-				throw new Error('validateShape: a union shape needs at least one variant')
-			}
-			for (const variant of shape.variants) validateShape(variant)
-			return
-		case 'optional':
-			throw new Error(
-				'validateShape: an optional shape may only appear as a direct object-property value',
-			)
-		case 'nullable':
-			validateShape(shape.inner)
-			return
 	}
 }
 

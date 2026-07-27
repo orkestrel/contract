@@ -24,6 +24,7 @@ import type {
 	UnionShape,
 } from './types.js'
 import { INFER_BREADTH_LIMIT, INFER_DEPTH_LIMIT } from './constants.js'
+import { ContractError } from './errors.js'
 import { attempt } from './helpers.js'
 import { isArray, isBoolean, isFiniteNumber, isInteger, isRecord, isString } from './validators.js'
 
@@ -44,6 +45,7 @@ import { isArray, isBoolean, isFiniteNumber, isInteger, isRecord, isString } fro
  *
  * @param options - Optional length (`min` / `max`), `pattern`, and `description`
  * @returns A string shape
+ * @throws {ContractError} When a present bound is invalid or `pattern` has flags
  *
  * @example
  * ```ts
@@ -51,13 +53,40 @@ import { isArray, isBoolean, isFiniteNumber, isInteger, isRecord, isString } fro
  * ```
  */
 export function stringShape(options?: StringShapeOptions): StringShape {
-	return {
+	if (
+		options?.min !== undefined &&
+		(!Number.isSafeInteger(options.min) || options.min < 0)
+	) {
+		throw new ContractError('stringShape: min must be a non-negative safe integer', {
+			code: 'bound',
+			context: { shape: 'string', limit: 'non-negative safe integer', received: String(options.min) },
+		})
+	}
+	if (
+		options?.max !== undefined &&
+		(!Number.isSafeInteger(options.max) || options.max < 0)
+	) {
+		throw new ContractError('stringShape: max must be a non-negative safe integer', {
+			code: 'bound',
+			context: { shape: 'string', limit: 'non-negative safe integer', received: String(options.max) },
+		})
+	}
+	if (options?.pattern !== undefined && options.pattern.flags.length > 0) {
+		throw new ContractError(
+			'stringShape: pattern must not use flags; use inline pattern constructs instead',
+			{
+				code: 'pattern',
+				context: { shape: 'string', received: options.pattern.toString() },
+			},
+		)
+	}
+	return Object.freeze({
 		type: 'string',
 		...(options?.min === undefined ? {} : { min: options.min }),
 		...(options?.max === undefined ? {} : { max: options.max }),
 		...(options?.pattern === undefined ? {} : { pattern: options.pattern }),
 		...(options?.description === undefined ? {} : { description: options.description }),
-	}
+	})
 }
 
 /**
@@ -65,6 +94,7 @@ export function stringShape(options?: StringShapeOptions): StringShape {
  *
  * @param options - Optional bounds (`min` / `max`), `integer`, and `description`
  * @returns A number shape
+ * @throws {ContractError} When a present bound is not finite
  *
  * @example
  * ```ts
@@ -72,13 +102,25 @@ export function stringShape(options?: StringShapeOptions): StringShape {
  * ```
  */
 export function numberShape(options?: NumberShapeOptions): NumberShape {
-	return {
+	if (options?.min !== undefined && !Number.isFinite(options.min)) {
+		throw new ContractError('numberShape: min must be finite', {
+			code: 'bound',
+			context: { shape: 'number', limit: 'finite number', received: String(options.min) },
+		})
+	}
+	if (options?.max !== undefined && !Number.isFinite(options.max)) {
+		throw new ContractError('numberShape: max must be finite', {
+			code: 'bound',
+			context: { shape: 'number', limit: 'finite number', received: String(options.max) },
+		})
+	}
+	return Object.freeze({
 		type: 'number',
 		...(options?.min === undefined ? {} : { min: options.min }),
 		...(options?.max === undefined ? {} : { max: options.max }),
 		...(options?.integer === undefined ? {} : { integer: options.integer }),
 		...(options?.description === undefined ? {} : { description: options.description }),
-	}
+	})
 }
 
 /**
@@ -92,13 +134,13 @@ export function numberShape(options?: NumberShapeOptions): NumberShape {
  * @returns An integer number shape
  */
 export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): NumberShape {
-	return {
+	return Object.freeze({
 		type: 'number',
 		integer: true,
 		...(options?.min === undefined ? {} : { min: options.min }),
 		...(options?.max === undefined ? {} : { max: options.max }),
 		...(options?.description === undefined ? {} : { description: options.description }),
-	}
+	})
 }
 
 /**
@@ -113,10 +155,10 @@ export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): Num
  * ```
  */
 export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
-	return {
+	return Object.freeze({
 		type: 'boolean',
 		...(options?.description === undefined ? {} : { description: options.description }),
-	}
+	})
 }
 
 /**
@@ -131,10 +173,10 @@ export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
  * ```
  */
 export function nullShape(options?: NullShapeOptions): NullShape {
-	return {
+	return Object.freeze({
 		type: 'null',
 		...(options?.description === undefined ? {} : { description: options.description }),
-	}
+	})
 }
 
 /**
@@ -155,12 +197,13 @@ export function nullShape(options?: NullShapeOptions): NullShape {
 export function literalShape<const T extends readonly (string | number | boolean)[]>(
 	values: T,
 	options?: LiteralShapeOptions,
-): LiteralShape<T> {
-	return {
+): LiteralShape<Readonly<T>> {
+	const snapshot = Object.freeze(structuredClone(values))
+	return Object.freeze({
 		type: 'literal',
-		values,
+		values: snapshot,
 		...(options?.description === undefined ? {} : { description: options.description }),
-	}
+	})
 }
 
 // === Collections
@@ -171,6 +214,7 @@ export function literalShape<const T extends readonly (string | number | boolean
  * @param items - The element shape
  * @param options - Optional length bounds and `description`
  * @returns An array shape
+ * @throws {ContractError} When a present bound is not a non-negative safe integer
  *
  * @example
  * ```ts
@@ -181,13 +225,31 @@ export function arrayShape<S extends ContractShape>(
 	items: S,
 	options?: ArrayShapeOptions,
 ): ArrayShape<S> {
-	return {
+	if (
+		options?.min !== undefined &&
+		(!Number.isSafeInteger(options.min) || options.min < 0)
+	) {
+		throw new ContractError('arrayShape: min must be a non-negative safe integer', {
+			code: 'bound',
+			context: { shape: 'array', limit: 'non-negative safe integer', received: String(options.min) },
+		})
+	}
+	if (
+		options?.max !== undefined &&
+		(!Number.isSafeInteger(options.max) || options.max < 0)
+	) {
+		throw new ContractError('arrayShape: max must be a non-negative safe integer', {
+			code: 'bound',
+			context: { shape: 'array', limit: 'non-negative safe integer', received: String(options.max) },
+		})
+	}
+	return Object.freeze({
 		type: 'array',
 		items,
 		...(options?.min === undefined ? {} : { min: options.min }),
 		...(options?.max === undefined ? {} : { max: options.max }),
 		...(options?.description === undefined ? {} : { description: options.description }),
-	}
+	})
 }
 
 /**
@@ -215,14 +277,18 @@ export function objectShape<
 	P extends Readonly<Record<string, ContractShape>>,
 	const A extends boolean | ContractShape = false,
 >(properties: P, options?: ObjectShapeOptions<A>): ObjectShape<P, A> {
-	return {
+	const snapshot: { [K in keyof P]: P[K] } = Object.create(null)
+	for (const key in properties) {
+		if (Object.hasOwn(properties, key)) snapshot[key] = properties[key]
+	}
+	return Object.freeze({
 		type: 'object',
-		properties,
+		properties: Object.freeze(snapshot),
 		...(options?.additionalProperties === undefined
 			? {}
 			: { additionalProperties: options.additionalProperties }),
 		...(options?.description === undefined ? {} : { description: options.description }),
-	}
+	})
 }
 
 /**
@@ -245,12 +311,12 @@ export function recordShape<S extends ContractShape>(
 	values: S,
 	options?: RecordShapeOptions,
 ): ObjectShape<Record<never, never>, S> {
-	return {
+	return Object.freeze({
 		type: 'object',
-		properties: {},
+		properties: Object.freeze({}),
 		additionalProperties: values,
 		...(options?.description === undefined ? {} : { description: options.description }),
-	}
+	})
 }
 
 // === Composition
@@ -267,8 +333,10 @@ export function recordShape<S extends ContractShape>(
  * // Infer<typeof id> = string | number
  * ```
  */
-export function unionShape<V extends readonly ContractShape[]>(...variants: V): UnionShape<V> {
-	return { type: 'union', variants }
+export function unionShape<V extends readonly ContractShape[]>(
+	...variants: V
+): UnionShape<Readonly<V>> {
+	return Object.freeze({ type: 'union', variants: Object.freeze(variants) })
 }
 
 /**
@@ -303,8 +371,14 @@ export function unionShape<V extends readonly ContractShape[]>(...variants: V): 
  * // 3.5 passes — matches numberShape only
  * ```
  */
-export function oneOfShape<V extends readonly ContractShape[]>(...variants: V): UnionShape<V> {
-	return { type: 'union', variants, mode: 'oneOf' }
+export function oneOfShape<V extends readonly ContractShape[]>(
+	...variants: V
+): UnionShape<Readonly<V>> {
+	return Object.freeze({
+		type: 'union',
+		variants: Object.freeze(variants),
+		mode: 'oneOf',
+	})
 }
 
 /**
@@ -318,7 +392,7 @@ export function oneOfShape<V extends readonly ContractShape[]>(...variants: V): 
  * @returns An optional shape
  */
 export function optionalShape<S extends ContractShape>(inner: S): OptionalShape<S> {
-	return { type: 'optional', inner }
+	return Object.freeze({ type: 'optional', inner })
 }
 
 /**
@@ -334,7 +408,7 @@ export function optionalShape<S extends ContractShape>(inner: S): OptionalShape<
  * ```
  */
 export function nullableShape<S extends ContractShape>(inner: S): NullableShape<S> {
-	return { type: 'nullable', inner }
+	return Object.freeze({ type: 'nullable', inner })
 }
 
 // === Escape hatch
@@ -356,10 +430,10 @@ export function nullableShape<S extends ContractShape>(inner: S): NullableShape<
  * ```
  */
 export function jsonShape(options?: JSONShapeOptions): JSONShape {
-	return {
+	return Object.freeze({
 		type: 'json',
 		...(options?.description === undefined ? {} : { description: options.description }),
-	}
+	})
 }
 
 /**
@@ -378,7 +452,7 @@ export function jsonShape(options?: JSONShapeOptions): JSONShape {
  * ```
  */
 export function rawShape(schema: JSONSchema): RawShape {
-	return { type: 'raw', schema }
+	return Object.freeze({ type: 'raw', schema: Object.freeze({ ...schema }) })
 }
 
 // === Schema inversion
@@ -404,10 +478,11 @@ export function rawShape(schema: JSONSchema): RawShape {
  *
  * @remarks
  * Total and pure. Either keyword is used only when it is a non-negative
- * integer (`isInteger` + `>= 0`); a malformed value (a string, a negative
- * number, `NaN`, `Infinity`, a fraction) is dropped as if absent. When both
- * bounds are present and `min` exceeds `max`, the PAIR is dropped entirely
- * (an unbounded shape is always a legal widening of a contradictory schema).
+ * safe integer (`Number.isSafeInteger` + `>= 0`); a malformed value (a string,
+ * a negative number, `NaN`, `Infinity`, a fraction, or an unsafe integer) is
+ * dropped as if absent. When both bounds are present and `min` exceeds `max`,
+ * the PAIR is dropped entirely (an unbounded shape is always a legal widening
+ * of a contradictory schema).
  *
  * @param min - The raw `minLength` / `minItems` keyword value
  * @param max - The raw `maxLength` / `maxItems` keyword value
@@ -424,8 +499,8 @@ export function deriveLengthBounds(
 	min: unknown,
 	max: unknown,
 ): { readonly min?: number; readonly max?: number } {
-	const lo = isInteger(min) && min >= 0 ? min : undefined
-	const hi = isInteger(max) && max >= 0 ? max : undefined
+	const lo = isInteger(min) && Number.isSafeInteger(min) && min >= 0 ? min : undefined
+	const hi = isInteger(max) && Number.isSafeInteger(max) && max >= 0 ? max : undefined
 	if (lo !== undefined && hi !== undefined && lo > hi) return {}
 	return {
 		...(lo === undefined ? {} : { min: lo }),
