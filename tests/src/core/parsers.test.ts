@@ -35,7 +35,12 @@ import {
 	parseStringField,
 	recordOf,
 } from '@src/core'
-import { soundnessViolations } from '../../setup.js'
+import {
+	buildSparseArray,
+	createRevokedArrayProxy,
+	soundnessViolations,
+	throwHostileAccess,
+} from '../../setup.js'
 
 describe('primitive parsers', () => {
 	it('parseString returns strings as-is and coerces finite numbers', () => {
@@ -118,6 +123,28 @@ describe('structural parsers', () => {
 		expect(parseArray([1, '2'], isNumber)).toBeUndefined()
 		expect(parseArray('x')).toBeUndefined()
 		expect(parseArray({})).toBeUndefined()
+	})
+
+	it('parseArray returns undefined for hostile input and throwing element guards', () => {
+		const hostile = createRevokedArrayProxy()
+		expect(() => parseArray(hostile, isString)).not.toThrow()
+		expect(parseArray(hostile, isString)).toBeUndefined()
+		expect(() =>
+			parseArray(
+				['value'],
+				(_value: unknown): _value is string => throwHostileAccess(),
+			),
+		).not.toThrow()
+		expect(
+			parseArray(
+				['value'],
+				(_value: unknown): _value is string => throwHostileAccess(),
+			),
+		).toBeUndefined()
+	})
+
+	it('parseArray rejects sparse arrays when guarding elements', () => {
+		expect(parseArray(buildSparseArray(), isString)).toBeUndefined()
 	})
 
 	it('parseEnum matches one of the allowed literals', () => {
@@ -304,6 +331,21 @@ describe('JSON parsers', () => {
 		expect(parseJSONAs('{"host":"localhost"}', isConfig)).toBeUndefined()
 		// Never throws on malformed input.
 		expect(parseJSONAs('not json', isConfig)).toBeUndefined()
+	})
+
+	it('parseJSONAs returns undefined when the supplied guard throws', () => {
+		expect(() =>
+			parseJSONAs(
+				'{"value":true}',
+				(_value: unknown): _value is { readonly value: boolean } => throwHostileAccess(),
+			),
+		).not.toThrow()
+		expect(
+			parseJSONAs(
+				'{"value":true}',
+				(_value: unknown): _value is { readonly value: boolean } => throwHostileAccess(),
+			),
+		).toBeUndefined()
 	})
 
 	it('parseJSONAs composes with isJSONPrimitive', () => {

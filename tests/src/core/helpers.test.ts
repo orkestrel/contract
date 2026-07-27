@@ -1,5 +1,5 @@
 import type { JSONSchema } from '@src/core'
-import { createRevokedProxy, createThrowingGetter } from '../../setup.js'
+import { buildSparseArray, createRevokedProxy, createThrowingGetter } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
 import {
 	attempt,
@@ -179,6 +179,10 @@ describe('matchesJSONValue', () => {
 		const nested: { child?: unknown } = {}
 		nested.child = { parent: nested }
 		expect(matchesJSONValue(nested, new WeakSet())).toBe(false)
+	})
+
+	it('rejects sparse arrays', () => {
+		expect(matchesJSONValue(buildSparseArray(), new WeakSet())).toBe(false)
 	})
 })
 

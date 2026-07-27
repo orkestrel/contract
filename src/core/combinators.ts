@@ -12,7 +12,6 @@ import {
 	isConstructor,
 	isFiniteNumber,
 	isInstance,
-	isIterable,
 	isMap,
 	isNumber,
 	isObject,
@@ -21,15 +20,14 @@ import {
 	isString,
 	isSymbol,
 } from './validators.js'
-import { attempt } from './helpers.js'
+import { holds } from './helpers.js'
 
 // Every combinator returns a `Guard<T>` — a total function (AGENTS §14). The
-// three combinators that invoke a caller-supplied callback inside the guard
-// body (`whereOf`, `lazyOf`, `transformOf`) contain any throw via `attempt`, so
+// combinators that invoke a caller-supplied callback inside the guard body
+// contain the whole call via `holds`, so
 // the produced guard reports a non-match instead of propagating. The container
-// combinators (`arrayOf`, `tupleOf`, `setOf`, `mapOf`, `iterableOf`, `recordOf`)
-// likewise wrap their element/entry/key-read walk in `attempt` after the cheap
-// structural check — a hostile Proxy trap, a throwing getter, a throwing
+// combinators likewise wrap their complete element/entry/key-read walk in
+// `holds` — a hostile Proxy trap, a throwing getter, a throwing
 // iterator, or a throwing caller-supplied predicate yields a non-match, never a
 // propagated throw.
 
@@ -46,13 +44,18 @@ import { attempt } from './helpers.js'
 export function arrayOf<T>(elementGuard: Guard<T>): Guard<readonly T[]>
 export function arrayOf(elementGuard: (value: unknown) => boolean): Guard<readonly unknown[]>
 export function arrayOf(elementGuard: (value: unknown) => boolean): Guard<readonly unknown[]> {
-	return (value: unknown): value is readonly unknown[] => {
-		if (!isArray(value)) {
-			return false
-		}
-		const outcome = attempt(() => value.every(elementGuard))
-		return outcome.success && outcome.value
-	}
+	return (value: unknown): value is readonly unknown[] =>
+		holds(() => {
+			if (!isArray(value)) {
+				return false
+			}
+			for (let index = 0; index < value.length; index += 1) {
+				if (!Object.hasOwn(value, index) || !elementGuard(value[index])) {
+					return false
+				}
+			}
+			return true
+		})
 }
 
 /**
@@ -75,26 +78,26 @@ export function tupleOf(
 export function tupleOf(
 	...guards: ReadonlyArray<(value: unknown) => boolean>
 ): Guard<readonly unknown[]> {
-	return (value: unknown): value is readonly unknown[] => {
-		if (!isArray(value)) {
-			return false
-		}
-		// Arity comparison reads `.length`, which — like the element reads below —
-		// can hit a hostile Proxy trap, so it stays inside the contained region too.
-		const outcome = attempt(() => {
+	return (value: unknown): value is readonly unknown[] =>
+		holds(() => {
+			if (!isArray(value)) {
+				return false
+			}
 			if (value.length !== guards.length) {
 				return false
 			}
 			for (let index = 0; index < guards.length; index += 1) {
 				const guard = guards[index]
-				if (!guard?.(value[index])) {
+				if (
+					!Object.hasOwn(value, index) ||
+					guard === undefined ||
+					!guard(value[index])
+				) {
 					return false
 				}
 			}
 			return true
 		})
-		return outcome.success && outcome.value
-	}
 }
 
 /**
@@ -170,11 +173,11 @@ export function enumOf<const E extends Record<string, string | number>>(
 export function setOf<T>(elementGuard: Guard<T>): Guard<ReadonlySet<T>>
 export function setOf(elementGuard: (value: unknown) => boolean): Guard<ReadonlySet<unknown>>
 export function setOf(elementGuard: (value: unknown) => boolean): Guard<ReadonlySet<unknown>> {
-	return (value: unknown): value is ReadonlySet<unknown> => {
-		if (!isSet(value)) {
-			return false
-		}
-		const outcome = attempt(() => {
+	return (value: unknown): value is ReadonlySet<unknown> =>
+		holds(() => {
+			if (!isSet(value)) {
+				return false
+			}
 			for (const entry of value) {
 				if (!elementGuard(entry)) {
 					return false
@@ -182,8 +185,6 @@ export function setOf(elementGuard: (value: unknown) => boolean): Guard<Readonly
 			}
 			return true
 		})
-		return outcome.success && outcome.value
-	}
 }
 
 /**
@@ -206,11 +207,11 @@ export function mapOf(
 	keyGuard: (value: unknown) => boolean,
 	valueGuard: (value: unknown) => boolean,
 ): Guard<ReadonlyMap<unknown, unknown>> {
-	return (value: unknown): value is ReadonlyMap<unknown, unknown> => {
-		if (!isMap(value)) {
-			return false
-		}
-		const outcome = attempt(() => {
+	return (value: unknown): value is ReadonlyMap<unknown, unknown> =>
+		holds(() => {
+			if (!isMap(value)) {
+				return false
+			}
 			for (const [key, entryValue] of value) {
 				if (!keyGuard(key) || !valueGuard(entryValue)) {
 					return false
@@ -218,8 +219,6 @@ export function mapOf(
 			}
 			return true
 		})
-		return outcome.success && outcome.value
-	}
 }
 
 export function recordOf<S extends GuardsShape>(shape: S): Guard<FromGuards<S>>
@@ -244,9 +243,8 @@ export function recordOf<S extends GuardsShape>(
  * Key presence is tested with `Object.hasOwn`, so a shape key satisfied only by
  * an inherited prototype member (`toString`, `constructor`, …) counts as absent.
  * A non-object / `null` / array input returns `false` rather than throwing. The
- * extra-key check only inspects `Object.keys` (string keys), so an extra
- * enumerable SYMBOL key is never rejected — intentional, for JSON fidelity, and
- * matches the compiled guard.
+ * The exactness check inspects every own string key, including non-enumerable
+ * keys. Symbol keys are ignored intentionally for JSON fidelity.
  *
  * @example
  * ```ts
@@ -272,8 +270,8 @@ export function recordOf<
 			: FromGuards<S>
 > {
 	const allowed = new Set<string>()
-	for (const key in shape) {
-		if (Object.prototype.hasOwnProperty.call(shape, key)) {
+	for (const key of Reflect.ownKeys(shape)) {
+		if (isString(key)) {
 			allowed.add(key)
 		}
 	}
@@ -287,22 +285,18 @@ export function recordOf<
 		? Readonly<{ [P in keyof S]?: FromGuards<S>[P] }>
 		: K extends ReadonlyArray<keyof S & string>
 			? OptionalFromGuards<S, K>
-			: FromGuards<S> => {
-		if (!isRecord(value)) {
-			return false
-		}
-
-		const outcome = attempt(() => {
-			for (const key of Object.keys(value)) {
-				if (!allowed.has(key)) {
+			: FromGuards<S> =>
+		holds(() => {
+			if (!isRecord(value)) {
+				return false
+			}
+			for (const key of Reflect.ownKeys(value)) {
+				if (isString(key) && !allowed.has(key)) {
 					return false
 				}
 			}
 
-			for (const key in shape) {
-				if (!Object.prototype.hasOwnProperty.call(shape, key)) {
-					continue
-				}
+			for (const key of allowed) {
 				const present = Object.hasOwn(value, key)
 				if (!optionalSet.has(key) && !present) {
 					return false
@@ -317,39 +311,6 @@ export function recordOf<
 
 			return true
 		})
-		return outcome.success && outcome.value
-	}
-}
-
-/**
- * Build a guard that accepts any iterable whose every element satisfies
- * `elementGuard`.
- *
- * @example
- * ```ts
- * const isNumberIterable = iterableOf(isNumber)
- * isNumberIterable([1, 2, 3])       // true
- * isNumberIterable(new Set([1, 2])) // true
- * isNumberIterable([1, 'two'])      // false
- * ```
- */
-export function iterableOf<T>(elementGuard: Guard<T>): Guard<Iterable<T>>
-export function iterableOf(elementGuard: (value: unknown) => boolean): Guard<Iterable<unknown>>
-export function iterableOf(elementGuard: (value: unknown) => boolean): Guard<Iterable<unknown>> {
-	return (value: unknown): value is Iterable<unknown> => {
-		if (!isIterable(value)) {
-			return false
-		}
-		const outcome = attempt(() => {
-			for (const entry of value) {
-				if (!elementGuard(entry)) {
-					return false
-				}
-			}
-			return true
-		})
-		return outcome.success && outcome.value
-	}
 }
 
 /**
@@ -373,7 +334,11 @@ export function keyOf<const O extends Readonly<Record<PropertyKey, unknown>>>(
 	value: O,
 ): Guard<keyof O> {
 	return (entry: unknown): entry is keyof O =>
-		(isString(entry) || isSymbol(entry) || isNumber(entry)) && Object.hasOwn(value, entry)
+		holds(
+			() =>
+				(isString(entry) || isSymbol(entry) || isNumber(entry)) &&
+				Object.hasOwn(value, entry),
+		)
 }
 
 /**
@@ -460,7 +425,8 @@ export function andOf(
 	left: (value: unknown) => boolean,
 	right: (value: unknown) => boolean,
 ): Guard<unknown> {
-	return (value: unknown): value is unknown => left(value) && right(value)
+	return (value: unknown): value is unknown =>
+		holds(() => left(value) && right(value))
 }
 
 /**
@@ -481,7 +447,8 @@ export function orOf(
 	left: (value: unknown) => boolean,
 	right: (value: unknown) => boolean,
 ): Guard<unknown> {
-	return (value: unknown): value is unknown => left(value) || right(value)
+	return (value: unknown): value is unknown =>
+		holds(() => left(value) || right(value))
 }
 
 /**
@@ -497,7 +464,7 @@ export function orOf(
  * ```
  */
 export function notOf(guard: (value: unknown) => boolean): Guard<unknown> {
-	return (value: unknown): value is unknown => !guard(value)
+	return (value: unknown): value is unknown => holds(() => !guard(value))
 }
 
 /**
@@ -515,12 +482,8 @@ export function complementOf<TBase, TExcluded extends TBase>(
 	base: Guard<TBase>,
 	excluded: Guard<TExcluded> | ((value: TBase) => value is TExcluded),
 ): Guard<Exclude<TBase, TExcluded>> {
-	return (value: unknown): value is Exclude<TBase, TExcluded> => {
-		if (!base(value)) {
-			return false
-		}
-		return !excluded(value)
-	}
+	return (value: unknown): value is Exclude<TBase, TExcluded> =>
+		holds(() => base(value) && !excluded(value))
 }
 
 /**
@@ -537,7 +500,8 @@ export function unionOf<const Gs extends ReadonlyArray<Guard<unknown>>>(
 ): Guard<GuardType<Gs[number]>>
 export function unionOf(...predicates: ReadonlyArray<(value: unknown) => boolean>): Guard<unknown>
 export function unionOf(...guards: ReadonlyArray<(value: unknown) => boolean>): Guard<unknown> {
-	return (value: unknown): value is unknown => guards.some((guard) => guard(value))
+	return (value: unknown): value is unknown =>
+		holds(() => guards.some((guard) => guard(value)))
 }
 
 /**
@@ -558,7 +522,8 @@ export function intersectionOf(
 export function intersectionOf(
 	...guards: ReadonlyArray<(value: unknown) => boolean>
 ): Guard<unknown> {
-	return (value: unknown): value is unknown => guards.every((guard) => guard(value))
+	return (value: unknown): value is unknown =>
+		holds(() => guards.every((guard) => guard(value)))
 }
 
 /**
@@ -588,15 +553,8 @@ export function whereOf<T, U extends T>(
 ): Guard<U>
 export function whereOf<T>(base: Guard<T>, predicate: (value: T) => boolean): Guard<T>
 export function whereOf<T>(base: Guard<T>, predicate: (value: T) => boolean): Guard<T> {
-	return (value: unknown): value is T => {
-		if (!base(value)) {
-			return false
-		}
-		// `predicate` is user-supplied with no never-throw contract; §14 forbids
-		// the guard from propagating its throw.
-		const outcome = attempt(() => predicate(value))
-		return outcome.success && outcome.value
-	}
+	return (value: unknown): value is T =>
+		holds(() => base(value) && predicate(value))
 }
 
 /**
@@ -622,12 +580,7 @@ export function whereOf<T>(base: Guard<T>, predicate: (value: T) => boolean): Gu
  * ```
  */
 export function lazyOf<T>(thunk: () => Guard<T>): Guard<T> {
-	return (value: unknown): value is T => {
-		// `thunk` and the guard it returns are user-supplied; §14 forbids
-		// propagating either throw.
-		const outcome = attempt(() => thunk()(value))
-		return outcome.success && outcome.value
-	}
+	return (value: unknown): value is T => holds(() => thunk()(value))
 }
 
 /**
@@ -637,9 +590,8 @@ export function lazyOf<T>(thunk: () => Guard<T>): Guard<T> {
  *
  * @remarks
  * `project` is a plain `(value: T) => U`. Per §14 the returned guard never
- * throws: a throw from `project` is contained and reported as a non-match.
- * `target` is itself a Guard (already §14-bound), so it stays outside the
- * contained region. (Unlike the reference implementation, there is no
+ * throws: a throw from `project` or `target` is contained and reported as a
+ * non-match. (Unlike the reference implementation, there is no
  * "curried projector" branch — a projection that legitimately returns a function
  * would be double-invoked under that scheme. Compose explicitly if you need it.)
  *
@@ -669,15 +621,8 @@ export function transformOf<T>(
 	project: (value: T) => unknown,
 	target: (value: unknown) => boolean,
 ): Guard<T> {
-	return (value: unknown): value is T => {
-		if (!base(value)) {
-			return false
-		}
-		// `project` is user-supplied with no never-throw contract; §14 forbids the
-		// guard from propagating its throw.
-		const outcome = attempt(() => project(value))
-		return outcome.success && target(outcome.value)
-	}
+	return (value: unknown): value is T =>
+		holds(() => base(value) && target(project(value)))
 }
 
 /**
@@ -774,7 +719,8 @@ export function stringOf(options?: {
  * ```
  */
 export function nullableOf<T>(guard: Guard<T>): Guard<T | null> {
-	return (value: unknown): value is T | null => value === null || guard(value)
+	return (value: unknown): value is T | null =>
+		holds(() => value === null || guard(value))
 }
 
 /**
@@ -790,5 +736,6 @@ export function nullableOf<T>(guard: Guard<T>): Guard<T | null> {
  * ```
  */
 export function optionalOf<T>(guard: Guard<T>): Guard<T | undefined> {
-	return (value: unknown): value is T | undefined => value === undefined || guard(value)
+	return (value: unknown): value is T | undefined =>
+		holds(() => value === undefined || guard(value))
 }

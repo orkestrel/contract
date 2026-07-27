@@ -67,6 +67,16 @@ import {
 	isZeroArgAsyncGenerator,
 	isZeroArgGenerator,
 } from '@src/core'
+import {
+	buildCyclicArray,
+	buildCyclicRecord,
+	buildDeepNest,
+	buildSparseArray,
+	createHostileKeys,
+	createRevokedArrayProxy,
+	createRevokedProxy,
+	createThrowingGetter,
+} from '../../setup.js'
 
 class JSONExample {
 	readonly value = 1
@@ -763,6 +773,97 @@ describe('function validators', () => {
 		expect(isAsyncFunction(fn)).toBe(false)
 		expect(() => isGeneratorFunction(fn)).not.toThrow()
 		expect(isGeneratorFunction(fn)).toBe(false)
+	})
+})
+
+describe('validator totality sweep', () => {
+	it('every exported is* guard returns a boolean for every hostile fixture', () => {
+		const guards: readonly ((value: unknown) => boolean)[] = [
+			isNull,
+			isUndefined,
+			isDefined,
+			isString,
+			isNumber,
+			isFiniteNumber,
+			isInteger,
+			isBoolean,
+			isTrue,
+			isFalse,
+			isBigInt,
+			isSymbol,
+			isFunction,
+			isNullableString,
+			isNullableNumber,
+			isNullableBoolean,
+			isDate,
+			isRegExp,
+			isError,
+			isPromise,
+			isPromiseLike,
+			isArrayBuffer,
+			isSharedArrayBuffer,
+			isIterable,
+			isAsyncIterable,
+			isObject,
+			isRecord,
+			isMap,
+			isSet,
+			isWeakMap,
+			isWeakSet,
+			isArray,
+			isDataView,
+			isArrayBufferView,
+			isInt8Array,
+			isUint8Array,
+			isUint8ClampedArray,
+			isInt16Array,
+			isUint16Array,
+			isInt32Array,
+			isUint32Array,
+			isFloat32Array,
+			isFloat64Array,
+			isBigInt64Array,
+			isBigUint64Array,
+			isEmptyString,
+			isEmptyArray,
+			isEmptyObject,
+			isEmptyMap,
+			isEmptySet,
+			isNonEmptyString,
+			isNonEmptyArray,
+			isNonEmptyObject,
+			isNonEmptyMap,
+			isNonEmptySet,
+			isZeroArg,
+			isAsyncFunction,
+			isGeneratorFunction,
+			isAsyncGeneratorFunction,
+			isZeroArgAsync,
+			isZeroArgGenerator,
+			isZeroArgAsyncGenerator,
+			isConstructor,
+			isJSONValue,
+			isJSONPrimitive,
+		]
+		const hostile: readonly unknown[] = [
+			createRevokedProxy(),
+			createRevokedArrayProxy(),
+			createThrowingGetter(),
+			createHostileKeys(),
+			buildDeepNest(10_000),
+			buildCyclicRecord(),
+			buildCyclicArray(),
+			buildSparseArray(),
+		]
+
+		for (const value of hostile) {
+			for (const guard of guards) {
+				expect(() => guard(value)).not.toThrow()
+				expect(typeof guard(value)).toBe('boolean')
+			}
+			expect(() => isInstance(value, Date)).not.toThrow()
+			expect(typeof isInstance(value, Date)).toBe('boolean')
+		}
 	})
 })
 

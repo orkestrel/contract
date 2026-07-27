@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from 'vitest'
+import type { Guard, GuardsShape } from '@src/core'
 import {
 	andOf,
 	arrayOf,
@@ -13,7 +13,6 @@ import {
 	isNull,
 	isNumber,
 	isString,
-	iterableOf,
 	keyOf,
 	lazyOf,
 	literalOf,
@@ -33,7 +32,18 @@ import {
 	unionOf,
 	whereOf,
 } from '@src/core'
-import type { Guard, GuardsShape } from '@src/core'
+import {
+	buildCyclicArray,
+	buildCyclicRecord,
+	buildDeepNest,
+	buildSparseArray,
+	createHostileKeys,
+	createRevokedArrayProxy,
+	createRevokedProxy,
+	createThrowingGetter,
+	throwHostileAccess,
+} from '../../setup.js'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 
 describe('element combinators', () => {
 	it('validates arrays and tuples', () => {
@@ -48,13 +58,17 @@ describe('element combinators', () => {
 		expect(pair(['a'])).toBe(false)
 	})
 
-	it('validates maps, sets, and iterables', () => {
+	it('arrayOf and tupleOf reject sparse arrays even when their guards allow undefined', () => {
+		const sparse = buildSparseArray()
+		expect(arrayOf(optionalOf(isString))(sparse)).toBe(false)
+		expect(tupleOf(optionalOf(isString), isString, optionalOf(isString))(sparse)).toBe(false)
+	})
+
+	it('validates maps and sets', () => {
 		expect(mapOf(isString, isNumber)(new Map([['a', 1]]))).toBe(true)
 		expect(mapOf(isString, isNumber)(new Map([['a', '1']]))).toBe(false)
 		expect(setOf(isNumber)(new Set([1, 2]))).toBe(true)
 		expect(setOf(isNumber)(new Set([1, '2']))).toBe(false)
-		expect(iterableOf(isNumber)(new Set([1, 2]))).toBe(true)
-		expect(iterableOf(isNumber)([1, 2, '3'])).toBe(false)
 	})
 })
 
@@ -136,6 +150,14 @@ describe('recordOf, pickOf, omitOf', () => {
 		const recordWithSymbol: unknown = { id: 'u1', [symbolKey]: 123 }
 		expect(recordOf({ id: isString })(recordWithSymbol)).toBe(true)
 		expect(recordOf({ id: isString })({ id: 'u1', extra: true })).toBe(false)
+	})
+
+	it('rejects non-enumerable extra own string keys', () => {
+		const value = Object.defineProperty({ id: 'u1' }, 'hidden', {
+			value: true,
+			enumerable: false,
+		})
+		expect(recordOf({ id: isString })(value)).toBe(false)
 	})
 
 	it('returns false for non-record inputs without throwing', () => {
@@ -547,6 +569,39 @@ describe('empty-collection and zero-guard edge cases', () => {
 })
 
 describe('user-callback throw containment (AGENTS §14)', () => {
+	it('logical, refinement, and nullish combinators contain every callback throw', () => {
+		const guards: readonly (readonly [Guard<unknown>, unknown])[] = [
+			[andOf(isString, throwHostileAccess), 'value'],
+			[orOf(throwHostileAccess, isString), 'value'],
+			[notOf(throwHostileAccess), 'value'],
+			[
+				complementOf(
+					isString,
+					(_value: string): _value is never => throwHostileAccess(),
+				),
+				'value',
+			],
+			[unionOf(throwHostileAccess, isString), 'value'],
+			[intersectionOf(isString, throwHostileAccess), 'value'],
+			[whereOf(isString, throwHostileAccess), 'value'],
+			[lazyOf(throwHostileAccess), 'value'],
+			[transformOf(isString, throwHostileAccess, isString), 'value'],
+			[
+				nullableOf((_value: unknown): _value is string => throwHostileAccess()),
+				'value',
+			],
+			[
+				optionalOf((_value: unknown): _value is string => throwHostileAccess()),
+				'value',
+			],
+		]
+
+		for (const [guard, value] of guards) {
+			expect(() => guard(value)).not.toThrow()
+			expect(guard(value)).toBe(false)
+		}
+	})
+
 	it('whereOf: a throwing refinement predicate is contained as a non-match', () => {
 		const throwingRefine = whereOf(isString, (_value: string): boolean => {
 			throw new Error('refinement error')
@@ -584,6 +639,58 @@ describe('user-callback throw containment (AGENTS §14)', () => {
 		expect(() => throwingGuard('hello')).not.toThrow()
 		expect(throwingGuard('hello')).toBe(false)
 		expect(throwingGuard(42)).toBe(false)
+	})
+})
+
+describe('combinator totality sweep', () => {
+	it('a guard from every combinator factory returns a boolean for every hostile fixture', () => {
+		let recursive: Guard<unknown> = isString
+		recursive = unionOf(isString, arrayOf(lazyOf(() => recursive)))
+		const shape = { id: isString, count: isNumber }
+		const guards: readonly Guard<unknown>[] = [
+			arrayOf(isString),
+			tupleOf(isString),
+			literalOf('value'),
+			instanceOf(Date),
+			enumOf({ Value: 'value' }),
+			setOf(isString),
+			mapOf(isString, isNumber),
+			recordOf({ id: isString }),
+			keyOf({ id: true }),
+			recordOf(pickOf(shape, ['id'])),
+			recordOf(omitOf(shape, ['count'])),
+			andOf(isString, isString),
+			orOf(isString, isNumber),
+			notOf(isString),
+			complementOf(isString, isEmptyString),
+			unionOf(isString, isNumber),
+			intersectionOf(isString, isString),
+			whereOf(isString, (value) => value.length > 0),
+			recursive,
+			transformOf(isString, (value) => value.length, isNumber),
+			boundsOf(0, 10),
+			matchOf(/^value$/),
+			stringOf({ min: 1, max: 10, pattern: /^value$/ }),
+			nullableOf(isString),
+			optionalOf(isString),
+		]
+		const hostile: readonly unknown[] = [
+			createRevokedProxy(),
+			createRevokedArrayProxy(),
+			createThrowingGetter(),
+			createHostileKeys(),
+			buildDeepNest(10_000),
+			buildCyclicRecord(),
+			buildCyclicArray(),
+			buildSparseArray(),
+		]
+
+		for (const value of hostile) {
+			for (const guard of guards) {
+				expect(() => guard(value)).not.toThrow()
+				expect(typeof guard(value)).toBe('boolean')
+			}
+		}
 	})
 })
 
@@ -650,17 +757,6 @@ describe('container-combinator throw containment (AGENTS §14)', () => {
 		expect(guard(map)).toBe(false)
 	})
 
-	it('iterableOf: an object with a throwing Symbol.iterator invocation is contained as a non-match', () => {
-		const hostile = {
-			[Symbol.iterator]() {
-				throw new Error('hostile iterator invocation')
-			},
-		}
-		const guard = iterableOf(isNumber)
-		expect(() => guard(hostile)).not.toThrow()
-		expect(guard(hostile)).toBe(false)
-	})
-
 	it('arrayOf: a throwing predicate is contained as a non-match', () => {
 		const guard = arrayOf((_value: unknown): boolean => {
 			throw new Error('predicate error')
@@ -694,14 +790,6 @@ describe('container-combinator throw containment (AGENTS §14)', () => {
 		)
 		expect(() => guard(new Map([['a', 1]]))).not.toThrow()
 		expect(guard(new Map([['a', 1]]))).toBe(false)
-	})
-
-	it('iterableOf: a throwing predicate is contained as a non-match', () => {
-		const guard = iterableOf((_value: unknown): boolean => {
-			throw new Error('predicate error')
-		})
-		expect(() => guard(['a'])).not.toThrow()
-		expect(guard(['a'])).toBe(false)
 	})
 
 	it('recordOf: a throwing predicate is contained as a non-match', () => {

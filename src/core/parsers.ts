@@ -1,7 +1,7 @@
 import type { Guard, JSONValue } from './types.js'
 import type { FieldPath } from './types.js'
 import { isArray, isFiniteNumber, isJSONValue, isNull, isRecord, isString } from './validators.js'
-import { resolveField } from './helpers.js'
+import { holds, resolveField } from './helpers.js'
 
 // AGENTS §14: a parser answers "give me a `T` or nothing" — it returns the
 // typed value or `undefined`, and it never throws. Each leaf parser here forms a
@@ -198,7 +198,19 @@ export function parseArray<T = unknown>(
 	guard?: Guard<T>,
 ): readonly T[] | undefined {
 	if (!isArray<T>(value)) return undefined
-	if (guard !== undefined && !value.every(guard)) return undefined
+	if (
+		guard !== undefined &&
+		!holds(() => {
+			for (let index = 0; index < value.length; index += 1) {
+				if (!Object.hasOwn(value, index) || !guard(value[index])) {
+					return false
+				}
+			}
+			return true
+		})
+	) {
+		return undefined
+	}
 	return value
 }
 
@@ -474,5 +486,11 @@ export function parseJSON(value: string): unknown {
 export function parseJSONAs<T>(value: string, guard: Guard<T>): T | undefined {
 	const parsed = parseJSON(value)
 	if (parsed === undefined) return undefined
-	return guard(parsed) ? parsed : undefined
+	let result: T | undefined = undefined
+	holds(() => {
+		if (!guard(parsed)) return false
+		result = parsed
+		return true
+	})
+	return result
 }

@@ -134,7 +134,16 @@ export function matchesJSONValue(entry: unknown, ancestors: WeakSet<object>): bo
 	if (Array.isArray(entry)) {
 		if (ancestors.has(entry)) return false
 		ancestors.add(entry)
-		const valid = entry.every((value) => matchesJSONValue(value, ancestors))
+		let valid = true
+		for (let index = 0; index < entry.length; index += 1) {
+			if (
+				!Object.hasOwn(entry, index) ||
+				!matchesJSONValue(entry[index], ancestors)
+			) {
+				valid = false
+				break
+			}
+		}
 		ancestors.delete(entry)
 		return valid
 	}

@@ -7,7 +7,7 @@ import type {
 	ZeroArgAsyncFunction,
 	ZeroArgFunction,
 } from './types.js'
-import { attempt, enumerableSymbolCount, matchesJSONValue } from './helpers.js'
+import { enumerableSymbolCount, holds, matchesJSONValue } from './helpers.js'
 
 // AGENTS §14: guards are total functions — a guard NEVER throws. Adversarial
 // input (hostile getters, exotic objects, cycles) returns `false`, never an
@@ -19,8 +19,8 @@ import { attempt, enumerableSymbolCount, matchesJSONValue } from './helpers.js'
 // invokes the target's `[Symbol.hasInstance]` / triggers a `getPrototypeOf`
 // trap), or an own-key enumeration (`isEmptyObject` / `isNonEmptyObject`) —
 // so a hostile getter, a revoked `Proxy`, or an exotic trap can throw
-// mid-probe. Totality is NOT automatic for these: each contains its
-// probe/walk in `attempt` (see ./helpers.js) and returns `false` on a caught
+// mid-probe. Totality is NOT automatic for these: each contains its whole
+// probe/walk in `holds` (see ./helpers.js) and returns `false` on a caught
 // throw. Every `instanceof`-based guard in this file routes through the
 // shared {@link isInstance} helper, which is the one place that containment
 // lives for that family.
@@ -249,7 +249,7 @@ export function isNullableBoolean(value: unknown): value is boolean | null {
  * NOT total (AGENTS §14): it invokes `getPrototypeOf` on `value` — which a
  * revoked `Proxy` or a `getPrototypeOf`-trap `Proxy` throws from — and, when
  * `X[Symbol.hasInstance]` is user-defined, can throw from arbitrary code. This
- * wraps the check in {@link attempt} (see ./helpers.js) so any such throw
+ * wraps the check in {@link holds} (see ./helpers.js) so any such throw
  * yields `false` instead of escaping.
  *
  * @param value - The value to test
@@ -269,12 +269,11 @@ export function isInstance<C>(
 ): value is InstanceType<C & AnyConstructor<object>> {
 	// `ctor` is narrowed to a function through `isFunction` before the `instanceof`
 	// check — an unconstrained generic RHS loses TS's built-in instanceof leniency
-	// once nested inside another generic call (the `attempt` callback), so the
+	// once nested inside another generic call (the `holds` callback), so the
 	// narrowing keeps this call legal without a constraint that would reject
 	// combinators.ts's `instanceOf`, which validates `ctor` separately.
 	const target: unknown = ctor
-	const outcome = attempt(() => isFunction(target) && value instanceof target)
-	return outcome.success && outcome.value
+	return holds(() => isFunction(target) && value instanceof target)
 }
 
 /** Determine whether a value is a `Date`.
@@ -343,16 +342,15 @@ export function isPromise<T = unknown>(value: unknown): value is Promise<T> {
 export function isPromiseLike<T = unknown>(
 	value: unknown,
 ): value is Promise<T> | (PromiseLike<T> & { catch: unknown; finally: unknown }) {
-	if (!isObject(value)) {
-		return false
-	}
-	const outcome = attempt(() => {
+	return holds(() => {
+		if (!isObject(value)) {
+			return false
+		}
 		const thenValue = Reflect.get(value, 'then')
 		const catchValue = Reflect.get(value, 'catch')
 		const finallyValue = Reflect.get(value, 'finally')
 		return isFunction(thenValue) && isFunction(catchValue) && isFunction(finallyValue)
 	})
-	return outcome.success && outcome.value
 }
 
 /** Determine whether a value is an `ArrayBuffer`.
@@ -401,14 +399,12 @@ export function isSharedArrayBuffer(value: unknown): value is SharedArrayBuffer 
  * ```
  */
 export function isIterable<T = unknown>(value: unknown): value is Iterable<T> {
-	if (isString(value)) {
-		return true
-	}
-	if (!isObject(value)) {
-		return false
-	}
-	const outcome = attempt(() => isFunction(Reflect.get(value, Symbol.iterator)))
-	return outcome.success && outcome.value
+	return holds(() => {
+		if (isString(value)) {
+			return true
+		}
+		return isObject(value) && isFunction(Reflect.get(value, Symbol.iterator))
+	})
 }
 
 /** Determine whether a value implements the async iterable protocol (`Symbol.asyncIterator`).
@@ -420,11 +416,9 @@ export function isIterable<T = unknown>(value: unknown): value is Iterable<T> {
  * ```
  */
 export function isAsyncIterable<T = unknown>(value: unknown): value is AsyncIterable<T> {
-	if (!isObject(value)) {
-		return false
-	}
-	const outcome = attempt(() => isFunction(Reflect.get(value, Symbol.asyncIterator)))
-	return outcome.success && outcome.value
+	return holds(
+		() => isObject(value) && isFunction(Reflect.get(value, Symbol.asyncIterator)),
+	)
 }
 
 // === Object & collection guards
@@ -462,7 +456,7 @@ export function isObject(value: unknown): value is object {
  * above `null`. Arrays and class instances are still rejected: an array's
  * prototype chain runs through `Array.prototype` before `null`, and a class
  * instance's runs through the class's own prototype. The whole body runs
- * inside `attempt` (AGENTS §14) so a revoked `Proxy` or a hostile
+ * inside `holds` (AGENTS §14) so a revoked `Proxy` or a hostile
  * `getPrototypeOf` trap cannot escape as a thrown error.
  *
  * @example
@@ -474,14 +468,13 @@ export function isObject(value: unknown): value is object {
  * ```
  */
 export function isRecord(value: unknown): value is Record<string, unknown> {
-	const outcome = attempt(() => {
+	return holds(() => {
 		if (!isObject(value) || isArray(value)) {
 			return false
 		}
 		const prototype = Object.getPrototypeOf(value)
 		return prototype === null || Object.getPrototypeOf(prototype) === null
 	})
-	return outcome.success && outcome.value
 }
 
 /** Determine whether a value is a `Map`.
@@ -543,7 +536,7 @@ export function isWeakSet(value: unknown): value is WeakSet<object> {
  * ```
  */
 export function isArray<T = unknown>(value: unknown): value is readonly T[] {
-	return Array.isArray(value)
+	return holds(() => Array.isArray(value))
 }
 
 /** Determine whether a value is a `DataView`.
@@ -567,7 +560,7 @@ export function isDataView(value: unknown): value is DataView<ArrayBufferLike> {
  * ```
  */
 export function isArrayBufferView(value: unknown): value is ArrayBufferView {
-	return ArrayBuffer.isView(value)
+	return holds(() => ArrayBuffer.isView(value))
 }
 
 /** Determine whether a value is an `Int8Array`.
@@ -735,7 +728,7 @@ export function isEmptyString(value: unknown): value is '' {
  * ```
  */
 export function isEmptyArray(value: unknown): value is readonly [] {
-	return isArray(value) && value.length === 0
+	return holds(() => isArray(value) && value.length === 0)
 }
 
 /** Determine whether a value is an empty plain object (no own string or enumerable symbol keys).
@@ -747,15 +740,12 @@ export function isEmptyArray(value: unknown): value is readonly [] {
  * ```
  */
 export function isEmptyObject(value: unknown): value is Record<string | symbol, never> {
-	if (!isRecord(value)) {
-		return false
-	}
-	// Object.keys / getOwnPropertySymbols read the object's own-key list, which
-	// an `ownKeys` Proxy trap can throw from — contained via `attempt` (AGENTS §14).
-	const outcome = attempt(
-		() => Object.keys(value).length === 0 && enumerableSymbolCount(value) === 0,
+	return holds(
+		() =>
+			isRecord(value) &&
+			Object.keys(value).length === 0 &&
+			enumerableSymbolCount(value) === 0,
 	)
-	return outcome.success && outcome.value
 }
 
 /** Determine whether a value is an empty `Map`.
@@ -767,7 +757,7 @@ export function isEmptyObject(value: unknown): value is Record<string | symbol, 
  * ```
  */
 export function isEmptyMap(value: unknown): value is ReadonlyMap<never, never> {
-	return isMap(value) && value.size === 0
+	return holds(() => isMap(value) && value.size === 0)
 }
 
 /** Determine whether a value is an empty `Set`.
@@ -779,7 +769,7 @@ export function isEmptyMap(value: unknown): value is ReadonlyMap<never, never> {
  * ```
  */
 export function isEmptySet(value: unknown): value is ReadonlySet<never> {
-	return isSet(value) && value.size === 0
+	return holds(() => isSet(value) && value.size === 0)
 }
 
 /** Determine whether a value is a non-empty string (at least one character).
@@ -803,7 +793,7 @@ export function isNonEmptyString(value: unknown): value is string {
  * ```
  */
 export function isNonEmptyArray<T = unknown>(value: unknown): value is readonly [T, ...T[]] {
-	return isArray(value) && value.length > 0
+	return holds(() => isArray<T>(value) && value.length > 0)
 }
 
 /** Determine whether a value is a non-empty plain object (at least one own string or enumerable symbol key).
@@ -815,12 +805,11 @@ export function isNonEmptyArray<T = unknown>(value: unknown): value is readonly 
  * ```
  */
 export function isNonEmptyObject(value: unknown): value is Record<string | symbol, unknown> {
-	if (!isRecord(value)) {
-		return false
-	}
-	// Same containment as isEmptyObject — an `ownKeys` Proxy trap can throw.
-	const outcome = attempt(() => Object.keys(value).length > 0 || enumerableSymbolCount(value) > 0)
-	return outcome.success && outcome.value
+	return holds(
+		() =>
+			isRecord(value) &&
+			(Object.keys(value).length > 0 || enumerableSymbolCount(value) > 0),
+	)
 }
 
 /** Determine whether a value is a non-empty `Map` (at least one entry).
@@ -834,7 +823,7 @@ export function isNonEmptyObject(value: unknown): value is Record<string | symbo
 export function isNonEmptyMap<K = unknown, V = unknown>(
 	value: unknown,
 ): value is ReadonlyMap<K, V> {
-	return isMap(value) && value.size > 0
+	return holds(() => isMap<K, V>(value) && value.size > 0)
 }
 
 /** Determine whether a value is a non-empty `Set` (at least one element).
@@ -846,7 +835,7 @@ export function isNonEmptyMap<K = unknown, V = unknown>(
  * ```
  */
 export function isNonEmptySet<T = unknown>(value: unknown): value is ReadonlySet<T> {
-	return isSet(value) && value.size > 0
+	return holds(() => isSet<T>(value) && value.size > 0)
 }
 
 // === Function guards
@@ -860,7 +849,7 @@ export function isNonEmptySet<T = unknown>(value: unknown): value is ReadonlySet
  * ```
  */
 export function isZeroArg(value: unknown): value is ZeroArgFunction {
-	return isFunction(value) && value.length === 0
+	return holds(() => isFunction(value) && value.length === 0)
 }
 
 /**
@@ -878,7 +867,7 @@ export function isZeroArg(value: unknown): value is ZeroArgFunction {
  * ```
  */
 export function isAsyncFunction(value: unknown): value is AnyAsyncFunction {
-	return isFunction(value) && value.constructor?.name === 'AsyncFunction'
+	return holds(() => isFunction(value) && value.constructor?.name === 'AsyncFunction')
 }
 
 /** Determine whether a value is a generator function (`function*`).
@@ -892,7 +881,7 @@ export function isAsyncFunction(value: unknown): value is AnyAsyncFunction {
 export function isGeneratorFunction(
 	value: unknown,
 ): value is (...args: unknown[]) => Generator<unknown, unknown, unknown> {
-	return isFunction(value) && value.constructor?.name === 'GeneratorFunction'
+	return holds(() => isFunction(value) && value.constructor?.name === 'GeneratorFunction')
 }
 
 /** Determine whether a value is an async generator function (`async function*`).
@@ -906,7 +895,9 @@ export function isGeneratorFunction(
 export function isAsyncGeneratorFunction(
 	value: unknown,
 ): value is (...args: unknown[]) => AsyncGenerator<unknown, unknown, unknown> {
-	return isFunction(value) && value.constructor?.name === 'AsyncGeneratorFunction'
+	return holds(
+		() => isFunction(value) && value.constructor?.name === 'AsyncGeneratorFunction',
+	)
 }
 
 /** Determine whether a value is a zero-argument async function.
@@ -964,15 +955,13 @@ export function isZeroArgAsyncGenerator(
  * ```
  */
 export function isConstructor(value: unknown): value is AnyConstructor<object> {
-	if (!isFunction(value)) {
-		return false
-	}
-	try {
+	return holds(() => {
+		if (!isFunction(value)) {
+			return false
+		}
 		Reflect.construct(String, [], value)
 		return true
-	} catch {
-		return false
-	}
+	})
 }
 
 // === JSON
@@ -984,7 +973,7 @@ export function isConstructor(value: unknown): value is AnyConstructor<object> {
  * Total guard: never throws, returns `false` for cycles, functions, `Date`
  * instances, class instances, `NaN`, and `±Infinity`. Arrays and plain records
  * are walked with an ancestor set so recursive input fails instead of hanging.
- * The whole walk runs inside `attempt` (AGENTS §14): a hostile getter on a
+ * The whole walk runs inside `holds` (AGENTS §14): a hostile getter on a
  * record property, or a revoked `Proxy` anywhere in the structure, is caught
  * and yields `false` instead of escaping as a thrown error.
  *
@@ -998,8 +987,7 @@ export function isConstructor(value: unknown): value is AnyConstructor<object> {
  * ```
  */
 export function isJSONValue(value: unknown): value is JSONValue {
-	const outcome = attempt(() => matchesJSONValue(value, new WeakSet()))
-	return outcome.success && outcome.value
+	return holds(() => matchesJSONValue(value, new WeakSet()))
 }
 
 /**
