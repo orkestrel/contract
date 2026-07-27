@@ -81,6 +81,22 @@ shared-file edits, and tree-wide mutating gates. Return the touched files,
 diffstat, scoped validation, and deviation state for independent integration and
 review.
 
+## Routing exclusion — defensive negative-test units
+
+The provider applies a content-safety filter that terminates a turn mid-run when
+the work requires authoring or reproducing a violation construct, even when the
+purpose is to prove a guard REJECTS it: sandbox escapes, resolution-bypassing
+imports, boundary evasion, injection payloads, credential-handling probes. The
+filter reads the construct, not the intent, so a legitimate negative test trips
+it exactly like an attack would. Observed twice on one unit, at the same point in
+the work, with nothing written to disk either time.
+
+Route such a unit to the native Opus `implementer` from the start, and record the
+Codex bench dark for that unit with this reason. Do not soften or obscure a brief
+to slip past the filter — a bench that declines work is a routing fact, not an
+obstacle. The exclusion is per unit: everything else still routes to Sol
+normally, and an audit that merely READS existing negative tests is unaffected.
+
 ## Journals and Windows
 
 - Journals, briefs, session files, and last-message files under `tmp/codex/` are
