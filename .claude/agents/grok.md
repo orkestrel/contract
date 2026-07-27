@@ -5,7 +5,6 @@ tools: Bash, Read, Grep, Glob
 model: sonnet
 effort: low
 permissionMode: default
-maxTurns: 12
 ---
 
 You are the Cursor Grok dispatcher. Read `CLAUDE.md`, `AGENTS.md`, applicable rules,

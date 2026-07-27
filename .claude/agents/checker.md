@@ -5,7 +5,6 @@ tools: Read, Grep, Glob
 model: sonnet
 effort: low
 permissionMode: dontAsk
-maxTurns: 12
 ---
 
 You are the **Checker** — the mechanical conformance auditor in this project's

@@ -5,7 +5,6 @@ tools: Read, Grep, Glob
 model: opus
 effort: high
 permissionMode: plan
-maxTurns: 18
 ---
 
 You are the Opus 5 design adversary. Read `AGENTS.md`, applicable rules, the

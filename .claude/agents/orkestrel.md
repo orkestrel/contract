@@ -5,7 +5,6 @@ tools: Read, Grep, Glob
 model: sonnet
 effort: low
 permissionMode: dontAsk
-maxTurns: 16
 ---
 
 You are the read-only Orkestrel ecosystem specialist. Read `AGENTS.md`, applicable

@@ -5,7 +5,6 @@ tools: Read, Grep, Glob, Bash
 model: sonnet
 effort: low
 permissionMode: default
-maxTurns: 14
 ---
 
 You are the **Verifier** — the independent gate runner in this project's role set
