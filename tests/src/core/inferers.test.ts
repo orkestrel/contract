@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+	attempt,
+	canonicalizeValue,
 	canonicalStringify,
 	compileSchema,
+	inferPrimitiveEnum,
 	integerShape,
 	INFER_BREADTH_LIMIT,
 	INFER_DEPTH_LIMIT,
@@ -18,6 +21,14 @@ import {
 	unifySchemas,
 	valueToSchema,
 } from '@src/core'
+import {
+	buildCyclicArray,
+	buildCyclicRecord,
+	buildSparseArray,
+	createHostileKeys,
+	createThrowingGetter,
+	SOUNDNESS_SAMPLE,
+} from '../../setup.js'
 
 describe('valueToSchema — leaf kinds', () => {
 	it('infers null', () => {
@@ -39,10 +50,10 @@ describe('valueToSchema — leaf kinds', () => {
 		expect(valueToSchema(3.14)).toEqual({ type: 'number' })
 	})
 
-	it('widens non-finite numbers to number', () => {
-		expect(valueToSchema(Number.NaN)).toEqual({ type: 'number' })
-		expect(valueToSchema(Number.POSITIVE_INFINITY)).toEqual({ type: 'number' })
-		expect(valueToSchema(Number.NEGATIVE_INFINITY)).toEqual({ type: 'number' })
+	it('widens non-finite numbers to {} — JSON carries no NaN / ±Infinity, so no type keyword is truthful', () => {
+		expect(valueToSchema(Number.NaN)).toEqual({})
+		expect(valueToSchema(Number.POSITIVE_INFINITY)).toEqual({})
+		expect(valueToSchema(Number.NEGATIVE_INFINITY)).toEqual({})
 	})
 
 	it('infers string', () => {
@@ -116,13 +127,13 @@ describe('valueToSchema — objects', () => {
 		expect(inferred).toEqual(expected)
 	})
 
-	it('treats an undefined-valued property as absent', () => {
+	it('drops an undefined-valued property and opens the schema (a closed schema would reject its own source object)', () => {
 		const inferred = valueToSchema({ a: 1, b: undefined })
 		expect(inferred).toEqual({
 			type: 'object',
 			properties: { a: { type: 'integer' } },
 			required: ['a'],
-			additionalProperties: false,
+			additionalProperties: true,
 		})
 	})
 
@@ -272,8 +283,11 @@ describe('samplesToSchema — records', () => {
 			},
 		)
 		expect(() => samplesToSchema([hostile])).not.toThrow()
-		const schema = samplesToSchema([hostile])
-		expect(schema.type).toBe('object')
+		// A failed key walk knows nothing about the rows — not even that they
+		// enumerate — so the slot widens to {} instead of claiming `type: 'object'`,
+		// whose compiled guard would re-enumerate the same hostile keys and reject
+		// the very row it was inferred from.
+		expect(samplesToSchema([hostile])).toEqual({})
 	})
 
 	it('terminates on a cyclic sample row, bounded by depth alone', () => {
@@ -518,7 +532,12 @@ describe('samplesToSchema — enum inference', () => {
 	})
 
 	it('does not fire on a number slot containing NaN (non-finite disqualifies)', () => {
-		expect(samplesToSchema([1, 1, Number.NaN], { enum: true })).toEqual({ type: 'number' })
+		// The slot is enum-ineligible, and the NaN sample itself infers `{}` (no
+		// JSON Schema type describes a non-finite number), so the unified result
+		// keeps both members rather than claiming every sample is a number.
+		expect(samplesToSchema([1, 1, Number.NaN], { enum: true })).toEqual({
+			anyOf: [{ type: 'integer' }, {}],
+		})
 	})
 
 	it('does not fire under default options (enum off)', () => {
@@ -877,6 +896,112 @@ describe('canonicalStringify — direct', () => {
 
 	it('renders NaN as null (JSON.stringify semantics)', () => {
 		expect(canonicalStringify(Number.NaN)).toBe('null')
+	})
+})
+
+describe('canonicalStringify — totality', () => {
+	it('returns undefined for a value JSON cannot encode at the top level', () => {
+		expect(canonicalStringify(undefined)).toBeUndefined()
+		expect(canonicalStringify(() => 1)).toBeUndefined()
+		expect(canonicalStringify(Symbol('x'))).toBeUndefined()
+		expect(canonicalStringify(10n)).toBeUndefined()
+	})
+
+	it('returns undefined for a container carrying a value JSON cannot encode', () => {
+		expect(canonicalStringify({ a: undefined })).toBeUndefined()
+		expect(canonicalStringify([1, undefined])).toBeUndefined()
+		expect(canonicalStringify({ a: { b: 10n } })).toBeUndefined()
+		expect(canonicalStringify(buildSparseArray())).toBeUndefined()
+	})
+
+	it('returns undefined for cyclic input, at every nesting level', () => {
+		expect(canonicalStringify(buildCyclicRecord())).toBeUndefined()
+		expect(canonicalStringify(buildCyclicArray())).toBeUndefined()
+		expect(canonicalStringify({ nested: buildCyclicRecord() })).toBeUndefined()
+	})
+
+	it('accepts a shared (non-cyclic) reference reached twice through different paths', () => {
+		const shared = { a: 1 }
+		expect(canonicalStringify({ left: shared, right: shared })).toBe(
+			'{"left":{"a":1},"right":{"a":1}}',
+		)
+		expect(canonicalStringify([shared, shared])).toBe('[{"a":1},{"a":1}]')
+	})
+
+	it('returns undefined for hostile traversal, never throwing', () => {
+		const hostileGetter = createThrowingGetter()
+		const hostileKeys = createHostileKeys()
+		expect(() => canonicalStringify(hostileGetter)).not.toThrow()
+		expect(canonicalStringify(hostileGetter)).toBeUndefined()
+		expect(() => canonicalStringify(hostileKeys)).not.toThrow()
+		expect(canonicalStringify(hostileKeys)).toBeUndefined()
+		expect(canonicalStringify({ nested: hostileGetter })).toBeUndefined()
+	})
+
+	it('never throws for any sample in the corpus', () => {
+		const thrown: unknown[] = []
+		for (const value of SOUNDNESS_SAMPLE) {
+			const outcome = attempt(() => canonicalStringify(value))
+			if (!outcome.success) thrown.push(value)
+		}
+		expect(thrown).toEqual([])
+	})
+})
+
+describe('canonicalizeValue — direct', () => {
+	it('sorts record keys, preserves array order, and encodes leaves as JSON', () => {
+		expect(canonicalizeValue({ b: 1, a: [3, 1] }, new WeakSet())).toBe('{"a":[3,1],"b":1}')
+		expect(canonicalizeValue(-0, new WeakSet())).toBe('0')
+		expect(canonicalizeValue(Number.NaN, new WeakSet())).toBe('null')
+	})
+
+	it('reports an un-encodable value as undefined without throwing', () => {
+		expect(canonicalizeValue(undefined, new WeakSet())).toBeUndefined()
+		expect(canonicalizeValue(buildSparseArray(), new WeakSet())).toBeUndefined()
+	})
+
+	it('treats only the ACTIVE traversal path as a cycle, per the caller-owned ancestor set', () => {
+		const node = { a: 1 }
+		const ancestors = new WeakSet<object>()
+		expect(canonicalizeValue(node, ancestors)).toBe('{"a":1}')
+		// The set unwinds after each subtree, so the same node encodes again.
+		expect(canonicalizeValue(node, ancestors)).toBe('{"a":1}')
+		ancestors.add(node)
+		expect(canonicalizeValue(node, ancestors)).toBeUndefined()
+	})
+})
+
+describe('unifySchemas / inferPrimitiveEnum — un-canonicalizable members', () => {
+	it('keeps an un-canonicalizable member in the union instead of dropping it (never narrows)', () => {
+		const cyclic: Record<string, unknown> = { type: 'object' }
+		cyclic.self = cyclic
+		const result = unifySchemas([{ type: 'string' }, cyclic, { type: 'string' }])
+		// The two structurally-equal string fragments de-duplicate; the cyclic one
+		// has no canonical key, so it cannot be de-duplicated or ordered — it is
+		// appended in input order rather than dropped.
+		expect(result.anyOf).toHaveLength(2)
+		expect(result.anyOf?.[0]).toEqual({ type: 'string' })
+		expect(result.anyOf?.[1]).toBe(cyclic)
+	})
+
+	it('returns the lone un-canonicalizable member directly', () => {
+		const cyclic: Record<string, unknown> = {}
+		cyclic.self = cyclic
+		expect(unifySchemas([cyclic])).toBe(cyclic)
+	})
+
+	it('is deterministic across repeated calls with un-canonicalizable members', () => {
+		const cyclic: Record<string, unknown> = {}
+		cyclic.self = cyclic
+		const first = unifySchemas([{ type: 'string' }, cyclic, { type: 'null' }])
+		const second = unifySchemas([{ type: 'string' }, cyclic, { type: 'null' }])
+		expect(first).toEqual(second)
+	})
+
+	it('never throws for a hostile enum slot and stays ineligible', () => {
+		const hostile = createThrowingGetter()
+		expect(() => inferPrimitiveEnum([hostile, hostile], INFER_ENUM_LIMIT)).not.toThrow()
+		expect(inferPrimitiveEnum([hostile, hostile], INFER_ENUM_LIMIT)).toBeUndefined()
 	})
 })
 

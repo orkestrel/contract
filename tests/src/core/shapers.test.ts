@@ -12,9 +12,11 @@ import {
 	arrayShape,
 	booleanShape,
 	compileGuard,
+	compileSchema,
 	ContractError,
 	createContract,
 	INFER_BREADTH_LIMIT,
+	INFER_DEPTH_LIMIT,
 	integerShape,
 	jsonShape,
 	literalShape,
@@ -33,6 +35,17 @@ import {
 	valueToSchema,
 } from '@src/core'
 import type { Equal, Expect } from '../../setup.js'
+import {
+	buildCyclicArray,
+	buildCyclicRecord,
+	buildDeepNest,
+	buildSparseArray,
+	captureContractError,
+	createClassInstance,
+	createHostileKeys,
+	createThrowingGetter,
+	SOUNDNESS_SAMPLE,
+} from '../../setup.js'
 
 describe('shape builders', () => {
 	it('rejects invalid string, array, and number bounds plus stateful patterns at construction', () => {
@@ -44,21 +57,14 @@ describe('shape builders', () => {
 		expect(() => numberShape({ max: Number.POSITIVE_INFINITY })).toThrowError(ContractError)
 		expect(() => stringShape({ pattern: /^value$/g })).toThrowError(ContractError)
 
-		try {
-			stringShape({ min: -1 })
-		} catch (error) {
-			expect(error).toBeInstanceOf(ContractError)
-			if (error instanceof ContractError) expect(error.code).toBe('bound')
-		}
-		try {
-			stringShape({ pattern: /^value$/g })
-		} catch (error) {
-			expect(error).toBeInstanceOf(ContractError)
-			if (error instanceof ContractError) {
-				expect(error.code).toBe('pattern')
-				expect(error.message).toContain('inline pattern constructs')
-			}
-		}
+		const bound = captureContractError(() => stringShape({ min: -1 }))
+		expect(bound).toBeInstanceOf(ContractError)
+		expect(bound.code).toBe('bound')
+
+		const pattern = captureContractError(() => stringShape({ pattern: /^value$/g }))
+		expect(pattern).toBeInstanceOf(ContractError)
+		expect(pattern.code).toBe('pattern')
+		expect(pattern.message).toContain('inline pattern constructs')
 	})
 
 	it('freezes every built shape and snapshots caller-owned collections', () => {
@@ -517,6 +523,98 @@ describe('schemaToShape — round-trip law: compileGuard(schemaToShape(valueToSc
 		expect(guard('ada@example.com')).toBe(true)
 		expect(guard('not an email at all')).toBe(true)
 	})
+
+	it('round-trips non-finite numbers (NaN / ±Infinity), which no JSON Schema type describes', () => {
+		expect(roundTrips(Number.NaN)).toEqual([true, true])
+		expect(roundTrips(Number.POSITIVE_INFINITY)).toEqual([true, true])
+		expect(roundTrips(Number.NEGATIVE_INFINITY)).toEqual([true, true])
+	})
+
+	it('round-trips exotic originals (Map, Set, class instance, function, symbol, bigint)', () => {
+		expect(roundTrips(new Map([['a', 1]]))).toEqual([true, true])
+		expect(roundTrips(new Set([1, 2]))).toEqual([true, true])
+		expect(roundTrips(createClassInstance())).toEqual([true, true])
+		expect(roundTrips(() => 1)).toEqual([true, true])
+		expect(roundTrips(Symbol('s'))).toEqual([true, true])
+		expect(roundTrips(10n)).toEqual([true, true])
+	})
+
+	it('round-trips a record carrying an explicitly-undefined property (the schema opens instead of closing over a dropped key)', () => {
+		expect(roundTrips({ a: 1, b: undefined })).toEqual([true, true])
+	})
+
+	it('round-trips hostile and cyclic hosts (throwing getter, hostile ownKeys, cyclic record/array)', () => {
+		expect(roundTrips(createThrowingGetter())).toEqual([true, true])
+		expect(roundTrips(createHostileKeys())).toEqual([true, true])
+		expect(roundTrips(buildCyclicRecord())).toEqual([true, true])
+		expect(roundTrips(buildCyclicArray())).toEqual([true, true])
+	})
+
+	it('round-trips a nest deeper than INFER_DEPTH_LIMIT (both walks bottom out at the same budget)', () => {
+		expect(roundTrips(buildDeepNest(INFER_DEPTH_LIMIT + 8))).toEqual([true, true])
+	})
+
+	// The whole-corpus invariant: the guard inferred from ANY sample accepts that
+	// sample. The exceptions are asserted EXPLICITLY (rather than filtered out of
+	// the corpus) so a NEW dishonesty cannot hide behind them — each one is a
+	// documented, deliberate limit of the inference direction, not an oversight.
+	it('accepts every SOUNDNESS_SAMPLE member except the documented absence and Date-serialization limits', () => {
+		const rejected: unknown[] = []
+		for (const value of SOUNDNESS_SAMPLE) {
+			if (!compileGuard(schemaToShape(valueToSchema(value)))(value)) rejected.push(value)
+		}
+		// In corpus order: `undefined` is absence, not a value — no compiled guard
+		// accepts it (`rawShape` reserves it as the parser failure sentinel); a
+		// `Date`'s inferred schema describes its JSON SERIALIZATION, never the
+		// runtime instance; a sparse array's holes are absent elements, which
+		// `arrayOf` rejects by the same `Object.hasOwn` rule `isJSONValue` applies.
+		expect(rejected).toHaveLength(3)
+		expect(rejected[0]).toBeUndefined()
+		expect(rejected[1]).toBeInstanceOf(Date)
+		expect(rejected[2]).toEqual(buildSparseArray())
+	})
+
+	it('accepts every SOUNDNESS_SAMPLE member for a samplesToSchema-derived guard on the same terms', () => {
+		const rejected: unknown[] = []
+		for (const value of SOUNDNESS_SAMPLE) {
+			if (!compileGuard(schemaToShape(samplesToSchema([value])))(value)) rejected.push(value)
+		}
+		expect(rejected).toHaveLength(3)
+		expect(rejected[0]).toBeUndefined()
+		expect(rejected[1]).toBeInstanceOf(Date)
+		expect(rejected[2]).toEqual(buildSparseArray())
+	})
+})
+
+describe('hand-authored shapes keep their strict semantics — only inference widens', () => {
+	it('a user-declared numberShape still rejects NaN and ±Infinity', () => {
+		const guard = compileGuard(numberShape())
+		expect(guard(1.5)).toBe(true)
+		expect(guard(Number.NaN)).toBe(false)
+		expect(guard(Number.POSITIVE_INFINITY)).toBe(false)
+		expect(guard(Number.NEGATIVE_INFINITY)).toBe(false)
+	})
+
+	it('a user-declared jsonShape still rejects non-JSON values', () => {
+		const guard = compileGuard(jsonShape())
+		expect(guard({ a: [1, 'x', null] })).toBe(true)
+		expect(guard(new Map())).toBe(false)
+		expect(guard(Number.NaN)).toBe(false)
+		expect(guard(() => 1)).toBe(false)
+	})
+
+	it('widens to rawShape, never jsonShape, while emitting the identical schema', () => {
+		expect(schemaToShape({})).toEqual(rawShape({}))
+		expect(schemaToShape({ description: 'anything' })).toEqual(
+			rawShape({ description: 'anything' }),
+		)
+		// Emission parity: the widened shape re-emits exactly what jsonShape did,
+		// so compileSchema(schemaToShape(s)) is unchanged by the widening target.
+		expect(compileSchema(schemaToShape({}))).toEqual({})
+		expect(compileSchema(schemaToShape({ description: 'anything' }))).toEqual({
+			description: 'anything',
+		})
+	})
 })
 
 describe('schemaToShape — keyword semantics', () => {
@@ -624,7 +722,7 @@ describe('schemaToShape — keyword semantics', () => {
 		expect(guard(value)).toBe(true)
 	})
 
-	it('widens oneOf/anyOf to jsonShape when the record-variant count exceeds INFER_BREADTH_LIMIT, rather than narrowing to a subset union', () => {
+	it('widens oneOf/anyOf to rawShape when the record-variant count exceeds INFER_BREADTH_LIMIT, rather than narrowing to a subset union', () => {
 		const variantCount = INFER_BREADTH_LIMIT + 10
 		const variants: JSONSchema[] = []
 		for (let index = 0; index < variantCount; index += 1) {
@@ -633,7 +731,7 @@ describe('schemaToShape — keyword semantics', () => {
 		const schema: JSONSchema = { anyOf: variants }
 		const guard = compileGuard(schemaToShape(schema))
 		// A variant beyond the sampling cap must still be accepted — proving the
-		// walk widened to jsonShape instead of building a narrower subset union.
+		// walk widened to rawShape instead of building a narrower subset union.
 		expect(guard(`v${INFER_BREADTH_LIMIT + 5}`)).toBe(true)
 	})
 
@@ -742,7 +840,7 @@ describe('schemaToShape — hostile schema triad', () => {
 		expect(() => createContract(schemaToShape(schema))).not.toThrow()
 	})
 
-	it('completes and widens deep subtrees to jsonShape at the depth limit', () => {
+	it('completes and widens deep subtrees to rawShape at the depth limit', () => {
 		let node: JSONSchema = { type: 'string' }
 		for (let level = 0; level < 100; level += 1) {
 			node = { type: 'object', properties: { child: node }, required: ['child'] }
@@ -752,7 +850,7 @@ describe('schemaToShape — hostile schema triad', () => {
 		expect(contract.is).toBeDefined()
 	})
 
-	it('does not let a throwing-getter Proxy schema escape, falling back to jsonShape', () => {
+	it('does not let a throwing-getter Proxy schema escape, falling back to rawShape', () => {
 		// A generic Proxy<JSONSchema> is JSONSchema-typed directly — no cast needed.
 		const hostile = new Proxy<JSONSchema>(
 			{ type: 'object' },

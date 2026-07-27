@@ -1,12 +1,15 @@
 // Base test setup — environment-agnostic helpers loaded first by every
 // Vitest project (`setupFiles[0]`). Keep this file free of `node:*` and of
 // `document` / `window` / Vue: DOM/Vue helpers live in `setupBrowser.ts`.
-import type { ContractShape, ContractInterface, Guard } from '@src/core'
+import type { ContractError, ContractShape, ContractInterface, Guard } from '@src/core'
 import {
 	arrayShape,
+	attempt,
 	booleanShape,
 	createContract,
+	INFER_DEPTH_LIMIT,
 	integerShape,
+	isContractError,
 	jsonShape,
 	literalShape,
 	nullableShape,
@@ -25,6 +28,43 @@ import { afterEach, expect, vi } from 'vitest'
 afterEach(() => {
 	vi.restoreAllMocks()
 })
+
+/**
+ * Run an operation expected to throw a {@link ContractError} and return that
+ * error, already narrowed.
+ *
+ * @remarks
+ * The shared THROWING NARROWER for error-path tests. A `try`/`catch` around the
+ * operation puts every following `expect` on a conditional path — the assertion
+ * silently never runs if the operation stops throwing, which is exactly the
+ * regression such a test exists to catch. This runs the operation through the
+ * package's own {@link attempt} boundary instead and narrows with the real
+ * {@link isContractError} guard, so the caller reads `code` / `context`
+ * unconditionally and a missing or wrong-typed throw fails the test here with a
+ * precise message rather than passing vacuously.
+ *
+ * @param operation - The operation expected to throw
+ * @returns The thrown {@link ContractError}
+ * @throws {Error} When `operation` returns normally or throws a non-`ContractError`
+ *
+ * @example
+ * ```ts
+ * const error = captureContractError(() => stringShape({ min: -1 }))
+ * expect(error.code).toBe('bound')
+ * ```
+ */
+export function captureContractError(operation: () => unknown): ContractError {
+	const outcome = attempt(operation)
+	if (outcome.success) {
+		throw new Error('captureContractError: the operation returned instead of throwing')
+	}
+	if (!isContractError(outcome.error)) {
+		throw new Error(
+			`captureContractError: the operation threw a non-ContractError: ${String(outcome.error)}`,
+		)
+	}
+	return outcome.error
+}
 
 /**
  * Throw from a deliberately hostile fixture operation.
@@ -65,9 +105,7 @@ export function advanceInfiniteIterable(): IteratorResult<number> {
  * Object.is(iterateInfiniteIterable.call(values), values) // true
  * ```
  */
-export function iterateInfiniteIterable(
-	this: IterableIterator<number>,
-): IterableIterator<number> {
+export function iterateInfiniteIterable(this: IterableIterator<number>): IterableIterator<number> {
 	return this
 }
 
@@ -218,6 +256,42 @@ export function buildSparseArray(): readonly unknown[] {
 }
 
 /**
+ * Create a record whose prototype is `null` — a plain record that no realm's
+ * `Object.prototype` sits above.
+ *
+ * @returns A null-prototype record carrying one integer property
+ *
+ * @example
+ * ```ts
+ * const record = createNullPrototypeRecord()
+ * Object.getPrototypeOf(record) // null
+ * ```
+ */
+export function createNullPrototypeRecord(): Readonly<Record<string, unknown>> {
+	const record: Record<string, unknown> = Object.create(null)
+	record.value = 1
+	return record
+}
+
+/**
+ * Create an instance of a user-defined class — an exotic, non-plain object no
+ * JSON Schema keyword describes.
+ *
+ * @returns A class instance carrying one integer property
+ *
+ * @example
+ * ```ts
+ * const instance = createClassInstance()
+ * Object.getPrototypeOf(instance) === Object.prototype // false
+ * ```
+ */
+export function createClassInstance(): object {
+	return new (class Sample {
+		readonly value: number = 1
+	})()
+}
+
+/**
  * Create a self-iterating iterator that can be consumed only once.
  *
  * @returns An iterator over `1`, `2`, and `3`
@@ -252,12 +326,21 @@ export function createInfiniteIterable(): IterableIterator<number> {
 }
 
 /**
- * A broad spread of values for exercising parse↔guard soundness exhaustively:
- * guard-valid representatives for every shipped guard, coercible inputs (numeric
- * strings, `'true'` / `1`), and adversarial non-matches (mixed arrays, symbol,
- * bigint, function) so both soundness clauses are covered non-vacuously.
+ * A broad, frozen spread of values for exercising the package's whole-value
+ * invariants exhaustively — parse↔guard soundness (see
+ * {@link soundnessViolations}), `explain` ⟺ `parse`, and the inference round
+ * trip `compileGuard(schemaToShape(valueToSchema(v)))(v)`.
+ *
+ * @remarks
+ * Covers guard-valid representatives for every shipped guard, coercible inputs
+ * (numeric strings, `'true'` / `1`), signed zero, `NaN` / `±Infinity`, empty and
+ * nested containers, exotic hosts (`Map`, `Set`, `Date`, a class instance, a
+ * function, a symbol, a bigint), a null-prototype record, cyclic record/array
+ * graphs, a sparse array, hostile hosts (a throwing own-getter, a throwing
+ * `ownKeys` Proxy), and a nest deeper than `INFER_DEPTH_LIMIT` — so every
+ * invariant is covered non-vacuously and adversarially.
  */
-export const SOUNDNESS_SAMPLE: readonly unknown[] = [
+export const SOUNDNESS_SAMPLE: readonly unknown[] = Object.freeze([
 	null,
 	undefined,
 	true,
@@ -316,7 +399,15 @@ export const SOUNDNESS_SAMPLE: readonly unknown[] = [
 	Symbol('s'),
 	() => 1,
 	new Date(),
-]
+	createNullPrototypeRecord(),
+	createClassInstance(),
+	buildCyclicRecord(),
+	buildCyclicArray(),
+	buildSparseArray(),
+	createThrowingGetter(),
+	createHostileKeys(),
+	buildDeepNest(INFER_DEPTH_LIMIT + 8),
+])
 
 /**
  * Return the parse↔guard soundness violations of a (guard, parser) pair over

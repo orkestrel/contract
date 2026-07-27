@@ -26,7 +26,7 @@ import {
 	unionShape,
 	validateShape,
 } from '@src/core'
-import { SOUNDNESS_SAMPLE } from '../../setup.js'
+import { captureContractError, SOUNDNESS_SAMPLE } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
 
 describe('validateShape', () => {
@@ -48,14 +48,9 @@ describe('validateShape', () => {
 
 		for (const entry of cases) {
 			expect(() => validateShape(entry.shape)).toThrowError(ContractError)
-			try {
-				validateShape(entry.shape)
-			} catch (error) {
-				expect(isContractError(error)).toBe(true)
-				if (isContractError(error)) {
-					expect(error.code).toBe(entry.code)
-				}
-			}
+			const error = captureContractError(() => validateShape(entry.shape))
+			expect(isContractError(error)).toBe(true)
+			expect(error.code).toBe(entry.code)
 		}
 	})
 
@@ -65,15 +60,10 @@ describe('validateShape', () => {
 		const shape: ContractShape = raw
 
 		expect(() => validateShape(shape)).toThrowError(ContractError)
-		try {
-			validateShape(shape)
-		} catch (error) {
-			expect(error).toBeInstanceOf(ContractError)
-			if (isContractError(error)) {
-				expect(error.code).toBe('cycle')
-				expect(error.context?.path).toEqual(['items'])
-			}
-		}
+		const error = captureContractError(() => validateShape(shape))
+		expect(error).toBeInstanceOf(ContractError)
+		expect(error.code).toBe('cycle')
+		expect(error.context?.path).toEqual(['items'])
 	})
 
 	it('raises a cycle ContractError with the property path for a self-referential object shape', () => {
@@ -82,15 +72,10 @@ describe('validateShape', () => {
 		const shape: ContractShape = raw
 
 		expect(() => validateShape(shape)).toThrowError(ContractError)
-		try {
-			validateShape(shape)
-		} catch (error) {
-			expect(error).toBeInstanceOf(ContractError)
-			if (isContractError(error)) {
-				expect(error.code).toBe('cycle')
-				expect(error.context?.path).toEqual(['properties', 'self'])
-			}
-		}
+		const error = captureContractError(() => validateShape(shape))
+		expect(error).toBeInstanceOf(ContractError)
+		expect(error.code).toBe('cycle')
+		expect(error.context?.path).toEqual(['properties', 'self'])
 	})
 
 	it('raises a cycle ContractError with the variant path for a self-referential union shape', () => {
@@ -99,15 +84,10 @@ describe('validateShape', () => {
 		const shape: ContractShape = raw
 
 		expect(() => validateShape(shape)).toThrowError(ContractError)
-		try {
-			validateShape(shape)
-		} catch (error) {
-			expect(error).toBeInstanceOf(ContractError)
-			if (isContractError(error)) {
-				expect(error.code).toBe('cycle')
-				expect(error.context?.path).toEqual(['variants', '0'])
-			}
-		}
+		const error = captureContractError(() => validateShape(shape))
+		expect(error).toBeInstanceOf(ContractError)
+		expect(error.code).toBe('cycle')
+		expect(error.context?.path).toEqual(['variants', '0'])
 	})
 
 	it('allows a shared child reached through separate non-cyclic paths', () => {
@@ -752,12 +732,9 @@ describe('compileGenerator', () => {
 		const shape = oneOfShape(literalShape(['same']), literalShape(['same']))
 
 		expect(() => compileGenerator(shape, seededRandom(1))).toThrowError(ContractError)
-		try {
-			compileGenerator(shape, seededRandom(1))
-		} catch (error) {
-			expect(isContractError(error)).toBe(true)
-			if (isContractError(error)) expect(error.code).toBe('generate')
-		}
+		const error = captureContractError(() => compileGenerator(shape, seededRandom(1)))
+		expect(isContractError(error)).toBe(true)
+		expect(error.code).toBe('generate')
 	})
 
 	it('throws on a raw shape (cannot be auto-generated)', () => {

@@ -30,7 +30,78 @@ import { attempt, sanitizeBudget } from './helpers.js'
 // === Canonicalization
 
 /**
- * Render a value as a deterministic, key-sorted JSON string.
+ * Encode one value as a deterministic, key-sorted JSON string — the recursive
+ * spine of {@link canonicalStringify}.
+ *
+ * @remarks
+ * Arrays keep their element order; records sort their own keys before encoding,
+ * recursively at every nesting level. Every other value is encoded by
+ * `JSON.stringify`, so `NaN` / `±Infinity` collapse to `'null'` and `-0`
+ * encodes as `'0'` — the same lossy-but-deterministic mapping real JSON makes.
+ *
+ * Returns `undefined` for anything JSON cannot encode: `undefined` itself, a
+ * function, a symbol, an array hole, or a cyclic back-edge to an ancestor. A
+ * container carrying such a member is itself un-encodable and returns
+ * `undefined` too, so the result is either a faithful encoding of the WHOLE
+ * value or nothing — a partially-encoded key is never emitted. Traversal is NOT
+ * contained here: a hostile getter or `Proxy` trap throws through to
+ * {@link canonicalStringify}, which owns the single {@link attempt} boundary
+ * for the walk.
+ *
+ * @param value - The value to encode
+ * @param ancestors - Objects on the active traversal path, guarding cycles
+ * @returns The deterministic encoding, or `undefined` when JSON cannot encode
+ *          `value`
+ *
+ * @example
+ * ```ts
+ * canonicalizeValue({ b: 1, a: 2 }, new WeakSet()) // '{"a":2,"b":1}'
+ * canonicalizeValue(undefined, new WeakSet())      // undefined
+ * ```
+ */
+export function canonicalizeValue(value: unknown, ancestors: WeakSet<object>): string | undefined {
+	if (isArray(value)) {
+		if (ancestors.has(value)) return undefined
+		ancestors.add(value)
+		const parts: string[] = []
+		for (let index = 0; index < value.length; index += 1) {
+			// A hole is an absent element, not a value — the same `Object.hasOwn`
+			// rule `arrayOf` and `matchesJSONValue` apply.
+			const part = Object.hasOwn(value, index)
+				? canonicalizeValue(value[index], ancestors)
+				: undefined
+			if (part === undefined) {
+				ancestors.delete(value)
+				return undefined
+			}
+			parts.push(part)
+		}
+		ancestors.delete(value)
+		return `[${parts.join(',')}]`
+	}
+	if (isRecord(value)) {
+		if (ancestors.has(value)) return undefined
+		ancestors.add(value)
+		const parts: string[] = []
+		for (const key of Object.keys(value).sort()) {
+			const part = canonicalizeValue(value[key], ancestors)
+			if (part === undefined) {
+				ancestors.delete(value)
+				return undefined
+			}
+			parts.push(`${JSON.stringify(key)}:${part}`)
+		}
+		ancestors.delete(value)
+		return `{${parts.join(',')}}`
+	}
+	// `JSON.stringify` returns `undefined` (never a string) for `undefined`, a
+	// function, and a symbol — exactly the values with no JSON encoding.
+	return JSON.stringify(value)
+}
+
+/**
+ * Render a value as a deterministic, key-sorted JSON string — or `undefined`
+ * when it has no faithful JSON encoding.
  *
  * @remarks
  * The stable-stringify backing {@link unifySchemas}'s de-duplication and
@@ -39,26 +110,40 @@ import { attempt, sanitizeBudget } from './helpers.js'
  * `JSONSchema` fragments built independently always canonicalize to the same
  * string. Pure host-independent ECMAScript with no environment-specific imports.
  *
+ * TOTAL: it NEVER throws, for any input. It returns `undefined` — never a
+ * partial or invalid encoding — for every value JSON cannot faithfully encode:
+ *
+ * - `undefined` itself, a function, a symbol, or an array hole (JSON encodes
+ *   none of them), at the top level or anywhere inside a container;
+ * - a bigint (`JSON.stringify` throws on one);
+ * - cyclic input, tracked with the same ancestor-{@link WeakSet} discipline
+ *   {@link inferArray} / {@link inferObject} use, so a shared (non-cyclic)
+ *   reference reached twice through different paths still encodes;
+ * - hostile traversal — a throwing own-getter, a hostile `ownKeys` trap, or a
+ *   revoked `Proxy` anywhere in the value — contained via {@link attempt}.
+ *
+ * A caller therefore treats `undefined` as "this value has no canonical key",
+ * never as an encoding: see {@link unifySchemas} (an un-keyed member cannot
+ * participate in de-duplication or ordering) and {@link inferPrimitiveEnum} (an
+ * un-keyed member makes the slot enum-ineligible).
+ *
  * @param value - The value to canonicalize (a `JSONSchema` fragment, or any
  *                nested piece of one)
- * @returns A deterministic string encoding of `value`
+ * @returns A deterministic string encoding of `value`, or `undefined` when JSON
+ *          cannot encode it
  *
  * @example
  * ```ts
  * canonicalStringify({ type: 'object', properties: {} }) ===
  * 	canonicalStringify({ properties: {}, type: 'object' }) // true
+ * canonicalStringify(Number.NaN)  // 'null' — JSON.stringify semantics
+ * canonicalStringify(undefined)   // undefined
+ * canonicalStringify(cyclicValue) // undefined
  * ```
  */
-export function canonicalStringify(value: unknown): string {
-	if (isArray(value)) {
-		return `[${value.map((entry) => canonicalStringify(entry)).join(',')}]`
-	}
-	if (isRecord(value)) {
-		const keys = Object.keys(value).sort()
-		const parts = keys.map((key) => `${JSON.stringify(key)}:${canonicalStringify(value[key])}`)
-		return `{${parts.join(',')}}`
-	}
-	return JSON.stringify(value)
+export function canonicalStringify(value: unknown): string | undefined {
+	const outcome = attempt(() => canonicalizeValue(value, new WeakSet()))
+	return outcome.success ? outcome.value : undefined
 }
 
 /**
@@ -73,6 +158,14 @@ export function canonicalStringify(value: unknown): string {
  * `{ anyOf: [...] }`, sorted by their canonical key for deterministic output.
  * An empty input list returns the empty accept-anything schema `{}`.
  *
+ * A member {@link canonicalStringify} cannot key — a cyclic, hostile, or
+ * otherwise JSON-inexpressible fragment, which only a direct caller can supply
+ * since the inferers always build plain encodable fragments — has NO
+ * de-duplication key, so it can participate in neither de-duplication nor the
+ * canonical-key ordering. It is KEPT (dropping a variant would narrow the
+ * union, and unification only ever widens), appended in input order after the
+ * sorted keyed members, so the result stays total and deterministic.
+ *
  * @param schemas - The schemas to unify
  * @returns The unified schema
  *
@@ -86,23 +179,36 @@ export function canonicalStringify(value: unknown): string {
 export function unifySchemas(schemas: readonly JSONSchema[]): JSONSchema {
 	if (schemas.length === 0) return {}
 	const seen = new Map<string, JSONSchema>()
+	const unkeyed: JSONSchema[] = []
 	for (const schema of schemas) {
 		const key = canonicalStringify(schema)
+		if (key === undefined) {
+			unkeyed.push(schema)
+			continue
+		}
 		if (!seen.has(key)) seen.set(key, schema)
 	}
+	// Both literals always canonicalize; the explicit checks keep the
+	// subsumption total against `canonicalStringify`'s optional result.
 	const integerKey = canonicalStringify({ type: 'integer' })
 	const numberKey = canonicalStringify({ type: 'number' })
-	if (seen.has(integerKey) && seen.has(numberKey)) {
+	if (
+		integerKey !== undefined &&
+		numberKey !== undefined &&
+		seen.has(integerKey) &&
+		seen.has(numberKey)
+	) {
 		seen.delete(integerKey)
 	}
 	const distinct = [...seen.entries()]
 		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
 		.map(([, schema]) => schema)
-	if (distinct.length <= 1) {
-		const [only] = distinct
+	const members = [...distinct, ...unkeyed]
+	if (members.length <= 1) {
+		const [only] = members
 		return only ?? {}
 	}
-	return { anyOf: distinct }
+	return { anyOf: members }
 }
 
 // === Format inference
@@ -232,6 +338,12 @@ export function samplesToFormat(values: readonly unknown[]): SchemaFormat | unde
  * `literalShape` emission. Members are sorted by canonical key for
  * deterministic output.
  *
+ * A member {@link canonicalStringify} cannot key has no identity to
+ * de-duplicate against, so the whole slot is enum-INELIGIBLE and returns
+ * `undefined` — widening to the caller's bare `type` rather than emitting an
+ * `enum` that might silently omit a value. (A string or finite number always
+ * canonicalizes, so this only guards the total contract.)
+ *
  * @param values - The collected slot values
  * @param limit - The maximum distinct-value count before giving up
  * @returns The `{ enum: [...] }` fragment, or `undefined` when ineligible
@@ -253,7 +365,10 @@ export function inferPrimitiveEnum(
 	if (!allString && !allNumber) return undefined
 	const distinct = new Map<string, string | number>()
 	for (const value of values) {
-		if (isString(value) || isFiniteNumber(value)) distinct.set(canonicalStringify(value), value)
+		if (!isString(value) && !isFiniteNumber(value)) continue
+		const key = canonicalStringify(value)
+		if (key === undefined) return undefined
+		distinct.set(key, value)
 	}
 	if (distinct.size >= values.length || distinct.size > limit) return undefined
 	const sorted = [...distinct.entries()].sort(([left], [right]) =>
@@ -272,13 +387,21 @@ export function inferPrimitiveEnum(
  * @remarks
  * Total: never throws, and terminates on cyclic input via `visited`. Leaf
  * classification order: `null`, boolean, integer (`Number.isInteger`
- * semantics — `-0` counts), finite non-integer number, non-finite number
- * (`NaN` / `±Infinity`, widened to `{ type: 'number' }`), string (gaining a
+ * semantics — `-0` counts), finite non-integer number, string (gaining a
  * `format` keyword when `format` is on and {@link stringToFormat} matches),
  * array (recurse), plain record (recurse), `Date` (`{ type: 'string' }`,
- * plus `format: 'date-time'` when `format` is on); everything else
- * (function, symbol, bigint, `undefined`, and other non-plain objects such as
- * `Map` / `Set`) is the empty accept-anything schema `{}`.
+ * plus `format: 'date-time'` when `format` is on); everything else — a
+ * NON-FINITE number (`NaN` / `±Infinity`), a function, a symbol, a bigint,
+ * `undefined`, and other non-plain objects such as `Map` / `Set` — is the
+ * empty accept-anything schema `{}`.
+ *
+ * A non-finite number bottoms out with the other JSON-inexpressible values on
+ * purpose: JSON carries no `NaN` / `±Infinity` (`JSON.stringify(Number.NaN)`
+ * is `'null'`), so `{ type: 'number' }` would ASSERT something a JSON Schema
+ * validator rejects — and the shape {@link schemaToShape} builds from it would
+ * reject the very sample it was inferred from. `{}` is the truthful
+ * description, and it inverts to an accept-anything shape, keeping
+ * `compileGuard(schemaToShape(valueToSchema(v)))(v)` true.
  *
  * @param value - The value to classify
  * @param depth - Remaining descent budget (0 halts recursion with `{}`)
@@ -308,7 +431,10 @@ export function inferValue(
 	if (isBoolean(value)) return { type: 'boolean' }
 	if (isInteger(value)) return { type: 'integer' }
 	if (isFiniteNumber(value)) return { type: 'number' }
-	if (isNumber(value)) return { type: 'number' }
+	// A non-finite number has no JSON representation at all, so it widens to
+	// `{}` with the other inexpressible values rather than claiming a `number`
+	// type no validator would accept it under.
+	if (isNumber(value)) return {}
 	if (isString(value)) {
 		if (format) {
 			const detected = stringToFormat(value)
@@ -409,19 +535,24 @@ export function inferArray(
  * Own enumerable string keys via `Object.keys`, sorted lexicographically for
  * deterministic output, capped at `breadth`. Each property value is read
  * through {@link attempt} so a hostile getter cannot escape as a thrown
- * error; a property whose value is `undefined` (hostile-getter failure
- * included) is treated as ABSENT — it contributes neither a `properties`
- * entry nor a `required` entry. Every other present key is required (single-
- * value mode). Emits `additionalProperties: false` when `closed`, `true`
- * otherwise — mirroring {@link compileSchema}'s object-emission convention —
- * EXCEPT when the own-key list exceeds `breadth`: a truncated key list means
- * the sampled schema no longer describes every property `value` actually
- * carries, so `additionalProperties` is forced to `true` regardless of
- * `closed` (a closed schema built from a truncated sample would otherwise
- * reject the very object it was inferred from). Depth exhaustion or a cyclic
- * re-encounter of `value` both yield `{}`. A same-object re-inference at the
- * same remaining `depth` is served from `memo` instead of recomputing
- * (guards a shared-reference DAG against exponential blowup).
+ * error; a property whose value is `undefined` is DROPPED — JSON encodes no
+ * such property (`JSON.stringify({ a: undefined })` is `'{}'`), so it
+ * contributes neither a `properties` entry nor a `required` entry. Every
+ * other present key is required (single-value mode).
+ *
+ * Emits `additionalProperties: false` when `closed`, `true` otherwise —
+ * mirroring {@link compileSchema}'s object-emission convention — EXCEPT when
+ * the sampled key list no longer describes every key `value` actually carries,
+ * which happens two ways: the own-key list exceeds `breadth` (truncation), or
+ * a key was dropped for holding `undefined`. Either way `additionalProperties`
+ * is forced to `true` regardless of `closed`, because a CLOSED schema built
+ * from an incomplete key list would reject the very object it was inferred
+ * from (`recordOf` rejects any own key the shape does not declare).
+ *
+ * Depth exhaustion or a cyclic re-encounter of `value` both yield `{}`. A
+ * same-object re-inference at the same remaining `depth` is served from `memo`
+ * instead of recomputing (guards a shared-reference DAG against exponential
+ * blowup).
  *
  * @param value - The record to infer from
  * @param depth - Remaining descent budget
@@ -467,22 +598,26 @@ export function inferObject(
 		// (compilers.ts).
 		const properties: Record<string, JSONSchema> = Object.create(null)
 		const required: string[] = []
+		let dropped = false
 		for (const key of keys) {
 			const propertyValue = value[key]
-			if (propertyValue === undefined) continue
+			if (propertyValue === undefined) {
+				dropped = true
+				continue
+			}
 			properties[key] = inferValue(propertyValue, depth - 1, breadth, closed, format, visited, memo)
 			required.push(key)
 		}
-		return { properties, required, truncated }
+		return { properties, required, partial: truncated || dropped }
 	})
 	visited.delete(value)
 	if (!outcome.success) return {}
-	const { properties, required, truncated } = outcome.value
+	const { properties, required, partial } = outcome.value
 	const schema: JSONSchema = {
 		type: 'object',
 		...(Object.keys(properties).length > 0 ? { properties } : {}),
 		...(required.length > 0 ? { required } : {}),
-		additionalProperties: truncated ? true : !closed,
+		additionalProperties: partial ? true : !closed,
 	}
 	let depths = memo.get(value)
 	if (!depths) {
@@ -612,14 +747,20 @@ export function inferSamples(
  * {@link inferArray}, this path carries no `visited` `WeakSet` — a value
  * shared by reference across multiple sample rows is legitimate (not a
  * cycle back to an ancestor), so termination on cyclic row data relies on
- * the decrementing `depth` budget alone. When the union of sample keys
- * exceeds `breadth`, the key list is truncated and `additionalProperties` is
- * forced to `true` regardless of `closed` — the same truncation-opens-the-
- * schema rule {@link inferObject} applies, so a closed schema built from a
- * truncated key union never rejects the very rows it was inferred from. A
- * hostile getter on ONE sample row drops that key for ALL rows (the whole
- * per-key value collection is a single {@link attempt}-contained walk) —
- * this is a deliberate all-or-nothing scope, not a per-row partial failure.
+ * the decrementing `depth` budget alone.
+ *
+ * `additionalProperties` is forced to `true` regardless of `closed` whenever
+ * the declared key list stops describing every key the rows carry — the same
+ * incomplete-sample-opens-the-schema rule {@link inferObject} applies, so a
+ * closed schema never rejects the very rows it was inferred from. That happens
+ * three ways: the union of sample keys exceeds `breadth` (truncation); a
+ * hostile getter defeats a key's value walk (which drops that key for ALL
+ * rows — a deliberate all-or-nothing scope, not a per-row partial failure);
+ * or some row carries the key as an own property holding `undefined`, which
+ * JSON encodes as no property at all, so the key is dropped rather than
+ * declared with a shape that row would fail. When the KEY walk itself fails
+ * (a hostile `ownKeys` trap on any row), nothing is known and the whole slot
+ * widens to `{}`.
  *
  * @param samples - The plain-record samples
  * @param depth - Remaining descent budget
@@ -656,13 +797,18 @@ export function inferRecordSamples(
 		const allKeys = [...keySet].sort()
 		return { keys: allKeys.slice(0, breadth), truncated: allKeys.length > breadth }
 	})
-	const keys = keysOutcome.success ? keysOutcome.value.keys : []
-	const truncated = keysOutcome.success && keysOutcome.value.truncated
+	// A failed key walk means nothing at all is known about these rows — not even
+	// that they behave like readable objects — so the slot widens to `{}` rather
+	// than claiming `type: 'object'`, whose compiled guard re-enumerates the same
+	// hostile keys and would reject the very rows it was inferred from.
+	if (!keysOutcome.success) return {}
+	const { keys, truncated } = keysOutcome.value
 	// Honest typing: a null-prototype accumulator so a key literally named
 	// '__proto__' becomes an own data key instead of mutating the prototype —
 	// the same pattern compileGuard / compileParser use (compilers.ts).
 	const properties: Record<string, JSONSchema> = Object.create(null)
 	const required: string[] = []
+	let partial = truncated
 	// Bounded by depth alone: unlike inferObject/inferArray, this record-
 	// sample path carries no `visited` WeakSet. A shared reference across
 	// sample rows is legitimate data (not a cycle back to an ancestor), so
@@ -673,13 +819,26 @@ export function inferRecordSamples(
 		// (AGENTS §14).
 		const valuesOutcome = attempt(() => {
 			const values: unknown[] = []
+			let dropped = false
 			for (const sample of samples) {
 				const propertyValue = sample[key]
-				if (propertyValue !== undefined) values.push(propertyValue)
+				if (propertyValue === undefined) {
+					if (Object.hasOwn(sample, key)) dropped = true
+					continue
+				}
+				values.push(propertyValue)
 			}
-			return values
+			return { values, dropped }
 		})
-		const values = valuesOutcome.success ? valuesOutcome.value : []
+		if (!valuesOutcome.success) {
+			partial = true
+			continue
+		}
+		const { values, dropped } = valuesOutcome.value
+		if (dropped) {
+			partial = true
+			continue
+		}
 		if (values.length > 0) {
 			properties[key] = inferSamples(values, depth - 1, breadth, closed, format, enumOn)
 		}
@@ -689,7 +848,7 @@ export function inferRecordSamples(
 		type: 'object',
 		...(Object.keys(properties).length > 0 ? { properties } : {}),
 		...(required.length > 0 ? { required } : {}),
-		additionalProperties: truncated ? true : !closed,
+		additionalProperties: partial ? true : !closed,
 	}
 }
 

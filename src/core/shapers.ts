@@ -54,22 +54,24 @@ import { isArray, isBoolean, isFiniteNumber, isInteger, isRecord, isString } fro
  * ```
  */
 export function stringShape(options?: StringShapeOptions): StringShape {
-	if (
-		options?.min !== undefined &&
-		(!Number.isSafeInteger(options.min) || options.min < 0)
-	) {
+	if (options?.min !== undefined && (!Number.isSafeInteger(options.min) || options.min < 0)) {
 		throw new ContractError('stringShape: min must be a non-negative safe integer', {
 			code: 'bound',
-			context: { shape: 'string', limit: 'non-negative safe integer', received: String(options.min) },
+			context: {
+				shape: 'string',
+				limit: 'non-negative safe integer',
+				received: String(options.min),
+			},
 		})
 	}
-	if (
-		options?.max !== undefined &&
-		(!Number.isSafeInteger(options.max) || options.max < 0)
-	) {
+	if (options?.max !== undefined && (!Number.isSafeInteger(options.max) || options.max < 0)) {
 		throw new ContractError('stringShape: max must be a non-negative safe integer', {
 			code: 'bound',
-			context: { shape: 'string', limit: 'non-negative safe integer', received: String(options.max) },
+			context: {
+				shape: 'string',
+				limit: 'non-negative safe integer',
+				received: String(options.max),
+			},
 		})
 	}
 	if (options?.pattern !== undefined && options.pattern.flags.length > 0) {
@@ -230,22 +232,24 @@ export function arrayShape<S extends ContractShape>(
 	items: S,
 	options?: ArrayShapeOptions,
 ): ArrayShape<S> {
-	if (
-		options?.min !== undefined &&
-		(!Number.isSafeInteger(options.min) || options.min < 0)
-	) {
+	if (options?.min !== undefined && (!Number.isSafeInteger(options.min) || options.min < 0)) {
 		throw new ContractError('arrayShape: min must be a non-negative safe integer', {
 			code: 'bound',
-			context: { shape: 'array', limit: 'non-negative safe integer', received: String(options.min) },
+			context: {
+				shape: 'array',
+				limit: 'non-negative safe integer',
+				received: String(options.min),
+			},
 		})
 	}
-	if (
-		options?.max !== undefined &&
-		(!Number.isSafeInteger(options.max) || options.max < 0)
-	) {
+	if (options?.max !== undefined && (!Number.isSafeInteger(options.max) || options.max < 0)) {
 		throw new ContractError('arrayShape: max must be a non-negative safe integer', {
 			code: 'bound',
-			context: { shape: 'array', limit: 'non-negative safe integer', received: String(options.max) },
+			context: {
+				shape: 'array',
+				limit: 'non-negative safe integer',
+				received: String(options.max),
+			},
 		})
 	}
 	return Object.freeze({
@@ -476,6 +480,16 @@ export function rawShape(schema: JSONSchema): RawShape {
 // asserted — `format` is annotation-only, and compiling an attacker-supplied
 // `pattern` into a `RegExp` is a ReDoS vector — so neither keyword narrows the
 // compiled guard; the returned shape is always one `validateShape` accepts.
+//
+// Every widening — an empty/unrecognized node, an exhausted budget, a cycle, a
+// hostile throw — lands on `rawShape`, NOT `jsonShape`. `{}` is JSON Schema's
+// accept-anything schema, and `rawShape` is its exact inverse: its compiled
+// guard accepts every defined value, and it re-emits `{}` verbatim. `jsonShape`
+// also emits `{}` but its guard is the strictly narrower `isJSONValue`, so
+// widening through it would REJECT the exotic originals (`Map`, `Set`, a class
+// instance, a function, `NaN`) whose inferred schema is exactly `{}` — the
+// round trip below would then be a false claim. `jsonShape` remains the shape a
+// user AUTHORS to mean "any JSON value"; it is never inferred.
 
 /**
  * Derive `min`/`max` shape bounds from a pair of non-negative-integer JSON
@@ -555,7 +569,7 @@ export function deriveRangeBounds(
  * `properties` (when a record) contributes one child shape per own key, capped
  * at {@link INFER_BREADTH_LIMIT}; a key is wrapped in {@link optionalShape}
  * unless it appears as a string entry of `required`. A property whose value is
- * not itself a record widens to {@link jsonShape}. `additionalProperties`:
+ * not itself a record widens to {@link rawShape}. `additionalProperties`:
  * `false` closes the object; a record value recurses into it (`objectShape`
  * validates extras against that shape); anything else — `true`, absent, or
  * malformed — leaves the object OPEN (`true`), matching JSON Schema's own
@@ -620,7 +634,7 @@ export function buildObjectShape(
 			const child = propertiesSource[key]
 			const childShape = isRecord(child)
 				? schemaNodeToShape(child, depth - 1, visited, memo)
-				: jsonShape()
+				: rawShape({})
 			properties[key] = requiredSource.includes(key) ? childShape : optionalShape(childShape)
 		}
 	}
@@ -658,7 +672,7 @@ export function buildObjectShape(
  *    record-entry count is at or under {@link INFER_BREADTH_LIMIT}; OVER the
  *    limit, building a subset union would be strictly narrower than the
  *    schema's full union (a value matching only a dropped variant would be
- *    wrongly rejected), so the whole node widens to {@link jsonShape} instead
+ *    wrongly rejected), so the whole node widens to {@link rawShape} instead
  *    of sampling a subset.
  * 3. `anyOf` — identically, via {@link unionShape}.
  * 4. `type: 'string'` / `'number'` / `'integer'` / `'boolean'` / `'null'` —
@@ -668,14 +682,16 @@ export function buildObjectShape(
  *    (e.g. `minimum: 1.5, maximum: 1.6`) — the same emptiness `validateShape`
  *    rejects — so the result is always a valid shape.
  * 5. `type: 'array'` — an {@link arrayShape} whose element shape recurses into
- *    a record-valued `items` (widening to {@link jsonShape} otherwise), with
+ *    a record-valued `items` (widening to {@link rawShape} otherwise), with
  *    bounds from `minItems` / `maxItems`.
  * 6. `type: 'object'`, OR no `type` / `enum` / `oneOf` / `anyOf` but a
  *    record-valued `properties` — delegates to {@link buildObjectShape}.
  * 7. Everything else — an empty schema, an unrecognized/absent `type`,
  *    exhausted depth/breadth, or an attempt failure — widens to
- *    {@link jsonShape} (the exact inverse of `compileSchema(jsonShape())`,
- *    and where the inferers themselves bottom out at their own limits).
+ *    {@link rawShape}, whose guard accepts every defined value and whose
+ *    emitted schema is the same `{}` (plus `description`) the node carried.
+ *    This is the exact inverse of `{}`, JSON Schema's accept-anything schema,
+ *    and where the inferers themselves bottom out at their own limits.
  *
  * `format` and `pattern` are NEVER read into the compiled shape — `format` is
  * annotation-only and `pattern` compiling an attacker-supplied string into a
@@ -683,7 +699,7 @@ export function buildObjectShape(
  * the produced shape's `description` option.
  *
  * @param schema - The schema node to convert
- * @param depth - Remaining descent budget (0 halts recursion with `jsonShape()`)
+ * @param depth - Remaining descent budget (0 halts recursion with `rawShape({})`)
  * @param visited - The ancestor set guarding against cycles — recursion
  *   state owned by the {@link schemaToShape} entry point; passing a shared or
  *   pre-populated `WeakSet` changes cycle-detection behavior and is not
@@ -723,7 +739,7 @@ export function buildShapeFromNode(
 	if (isArray(schema.oneOf)) {
 		const records = schema.oneOf.filter((entry): entry is JSONSchema => isRecord(entry))
 		if (records.length > INFER_BREADTH_LIMIT) {
-			return jsonShape(description === undefined ? undefined : { description })
+			return rawShape(description === undefined ? {} : { description })
 		}
 		const variants = records.map((entry) => schemaNodeToShape(entry, depth - 1, visited, memo))
 		if (variants.length > 0) return oneOfShape(...variants)
@@ -732,7 +748,7 @@ export function buildShapeFromNode(
 	if (isArray(schema.anyOf)) {
 		const records = schema.anyOf.filter((entry): entry is JSONSchema => isRecord(entry))
 		if (records.length > INFER_BREADTH_LIMIT) {
-			return jsonShape(description === undefined ? undefined : { description })
+			return rawShape(description === undefined ? {} : { description })
 		}
 		const variants = records.map((entry) => schemaNodeToShape(entry, depth - 1, visited, memo))
 		if (variants.length > 0) return unionShape(...variants)
@@ -780,7 +796,7 @@ export function buildShapeFromNode(
 	if (type === 'array') {
 		const items = isRecord(schema.items)
 			? schemaNodeToShape(schema.items, depth - 1, visited, memo)
-			: jsonShape()
+			: rawShape({})
 		const bounds = deriveLengthBounds(schema.minItems, schema.maxItems)
 		return arrayShape(items, {
 			...bounds,
@@ -792,7 +808,7 @@ export function buildShapeFromNode(
 		return buildObjectShape(schema, depth, visited, memo, description)
 	}
 
-	return jsonShape(description === undefined ? undefined : { description })
+	return rawShape(description === undefined ? {} : { description })
 }
 
 /**
@@ -804,13 +820,13 @@ export function buildShapeFromNode(
  * @remarks
  * Total: never throws. Guards depth exhaustion, a non-record node (the
  * node's static `JSONSchema` type is not trusted at runtime), and a cyclic
- * re-encounter of `schema` — all three widen to {@link jsonShape}. The
+ * re-encounter of `schema` — all three widen to {@link rawShape}. The
  * ancestor set is added to and removed from around the WHOLE subtree
  * conversion (not permanently), so a DAG-shaped schema reached twice via two
  * different, non-cyclic paths does not false-positive as a cycle. The
  * subtree conversion itself runs inside {@link attempt}, so a hostile
  * throwing getter/Proxy anywhere in `schema` cannot escape as a thrown error
- * — it degrades to {@link jsonShape} instead. A same-node re-conversion at
+ * — it degrades to {@link rawShape} instead. A same-node re-conversion at
  * the same remaining `depth` is served from `memo` (guards a
  * shared-reference schema DAG against exponential blowup), mirroring
  * {@link inferObject} / {@link inferArray} (inferers.ts).
@@ -825,7 +841,7 @@ export function buildShapeFromNode(
  *   recursion state owned by the {@link schemaToShape} entry point; passing
  *   a shared or pre-populated `WeakMap` changes caching behavior and is not
  *   supported usage
- * @returns The built shape for `schema`, or {@link jsonShape} on any failure
+ * @returns The built shape for `schema`, or {@link rawShape} on any failure
  *
  * @example
  * ```ts
@@ -839,13 +855,13 @@ export function schemaNodeToShape(
 	visited: WeakSet<object>,
 	memo: WeakMap<object, Map<number, ContractShape>>,
 ): ContractShape {
-	if (!(depth > 0) || !isRecord(schema) || visited.has(schema)) return jsonShape()
+	if (!(depth > 0) || !isRecord(schema) || visited.has(schema)) return rawShape({})
 	const cached = memo.get(schema)?.get(depth)
 	if (cached) return cached
 	visited.add(schema)
 	const outcome = attempt(() => buildShapeFromNode(schema, depth, visited, memo))
 	visited.delete(schema)
-	const shape = outcome.success ? outcome.value : jsonShape()
+	const shape = outcome.success ? outcome.value : rawShape({})
 	let depths = memo.get(schema)
 	if (!depths) {
 		depths = new Map()
@@ -863,7 +879,7 @@ export function schemaNodeToShape(
  * @remarks
  * Total: NEVER throws, for any input — a malformed, cyclic, deeply-nested, or
  * outright hostile (throwing-getter Proxy) `schema` value all degrade to
- * {@link jsonShape} rather than escaping as an error, so
+ * {@link rawShape} rather than escaping as an error, so
  * `createContract(schemaToShape(x))` is safe to call for any `x`. See
  * {@link buildShapeFromNode} for the exact per-keyword precedence.
  *
@@ -873,9 +889,31 @@ export function schemaNodeToShape(
  * `RegExp` is a ReDoS vector; both keywords are read only far enough to be
  * ignored. Any node the walk cannot express — an empty `{}`, an
  * unrecognized `type`, a schema past {@link INFER_DEPTH_LIMIT} deep, or a
- * cyclic re-encounter — widens to {@link jsonShape} (accept any JSON), never
- * narrows: the round trip `compileGuard(schemaToShape(valueToSchema(v)))(v)`
- * holds for every `v`, with widening as the only source of looseness.
+ * cyclic re-encounter — widens to {@link rawShape} (accept any defined
+ * value), never narrows.
+ *
+ * ROUND TRIP: `compileGuard(schemaToShape(valueToSchema(v)))(v)` is `true` for
+ * every `v` — including the values no JSON Schema keyword describes (`NaN`,
+ * `±Infinity`, a `Map`, a `Set`, a class instance, a function, a symbol, a
+ * bigint, a cyclic or hostile host), which infer `{}` and widen back to an
+ * accept-anything {@link rawShape}. Widening is the only source of looseness.
+ * The law has exactly two limits, both about values JSON itself cannot carry:
+ *
+ * - **Absence.** `undefined` is not a value: no compiled guard accepts it
+ *   (`rawShape` reserves it as the parser failure sentinel). So `undefined`
+ *   itself, an array element holding it, and an array HOLE (`arrayOf` requires
+ *   every index to be an own property, the same rule `isJSONValue` applies)
+ *   all fall outside the law. An OBJECT property holding `undefined` does not:
+ *   `valueToSchema` drops the key and opens the object, so the source object
+ *   is still accepted.
+ * - **`Date` serialization.** A `Date` infers the schema of its JSON form
+ *   (`{ type: 'string' }`, plus `format: 'date-time'` when `format` is on), so
+ *   the law applies to `date.toISOString()` rather than the runtime instance.
+ *
+ * A widened node cannot be auto-generated: `rawShape` embeds an arbitrary
+ * schema fragment, so `createContract(schemaToShape(x)).generate()` throws
+ * when the conversion widened anywhere — `schema` / `is` / `parse` / `explain`
+ * stay total.
  *
  * @param schema - The JSON Schema value to convert
  * @returns The built {@link ContractShape}
