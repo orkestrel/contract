@@ -1,8 +1,8 @@
 # @orkestrel/contract
 
 The zero-dependency contract toolkit — runtime type guards, guard combinators, coerce-and-extract
-parsers, and a shape DSL that compiles once into a guard, parser, JSON Schema, and generator that
-can never drift. The foundation package of the `@orkestrel` line.
+parsers, and a shape DSL that compiles once into a guard, parser, fault report, JSON Schema, and
+generator that can never drift. The foundation package of the `@orkestrel` line.
 
 ## Install
 
@@ -18,7 +18,13 @@ npm install @orkestrel/contract
 ## Usage
 
 ```ts
-import { createContract, integerShape, objectShape, stringShape } from '@orkestrel/contract'
+import {
+	createContract,
+	integerShape,
+	objectShape,
+	seededRandom,
+	stringShape,
+} from '@orkestrel/contract'
 
 const user = createContract(
 	objectShape({
@@ -29,7 +35,9 @@ const user = createContract(
 
 user.is({ name: 'Ada', age: 36 }) // true
 user.parse({ name: 'Ada', age: '36' }) // { name: 'Ada', age: 36 } — coerces, or undefined
+user.explain({ name: '', age: 36 }) // [{ reason: 'constraint', path: ['name'], constraint: 'min', limit: 1, … }]
 user.schema // the owned, deeply frozen compiled JSON Schema
+user.generate(seededRandom(42)) // reproducible seed data; omit the arg for a wall-clock-seeded source
 ```
 
 ## Guide
