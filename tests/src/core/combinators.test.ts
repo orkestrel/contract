@@ -118,10 +118,10 @@ describe('literal and enum combinators', () => {
 		expect(isDirection('left')).toBe(false)
 	})
 
-	it('literalOf uses Object.is semantics', () => {
+	it('literalOf uses SameValueZero semantics for NaN and signed zero', () => {
 		expect(literalOf(Number.NaN)(Number.NaN)).toBe(true)
-		expect(literalOf(0)(-0)).toBe(false)
-		expect(literalOf(-0)(0)).toBe(false)
+		expect(literalOf(0)(-0)).toBe(true)
+		expect(literalOf(-0)(0)).toBe(true)
 		expect(literalOf(-0)(-0)).toBe(true)
 	})
 })

@@ -102,8 +102,14 @@ export function tupleOf(
 }
 
 /**
- * Build a guard that accepts values identical (via `Object.is`) to one of the
- * provided literal primitives.
+ * Build a guard that accepts a provided literal primitive using SameValueZero
+ * comparison.
+ *
+ * @remarks
+ * Signed zero compares equal, while `NaN` compares equal to `NaN`.
+ *
+ * @param literals - The permitted literal primitives
+ * @returns A guard narrowing to the provided literal union
  *
  * @example
  * ```ts
@@ -115,8 +121,8 @@ export function tupleOf(
 export function literalOf<const Literals extends ReadonlyArray<string | number | boolean>>(
 	...literals: Literals
 ): Guard<Literals[number]> {
-	return (value: unknown): value is Literals[number] =>
-		literals.some((literal) => Object.is(literal, value))
+	const allowed = new Set<unknown>(literals)
+	return (value: unknown): value is Literals[number] => allowed.has(value)
 }
 
 /**

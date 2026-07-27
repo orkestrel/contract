@@ -415,8 +415,10 @@ export interface JSONShape {
  * A raw JSON Schema passthrough — embeds a schema fragment directly.
  *
  * @remarks
- * For values the shape DSL can't express. The compiled guard accepts any value
- * and the parser passes it through unchanged; the schema is emitted verbatim.
+ * For values the shape DSL can't express. The compiled guard accepts every
+ * top-level value except `undefined`, which is reserved as the parser failure
+ * sentinel. Wrap the shape with {@link OptionalShape} to admit absence. Defined
+ * values pass through unchanged, and the schema is emitted verbatim.
  */
 export interface RawShape {
 	readonly type: 'raw'
