@@ -27,6 +27,231 @@ afterEach(() => {
 })
 
 /**
+ * Throw from a deliberately hostile fixture operation.
+ *
+ * @returns Never returns because hostile access always throws
+ *
+ * @example
+ * ```ts
+ * throwHostileAccess() // throws
+ * ```
+ */
+export function throwHostileAccess(): never {
+	throw new Error('hostile access')
+}
+
+/**
+ * Advance an infinite numeric iterator by one entry.
+ *
+ * @returns An unfinished iterator result carrying zero
+ *
+ * @example
+ * ```ts
+ * advanceInfiniteIterable() // { done: false, value: 0 }
+ * ```
+ */
+export function advanceInfiniteIterable(): IteratorResult<number> {
+	return { done: false, value: 0 }
+}
+
+/**
+ * Return an infinite iterator from its iterable protocol method.
+ *
+ * @returns The iterator receiving the protocol call
+ *
+ * @example
+ * ```ts
+ * const values = createInfiniteIterable()
+ * Object.is(iterateInfiniteIterable.call(values), values) // true
+ * ```
+ */
+export function iterateInfiniteIterable(
+	this: IterableIterator<number>,
+): IterableIterator<number> {
+	return this
+}
+
+/**
+ * Create an object Proxy whose access has been permanently revoked.
+ *
+ * @returns A revoked Proxy that throws when inspected
+ *
+ * @example
+ * ```ts
+ * const value = createRevokedProxy()
+ * Reflect.getPrototypeOf(value) // throws
+ * ```
+ */
+export function createRevokedProxy(): object {
+	const revocable = Proxy.revocable({}, {})
+	revocable.revoke()
+	return revocable.proxy
+}
+
+/**
+ * Create an array Proxy whose access has been permanently revoked.
+ *
+ * @returns A revoked array Proxy that throws when inspected
+ *
+ * @example
+ * ```ts
+ * const value = createRevokedArrayProxy()
+ * value.length // throws
+ * ```
+ */
+export function createRevokedArrayProxy(): readonly unknown[] {
+	const target: unknown[] = []
+	const revocable = Proxy.revocable(target, {})
+	revocable.revoke()
+	return revocable.proxy
+}
+
+/**
+ * Create a record with an own getter that throws whenever read.
+ *
+ * @returns A record whose `value` getter throws
+ *
+ * @example
+ * ```ts
+ * const record = createThrowingGetter()
+ * Reflect.get(record, 'value') // throws
+ * ```
+ */
+export function createThrowingGetter(): Readonly<Record<string, unknown>> {
+	const record: Record<string, unknown> = {}
+	return Object.defineProperty(record, 'value', {
+		get: throwHostileAccess,
+		enumerable: true,
+	})
+}
+
+/**
+ * Create an object whose own-key reflection traps always throw.
+ *
+ * @returns A Proxy hostile to own-key and descriptor inspection
+ *
+ * @example
+ * ```ts
+ * const value = createHostileKeys()
+ * Reflect.ownKeys(value) // throws
+ * ```
+ */
+export function createHostileKeys(): object {
+	return new Proxy(
+		{},
+		{
+			ownKeys: throwHostileAccess,
+			getOwnPropertyDescriptor: throwHostileAccess,
+		},
+	)
+}
+
+/**
+ * Build an alternating array-and-record nest around a string leaf.
+ *
+ * @param depth - The number of container layers to add
+ * @returns `'leaf'` wrapped in `depth` alternating container layers
+ *
+ * @example
+ * ```ts
+ * buildDeepNest(2) // { value: ['leaf'] }
+ * ```
+ */
+export function buildDeepNest(depth: number): unknown {
+	let value: unknown = 'leaf'
+	for (let layer = 0; layer < depth; layer += 1) {
+		value = layer % 2 === 0 ? [value] : { value }
+	}
+	return value
+}
+
+/**
+ * Build a record whose `self` property points back to the record.
+ *
+ * @returns A cyclic readonly record
+ *
+ * @example
+ * ```ts
+ * const record = buildCyclicRecord()
+ * Object.is(record.self, record) // true
+ * ```
+ */
+export function buildCyclicRecord(): Readonly<Record<string, unknown>> {
+	const record: Record<string, unknown> = {}
+	record.self = record
+	return record
+}
+
+/**
+ * Build an array whose only entry points back to the array.
+ *
+ * @returns A cyclic readonly array
+ *
+ * @example
+ * ```ts
+ * const value = buildCyclicArray()
+ * Object.is(value[0], value) // true
+ * ```
+ */
+export function buildCyclicArray(): readonly unknown[] {
+	const value: unknown[] = []
+	value.push(value)
+	return value
+}
+
+/**
+ * Build a three-slot sparse array with only its middle entry populated.
+ *
+ * @returns A readonly sparse array containing `'value'` at index one
+ *
+ * @example
+ * ```ts
+ * const value = buildSparseArray()
+ * value.length // 3
+ * ```
+ */
+export function buildSparseArray(): readonly unknown[] {
+	const value: unknown[] = []
+	value.length = 3
+	value[1] = 'value'
+	return value
+}
+
+/**
+ * Create a self-iterating iterator that can be consumed only once.
+ *
+ * @returns An iterator over `1`, `2`, and `3`
+ *
+ * @example
+ * ```ts
+ * const values = createOneShotIterable()
+ * Array.from(values) // [1, 2, 3]
+ * Array.from(values) // []
+ * ```
+ */
+export function createOneShotIterable(): IterableIterator<number> {
+	return [1, 2, 3].values()
+}
+
+/**
+ * Create an iterator that yields zero forever.
+ *
+ * @returns A self-iterating infinite iterator
+ *
+ * @example
+ * ```ts
+ * const values = createInfiniteIterable()
+ * values.next() // { done: false, value: 0 }
+ * ```
+ */
+export function createInfiniteIterable(): IterableIterator<number> {
+	return {
+		next: advanceInfiniteIterable,
+		[Symbol.iterator]: iterateInfiniteIterable,
+	}
+}
+
+/**
  * A broad spread of values for exercising parse↔guard soundness exhaustively:
  * guard-valid representatives for every shipped guard, coercible inputs (numeric
  * strings, `'true'` / `1`), and adversarial non-matches (mixed arrays, symbol,

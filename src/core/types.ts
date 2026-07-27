@@ -37,6 +37,49 @@ export type Result<T, E = Error> = Success<T> | Failure<E>
  */
 export type FieldPath = string | readonly string[]
 
+// === Errors
+
+/** Machine-readable category carried by a {@link ContractError}. */
+export type ContractCode =
+	/** Identifies a bound contract error. */
+	| 'bound'
+	/** Identifies a range contract error. */
+	| 'range'
+	/** Identifies an empty-value contract error. */
+	| 'empty'
+	/** Identifies a placement contract error. */
+	| 'placement'
+	/** Identifies a literal contract error. */
+	| 'literal'
+	/** Identifies a cycle contract error. */
+	| 'cycle'
+	/** Identifies a pattern contract error. */
+	| 'pattern'
+	/** Identifies a generation contract error. */
+	| 'generate'
+
+/** Optional structured details carried by a {@link ContractError}. */
+export interface ContractErrorContext {
+	/** Location associated with the error. */
+	readonly path?: FieldPath
+	/** Shape label associated with the error. */
+	readonly shape?: string
+	/** Numeric or textual limit associated with the error. */
+	readonly limit?: number | string
+	/** Received-value description associated with the error. */
+	readonly received?: string
+}
+
+/** Construction options for a {@link ContractError}. */
+export interface ContractErrorOptions {
+	/** Machine-readable error category. */
+	readonly code: ContractCode
+	/** Optional structured error details. */
+	readonly context?: ContractErrorContext
+	/** Optional originating thrown value. */
+	readonly cause?: unknown
+}
+
 // === Guards
 
 /** A runtime type guard: returns `true` when `value` satisfies `T` and narrows it. */

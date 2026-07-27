@@ -1,9 +1,11 @@
 import type { JSONSchema } from '@src/core'
+import { createRevokedProxy, createThrowingGetter } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
 import {
 	attempt,
 	createContract,
 	enumerableSymbolCount,
+	holds,
 	matchesJSONValue,
 	objectShape,
 	resolveField,
@@ -20,12 +22,13 @@ describe('attempt', () => {
 		expect(outcome).toEqual({ success: true, value: 42 })
 	})
 
-	it('rethrows an Error reason as-is (by reference)', () => {
+	it('preserves an Error reason as-is (by reference)', () => {
 		const error = new Error('boom')
 		const outcome = attempt(() => {
 			throw error
 		})
 		expect(outcome.success).toBe(false)
+		expect(!outcome.success && outcome.error).toBeInstanceOf(Error)
 		expect(!outcome.success && outcome.error).toBe(error)
 	})
 
@@ -38,12 +41,36 @@ describe('attempt', () => {
 		expect(!outcome.success && outcome.error.message).toBe('plain string reason')
 	})
 
-	it("falls back to a fixed message when the thrown value's own toString throws", () => {
-		const hostile = {
-			toString() {
-				throw new Error('hostile toString')
-			},
-		}
+	it('normalizes a Symbol reason into an Error via String()', () => {
+		const outcome = attempt(() => {
+			throw Symbol('symbol reason')
+		})
+		expect(outcome.success).toBe(false)
+		expect(!outcome.success && outcome.error).toBeInstanceOf(Error)
+		expect(!outcome.success && outcome.error.message).toBe('Symbol(symbol reason)')
+	})
+
+	it('normalizes a null reason into an Error via String()', () => {
+		const outcome = attempt(() => {
+			throw null
+		})
+		expect(outcome.success).toBe(false)
+		expect(!outcome.success && outcome.error).toBeInstanceOf(Error)
+		expect(!outcome.success && outcome.error.message).toBe('null')
+	})
+
+	it('returns a fallback Error when inspecting a revoked Proxy reason throws', () => {
+		const hostile = createRevokedProxy()
+		const outcome = attempt(() => {
+			throw hostile
+		})
+		expect(outcome.success).toBe(false)
+		expect(!outcome.success && outcome.error).toBeInstanceOf(Error)
+		expect(!outcome.success && outcome.error.message).toBe('Unknown thrown value')
+	})
+
+	it('falls back to a fixed message when the thrown value cannot be stringified', () => {
+		const hostile: object = Object.create(null)
 		const outcome = attempt(() => {
 			throw hostile
 		})
@@ -58,6 +85,29 @@ describe('attempt', () => {
 				throw new Error('anything')
 			}),
 		).not.toThrow()
+	})
+})
+
+describe('holds', () => {
+	it('returns false when the callback throws', () => {
+		expect(
+			holds(() => {
+				throw new Error('boom')
+			}),
+		).toBe(false)
+	})
+
+	it('returns true when the callback returns true', () => {
+		expect(holds(() => true)).toBe(true)
+	})
+
+	it('returns false when the callback returns false', () => {
+		expect(holds(() => false)).toBe(false)
+	})
+
+	it('returns false when the callback returns a truthy non-boolean at runtime', () => {
+		const callback = new Proxy(() => true, { apply: String })
+		expect(holds(callback)).toBe(false)
 	})
 })
 
@@ -83,25 +133,15 @@ describe('resolveField', () => {
 	})
 
 	it('returns undefined against a hostile getter without throwing', () => {
-		const hostile = {
-			get a() {
-				throw new Error('hostile getter')
-			},
-		}
-		expect(() => resolveField(hostile, 'a')).not.toThrow()
-		expect(resolveField(hostile, 'a')).toBeUndefined()
+		const hostile = createThrowingGetter()
+		expect(() => resolveField(hostile, 'value')).not.toThrow()
+		expect(resolveField(hostile, 'value')).toBeUndefined()
 	})
 
 	it('returns undefined against a hostile getter mid-path without throwing', () => {
-		const hostile = {
-			user: {
-				get name() {
-					throw new Error('hostile nested getter')
-				},
-			},
-		}
-		expect(() => resolveField(hostile, ['user', 'name'])).not.toThrow()
-		expect(resolveField(hostile, ['user', 'name'])).toBeUndefined()
+		const hostile = { user: createThrowingGetter() }
+		expect(() => resolveField(hostile, ['user', 'value'])).not.toThrow()
+		expect(resolveField(hostile, ['user', 'value'])).toBeUndefined()
 	})
 })
 

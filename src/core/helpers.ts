@@ -47,19 +47,29 @@ export function attempt<T>(callback: () => T): Result<T> {
 	try {
 		return { success: true, value: callback() }
 	} catch (reason) {
-		if (reason instanceof Error) {
-			return { success: false, error: reason }
-		}
-		// A thrown non-Error value's own `toString` may itself throw (a hostile
-		// object) — contain that conversion too so normalization never escapes.
-		let message = 'Unknown thrown value'
 		try {
-			message = String(reason)
+			const error = reason instanceof Error ? reason : new Error(String(reason))
+			return { success: false, error }
 		} catch {
-			// keep the fallback message
+			return { success: false, error: new Error('Unknown thrown value') }
 		}
-		return { success: false, error: new Error(message) }
 	}
+}
+
+/**
+ * Invoke a predicate through the sanctioned never-throw boundary.
+ *
+ * @param callback - The predicate to invoke with no arguments
+ * @returns `true` only when the callback returns the boolean value `true`
+ *
+ * @example
+ * ```ts
+ * holds(() => value instanceof Widget) // false when inspection throws
+ * ```
+ */
+export function holds(callback: () => boolean): boolean {
+	const outcome = attempt(callback)
+	return outcome.success && outcome.value === true
 }
 
 // === Record-field access
