@@ -63,7 +63,7 @@ describe('coding policy', () => {
 		if (!isRecord(permissions)) throw new Error('Claude permissions must be a record')
 
 		expect(permissions.allow).toBeUndefined()
-		expect(permissions.ask).toEqual(['Bash'])
+		expect(permissions.ask).toBeUndefined()
 		expect(permissions.deny).toEqual(
 			expect.arrayContaining([
 				'Read(.env*)',

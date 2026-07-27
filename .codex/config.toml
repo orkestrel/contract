@@ -37,7 +37,8 @@ Work directly for trivial tasks. For non-trivial work: send the reading to grok;
 planner (Opus 5, subjective) and analyst (Sol, objective) on the
 SAME design brief in parallel without showing either the other's answer, then
 reconcile them into one plan; plan bounded units with disjoint ownership; route each
-nontrivial unit to implementer (Sol), reserving builder/application for fully
+nontrivial unit to implementer (Sol) or the opus implementation bridge (Opus 5) —
+whichever engine fits the unit — reserving builder/application for fully
 specified taste-free mechanics; integrate
 shared files serially; obtain an independent reviewer (Opus 5) design audit and an
 independent analyst (Sol) correctness audit plus a checker conformance pass; then
