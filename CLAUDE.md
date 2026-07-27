@@ -135,13 +135,21 @@ formatter and build races, cache phantoms, and validation cross-talk:
 
 ## Execution loop
 
+At session start, before planning, the Orchestrator records bench liveness with the two cheap
+probes (`codex --version`; `agent`/`agent.cmd` `--version`) and plans routing against that
+record. Probes are read-only; a dark bench is noted with its fallback, never silently
+absorbed.
+
 1. **Absorb.** Dispatch `grok` for terrain, prior art, and the reading the decision needs. In
    an Orkestrel repo dispatch `orkestrel` alongside it for live package state. Skip only when
    the ground is already known.
 2. **Design adversarially.** Dispatch `planner` (Opus 5) and `analyst` (Sol) on the SAME brief,
    in parallel, without showing either the other's answer. Reconcile them yourself into one
    plan: units, dependencies, ownership, parallel/serial order, acceptance criteria, risks.
-   Surface the plan before dispatch.
+   Surface the plan before dispatch, including a routing ledger: every unit names its role
+   AND engine. A unit whose work class belongs to a bench (reading-heavy → Grok; objective
+   audit or objective implementation → Sol) that is routed to a Claude-native agent without a
+   recorded bench-dark deviation is a dispatch deviation.
 3. **Implement.** Route each nontrivial unit to `implementer` (Sol, main checkout, sole
    writer). Route a fully
    specified, taste-free unit to `builder` or `application`. Never route implementation to an
@@ -198,10 +206,38 @@ hypothesis until it is verified against source and accepted by the Orchestrator.
 verifies its CLI is present before running and stops with a deviation report naming the
 fallback when it is not.
 
+Three bench laws apply to every external engine:
+
+- **Transport by work class.** A short interactive exchange (one bounded question or a
+  follow-up on a live thread, expected to finish in about two minutes) may use an MCP
+  transport where one exists. Long-running work — audits, implementation units, anything
+  multi-minute — uses the journaled CLI and never MCP: an interrupted MCP call loses its
+  session invisibly, while a journal survives any client-side failure.
+- **Journal first.** Every bench invocation leaves a tailable on-disk record under
+  `tmp/<bench>/` (`tmp/codex/`, `tmp/cursor/`): the brief as a file, the event stream or
+  output log, and the final answer. The user tails the journal for live progress; the
+  journal's mtime is the liveness signal; the session id in the journal head is the recovery
+  handle. Briefs never travel as fragile shell arguments.
+- **Ephemeral journals.** Everything under `tmp/` is unit evidence, never committed. Bridges
+  never delete journals; the Orchestrator sweeps `tmp/codex/` and `tmp/cursor/` once at
+  campaign acceptance, after the final gate evidence is recorded. A journal surviving past
+  its campaign is residue.
+
+For a long-running bridge exec the Orchestrator arms a stall watcher on the journal
+(file-exists on the final answer, mtime-stall threshold of a few minutes) instead of trusting
+the bridge to report failure — a wedged bridge is silent, and silence must never read as
+progress. A stalled journal follows the deviation ladder, with the session id from the
+journal head as the recovery handle.
+
 ### Cursor Grok
 
 - Reached only through the `grok` role, in ask mode:
-  `agent -p --trust --mode=ask --model "$CURSOR_GROK_MODEL" "<brief>"`.
+  `<agent-cli> -p --trust --mode=ask --model "$CURSOR_GROK_MODEL" "<brief>" | tee tmp/cursor/<unit>.log`.
+  `<agent-cli>` resolves as bare `agent`, then `agent.cmd` (Windows installs ship only
+  `.cmd`/`.ps1` shims, so bare `agent` does not resolve in Bash), then
+  `"$LOCALAPPDATA/cursor-agent/agent.cmd"` — verified with `--version` before first use. Long
+  briefs are written to `tmp/cursor/<unit>-brief.md` and the prompt points at the file. The
+  tee'd log is the bench's journal.
 - Read-only. `--force` never appears. Nothing it returns is applied.
 - Read the exact model id from `agent models` and store it in `CURSOR_GROK_MODEL`. Never guess
   or substitute.
@@ -223,14 +259,20 @@ fallback when it is not.
   journal head goes in every bridge report so follow-ups continue the same session via
   `codex exec resume <session-id>` with context intact. `--output-schema` is available when
   the Orchestrator wants a machine-checkable return shape.
-- **MCP wiring is the preferred transport.** `.mcp.json` registers `codex mcp-server` as a
-  project MCP server (verified tools: `codex` to start a session, `codex-reply` to continue
-  one), and settings enable project MCP servers without prompting, so the wiring works
-  headless — including Claude Code Cloud, where `.mcp.json` ships with the repo and the bench
-  lights up once the codex binary is installed and device-authed. When the `mcp__codex__*`
-  tools are present in a session, reach the bench through them — progress streams into the
-  client natively and `codex-reply` carries the conversation. The journaled CLI protocol
-  above is the fallback whenever the MCP tools are not loaded.
+- **Transport is chosen by work class.** The MCP wiring (`.mcp.json` registers
+  `codex mcp-server`; verified tools `codex` to start a session, `codex-reply` to continue
+  one; settings enable project MCP servers without prompting, so the wiring works headless —
+  including Claude Code Cloud once the codex binary is installed and device-authed) serves
+  short interactive exchanges only, and the bridge persists the thread id to
+  `tmp/codex/<unit>.session` the moment a response carries it — an interrupted MCP call with
+  no persisted id is unrecoverable and treated as failed. Long-running work (audits,
+  implementation units) always uses the journaled CLI: the brief at
+  `tmp/codex/<unit>-brief.md`, one `codex exec --json` streaming to `tmp/codex/<unit>.jsonl`
+  with `--output-last-message`, foreground when it fits the shell cap, backgrounded with the
+  turn ended when it may not — the harness re-invocation is the wait; placeholder loops and
+  wait-promise reports are deviations. Recovery ladder on interruption: persisted-id
+  `codex-reply` re-emission → fresh CLI session with the same brief file → for an interrupted
+  CLI exec, the journal survives and the Orchestrator chooses resume or fresh.
 - **The inverse bridge exists too:** Claude Code exposes `claude mcp serve`, registered in
   Codex's global config (`codex mcp add claude -- claude mcp serve`) so Codex-primary
   sessions reach Claude/Opus as first-class MCP tools instead of shelling to the CLI.
@@ -277,6 +319,9 @@ CODEX_IMPLEMENTER_EFFORT=high
 - No writer's and no external engine's self-assessment is authoritative.
 - Do not let a lower-cost native agent stand in for Grok, Opus 5, or Sol; do not spend Opus 5
   on discovery or mechanical edits; do not route judgment-bearing implementation away from Sol.
+  A bench substitution is legitimate only when the same session records the bench dark (CLI
+  missing, auth expired, model unavailable) — the fallback is then named in the plan, not
+  improvised silently.
 - Do not run the design adversaries on different briefs, or show either one the other's answer
   before both have returned.
 - Do not accept unreviewed implementation, unverified hypotheses, shared-tree writing races,
