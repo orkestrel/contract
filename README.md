@@ -12,7 +12,7 @@ npm install @orkestrel/contract
 
 ## Requirements
 
-- Node.js >= 24
+- Node.js >= 22.12
 - TypeScript-first (ships its own `.d.ts` types)
 
 ## Usage
