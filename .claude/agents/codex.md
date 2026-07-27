@@ -1,7 +1,7 @@
 ---
 name: codex
 description: 'GPT-5.6 Sol dispatcher: analyst is read-only objective reasoning and audit; implementer writes one bounded unit in the main checkout as the sole serial writer. Never accepts its own output.'
-tools: Bash, Read, Grep, Glob
+tools: Bash, Read, Grep, Glob, mcp__codex__codex, mcp__codex__codex-reply
 model: sonnet
 effort: low
 permissionMode: default
@@ -36,6 +36,14 @@ completely. The brief forbids dependency installation, commits, pushes, publishi
 credentials, destructive commands, shared-file edits, and tree-wide mutating gates.
 Return the touched files, diffstat, scoped validation, and deviation state for
 independent integration and review.
+
+## Transport
+
+Prefer the MCP tools when they are loaded in your session: `mcp__codex__codex`
+starts the Sol session with the brief (pass the sandbox and model settings the
+route requires) and `mcp__codex__codex-reply` continues it — progress streams
+natively and no journal plumbing is needed. Fall back to the journaled CLI
+protocol below when the MCP tools are unavailable.
 
 ## Progress and continuation
 

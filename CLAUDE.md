@@ -219,10 +219,17 @@ fallback when it is not.
   journal head goes in every bridge report so follow-ups continue the same session via
   `codex exec resume <session-id>` with context intact. `--output-schema` is available when
   the Orchestrator wants a machine-checkable return shape.
-- **MCP wiring:** `.mcp.json` registers `codex mcp-server` as a project MCP server, so Codex
-  is also reachable as first-class tools with progress streamed into the client UI. The CLI
-  journal protocol above remains the default for bench dispatches; the MCP surface is for
-  interactive and tool-native use.
+- **MCP wiring is the preferred transport.** `.mcp.json` registers `codex mcp-server` as a
+  project MCP server (verified tools: `codex` to start a session, `codex-reply` to continue
+  one), and settings enable project MCP servers without prompting, so the wiring works
+  headless — including Claude Code Cloud, where `.mcp.json` ships with the repo and the bench
+  lights up once the codex binary is installed and device-authed. When the `mcp__codex__*`
+  tools are present in a session, reach the bench through them — progress streams into the
+  client natively and `codex-reply` carries the conversation. The journaled CLI protocol
+  above is the fallback whenever the MCP tools are not loaded.
+- **The inverse bridge exists too:** Claude Code exposes `claude mcp serve`, registered in
+  Codex's global config (`codex mcp add claude -- claude mcp serve`) so Codex-primary
+  sessions reach Claude/Opus as first-class MCP tools instead of shelling to the CLI.
 - `analyst` runs `gpt-5.6-sol` at high effort with `--sandbox read-only` in the current
   checkout, for objective analysis, the adversarial design argument, diagnosis, and the
   post-implementation correctness audit.
