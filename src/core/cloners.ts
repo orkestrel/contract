@@ -1,4 +1,6 @@
 import type { ContractShape, JSONSchema } from './types.js'
+import { ContractError } from './errors.js'
+import { attempt, enumerableKeys } from './helpers.js'
 
 /**
  * Deep-clone a JSON Schema graph into an owned frozen snapshot.
@@ -6,11 +8,14 @@ import type { ContractShape, JSONSchema } from './types.js'
  * @remarks
  * Walks arrays and records iteratively with a memo, preserving shared
  * references and closing cyclic edges onto their cloned nodes. Primitive
- * values are copied directly, every own key is retained, and each produced
- * object is frozen after its edges are wired.
+ * values and own enumerable string-keyed edges are copied; record nodes use
+ * null prototypes, arrays retain only their intrinsic array prototype, and
+ * every produced object is frozen after its edges are wired. Hostile traversal
+ * throws a clone-coded {@link ContractError}, never a caller-owned raw error.
  *
  * @param schema - The JSON Schema graph to snapshot
  * @returns A deeply cloned and frozen JSON Schema graph
+ * @throws {ContractError} When hostile schema traversal prevents ownership
  *
  * @example
  * ```ts
@@ -20,51 +25,73 @@ import type { ContractShape, JSONSchema } from './types.js'
  * ```
  */
 export function cloneSchema(schema: JSONSchema): JSONSchema {
-	const root: JSONSchema = Object.create(Object.getPrototypeOf(schema))
-	const memo = new Map<object, object>([[schema, root]])
-	const pending: { readonly source: object; readonly clone: object }[] = [
-		{ source: schema, clone: root },
-	]
+	try {
+		const root: JSONSchema = Object.create(null)
+		const memo = new Map<object, object>([[schema, root]])
+		const pending: {
+			readonly source: object
+			readonly clone: object
+			readonly path: readonly string[]
+		}[] = [{ source: schema, clone: root, path: [] }]
 
-	while (pending.length > 0) {
-		const frame = pending.pop()
-		if (frame === undefined) continue
+		while (pending.length > 0) {
+			const frame = pending.pop()
+			if (frame === undefined) continue
+			const keys = enumerableKeys(frame.source)
+			if (keys === undefined) {
+				throw new ContractError('cloneSchema: property enumeration failed', {
+					code: 'clone',
+					context: { path: frame.path, shape: 'schema' },
+				})
+			}
 
-		for (const key of Reflect.ownKeys(frame.source)) {
-			const descriptor = Reflect.getOwnPropertyDescriptor(frame.source, key)
-			if (descriptor === undefined) continue
-			const source = Reflect.get(frame.source, key)
-			let clone: unknown = source
-			if (typeof source === 'object' && source !== null) {
-				const existing = memo.get(source)
-				if (existing !== undefined) {
-					clone = existing
-				} else {
-					const child: object = Array.isArray(source)
-						? []
-						: Object.create(Object.getPrototypeOf(source))
-					memo.set(source, child)
-					pending.push({ source, clone: child })
-					clone = child
+			for (const key of keys) {
+				const outcome = attempt(() => Reflect.get(frame.source, key))
+				if (!outcome.success) {
+					throw new ContractError('cloneSchema: property access failed', {
+						code: 'clone',
+						context: { path: [...frame.path, key], shape: 'schema' },
+						cause: outcome.error,
+					})
 				}
+				const source = outcome.value
+				let clone: unknown = source
+				if (typeof source === 'object' && source !== null) {
+					const existing = memo.get(source)
+					if (existing !== undefined) {
+						clone = existing
+					} else {
+						const child: object = Array.isArray(source) ? [] : Object.create(null)
+						memo.set(source, child)
+						pending.push({
+							source,
+							clone: child,
+							path: [...frame.path, key],
+						})
+						clone = child
+					}
+				}
+
+				Object.defineProperty(frame.clone, key, {
+					value: clone,
+					enumerable: true,
+					configurable: true,
+					writable: true,
+				})
 			}
 
-			if (Array.isArray(frame.clone) && key === 'length') {
-				Reflect.set(frame.clone, key, clone)
-				continue
-			}
-			Object.defineProperty(frame.clone, key, {
-				value: clone,
-				enumerable: descriptor.enumerable === true,
-				configurable: descriptor.configurable === true,
-				writable: true,
-			})
+			Object.freeze(frame.clone)
 		}
 
-		Object.freeze(frame.clone)
+		return root
+	} catch (reason) {
+		if (reason instanceof ContractError) throw reason
+		throw new ContractError('cloneSchema: failed to create an owned schema snapshot', {
+			code: 'clone',
+			context: { shape: 'schema' },
+			cause: reason,
+		})
 	}
-
-	return root
 }
 
 /**
@@ -74,10 +101,12 @@ export function cloneSchema(schema: JSONSchema): JSONSchema {
  * Uses an explicit memo to preserve shared-child identity and close cyclic
  * edges onto their cloned nodes. Shape-node shells are created iteratively,
  * then their structural edges are wired and their copied collections frozen.
- * A raw schema delegates to {@link cloneSchema}.
+ * A raw schema delegates to {@link cloneSchema}; hostile raw-schema traversal
+ * throws a clone-coded {@link ContractError}.
  *
  * @param shape - The contract shape graph to snapshot
  * @returns A deeply cloned and frozen shape graph
+ * @throws {ContractError} When hostile raw-schema traversal prevents ownership
  *
  * @example
  * ```ts
@@ -190,7 +219,15 @@ export function cloneShape(shape: ContractShape): ContractShape {
 				}
 				break
 			case 'raw': {
-				clone = { type: 'raw', schema: cloneSchema(source.schema) }
+				const outcome = attempt(() => source.schema)
+				if (!outcome.success) {
+					throw new ContractError('cloneShape: raw schema access failed', {
+						code: 'clone',
+						context: { shape: 'raw' },
+						cause: outcome.error,
+					})
+				}
+				clone = { type: 'raw', schema: cloneSchema(outcome.value) }
 				break
 			}
 		}

@@ -1,7 +1,16 @@
 import type { Guard, JSONValue } from './types.js'
 import type { FieldPath } from './types.js'
-import { isArray, isFiniteNumber, isJSONValue, isNull, isRecord, isString } from './validators.js'
-import { holds, resolveField } from './helpers.js'
+import {
+	isArray,
+	isBoolean,
+	isFiniteNumber,
+	isJSONValue,
+	isNull,
+	isNumber,
+	isRecord,
+	isString,
+} from './validators.js'
+import { attempt, holds, resolveField } from './helpers.js'
 
 // AGENTS §14: a parser answers "give me a `T` or nothing" — it returns the
 // typed value or `undefined`, and it never throws. Each leaf parser here forms a
@@ -245,10 +254,12 @@ export function parseJSONValue(value: unknown): JSONValue | undefined {
  * Parse an unknown value as one of the allowed literal primitives.
  *
  * @remarks
- * Pairs with {@link literalOf} — both match by `Object.is`, so the
+ * Pairs with {@link literalOf} — both match by SameValueZero, so the
  * `parseEnum ↔ literalOf(...allowed)` pairing covers every literal primitive
  * (string, number, or boolean), not only strings. Matching is identity, never
- * cross-type coercion: `parseEnum('1', [1])` stays `undefined`.
+ * cross-type coercion: `parseEnum('1', [1])` stays `undefined`. The allowed
+ * values are copied into an owned frozen `Set`; hostile iteration returns
+ * `undefined` rather than escaping.
  *
  * @param value - The value to parse
  * @param allowed - The permitted literal values
@@ -263,11 +274,18 @@ export function parseJSONValue(value: unknown): JSONValue | undefined {
 export function parseEnum<const T extends string | number | boolean>(
 	value: unknown,
 	allowed: readonly T[],
-): T | undefined {
-	for (const option of allowed) {
-		if (Object.is(value, option)) return option
-	}
-	return undefined
+): T | undefined
+export function parseEnum(
+	value: unknown,
+	allowed: readonly (string | number | boolean)[],
+): string | number | boolean | undefined
+export function parseEnum(
+	value: unknown,
+	allowed: readonly (string | number | boolean)[],
+): string | number | boolean | undefined {
+	const outcome = attempt(() => Object.freeze(new Set<unknown>(allowed)))
+	if (!outcome.success || !outcome.value.has(value)) return undefined
+	return isString(value) || isNumber(value) || isBoolean(value) ? value : undefined
 }
 
 // === Record-field parsers

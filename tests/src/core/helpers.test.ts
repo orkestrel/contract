@@ -3,7 +3,10 @@ import { buildSparseArray, createRevokedProxy, createThrowingGetter } from '../.
 import { describe, expect, it } from 'vitest'
 import {
 	attempt,
+	ContractError,
 	createContract,
+	drawRandom,
+	enumerableKeys,
 	enumerableSymbolCount,
 	holds,
 	matchesJSONValue,
@@ -108,6 +111,40 @@ describe('holds', () => {
 	it('returns false when the callback returns a truthy non-boolean at runtime', () => {
 		const callback = new Proxy(() => true, { apply: String })
 		expect(holds(callback)).toBe(false)
+	})
+})
+
+describe('enumerableKeys', () => {
+	it('returns a frozen owned snapshot of only own enumerable string keys', () => {
+		const symbol = Symbol('symbol')
+		const value = Object.create({ inherited: true })
+		Object.defineProperty(value, 'hidden', { value: true, enumerable: false })
+		Object.defineProperty(value, symbol, { value: true, enumerable: true })
+		value.visible = true
+		const keys = enumerableKeys(value)
+
+		expect(keys).toEqual(['visible'])
+		expect(Object.isFrozen(keys)).toBe(true)
+	})
+
+	it('returns undefined for hostile property enumeration', () => {
+		expect(enumerableKeys(createRevokedProxy())).toBeUndefined()
+	})
+})
+
+describe('drawRandom', () => {
+	it('returns finite samples inside the random-source range', () => {
+		expect(drawRandom(() => 0, 'number')).toBe(0)
+		expect(drawRandom(() => 0.999, 'number')).toBe(0.999)
+	})
+
+	it('throws a generate ContractError for invalid or throwing sources', () => {
+		expect(() => drawRandom(() => 1, 'union')).toThrowError(ContractError)
+		expect(() =>
+			drawRandom(() => {
+				throw new Error('source')
+			}, 'union'),
+		).toThrowError(ContractError)
 	})
 })
 

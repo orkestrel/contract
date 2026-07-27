@@ -1,5 +1,4 @@
 import type { ContractErrorContext, ContractErrorOptions } from './types.js'
-import { holds } from './helpers.js'
 
 /**
  * Error carrying a machine-readable contract category and optional context.
@@ -44,5 +43,9 @@ export class ContractError extends Error {
  * ```
  */
 export function isContractError(value: unknown): value is ContractError {
-	return holds(() => value instanceof ContractError)
+	try {
+		return value instanceof ContractError
+	} catch {
+		return false
+	}
 }

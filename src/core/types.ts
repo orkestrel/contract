@@ -57,6 +57,10 @@ export type ContractCode =
 	| 'pattern'
 	/** Identifies a generation contract error. */
 	| 'generate'
+	/** Identifies an owned-clone contract error. */
+	| 'clone'
+	/** Identifies a compilation-depth contract error. */
+	| 'depth'
 
 /** Optional structured details carried by a {@link ContractError}. */
 export interface ContractErrorContext {
@@ -219,8 +223,9 @@ export type JSONSchemaType =
  * emitted by the {@link stringToFormat} / {@link samplesToFormat} inference
  * heuristics (`valueToSchema` / `samplesToSchema`), never by `compileSchema`.
  * Recursive via `items` / `properties` / `additionalProperties` / `anyOf` /
- * `oneOf`, but every walk is over a finite, developer-authored shape — there
- * is no cycle/depth risk.
+ * `oneOf`. {@link createContract} owns and validates developer-authored shape
+ * graphs; cycles and nesting past {@link COMPILE_DEPTH_LIMIT} fail with a coded
+ * {@link ContractError} before artifact compilation.
  */
 export interface JSONSchema {
 	readonly type?: JSONSchemaType
@@ -286,8 +291,8 @@ export interface ValueToSchemaOptions {
  *
  * @remarks
  * A discriminated union keyed on `type`. Shapes nest (an `ArrayShape` holds an
- * element shape, an `ObjectShape` a map of them), so a contract is a finite,
- * developer-authored tree — never cyclic.
+ * element shape, an `ObjectShape` a map of them). {@link validateShape}
+ * enforces an acyclic graph within {@link COMPILE_DEPTH_LIMIT}.
  */
 export type ContractShape =
 	| StringShape
@@ -374,8 +379,9 @@ export interface ObjectShape<
  * A union shape — accepts a value matching any one variant (first match wins).
  *
  * @remarks
- * `mode` selects the emitted JSON Schema keyword: `'anyOf'` (default) or
- * `'oneOf'`. Runtime behavior is identical.
+ * `mode` selects the emitted JSON Schema keyword and runtime matching rule:
+ * `'anyOf'` (default) accepts the first matching variant, while `'oneOf'`
+ * requires exactly one variant to match.
  */
 export interface UnionShape<V extends readonly ContractShape[] = readonly ContractShape[]> {
 	readonly type: 'union'
@@ -418,7 +424,8 @@ export interface JSONShape {
  * For values the shape DSL can't express. The compiled guard accepts every
  * top-level value except `undefined`, which is reserved as the parser failure
  * sentinel. Wrap the shape with {@link OptionalShape} to admit absence. Defined
- * values pass through unchanged, and the schema is emitted verbatim.
+ * values pass through unchanged, and the schema is emitted structurally
+ * verbatim as an owned deeply frozen copy.
  */
 export interface RawShape {
 	readonly type: 'raw'
@@ -712,9 +719,10 @@ export type RandomFunction = () => number
  *
  * @remarks
  * Built by `createContract`: `is` narrows, `parse` coerces (returning the typed
- * value or `undefined`), `schema` is the emitted JSON Schema, and `generate`
- * produces deterministic seed data from a {@link RandomFunction} (defaulting to
- * a wall-clock-seeded source when none is supplied).
+ * value or `undefined`), `schema` is an owned deeply frozen emitted JSON
+ * Schema, and `generate` produces deterministic seed data from a
+ * {@link RandomFunction} (defaulting to a wall-clock-seeded source when none
+ * is supplied).
  */
 export interface ContractInterface<T> {
 	readonly schema: JSONSchema

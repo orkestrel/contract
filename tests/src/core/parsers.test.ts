@@ -158,6 +158,20 @@ describe('structural parsers', () => {
 		expect(parseEnum(Number.NaN, [Number.NaN])).toBe(Number.NaN)
 	})
 
+	it('parseEnum preserves signed-zero soundness with literalOf SameValueZero membership', () => {
+		const allowed: readonly [0] = [0]
+
+		expect(literalOf(...allowed)(-0)).toBe(true)
+		expect(Object.is(parseEnum(-0, allowed), -0)).toBe(true)
+	})
+
+	it('parseEnum returns undefined when the allowed array is a revoked Proxy', () => {
+		const allowed = createRevokedArrayProxy<string>()
+
+		expect(() => parseEnum('value', allowed)).not.toThrow()
+		expect(parseEnum('value', allowed)).toBeUndefined()
+	})
+
 	it('parseJSONValue narrows a cycle-safe JSON tree by reference', () => {
 		const tree = { nested: [1, 'x', null] }
 		expect(parseJSONValue(tree)).toBe(tree)

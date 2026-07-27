@@ -20,10 +20,17 @@ import {
 	isString,
 	isUndefined,
 } from './validators.js'
-import { attempt, preview, seededRandom, shapeToKind } from './helpers.js'
-import { FAULT_LIMIT, GENERATION_ATTEMPT_LIMIT } from './constants.js'
+import {
+	attempt,
+	drawRandom,
+	enumerableKeys,
+	preview,
+	seededRandom,
+	shapeToKind,
+} from './helpers.js'
+import { COMPILE_DEPTH_LIMIT, FAULT_LIMIT, GENERATION_ATTEMPT_LIMIT } from './constants.js'
 import { ContractError } from './errors.js'
-import { cloneShape } from './cloners.js'
+import { cloneSchema, cloneShape } from './cloners.js'
 import {
 	arrayOf,
 	boundsOf,
@@ -31,7 +38,6 @@ import {
 	matchOf,
 	nullableOf,
 	orOf,
-	recordOf,
 	stringOf,
 	unionOf,
 	whereOf,
@@ -67,8 +73,11 @@ import { parseBoolean, parseInteger, parseNumber, parseRecord, parseString } fro
  *   `-Infinity`) number values.
  * - A bounded {@link StringShape} / {@link NumberShape} / {@link ArrayShape}
  *   needs `min <= max` when both are set.
+ * - Every present number bound is finite.
  * - An integer {@link NumberShape} (`integer: true`) needs a non-empty integer
  *   range: `Math.ceil(min ?? -Infinity) <= Math.floor(max ?? Infinity)`.
+ * - Shape nesting may not exceed {@link COMPILE_DEPTH_LIMIT}; excessive depth
+ *   fails before recursive artifact compilation begins.
  * - `null` / `json` / `raw` / `boolean` are always-valid leaves. Recursion
  *   continues into array items, object properties (and `additionalProperties`
  *   when it is a shape), union variants, and optional/nullable inner shapes.
@@ -90,9 +99,10 @@ export function validateShape(shape: ContractShape): void {
 				readonly shape: ContractShape
 				readonly path: readonly string[]
 				readonly optional: boolean
+				readonly depth: number
 		  }
 		| { readonly operation: 'exit'; readonly shape: ContractShape }
-	)[] = [{ operation: 'enter', shape, path: [], optional: false }]
+	)[] = [{ operation: 'enter', shape, path: [], optional: false, depth: 0 }]
 
 	while (stack.length > 0) {
 		const frame = stack.pop()
@@ -103,6 +113,12 @@ export function validateShape(shape: ContractShape): void {
 		}
 
 		const current = frame.shape
+		if (frame.depth > COMPILE_DEPTH_LIMIT) {
+			throw new ContractError('validateShape: a shape exceeds the compilation depth limit', {
+				code: 'depth',
+				context: { path: frame.path, shape: current.type, limit: COMPILE_DEPTH_LIMIT },
+			})
+		}
 		if (active.has(current)) {
 			throw new ContractError('validateShape: a shape graph may not contain a cycle', {
 				code: 'cycle',
@@ -122,6 +138,28 @@ export function validateShape(shape: ContractShape): void {
 				}
 				break
 			case 'number':
+				if (current.min !== undefined && !Number.isFinite(current.min)) {
+					throw new ContractError('validateShape: a number shape min must be finite', {
+						code: 'bound',
+						context: {
+							path: frame.path,
+							shape: current.integer === true ? 'integer' : 'number',
+							limit: 'finite number',
+							received: String(current.min),
+						},
+					})
+				}
+				if (current.max !== undefined && !Number.isFinite(current.max)) {
+					throw new ContractError('validateShape: a number shape max must be finite', {
+						code: 'bound',
+						context: {
+							path: frame.path,
+							shape: current.integer === true ? 'integer' : 'number',
+							limit: 'finite number',
+							received: String(current.max),
+						},
+					})
+				}
 				if (current.min !== undefined && current.max !== undefined && current.min > current.max) {
 					throw new ContractError('validateShape: a number shape has min greater than max', {
 						code: 'range',
@@ -181,6 +219,7 @@ export function validateShape(shape: ContractShape): void {
 					shape: current.items,
 					path: [...frame.path, 'items'],
 					optional: false,
+					depth: frame.depth + 1,
 				})
 				break
 			case 'object': {
@@ -191,6 +230,7 @@ export function validateShape(shape: ContractShape): void {
 						shape: extra,
 						path: [...frame.path, 'additionalProperties'],
 						optional: false,
+						depth: frame.depth + 1,
 					})
 				}
 				const keys = Object.keys(current.properties)
@@ -204,6 +244,7 @@ export function validateShape(shape: ContractShape): void {
 						shape: child,
 						path: [...frame.path, 'properties', key],
 						optional: true,
+						depth: frame.depth + 1,
 					})
 				}
 				break
@@ -223,6 +264,7 @@ export function validateShape(shape: ContractShape): void {
 						shape: variant,
 						path: [...frame.path, 'variants', String(index)],
 						optional: false,
+						depth: frame.depth + 1,
 					})
 				}
 				break
@@ -241,6 +283,7 @@ export function validateShape(shape: ContractShape): void {
 					shape: current.inner,
 					path: [...frame.path, 'inner'],
 					optional: false,
+					depth: frame.depth + 1,
 				})
 				break
 			case 'nullable':
@@ -249,6 +292,7 @@ export function validateShape(shape: ContractShape): void {
 					shape: current.inner,
 					path: [...frame.path, 'inner'],
 					optional: false,
+					depth: frame.depth + 1,
 				})
 				break
 		}
@@ -263,7 +307,9 @@ export function validateShape(shape: ContractShape): void {
  * @remarks
  * Object shapes emit `additionalProperties: false` (unless opened) and list only
  * required keys in `required`; nullable shapes emit an `anyOf` with `{ type:
- * 'null' }`. Emission only — it never inspects a runtime value.
+ * 'null' }`. The result is an owned deeply frozen graph; raw schemas are cloned
+ * rather than retained by reference. Emission only — it never inspects a
+ * runtime value.
  *
  * @param shape - The shape to compile
  * @returns The emitted JSON Schema
@@ -277,47 +323,47 @@ export function compileSchema(shape: ContractShape): JSONSchema {
 	if (!Object.isFrozen(shape)) return compileSchema(cloneShape(shape))
 	switch (shape.type) {
 		case 'string':
-			return {
+			return Object.freeze({
 				type: 'string',
 				...(shape.min !== undefined ? { minLength: shape.min } : {}),
 				...(shape.max !== undefined ? { maxLength: shape.max } : {}),
 				...(shape.pattern !== undefined ? { pattern: shape.pattern.source } : {}),
 				...(shape.description !== undefined ? { description: shape.description } : {}),
-			}
+			})
 		case 'number':
-			return {
+			return Object.freeze({
 				type: shape.integer === true ? 'integer' : 'number',
 				...(shape.min !== undefined ? { minimum: shape.min } : {}),
 				...(shape.max !== undefined ? { maximum: shape.max } : {}),
 				...(shape.description !== undefined ? { description: shape.description } : {}),
-			}
+			})
 		case 'boolean':
-			return {
+			return Object.freeze({
 				type: 'boolean',
 				...(shape.description !== undefined ? { description: shape.description } : {}),
-			}
+			})
 		case 'null':
-			return {
+			return Object.freeze({
 				type: 'null',
 				...(shape.description !== undefined ? { description: shape.description } : {}),
-			}
+			})
 		case 'json':
-			return {
+			return Object.freeze({
 				...(shape.description !== undefined ? { description: shape.description } : {}),
-			}
+			})
 		case 'literal':
-			return {
-				enum: [...shape.values],
+			return Object.freeze({
+				enum: Object.freeze([...shape.values]),
 				...(shape.description !== undefined ? { description: shape.description } : {}),
-			}
+			})
 		case 'array':
-			return {
+			return Object.freeze({
 				type: 'array',
 				items: compileSchema(shape.items),
 				...(shape.min !== undefined ? { minItems: shape.min } : {}),
 				...(shape.max !== undefined ? { maxItems: shape.max } : {}),
 				...(shape.description !== undefined ? { description: shape.description } : {}),
-			}
+			})
 		case 'object': {
 			const properties: Record<string, JSONSchema> = Object.create(null)
 			const required: string[] = []
@@ -334,27 +380,33 @@ export function compileSchema(shape: ContractShape): JSONSchema {
 					: extra !== undefined && extra !== false
 						? compileSchema(extra)
 						: false
-			return {
+			return Object.freeze({
 				type: 'object',
-				...(Object.keys(properties).length > 0 ? { properties } : {}),
-				...(required.length > 0 ? { required } : {}),
+				...(Object.keys(properties).length > 0 ? { properties: Object.freeze(properties) } : {}),
+				...(required.length > 0 ? { required: Object.freeze(required) } : {}),
 				additionalProperties,
 				...(shape.description !== undefined ? { description: shape.description } : {}),
-			}
+			})
 		}
 		case 'union':
-			return {
+			return Object.freeze({
 				...(shape.mode === 'oneOf'
-					? { oneOf: shape.variants.map((variant) => compileSchema(variant)) }
-					: { anyOf: shape.variants.map((variant) => compileSchema(variant)) }),
+					? {
+							oneOf: Object.freeze(shape.variants.map((variant) => compileSchema(variant))),
+						}
+					: {
+							anyOf: Object.freeze(shape.variants.map((variant) => compileSchema(variant))),
+						}),
 				...(shape.description !== undefined ? { description: shape.description } : {}),
-			}
+			})
 		case 'optional':
 			return compileSchema(shape.inner)
 		case 'nullable':
-			return { anyOf: [compileSchema(shape.inner), { type: 'null' }] }
+			return Object.freeze({
+				anyOf: Object.freeze([compileSchema(shape.inner), Object.freeze({ type: 'null' })]),
+			})
 		case 'raw':
-			return shape.schema
+			return cloneSchema(shape.schema)
 	}
 }
 
@@ -365,9 +417,11 @@ export function compileSchema(shape: ContractShape): JSONSchema {
  *
  * @remarks
  * Reuses the combinators for structural and refined shapes, and uses an owned
- * `Set` for SameValueZero literal matching. Like every guard it is total — it
- * never throws (AGENTS §14). An unfrozen caller-owned shape is first compiled
- * from an owned snapshot.
+ * `Set` for SameValueZero literal matching. Compiled object shapes observe own
+ * enumerable string keys through {@link enumerableKeys}, matching their
+ * parser, reporter, and inference view for both open and closed objects. Like
+ * every guard it is total — it never throws (AGENTS §14). An unfrozen
+ * caller-owned shape is first compiled from an owned snapshot.
  *
  * @param shape - The shape to compile
  * @returns A guard narrowing to the shape's inferred type
@@ -433,25 +487,26 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
 				}
 			}
 			const extra = shape.additionalProperties
-			// Closed object → the exact, optional-key-aware `recordOf`.
-			if (extra === undefined || extra === false) {
-				return optionalKeys.length > 0 ? recordOf(map, optionalKeys) : recordOf(map)
-			}
-			// Open object → validate known keys, then accept (`true`) or guard extras.
-			const additional = extra === true ? undefined : compileGuard(extra)
+			const closed = extra === undefined || extra === false
+			const additional = closed || extra === true ? undefined : compileGuard(extra)
 			const required = Object.keys(map).filter((key) => !optionalKeys.includes(key))
 			return (value: unknown): value is unknown => {
 				if (!isRecord(value)) return false
+				const keys = enumerableKeys(value)
+				if (keys === undefined) return false
+				const present = new Set(keys)
 				for (const key of required) {
-					if (!Object.hasOwn(value, key)) return false
+					if (!present.has(key)) return false
 				}
 				// Contain the whole key-enumeration + value-read walk — a hostile
 				// getter on `value` must yield `false`, never throw (AGENTS §14).
 				const outcome = attempt(() => {
-					for (const key of Object.keys(value)) {
+					for (const key of keys) {
 						const guard = Object.hasOwn(map, key) ? map[key] : undefined
 						if (guard !== undefined) {
 							if (!guard(value[key])) return false
+						} else if (closed) {
+							return false
 						} else if (additional !== undefined && !additional(value[key])) {
 							return false
 						}
@@ -498,8 +553,9 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
  * `boundsOf` for a number's value and an array's length — so a value that coerces
  * but violates a bound parses to `undefined`. The result is full parse↔guard
  * soundness (AGENTS §14): a non-`undefined` parse always satisfies the contract's
- * `is`, refinements included. An unfrozen caller-owned shape is first compiled
- * from an owned snapshot.
+ * `is`, refinements included. Object presence and extra-key processing use the
+ * same own-enumerable-string snapshot as the guard, reporter, and inference.
+ * An unfrozen caller-owned shape is first compiled from an owned snapshot.
  *
  * @param shape - The shape to compile
  * @returns A parser yielding the shape's inferred type or `undefined`
@@ -601,6 +657,9 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 			return (value) => {
 				const record = parseRecord(value)
 				if (record === undefined) return undefined
+				const keys = enumerableKeys(record)
+				if (keys === undefined) return undefined
+				const present = new Set(keys)
 				// Contain the whole record walk — a hostile getter on `record` must
 				// yield `undefined`, never throw (AGENTS §14).
 				const outcome = attempt(() => {
@@ -609,6 +668,10 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 					// mutating the prototype (same pattern as `pickOf`).
 					const result: Record<string, unknown> = Object.create(null)
 					for (const entry of entries) {
+						if (!present.has(entry.key)) {
+							if (entry.optional) continue
+							return undefined
+						}
 						const raw = record[entry.key]
 						if (raw === undefined) {
 							if (entry.optional) continue
@@ -619,7 +682,7 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 						result[entry.key] = parsed
 					}
 					if (open) {
-						for (const key of Object.keys(record)) {
+						for (const key of keys) {
 							if (known.has(key)) continue
 							if (additional === undefined) {
 								result[key] = record[key]
@@ -692,11 +755,13 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
  * @remarks
  * The same shape and the same `random` source always produce the same value, so
  * seed data is reproducible. Defaults to a {@link seededRandom} source seeded
- * from the wall clock when none is supplied. Throws on a degenerate empty
- * `literalShape` / `unionShape`, on a pattern-constrained `stringShape` whose
- * generated sample cannot satisfy the pattern, or on a `rawShape` (its embedded
- * schema is arbitrary and cannot be auto-generated) — a programmer error that
- * cannot generate a value (AGENTS §12). `createContract` runs
+ * from the wall clock when none is supplied. Every generation failure throws a
+ * {@link ContractError} with code `'generate'` and context naming the shape
+ * category plus the failed pattern, attempt count, or random-source range.
+ * Failures include a degenerate empty `literalShape` / `unionShape`, a
+ * pattern-constrained `stringShape` whose generated sample cannot satisfy the
+ * pattern, an invalid random sample, and a `rawShape` whose arbitrary embedded
+ * schema cannot be auto-generated. `createContract` runs
  * {@link validateShape} first, so a degenerate `literalShape` / `unionShape` /
  * bounded shape is normally caught there; these throws remain here as defense
  * for standalone `compileGenerator` use. Union candidates are bounded by
@@ -706,6 +771,7 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
  * @param shape - The shape to generate from
  * @param random - A seeded random source (defaults to `seededRandom(Date.now())`)
  * @returns A value matching the shape
+ * @throws {ContractError} When the shape or random source cannot produce a valid value
  *
  * @example
  * ```ts
@@ -730,54 +796,62 @@ export function compileGenerator(
 			const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
 			let value = ''
 			for (let index = 0; index < length; index += 1) {
-				value += alphabet[Math.floor(random() * alphabet.length)]
+				value += alphabet[Math.floor(drawRandom(random, 'string') * alphabet.length)]
 			}
 			if (shape.pattern !== undefined && !matchOf(shape.pattern)(value)) {
-				throw new Error(
+				throw new ContractError(
 					'compileGenerator: a pattern-constrained string shape cannot be auto-generated — supply or verify values another way',
+					{
+						code: 'generate',
+						context: { shape: 'string', limit: shape.pattern.source },
+					},
 				)
 			}
 			return value
 		}
 		case 'number': {
+			const sample = drawRandom(random, shape.integer === true ? 'integer' : 'number')
 			if (shape.integer === true) {
-				if (shape.min !== undefined) return Math.ceil(shape.min)
-				if (shape.max !== undefined) return Math.floor(shape.max)
-				return Math.floor(random() * 101)
+				const lo = Math.ceil(shape.min ?? Math.min(-100, shape.max ?? -100))
+				const hi = Math.floor(shape.max ?? Math.max(100, shape.min ?? 100))
+				return lo === hi ? lo : Math.floor(sample * (hi - lo + 1)) + lo
 			}
-			if (shape.min !== undefined) return shape.min
-			if (shape.max !== undefined) return shape.max
-			return random() * 100
+			const lo = shape.min ?? Math.min(-100, shape.max ?? -100)
+			const hi = shape.max ?? Math.max(100, shape.min ?? 100)
+			return lo === hi ? lo : lo + sample * (hi - lo)
 		}
 		case 'boolean':
-			return random() >= 0.5
+			return drawRandom(random, 'boolean') >= 0.5
 		case 'null':
 			return null
 		case 'json': {
-			const pick = Math.floor(random() * 5)
+			const pick = Math.floor(drawRandom(random, 'json') * 5)
 			if (pick === 0) return null
-			if (pick === 1) return random() >= 0.5
-			if (pick === 2) return Math.floor(random() * 1000)
+			if (pick === 1) return drawRandom(random, 'json') >= 0.5
+			if (pick === 2) return Math.floor(drawRandom(random, 'json') * 1000)
 			if (pick === 3) {
 				const alphabet = 'abcdefghijklmnopqrstuvwxyz'
 				let value = ''
 				for (let index = 0; index < 6; index += 1) {
-					value += alphabet[Math.floor(random() * alphabet.length)]
+					value += alphabet[Math.floor(drawRandom(random, 'json') * alphabet.length)]
 				}
 				return value
 			}
-			return { value: Math.floor(random() * 1000) }
+			return { value: Math.floor(drawRandom(random, 'json') * 1000) }
 		}
 		case 'literal': {
 			if (shape.values.length === 0) {
-				throw new Error('compileGenerator: a literal shape needs at least one value')
+				throw new ContractError('compileGenerator: a literal shape needs at least one value', {
+					code: 'generate',
+					context: { shape: 'literal', limit: 1 },
+				})
 			}
-			return shape.values[Math.floor(random() * shape.values.length)]
+			return shape.values[Math.floor(drawRandom(random, 'literal') * shape.values.length)]
 		}
 		case 'array': {
 			const lo = shape.min ?? Math.min(1, shape.max ?? 1)
 			const hi = shape.max ?? Math.max(lo, 3)
-			const length = Math.floor(random() * (hi - lo + 1)) + lo
+			const length = Math.floor(drawRandom(random, 'array') * (hi - lo + 1)) + lo
 			const result: unknown[] = []
 			for (let index = 0; index < length; index += 1) {
 				result.push(compileGenerator(shape.items, random))
@@ -789,7 +863,7 @@ export function compileGenerator(
 			for (const key of Object.keys(shape.properties)) {
 				const child = shape.properties[key]
 				if (child === undefined) continue
-				if (child.type === 'optional' && random() < 0.3) continue
+				if (child.type === 'optional' && drawRandom(random, 'object') < 0.3) continue
 				Object.defineProperty(result, key, {
 					value: compileGenerator(child, random),
 					enumerable: true,
@@ -802,7 +876,7 @@ export function compileGenerator(
 			// generate as `{}` — skip any collision with a declared property name.
 			const extra = shape.additionalProperties
 			if (extra !== undefined && extra !== true && extra !== false) {
-				const count = 1 + Math.floor(random() * 2)
+				const count = 1 + Math.floor(drawRandom(random, 'object') * 2)
 				for (let index = 0; index < count; index += 1) {
 					const key = `key${index}`
 					if (Object.hasOwn(result, key)) continue
@@ -818,27 +892,36 @@ export function compileGenerator(
 		}
 		case 'union': {
 			if (shape.variants.length === 0) {
-				throw new Error('compileGenerator: a union shape needs at least one variant')
+				throw new ContractError('compileGenerator: a union shape needs at least one variant', {
+					code: 'generate',
+					context: { shape: 'union', limit: 1 },
+				})
 			}
 			const guard = compileGuard<ContractShape>(shape)
-			for (let attemptIndex = 0; attemptIndex < GENERATION_ATTEMPT_LIMIT; attemptIndex += 1) {
-				const variant = shape.variants[Math.floor(random() * shape.variants.length)]
+			const attempts = Math.max(GENERATION_ATTEMPT_LIMIT, shape.variants.length)
+			const start = Math.floor(drawRandom(random, 'union') * shape.variants.length)
+			for (let attemptIndex = 0; attemptIndex < attempts; attemptIndex += 1) {
+				const variant = shape.variants[(start + attemptIndex) % shape.variants.length]
 				if (variant === undefined) continue
 				const outcome = attempt(() => compileGenerator(variant, random))
 				if (outcome.success && guard(outcome.value)) return outcome.value
 			}
 			throw new ContractError('compileGenerator: no union candidate satisfied the compiled guard', {
 				code: 'generate',
-				context: { shape: 'union', limit: GENERATION_ATTEMPT_LIMIT },
+				context: { shape: 'union', limit: attempts },
 			})
 		}
 		case 'optional':
 			return compileGenerator(shape.inner, random)
 		case 'nullable':
-			return random() < 0.2 ? null : compileGenerator(shape.inner, random)
+			return drawRandom(random, 'nullable') < 0.2 ? null : compileGenerator(shape.inner, random)
 		case 'raw':
-			throw new Error(
+			throw new ContractError(
 				'compileGenerator: a raw shape embeds an arbitrary JSON Schema and cannot be auto-generated — supply values another way',
+				{
+					code: 'generate',
+					context: { shape: 'raw', limit: 'explicit value source' },
+				},
 			)
 	}
 }
@@ -1027,6 +1110,11 @@ export function compileReporter(
 				return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
 			}
 			const record = value
+			const keys = enumerableKeys(record)
+			if (keys === undefined) {
+				return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
+			}
+			const present = new Set(keys)
 			const faults: Fault[] = []
 			const known = new Set<string>()
 			const outcome = attempt(() => {
@@ -1037,13 +1125,16 @@ export function compileReporter(
 					known.add(key)
 					const optional = child.type === 'optional'
 					const inner = optional ? child.inner : child
-					// Mirror the parser's presence gate exactly (compileParser,
-					// object branch, ~line 492): a property is "absent" when its
-					// VALUE is `undefined`, not when the key itself is missing
-					// (`Object.hasOwn`) — a present key with an explicit `undefined`
-					// value is treated identically to a missing one, so `explain`
-					// never faults (or recurses into the inner reporter) where
-					// `parse` silently skips it.
+					// Mirror the parser's presence gate exactly: only an own
+					// enumerable string key is present. A present key with an
+					// explicit `undefined` value is still treated like absence, so
+					// `explain` never faults where `parse` silently skips it.
+					if (!present.has(key)) {
+						if (!optional) {
+							faults.push({ reason: 'missing', path: [...path, key], expected: shapeToKind(inner) })
+						}
+						continue
+					}
 					const raw = record[key]
 					if (raw === undefined) {
 						if (!optional) {
@@ -1055,7 +1146,7 @@ export function compileReporter(
 				}
 				const extra = shape.additionalProperties
 				if (extra !== undefined && extra !== true && extra !== false) {
-					for (const key of Object.keys(record)) {
+					for (const key of keys) {
 						if (faults.length >= FAULT_LIMIT) return
 						if (known.has(key)) continue
 						faults.push(...compileReporter(extra, record[key], [...path, key]))
@@ -1116,7 +1207,8 @@ export function compileReporter(
  * Runs {@link validateShape} first — a malformed shape throws immediately
  * rather than compiling into a silently-wrong contract (AGENTS §12). It takes
  * one owned snapshot and hands that same graph to every artifact compiler.
- * Then it precompiles the schema, guard, and parser once; `generate` walks the
+ * Then it precompiles the deeply frozen owned schema, guard, and parser once;
+ * `generate` walks the
  * snapshot per call with the supplied random source, and `explain` compiles the
  * diagnostic report via {@link compileReporter} at zero added compile-time cost
  * (it re-walks the snapshot per call, exactly like `generate`).

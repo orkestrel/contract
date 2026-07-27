@@ -105,16 +105,17 @@ export function stringShape(options?: StringShapeOptions): StringShape {
  * ```
  */
 export function numberShape(options?: NumberShapeOptions): NumberShape {
+	const shape = options?.integer === true ? 'integer' : 'number'
 	if (options?.min !== undefined && !Number.isFinite(options.min)) {
 		throw new ContractError('numberShape: min must be finite', {
 			code: 'bound',
-			context: { shape: 'number', limit: 'finite number', received: String(options.min) },
+			context: { shape, limit: 'finite number', received: String(options.min) },
 		})
 	}
 	if (options?.max !== undefined && !Number.isFinite(options.max)) {
 		throw new ContractError('numberShape: max must be finite', {
 			code: 'bound',
-			context: { shape: 'number', limit: 'finite number', received: String(options.max) },
+			context: { shape, limit: 'finite number', received: String(options.max) },
 		})
 	}
 	return Object.freeze({
@@ -135,15 +136,10 @@ export function numberShape(options?: NumberShapeOptions): NumberShape {
  *
  * @param options - Optional bounds and `description` (no `integer` key)
  * @returns An integer number shape
+ * @throws {ContractError} When a present bound is not finite
  */
 export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): NumberShape {
-	return Object.freeze({
-		type: 'number',
-		integer: true,
-		...(options?.min === undefined ? {} : { min: options.min }),
-		...(options?.max === undefined ? {} : { max: options.max }),
-		...(options?.description === undefined ? {} : { description: options.description }),
-	})
+	return numberShape({ ...options, integer: true })
 }
 
 /**
@@ -579,8 +575,8 @@ export function deriveRangeBounds(
  * keys than {@link INFER_BREADTH_LIMIT}, the schema's own
  * `additionalProperties` is OVERRIDDEN and forced to `true` (fully open) —
  * a dropped key's value could otherwise fail a `false` or record-valued rest
- * shape it was never checked against — mirroring `inferObject`'s
- * `truncated ? true : !closed` rule (inferers.ts:485). The accumulator uses a
+ * shape it was never checked against — mirroring {@link inferObject}'s
+ * partial-key handling in `inferers.ts`. The accumulator uses a
  * null-prototype record so a property literally named `__proto__` becomes an
  * own data key rather than mutating the prototype, mirroring
  * {@link inferObject} (inferers.ts).
@@ -897,7 +893,7 @@ export function schemaNodeToShape(
  * `±Infinity`, a `Map`, a `Set`, a class instance, a function, a symbol, a
  * bigint, a cyclic or hostile host), which infer `{}` and widen back to an
  * accept-anything {@link rawShape}. Widening is the only source of looseness.
- * The law has exactly two limits, both about values JSON itself cannot carry:
+ * The law has three explicit host limits:
  *
  * - **Absence.** `undefined` is not a value: no compiled guard accepts it
  *   (`rawShape` reserves it as the parser failure sentinel). So `undefined`
@@ -909,6 +905,11 @@ export function schemaNodeToShape(
  * - **`Date` serialization.** A `Date` infers the schema of its JSON form
  *   (`{ type: 'string' }`, plus `format: 'date-time'` when `format` is on), so
  *   the law applies to `date.toISOString()` rather than the runtime instance.
+ * - **Stateful access.** A getter whose result changes between inference and
+ *   guard evaluation can invalidate the sampled fact. Likewise, an array that
+ *   overrides iteration behavior can present different elements to the two
+ *   phases. The law applies only while the sampled host's observable own
+ *   enumerable string properties and array iteration remain stable.
  *
  * A widened node cannot be auto-generated: `rawShape` embeds an arbitrary
  * schema fragment, so `createContract(schemaToShape(x)).generate()` throws

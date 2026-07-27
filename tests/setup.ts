@@ -129,6 +129,7 @@ export function createRevokedProxy(): object {
 /**
  * Create an array Proxy whose access has been permanently revoked.
  *
+ * @typeParam T - The array element type exposed to the caller
  * @returns A revoked array Proxy that throws when inspected
  *
  * @example
@@ -137,8 +138,8 @@ export function createRevokedProxy(): object {
  * value.length // throws
  * ```
  */
-export function createRevokedArrayProxy(): readonly unknown[] {
-	const target: unknown[] = []
+export function createRevokedArrayProxy<T = unknown>(): readonly T[] {
+	const target: T[] = []
 	const revocable = Proxy.revocable(target, {})
 	revocable.revoke()
 	return revocable.proxy
@@ -201,6 +202,51 @@ export function buildDeepNest(depth: number): unknown {
 		value = layer % 2 === 0 ? [value] : { value }
 	}
 	return value
+}
+
+/**
+ * Build a finite array-shape nest at an exact depth.
+ *
+ * @param depth - The number of array wrappers around the string leaf
+ * @returns The nested contract shape
+ *
+ * @example
+ * ```ts
+ * buildDeepShape(2) // arrayShape(arrayShape(stringShape()))
+ * ```
+ */
+export function buildDeepShape(depth: number): ContractShape {
+	let shape: ContractShape = stringShape()
+	for (let index = 0; index < depth; index += 1) {
+		shape = arrayShape(shape)
+	}
+	return shape
+}
+
+/**
+ * Create a plain record with one non-enumerable own property.
+ *
+ * @param key - The hidden property key
+ * @param value - The hidden property value
+ * @returns The record carrying the non-enumerable property
+ *
+ * @example
+ * ```ts
+ * Object.keys(createNonEnumerableRecord('hidden', true)) // []
+ * ```
+ */
+export function createNonEnumerableRecord(
+	key: string,
+	value: unknown,
+): Readonly<Record<string, unknown>> {
+	const record: Record<string, unknown> = {}
+	Object.defineProperty(record, key, {
+		value,
+		enumerable: false,
+		configurable: true,
+		writable: true,
+	})
+	return record
 }
 
 /**
@@ -336,9 +382,10 @@ export function createInfiniteIterable(): IterableIterator<number> {
  * (numeric strings, `'true'` / `1`), signed zero, `NaN` / `±Infinity`, empty and
  * nested containers, exotic hosts (`Map`, `Set`, `Date`, a class instance, a
  * function, a symbol, a bigint), a null-prototype record, cyclic record/array
- * graphs, a sparse array, hostile hosts (a throwing own-getter, a throwing
- * `ownKeys` Proxy), and a nest deeper than `INFER_DEPTH_LIMIT` — so every
- * invariant is covered non-vacuously and adversarially.
+ * graphs, a sparse array, a record with a non-enumerable own property, hostile
+ * hosts (a throwing own-getter, a throwing `ownKeys` Proxy), and a nest deeper
+ * than `INFER_DEPTH_LIMIT` — so every invariant is covered non-vacuously and
+ * adversarially.
  */
 export const SOUNDNESS_SAMPLE: readonly unknown[] = Object.freeze([
 	null,
@@ -400,6 +447,7 @@ export const SOUNDNESS_SAMPLE: readonly unknown[] = Object.freeze([
 	() => 1,
 	new Date(),
 	createNullPrototypeRecord(),
+	createNonEnumerableRecord('hidden', 'value'),
 	createClassInstance(),
 	buildCyclicRecord(),
 	buildCyclicArray(),

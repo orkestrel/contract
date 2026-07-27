@@ -3,6 +3,7 @@ import {
 	arrayShape,
 	cloneSchema,
 	cloneShape,
+	ContractError,
 	objectShape,
 	stringShape,
 	unionShape,
@@ -53,6 +54,34 @@ describe('cloneSchema', () => {
 		expect(Object.isFrozen(clone)).toBe(true)
 		expect(Object.isFrozen(clone.properties)).toBe(true)
 		expect(Object.isFrozen(source)).toBe(false)
+	})
+
+	it('severs caller prototypes and excludes inherited behavior from the clone', () => {
+		const prototype = { marker: 'source' }
+		Object.defineProperty(prototype, 'danger', {
+			get() {
+				throw new Error('inherited getter')
+			},
+		})
+		const source: JSONSchema = Object.create(prototype)
+		const clone = cloneSchema(source)
+
+		prototype.marker = 'mutated'
+		expect(Object.getPrototypeOf(clone)).toBeNull()
+		expect(Reflect.get(clone, 'marker')).toBeUndefined()
+		expect(() => Reflect.get(clone, 'danger')).not.toThrow()
+	})
+
+	it('contains a throwing own getter as a clone ContractError', () => {
+		const source: JSONSchema = {}
+		Object.defineProperty(source, 'type', {
+			enumerable: true,
+			get() {
+				throw new Error('own getter')
+			},
+		})
+
+		expect(() => cloneSchema(source)).toThrowError(ContractError)
 	})
 })
 
@@ -108,5 +137,18 @@ describe('cloneShape', () => {
 		if (clone.type !== 'union') return
 		expect(clone.variants[0]).toBe(clone.variants[1])
 		expect(Object.isFrozen(clone.variants)).toBe(true)
+	})
+
+	it('contains hostile raw-schema edges as a clone ContractError', () => {
+		const raw = JSON.parse('{"type":"raw","schema":{"type":"string"}}')
+		Object.defineProperty(raw, 'schema', {
+			enumerable: true,
+			get() {
+				throw new Error('raw schema getter')
+			},
+		})
+		const shape: ContractShape = raw
+
+		expect(() => cloneShape(shape)).toThrowError(ContractError)
 	})
 })

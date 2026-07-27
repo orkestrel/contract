@@ -1,10 +1,12 @@
-import type { ContractShape } from '@src/core'
+import type { ContractShape, JSONSchema, RawShape } from '@src/core'
 import {
 	arrayShape,
 	booleanShape,
+	COMPILE_DEPTH_LIMIT,
 	compileGenerator,
 	compileGuard,
 	compileParser,
+	compileReporter,
 	compileSchema,
 	ContractError,
 	createContract,
@@ -26,7 +28,12 @@ import {
 	unionShape,
 	validateShape,
 } from '@src/core'
-import { captureContractError, SOUNDNESS_SAMPLE } from '../../setup.js'
+import {
+	buildDeepShape,
+	captureContractError,
+	createNonEnumerableRecord,
+	SOUNDNESS_SAMPLE,
+} from '../../setup.js'
 import { describe, expect, it } from 'vitest'
 
 describe('validateShape', () => {
@@ -167,6 +174,30 @@ describe('validateShape', () => {
 		expect(() => validateShape(numberShape({ min: 5, max: 1 }))).toThrow(
 			'validateShape: a number shape has min greater than max',
 		)
+	})
+
+	it('rejects non-finite hand-authored number and integer bounds with bound errors', () => {
+		const shapes: readonly ContractShape[] = [
+			{ type: 'number', min: Number.NaN },
+			{ type: 'number', integer: true, max: Number.POSITIVE_INFINITY },
+		]
+
+		for (const shape of shapes) {
+			const error = captureContractError(() => validateShape(shape))
+			expect(error.code).toBe('bound')
+			expect(error.context?.limit).toBe('finite number')
+		}
+	})
+
+	it('accepts the compilation depth boundary and rejects the next level without RangeError', () => {
+		expect(() => createContract(buildDeepShape(COMPILE_DEPTH_LIMIT))).not.toThrow()
+
+		const error = captureContractError(() =>
+			createContract(buildDeepShape(COMPILE_DEPTH_LIMIT + 1)),
+		)
+		expect(error.code).toBe('depth')
+		expect(error).not.toBeInstanceOf(RangeError)
+		expect(error.context?.limit).toBe(COMPILE_DEPTH_LIMIT)
 	})
 
 	it('throws on an array shape with min greater than max', () => {
@@ -373,6 +404,24 @@ describe('compileSchema', () => {
 		expect(schema.properties?.['__proto__']).toEqual({ type: 'integer' })
 		expect(schema.required).toEqual(['__proto__'])
 	})
+
+	it('owns and deeply freezes a raw schema even when the root shape is caller-frozen', () => {
+		const child: JSONSchema = { type: 'string' }
+		const schema: JSONSchema = { type: 'object', properties: { value: child } }
+		const shape: RawShape = Object.freeze({ type: 'raw', schema })
+		const compiled = compileSchema(shape)
+
+		Reflect.set(schema, 'type', 'number')
+		Reflect.set(child, 'type', 'integer')
+		expect(compiled).not.toBe(schema)
+		expect(compiled).toEqual({
+			type: 'object',
+			properties: { value: { type: 'string' } },
+		})
+		expect(Object.isFrozen(compiled)).toBe(true)
+		expect(Object.isFrozen(compiled.properties)).toBe(true)
+		expect(Object.isFrozen(compiled.properties?.value)).toBe(true)
+	})
 })
 
 describe('compileGuard', () => {
@@ -496,6 +545,19 @@ describe('compileGuard', () => {
 		expect(Object.hasOwn(record, '__proto__')).toBe(true)
 		expect(record['__proto__']).toBe(5)
 		expect(JSON.stringify(record)).toBe('{"__proto__":5}')
+	})
+
+	it('compiled object artifacts share the own-enumerable-string property view', () => {
+		const shape = objectShape({ x: booleanShape() }, { additionalProperties: true })
+		const value = createNonEnumerableRecord('x', 'bad')
+		const guard = compileGuard(shape)
+		const parse = compileParser(shape)
+
+		expect(guard(value)).toBe(false)
+		expect(parse(value)).toBeUndefined()
+		expect(compileReporter(shape, value)).toEqual([
+			{ reason: 'missing', path: ['x'], expected: 'boolean' },
+		])
 	})
 
 	it('round-trips a __proto__-keyed object through schema, guard, parser, and generator', () => {
@@ -728,6 +790,54 @@ describe('compileGenerator', () => {
 		}
 	})
 
+	it('draws bounded number and integer values across their effective ranges', () => {
+		const number = numberShape({ min: 10, max: 20 })
+		const integer = integerShape({ min: 10, max: 20 })
+
+		expect(compileGenerator(number, () => 0)).toBe(10)
+		expect(compileGenerator(number, () => 0.5)).toBe(15)
+		expect(compileGenerator(integer, () => 0)).toBe(10)
+		expect(compileGenerator(integer, () => 0.5)).toBe(15)
+	})
+
+	it('rotates through union and oneOf variants so an ungeneratable first variant cannot starve siblings', () => {
+		expect(compileGenerator(unionShape(rawShape({}), literalShape(['ok'])), () => 0)).toBe('ok')
+		expect(
+			compileGenerator(
+				oneOfShape(stringShape({ min: 1, pattern: /^z$/ }), literalShape([1])),
+				() => 0,
+			),
+		).toBe(1)
+	})
+
+	it('reports an out-of-range random source distinctly from union exhaustion', () => {
+		const error = captureContractError(() =>
+			compileGenerator(unionShape(stringShape(), integerShape()), () => 1),
+		)
+
+		expect(error.code).toBe('generate')
+		expect(error.context).toEqual({
+			shape: 'union',
+			limit: '[0, 1)',
+			received: '1',
+		})
+	})
+
+	it('uses ContractError generate for every direct generator failure category', () => {
+		const shapes: readonly ContractShape[] = [
+			stringShape({ min: 1, pattern: /^z$/ }),
+			literalShape([]),
+			unionShape(),
+			rawShape({}),
+		]
+
+		for (const shape of shapes) {
+			const error = captureContractError(() => compileGenerator(shape, () => 0))
+			expect(error.code).toBe('generate')
+			expect(error.context?.shape).toBe(shape.type)
+		}
+	})
+
 	it('throws generate when no oneOf candidate can satisfy the compiled guard', () => {
 		const shape = oneOfShape(literalShape(['same']), literalShape(['same']))
 
@@ -797,6 +907,17 @@ describe('createContract', () => {
 		expect(contract.parse(['drift'])).toBeUndefined()
 		expect(contract.is(contract.generate(seededRandom(4)))).toBe(true)
 		expect(contract.generate(seededRandom(4))).toEqual(['stable'])
+	})
+
+	it('exposes a deeply frozen schema artifact that cannot drift from compiled behavior', () => {
+		const contract = createContract(objectShape({ value: stringShape() }))
+
+		expect(Object.isFrozen(contract.schema)).toBe(true)
+		expect(Object.isFrozen(contract.schema.properties)).toBe(true)
+		expect(Object.isFrozen(contract.schema.properties?.value)).toBe(true)
+		expect(Reflect.set(contract.schema, 'type', 'number')).toBe(false)
+		expect(contract.schema.type).toBe('object')
+		expect(contract.is({ value: 'stable' })).toBe(true)
 	})
 
 	it('carries Infer<S> end-to-end from a recordShape (finding #7)', () => {

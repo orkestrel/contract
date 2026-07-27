@@ -17,7 +17,7 @@ import {
 	isRecord,
 	isString,
 } from './validators.js'
-import { attempt, sanitizeBudget } from './helpers.js'
+import { attempt, enumerableKeys, sanitizeBudget } from './helpers.js'
 
 // The inferers walk an UNKNOWN, possibly adversarial runtime value (or a set
 // of example values) and emit a JSONSchema — the reverse direction of
@@ -532,13 +532,14 @@ export function inferArray(
  * properties.
  *
  * @remarks
- * Own enumerable string keys via `Object.keys`, sorted lexicographically for
- * deterministic output, capped at `breadth`. Each property value is read
- * through {@link attempt} so a hostile getter cannot escape as a thrown
- * error; a property whose value is `undefined` is DROPPED — JSON encodes no
- * such property (`JSON.stringify({ a: undefined })` is `'{}'`), so it
- * contributes neither a `properties` entry nor a `required` entry. Every
- * other present key is required (single-value mode).
+ * Own enumerable string keys via {@link enumerableKeys}, sorted
+ * lexicographically for deterministic output, capped at `breadth`. This is the
+ * same property view compiled object guards, parsers, and reporters use. Each
+ * property value is read through {@link attempt} so a hostile getter cannot
+ * escape as a thrown error; a property whose value is `undefined` is DROPPED
+ * — JSON encodes no such property (`JSON.stringify({ a: undefined })` is
+ * `'{}'`), so it contributes neither a `properties` entry nor a `required`
+ * entry. Every other present key is required (single-value mode).
  *
  * Emits `additionalProperties: false` when `closed`, `true` otherwise —
  * mirroring {@link compileSchema}'s object-emission convention — EXCEPT when
@@ -589,7 +590,9 @@ export function inferObject(
 	// throw (AGENTS §14) — mirroring compileGuard's object branch
 	// (compilers.ts).
 	const outcome = attempt(() => {
-		const allKeys = Object.keys(value).sort()
+		const snapshot = enumerableKeys(value)
+		if (snapshot === undefined) throw new Error('inferObject: property enumeration failed')
+		const allKeys = [...snapshot].sort()
 		const keys = allKeys.slice(0, breadth)
 		const truncated = allKeys.length > breadth
 		// Honest typing: a null-prototype accumulator so a property literally

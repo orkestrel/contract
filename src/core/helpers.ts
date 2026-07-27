@@ -7,6 +7,7 @@ import type {
 	Result,
 } from './types.js'
 import { PREVIEW_LIMIT } from './constants.js'
+import { ContractError } from './errors.js'
 import {
 	isBigInt,
 	isBoolean,
@@ -70,6 +71,61 @@ export function attempt<T>(callback: () => T): Result<T> {
 export function holds(callback: () => boolean): boolean {
 	const outcome = attempt(callback)
 	return outcome.success && outcome.value === true
+}
+
+/**
+ * Snapshot an object's own enumerable string keys through a total boundary.
+ *
+ * @remarks
+ * This is the package-wide runtime property view used by compiled object
+ * guards, parsers, reporters, schema inference, and owned schema cloning. It
+ * matches the object-key view serialized by `JSON.stringify`: inherited,
+ * symbol, and non-enumerable properties are excluded. A hostile Proxy trap
+ * returns `undefined` rather than escaping.
+ *
+ * @param value - The object whose keys to snapshot
+ * @returns A frozen owned key list, or `undefined` when enumeration throws
+ *
+ * @example
+ * ```ts
+ * enumerableKeys({ visible: 1 }) // ['visible']
+ * ```
+ */
+export function enumerableKeys(value: object): readonly string[] | undefined {
+	const outcome = attempt(() => Object.keys(value))
+	return outcome.success ? Object.freeze([...outcome.value]) : undefined
+}
+
+/**
+ * Draw and validate one generator random sample.
+ *
+ * @param random - The caller-supplied random source
+ * @param shape - The shape category consuming the sample
+ * @returns A finite sample in `[0, 1)`
+ * @throws {ContractError} When the source throws or returns outside `[0, 1)`
+ *
+ * @example
+ * ```ts
+ * drawRandom(() => 0.5, 'number') // 0.5
+ * ```
+ */
+export function drawRandom(random: RandomFunction, shape: string): number {
+	const outcome = attempt(random)
+	if (!outcome.success) {
+		throw new ContractError('compileGenerator: the random source threw', {
+			code: 'generate',
+			context: { shape, limit: '[0, 1)', received: 'threw' },
+			cause: outcome.error,
+		})
+	}
+	const sample = outcome.value
+	if (!isFiniteNumber(sample) || sample < 0 || sample >= 1) {
+		throw new ContractError('compileGenerator: the random source must return a value in [0, 1)', {
+			code: 'generate',
+			context: { shape, limit: '[0, 1)', received: String(sample) },
+		})
+	}
+	return sample
 }
 
 // === Record-field access

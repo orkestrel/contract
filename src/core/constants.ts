@@ -76,6 +76,22 @@ export const PREVIEW_LIMIT = 64
 export const GUARD_DEPTH_LIMIT = 512
 
 /**
+ * The maximum supported nesting depth of a compiled contract shape, frozen.
+ *
+ * @remarks
+ * {@link validateShape} rejects the next level with a depth-coded
+ * {@link ContractError} before recursive artifact compilation begins, so a
+ * finite but pathologically deep developer-authored shape fails predictably
+ * instead of reaching the JavaScript call-stack limit.
+ *
+ * @example
+ * ```ts
+ * COMPILE_DEPTH_LIMIT // 512
+ * ```
+ */
+export const COMPILE_DEPTH_LIMIT = 512
+
+/**
  * The maximum number of candidate-generation attempts for a constrained
  * generated value, frozen.
  *

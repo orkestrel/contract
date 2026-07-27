@@ -51,6 +51,8 @@ describe('ContractError', () => {
 			'cycle',
 			'pattern',
 			'generate',
+			'clone',
+			'depth',
 		]
 
 		for (const code of codes) {

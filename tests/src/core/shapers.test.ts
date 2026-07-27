@@ -43,6 +43,7 @@ import {
 	captureContractError,
 	createClassInstance,
 	createHostileKeys,
+	createNonEnumerableRecord,
 	createThrowingGetter,
 	SOUNDNESS_SAMPLE,
 } from '../../setup.js'
@@ -65,6 +66,14 @@ describe('shape builders', () => {
 		expect(pattern).toBeInstanceOf(ContractError)
 		expect(pattern.code).toBe('pattern')
 		expect(pattern.message).toContain('inline pattern constructs')
+	})
+
+	it('integerShape rejects non-finite bounds like numberShape', () => {
+		for (const bound of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+			const error = captureContractError(() => integerShape({ min: bound }))
+			expect(error.code).toBe('bound')
+			expect(error.context?.shape).toBe('integer')
+		}
 	})
 
 	it('freezes every built shape and snapshots caller-owned collections', () => {
@@ -541,6 +550,10 @@ describe('schemaToShape — round-trip law: compileGuard(schemaToShape(valueToSc
 
 	it('round-trips a record carrying an explicitly-undefined property (the schema opens instead of closing over a dropped key)', () => {
 		expect(roundTrips({ a: 1, b: undefined })).toEqual([true, true])
+	})
+
+	it('round-trips a record carrying only a non-enumerable own property', () => {
+		expect(roundTrips(createNonEnumerableRecord('hidden', 'value'))).toEqual([true, true])
 	})
 
 	it('round-trips hostile and cyclic hosts (throwing getter, hostile ownKeys, cyclic record/array)', () => {
