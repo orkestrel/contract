@@ -211,8 +211,14 @@ fallback when it is not.
 
 ### Codex Sol
 
-- Reached from Claude Code only through the `codex` role, on `codex exec --ephemeral`; in a
-  Codex session these are native agents.
+- Reached from Claude Code only through the `codex` role, on journaled, resumable
+  `codex exec`; in a Codex session these are native agents.
+- **Every run is journaled and resumable.** `--json` streams the event log to
+  `tmp/codex/<unit>.jsonl` (gitignored; the user tails it live for progress — nobody polls),
+  `--output-last-message` captures the final answer as a file, and the session id from the
+  journal head goes in every bridge report so follow-ups continue the same session via
+  `codex exec resume <session-id>` with context intact. `--output-schema` is available when
+  the Orchestrator wants a machine-checkable return shape.
 - `analyst` runs `gpt-5.6-sol` at high effort with `--sandbox read-only` in the current
   checkout, for objective analysis, the adversarial design argument, diagnosis, and the
   post-implementation correctness audit.

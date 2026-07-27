@@ -14,9 +14,9 @@ never implement directly, and never treat Sol's response as authoritative.
 
 ## Analyst
 
-Run in the current checkout:
+Run in the current checkout (create `tmp/codex/` first):
 
-`codex exec --ephemeral --sandbox read-only --model gpt-5.6-sol -c "model_reasoning_effort=\"high\"" "<brief>"`
+`codex exec --json --sandbox read-only --model gpt-5.6-sol -c "model_reasoning_effort=\"high\"" --output-last-message tmp/codex/<unit>-last.md "<brief>" > tmp/codex/<unit>.jsonl`
 
 Use for objective/realistic design argument, diagnosis, correctness/security audit,
 and constraint review. Capture repository status before and after. Require evidence
@@ -25,9 +25,9 @@ for every claim and return unsupported claims as dropped.
 ## Implementer
 
 Require a clean committed baseline, owned files, off-limits files, and a deviation
-contract. Run in the main checkout as the sole writer:
+contract. Run in the main checkout as the sole writer (create `tmp/codex/` first):
 
-`codex exec --ephemeral --sandbox workspace-write --model gpt-5.6-sol -c "model_reasoning_effort=\"high\"" "<brief>"`
+`codex exec --json --sandbox workspace-write --model gpt-5.6-sol -c "model_reasoning_effort=\"high\"" --output-last-message tmp/codex/<unit>-last.md "<brief>" > tmp/codex/<unit>.jsonl`
 
 Be patient: one foreground invocation with a generous timeout — never poll,
 background, restart, or kill a running exec. When it returns, verify the result
@@ -36,6 +36,17 @@ completely. The brief forbids dependency installation, commits, pushes, publishi
 credentials, destructive commands, shared-file edits, and tree-wide mutating gates.
 Return the touched files, diffstat, scoped validation, and deviation state for
 independent integration and review.
+
+## Progress and continuation
+
+- The `--json` journal at `tmp/codex/<unit>.jsonl` is the live progress record —
+  the user tails it; never re-print the stream into your report.
+- Read Sol's answer from the `--output-last-message` file, not from stdout.
+- Record the session id from the journal's opening events and include it in every
+  report. Follow-ups continue the same session with its context intact:
+  `codex exec resume <session-id> --json --output-last-message tmp/codex/<unit>-followup-last.md "<follow-up>" > tmp/codex/<unit>-followup.jsonl`
+- When the Orchestrator supplies a JSON Schema for the return shape, pass it with
+  `--output-schema <file>` so the final message is machine-checkable.
 
 Never invoke Fable. Never authenticate, log out, inspect auth files, substitute an API
 key, or silently switch models. If the CLI or device-auth session is unavailable,
