@@ -206,6 +206,10 @@ fallback when it is not.
 - Read the exact model id from `agent models` and store it in `CURSOR_GROK_MODEL`. Never guess
   or substitute.
 - Never expose `CURSOR_API_KEY` in a command, a log, or a report.
+- **Cursor is an MCP client, not a server.** The CLI ships no server mode; `.cursor/mcp.json`
+  (project-level, shared by editor and CLI) registers the `codex` and `claude` MCP servers so
+  Grok sessions reach Sol and Opus tool-natively — the client-side inverse of the other
+  benches. Approve once per machine with `agent mcp enable codex` / `agent mcp enable claude`.
 - Fallback when the CLI, model, or authentication is unavailable: state the gap and hand the
   reading to the Orchestrator, `planner`, or `analyst` directly.
 
