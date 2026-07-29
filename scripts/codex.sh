@@ -32,8 +32,10 @@ valid_effort() {
 
 if codex login status >/dev/null 2>&1; then
   auth="authentication ready"
+  recovery=""
 else
   auth="authentication unavailable"
+  recovery='codex login --device-auth'
 fi
 
 if valid_model "$analyst_model" &&
@@ -46,4 +48,7 @@ else
 fi
 
 echo "codex.sh: bench detected; ${auth}; ${routes}."
+if [ -n "$recovery" ]; then
+  echo "codex.sh: to recover, run \`${recovery}\`."
+fi
 exit 0
