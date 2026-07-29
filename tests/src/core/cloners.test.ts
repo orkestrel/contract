@@ -1,12 +1,15 @@
-import type { ContractShape, JSONSchema } from '@src/core'
+import type { ContractShape, JSONRecord, JSONSchema } from '@src/core'
 import {
 	arrayShape,
+	cloneJSONRecord,
+	cloneJSONValue,
 	cloneSchema,
 	cloneShape,
 	compileGuard,
 	compileSchema,
 	ContractError,
 	createContract,
+	isRecord,
 	objectShape,
 	ownShape,
 	stringShape,
@@ -14,6 +17,355 @@ import {
 } from '@src/core'
 import { captureContractError } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
+
+describe('cloneJSONValue', () => {
+	it('keeps finite primitives, exposes one-argument functions, and narrows record roots', () => {
+		expect(cloneJSONValue.length).toBe(1)
+		expect(cloneJSONRecord.length).toBe(1)
+
+		for (const value of [
+			null,
+			'',
+			'value',
+			true,
+			false,
+			0,
+			-0,
+			Number.MIN_VALUE,
+			Number.MAX_VALUE,
+		]) {
+			expect(Object.is(cloneJSONValue(value), value)).toBe(true)
+		}
+
+		const record: JSONRecord = cloneJSONRecord({ attempt: 1 })
+		expect(record).toEqual({ attempt: 1 })
+		expect(Object.getPrototypeOf(record)).toBeNull()
+		expect(Object.isFrozen(record)).toBe(true)
+
+		const emptyArray = cloneJSONValue(Object.freeze([]))
+		expect(emptyArray).toEqual([])
+		expect(Object.getPrototypeOf(emptyArray)).toBe(Array.prototype)
+		expect(Object.isFrozen(emptyArray)).toBe(true)
+
+		const emptySource: Record<string, unknown> = Object.create(null)
+		const emptyRecord = cloneJSONRecord(emptySource)
+		expect(Reflect.ownKeys(emptyRecord)).toEqual([])
+		expect(Object.getPrototypeOf(emptyRecord)).toBeNull()
+		expect(Object.isFrozen(emptyRecord)).toBe(true)
+
+		for (const value of [null, [], 'record']) {
+			const error = captureContractError(() => cloneJSONRecord(value))
+			expect(error.code).toBe('clone')
+			expect(error.context?.shape).toBe('json')
+		}
+
+		for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+			const error = captureContractError(() => cloneJSONValue(value))
+			expect(error.code).toBe('clone')
+			expect(error.context?.shape).toBe('json')
+		}
+	})
+
+	it('creates a deeply frozen caller-independent graph with normalized prototypes', () => {
+		const source = { nested: [{ value: 'stable' }] }
+		const clone = cloneJSONValue(source)
+
+		const first = source.nested[0]
+		if (first === undefined) throw new Error('expected source child')
+		first.value = 'mutated'
+		source.nested.push({ value: 'added' })
+		expect(clone).toEqual({ nested: [{ value: 'stable' }] })
+		expect(clone).not.toBe(source)
+		expect(Object.isFrozen(clone)).toBe(true)
+		expect(Object.getPrototypeOf(clone)).toBeNull()
+		if (!isRecord(clone)) return
+
+		const nested: unknown = clone.nested
+		expect(Array.isArray(nested)).toBe(true)
+		if (!Array.isArray(nested)) return
+		expect(nested).not.toBe(source.nested)
+		expect(Object.getPrototypeOf(nested)).toBe(Array.prototype)
+		expect(Object.isFrozen(nested)).toBe(true)
+
+		const child: unknown = nested[0]
+		expect(isRecord(child)).toBe(true)
+		if (!isRecord(child)) return
+		expect(child).not.toBe(source.nested[0])
+		expect(Object.getPrototypeOf(child)).toBeNull()
+		expect(Object.isFrozen(child)).toBe(true)
+	})
+
+	it('preserves __proto__ as own data in deterministic key order', () => {
+		const special: Record<string, unknown> = Object.create(null)
+		special.first = 1
+		Object.defineProperty(special, '__proto__', {
+			value: 'data',
+			enumerable: true,
+			configurable: true,
+			writable: true,
+		})
+		special.last = 2
+		const clone = cloneJSONRecord(special)
+
+		expect(Object.getPrototypeOf(clone)).toBeNull()
+		expect(Object.prototype.hasOwnProperty.call(clone, '__proto__')).toBe(true)
+		expect(Reflect.get(clone, '__proto__')).toBe('data')
+		expect(Reflect.ownKeys(clone)).toEqual(['first', '__proto__', 'last'])
+	})
+
+	it('duplicates repeated noncyclic aliases as independent JSON tree branches', () => {
+		const shared = { nested: [1, 2, 3] }
+		const clone = cloneJSONRecord({ first: shared, second: shared })
+
+		expect(clone.first).toEqual(clone.second)
+		expect(clone.first).not.toBe(clone.second)
+		if (!isRecord(clone.first) || !isRecord(clone.second)) {
+			throw new Error('expected cloned records')
+		}
+		expect(clone.first.nested).not.toBe(clone.second.nested)
+		expect(Object.isFrozen(clone.first)).toBe(true)
+		expect(Object.isFrozen(clone.second)).toBe(true)
+	})
+
+	it('rejects direct and indirect cycles', () => {
+		const direct: unknown[] = []
+		direct.push(direct)
+		const first: Record<string, unknown> = {}
+		const second: Record<string, unknown> = { first }
+		first.second = second
+
+		for (const value of [direct, first]) {
+			const error = captureContractError(() => cloneJSONValue(value))
+			expect(error.code).toBe('clone')
+			expect(error.context?.shape).toBe('json')
+		}
+	})
+
+	it('accepts realm-agnostic record and array brands but rejects custom records', () => {
+		const foreignPrototype = Object.create(null)
+		const foreignRecord: Record<string, unknown> = Object.create(foreignPrototype)
+		foreignRecord.value = 1
+		const foreignArray: unknown[] = [foreignRecord]
+		Object.setPrototypeOf(foreignArray, null)
+
+		expect(isRecord(foreignRecord)).toBe(true)
+		expect(Array.isArray(foreignArray)).toBe(true)
+		expect(foreignArray instanceof Array).toBe(false)
+
+		const clone = cloneJSONValue(foreignArray)
+		expect(Array.isArray(clone)).toBe(true)
+		if (!Array.isArray(clone)) throw new Error('expected cloned array')
+		expect(Object.getPrototypeOf(clone)).toBe(Array.prototype)
+		expect(Object.isFrozen(clone)).toBe(true)
+		expect(isRecord(clone[0])).toBe(true)
+		if (!isRecord(clone[0])) throw new Error('expected cloned record')
+		expect(Object.getPrototypeOf(clone[0])).toBeNull()
+
+		const frozen = Object.freeze([7])
+		const frozenDescriptor = Reflect.getOwnPropertyDescriptor(frozen, '0')
+		expect(frozenDescriptor?.writable).toBe(false)
+		expect(frozenDescriptor?.configurable).toBe(false)
+		const frozenClone = cloneJSONValue(frozen)
+		expect(frozenClone).toEqual([7])
+		expect(frozenClone).not.toBe(frozen)
+		expect(Object.isFrozen(frozenClone)).toBe(true)
+
+		class Value {
+			readonly value = 1
+		}
+		const custom = Object.create({})
+		for (const value of [new Value(), custom]) {
+			expect(isRecord(value)).toBe(false)
+			const error = captureContractError(() => cloneJSONValue(value))
+			expect(error.code).toBe('clone')
+			expect(error.context?.shape).toBe('json')
+		}
+	})
+
+	it('rejects inexact properties and unsupported values without invoking accessors', () => {
+		let accesses = 0
+		const sparse = new Array<unknown>(2)
+		sparse[0] = 'present'
+
+		const extra: unknown[] = []
+		Object.defineProperty(extra, 'extra', {
+			value: true,
+			enumerable: true,
+			configurable: true,
+			writable: true,
+		})
+
+		const arrayAccessor: unknown[] = []
+		Object.defineProperty(arrayAccessor, '0', {
+			enumerable: true,
+			configurable: true,
+			get() {
+				accesses += 1
+				return 'unsafe'
+			},
+		})
+
+		const hiddenIndex: unknown[] = ['hidden']
+		Object.defineProperty(hiddenIndex, '0', {
+			value: 'hidden',
+			enumerable: false,
+			configurable: true,
+			writable: true,
+		})
+
+		const recordAccessor: Record<string, unknown> = {}
+		Object.defineProperty(recordAccessor, 'value', {
+			enumerable: true,
+			configurable: true,
+			get() {
+				accesses += 1
+				return 'unsafe'
+			},
+		})
+
+		const hiddenRecord: Record<string, unknown> = {}
+		Object.defineProperty(hiddenRecord, 'value', {
+			value: 'hidden',
+			enumerable: false,
+			configurable: true,
+			writable: true,
+		})
+
+		const symbolRecord: Record<string, unknown> = {}
+		Object.defineProperty(symbolRecord, Symbol('value'), {
+			value: 'symbol',
+			enumerable: true,
+			configurable: true,
+			writable: true,
+		})
+
+		const symbolArray: unknown[] = []
+		Object.defineProperty(symbolArray, Symbol('value'), {
+			value: 'symbol',
+			enumerable: false,
+			configurable: true,
+			writable: true,
+		})
+
+		const invalid: readonly unknown[] = [
+			sparse,
+			extra,
+			arrayAccessor,
+			hiddenIndex,
+			recordAccessor,
+			hiddenRecord,
+			symbolRecord,
+			symbolArray,
+			undefined,
+			Math.max,
+			Symbol('unsupported'),
+			1n,
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+			Number.NEGATIVE_INFINITY,
+		]
+
+		for (const value of invalid) {
+			const error = captureContractError(() => cloneJSONValue(value))
+			expect(error.code).toBe('clone')
+			expect(error.context?.shape).toBe('json')
+		}
+		expect(accesses).toBe(0)
+	})
+
+	it('rejects an array proxy that substitutes a decoration for a canonical index key', () => {
+		const source = [7]
+		Object.defineProperty(source, 'decoration', {
+			value: true,
+			enumerable: true,
+			configurable: true,
+			writable: true,
+		})
+		const substituted = new Proxy(source, {
+			ownKeys() {
+				return ['length', 'decoration']
+			},
+		})
+
+		const first = captureContractError(() => cloneJSONValue(substituted))
+		const second = captureContractError(() => cloneJSONValue(substituted))
+		expect(first).not.toBe(second)
+		expect(first.code).toBe('clone')
+		expect(first.context?.shape).toBe('json')
+		expect(Object.hasOwn(first, 'cause')).toBe(false)
+	})
+
+	it('replaces hostile reflective throws with distinct cause-free clone errors', () => {
+		const callerObject = { caller: true }
+		const callerError = new ContractError('caller', { code: 'clone' })
+		const primitiveTrap = new Proxy(
+			{},
+			{
+				ownKeys() {
+					throw 'primitive'
+				},
+			},
+		)
+		const objectTrap = new Proxy(
+			{ value: 1 },
+			{
+				getOwnPropertyDescriptor() {
+					throw callerObject
+				},
+			},
+		)
+		const errorTrap = new Proxy(
+			{},
+			{
+				ownKeys() {
+					throw callerError
+				},
+			},
+		)
+		const revoked = Proxy.revocable<Record<string, unknown>>({}, {})
+		revoked.revoke()
+
+		for (const value of [primitiveTrap, objectTrap, errorTrap, revoked.proxy]) {
+			const first = captureContractError(() => cloneJSONValue(value))
+			const second = captureContractError(() => cloneJSONValue(value))
+			expect(first).not.toBe(second)
+			expect(first).not.toBe(callerError)
+			expect(first.code).toBe('clone')
+			expect(first.context?.shape).toBe('json')
+			expect(Object.hasOwn(first, 'cause')).toBe(false)
+		}
+
+		const recordError = new ContractError('record caller', { code: 'clone' })
+		const recordTrap = new Proxy(
+			{},
+			{
+				getPrototypeOf() {
+					throw recordError
+				},
+			},
+		)
+		const contained = captureContractError(() => cloneJSONRecord(recordTrap))
+		expect(contained).not.toBe(recordError)
+		expect(contained.code).toBe('clone')
+		expect(contained.context?.shape).toBe('json')
+		expect(Object.hasOwn(contained, 'cause')).toBe(false)
+	})
+
+	it('clones deeply nested input without recursive call-stack pressure', () => {
+		const depth = 20_000
+		let source: unknown = 'leaf'
+		for (let index = 0; index < depth; index += 1) source = [source]
+
+		const clone = cloneJSONValue(source)
+		let current: unknown = clone
+		for (let index = 0; index < depth; index += 1) {
+			if (!Array.isArray(current)) throw new Error(`expected array at depth ${index}`)
+			if (!Object.isFrozen(current)) throw new Error(`expected frozen array at depth ${index}`)
+			current = current[0]
+		}
+		expect(current).toBe('leaf')
+	})
+})
 
 describe('cloneSchema', () => {
 	it('deep-clones and freezes a nested schema without touching the source', () => {

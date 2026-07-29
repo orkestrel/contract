@@ -1,6 +1,316 @@
-import type { ContractShape, JSONSchema, StringShape } from './types.js'
+import type { ContractShape, JSONRecord, JSONSchema, JSONValue, StringShape } from './types.js'
 import { ContractError, isContractError } from './errors.js'
 import { attempt, enumerableKeys } from './helpers.js'
+import { isRecord } from './validators.js'
+
+/**
+ * Deep-clone exact JSON data into an owned frozen snapshot.
+ *
+ * @remarks
+ * Traverses iteratively so deeply nested input cannot exhaust the call stack.
+ * Repeated noncyclic aliases are duplicated because JSON persistence represents
+ * a tree, while a structural back-edge on the active path is rejected as a
+ * cycle. Arrays are rebuilt as standard dense arrays and records as
+ * null-prototype objects; every produced node is frozen after its children are
+ * wired. Array keys must be exactly `length` plus every canonical index.
+ * Writable and configurable index flags are normalized rather than treated as
+ * JSON data, so frozen arrays remain valid. Property descriptors are inspected
+ * without reading values through accessors, and every hostile reflective
+ * operation is contained before a new clone-coded error is exposed.
+ *
+ * @param value - The unknown value to validate and snapshot
+ * @returns The primitive unchanged, or a deeply cloned and frozen JSON graph
+ * @throws {ContractError} When the value is not exact acyclic JSON data or traversal fails
+ *
+ * @example
+ * ```ts
+ * const source = { settings: { enabled: true } }
+ * const clone = cloneJSONValue(source)
+ * source.settings.enabled = false
+ * clone // { settings: { enabled: true } }
+ * ```
+ */
+export function cloneJSONValue(value: unknown): JSONValue {
+	if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
+	if (typeof value === 'number') {
+		if (Number.isFinite(value)) return value
+		throw new ContractError('cloneJSONValue: number is not finite', {
+			code: 'clone',
+			context: { shape: 'json' },
+		})
+	}
+	if (typeof value !== 'object') {
+		throw new ContractError('cloneJSONValue: value is not JSON data', {
+			code: 'clone',
+			context: { shape: 'json' },
+		})
+	}
+
+	const arrayOutcome = attempt(() => Array.isArray(value))
+	if (!arrayOutcome.success) {
+		throw new ContractError('cloneJSONValue: value brand could not be inspected', {
+			code: 'clone',
+			context: { shape: 'json' },
+		})
+	}
+
+	let root: JSONValue[] | JSONRecord
+	if (arrayOutcome.value) {
+		root = []
+	} else if (isRecord(value)) {
+		root = Object.create(null)
+	} else {
+		throw new ContractError('cloneJSONValue: object is not a plain record', {
+			code: 'clone',
+			context: { shape: 'json' },
+		})
+	}
+
+	const active = new WeakSet<object>()
+	active.add(value)
+	const pending: {
+		readonly source: object
+		readonly clone: JSONValue[] | JSONRecord
+		readonly array: boolean
+		entries: readonly (readonly [key: string, value: unknown])[] | undefined
+		index: number
+	}[] = [
+		{
+			source: value,
+			clone: root,
+			array: arrayOutcome.value,
+			entries: undefined,
+			index: 0,
+		},
+	]
+
+	while (pending.length > 0) {
+		const frame = pending[pending.length - 1]
+		if (frame === undefined) continue
+
+		if (frame.entries === undefined) {
+			const keysOutcome = attempt(() => Reflect.ownKeys(frame.source))
+			if (!keysOutcome.success) {
+				throw new ContractError('cloneJSONValue: own keys could not be inspected', {
+					code: 'clone',
+					context: { shape: 'json' },
+				})
+			}
+			const keys = keysOutcome.value
+			const entries: [key: string, value: unknown][] = []
+
+			if (frame.array) {
+				const lengthOutcome = attempt(() =>
+					Reflect.getOwnPropertyDescriptor(frame.source, 'length'),
+				)
+				if (!lengthOutcome.success) {
+					throw new ContractError('cloneJSONValue: array length could not be inspected', {
+						code: 'clone',
+						context: { shape: 'json' },
+					})
+				}
+				const lengthDescriptor = lengthOutcome.value
+				if (
+					lengthDescriptor === undefined ||
+					!('value' in lengthDescriptor) ||
+					typeof lengthDescriptor.value !== 'number' ||
+					!Number.isInteger(lengthDescriptor.value) ||
+					lengthDescriptor.value < 0 ||
+					lengthDescriptor.value > 4_294_967_295 ||
+					lengthDescriptor.enumerable !== false ||
+					lengthDescriptor.configurable !== false
+				) {
+					throw new ContractError('cloneJSONValue: array is not intrinsic and dense', {
+						code: 'clone',
+						context: { shape: 'json' },
+					})
+				}
+
+				const remaining = new Set(keys)
+				if (!remaining.delete('length')) {
+					throw new ContractError('cloneJSONValue: array own keys are not exact', {
+						code: 'clone',
+						context: { shape: 'json' },
+					})
+				}
+				for (let index = 0; index < lengthDescriptor.value; index += 1) {
+					const key = String(index)
+					if (!remaining.delete(key)) {
+						throw new ContractError('cloneJSONValue: array own keys are not exact', {
+							code: 'clone',
+							context: { shape: 'json' },
+						})
+					}
+					const descriptorOutcome = attempt(() =>
+						Reflect.getOwnPropertyDescriptor(frame.source, key),
+					)
+					if (!descriptorOutcome.success) {
+						throw new ContractError('cloneJSONValue: array index could not be inspected', {
+							code: 'clone',
+							context: { shape: 'json' },
+						})
+					}
+					const descriptor = descriptorOutcome.value
+					if (
+						descriptor === undefined ||
+						!('value' in descriptor) ||
+						descriptor.enumerable !== true
+					) {
+						throw new ContractError('cloneJSONValue: array index is not enumerable data', {
+							code: 'clone',
+							context: { shape: 'json' },
+						})
+					}
+					entries.push([key, descriptor.value])
+				}
+				if (remaining.size !== 0) {
+					throw new ContractError('cloneJSONValue: array own keys are not exact', {
+						code: 'clone',
+						context: { shape: 'json' },
+					})
+				}
+			} else {
+				for (const key of keys) {
+					if (typeof key !== 'string') {
+						throw new ContractError('cloneJSONValue: record has a symbol property', {
+							code: 'clone',
+							context: { shape: 'json' },
+						})
+					}
+					const descriptorOutcome = attempt(() =>
+						Reflect.getOwnPropertyDescriptor(frame.source, key),
+					)
+					if (!descriptorOutcome.success) {
+						throw new ContractError('cloneJSONValue: record property could not be inspected', {
+							code: 'clone',
+							context: { shape: 'json' },
+						})
+					}
+					const descriptor = descriptorOutcome.value
+					if (
+						descriptor === undefined ||
+						!('value' in descriptor) ||
+						descriptor.enumerable !== true
+					) {
+						throw new ContractError('cloneJSONValue: record property is not enumerable data', {
+							code: 'clone',
+							context: { shape: 'json' },
+						})
+					}
+					entries.push([key, descriptor.value])
+				}
+			}
+
+			frame.entries = entries
+		}
+
+		const entry = frame.entries[frame.index]
+		if (entry === undefined) {
+			Object.freeze(frame.clone)
+			active.delete(frame.source)
+			pending.pop()
+			continue
+		}
+		frame.index += 1
+
+		const key = entry[0]
+		const source = entry[1]
+		let clone: JSONValue
+		if (source === null || typeof source === 'string' || typeof source === 'boolean') {
+			clone = source
+		} else if (typeof source === 'number') {
+			if (!Number.isFinite(source)) {
+				throw new ContractError('cloneJSONValue: number is not finite', {
+					code: 'clone',
+					context: { shape: 'json' },
+				})
+			}
+			clone = source
+		} else if (typeof source === 'object') {
+			if (active.has(source)) {
+				throw new ContractError('cloneJSONValue: cycle detected', {
+					code: 'clone',
+					context: { shape: 'json' },
+				})
+			}
+			const childArrayOutcome = attempt(() => Array.isArray(source))
+			if (!childArrayOutcome.success) {
+				throw new ContractError('cloneJSONValue: value brand could not be inspected', {
+					code: 'clone',
+					context: { shape: 'json' },
+				})
+			}
+			let child: JSONValue[] | JSONRecord
+			if (childArrayOutcome.value) {
+				child = []
+			} else if (isRecord(source)) {
+				child = Object.create(null)
+			} else {
+				throw new ContractError('cloneJSONValue: object is not a plain record', {
+					code: 'clone',
+					context: { shape: 'json' },
+				})
+			}
+			clone = child
+			active.add(source)
+			pending.push({
+				source,
+				clone: child,
+				array: childArrayOutcome.value,
+				entries: undefined,
+				index: 0,
+			})
+		} else {
+			throw new ContractError('cloneJSONValue: property is not JSON data', {
+				code: 'clone',
+				context: { shape: 'json' },
+			})
+		}
+
+		Object.defineProperty(frame.clone, key, {
+			value: clone,
+			enumerable: true,
+			configurable: true,
+			writable: true,
+		})
+	}
+
+	return root
+}
+
+/**
+ * Deep-clone an exact JSON object record into an owned frozen snapshot.
+ *
+ * @remarks
+ * Adds a record-root boundary to {@link cloneJSONValue}. The output is a
+ * deeply frozen null-prototype record, and repeated noncyclic aliases are
+ * duplicated as independent JSON tree branches.
+ *
+ * @param value - The unknown record value to validate and snapshot
+ * @returns A deeply cloned and frozen JSON record
+ * @throws {ContractError} When the root is not a record, nested data is inexact, or traversal fails
+ *
+ * @example
+ * ```ts
+ * cloneJSONRecord({ attempt: 1 }) // frozen null-prototype record
+ * ```
+ */
+export function cloneJSONRecord(value: unknown): JSONRecord {
+	if (!isRecord(value)) {
+		throw new ContractError('cloneJSONRecord: value is not a plain record', {
+			code: 'clone',
+			context: { shape: 'json' },
+		})
+	}
+	const clone = cloneJSONValue(value)
+	if (!isRecord(clone)) {
+		throw new ContractError('cloneJSONRecord: cloned value is not a record', {
+			code: 'clone',
+			context: { shape: 'json' },
+		})
+	}
+	return clone
+}
 
 /**
  * Deep-clone a JSON Schema graph into an owned frozen snapshot.

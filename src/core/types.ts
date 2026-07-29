@@ -184,11 +184,27 @@ export type ZeroArgAsyncFunction = () => Promise<unknown>
  *
  * @remarks
  * The recursive {@link JSONValue} tree type is shipped for consumers that need a
- * reusable JSON metadata contract. Dedicated `JSONObject` / `JSONArray` aliases
- * remain unshipped; compose those narrower shapes with the combinators, or keep
- * an untrusted parse result as `unknown` and narrow it.
+ * reusable JSON metadata contract. {@link JSONRecord} supplies the record-root
+ * contract needed by persistence and metadata consumers; a dedicated
+ * `JSONArray` alias remains unnecessary because `readonly JSONValue[]` already
+ * expresses that branch directly.
  */
 export type JSONPrimitive = string | number | boolean | null
+
+/**
+ * A readonly string-keyed JSON object record.
+ *
+ * @remarks
+ * Runtime ownership through
+ * {@link import('./cloners.js').cloneJSONRecord} normalizes records to a frozen
+ * null-prototype object after exact descriptor validation.
+ *
+ * @example
+ * ```ts
+ * const metadata: JSONRecord = { attempt: 1, labels: ['ready'] }
+ * ```
+ */
+export type JSONRecord = { readonly [key: string]: JSONValue }
 
 /**
  * A recursive JSON value — primitives, arrays, and object records.
@@ -203,7 +219,7 @@ export type JSONPrimitive = string | number | boolean | null
  * const value: JSONValue = { nested: [1, 'x', null] }
  * ```
  */
-export type JSONValue = JSONPrimitive | readonly JSONValue[] | { readonly [key: string]: JSONValue }
+export type JSONValue = JSONPrimitive | readonly JSONValue[] | JSONRecord
 
 /** The seven standard JSON Schema `type` names. */
 export type JSONSchemaType =
