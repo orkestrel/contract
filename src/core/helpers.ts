@@ -75,6 +75,49 @@ export function holds(callback: () => boolean): boolean {
 }
 
 /**
+ * Sanitize a URL against a caller-owned scheme allowlist and a policy-free
+ * control-character and protocol-relative floor.
+ *
+ * @remarks
+ * This enforces only the scheme allowlist plus control-character stripping and
+ * protocol-relative refusal. It does not decode entities, HTML-escape, hard-ban
+ * schemes, parse, resolve, or canonicalize the URL. An HTML embedder must escape
+ * the result for its output context and may additionally ban script-capable
+ * schemes; `@orkestrel/html` is the hardened consumer for that boundary.
+ *
+ * @param value - The URL value to sanitize
+ * @param schemes - The lowercase schemes the caller allows
+ * @returns The cleaned URL when relative or allowlisted, otherwise an empty string
+ *
+ * @example
+ * ```ts
+ * sanitizeURL('HtTp://example.com', new Set(['http', 'https'])) // kept
+ * sanitizeURL('javascript:alert(1)', ['http', 'https']) // ''
+ * ```
+ */
+export function sanitizeURL(
+	value: string,
+	schemes: ReadonlySet<string> | readonly string[],
+): string {
+	const outcome = attempt(() => {
+		const cleaned = value.replace(/[\p{Cc}\u{20}]/gu, '')
+		const first = cleaned[0]
+		const second = cleaned[1]
+		if ((first === '/' || first === '\\') && (second === '/' || second === '\\')) {
+			return ''
+		}
+		const match = cleaned.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/)
+		if (match === null) return cleaned
+		const scheme = match[1]
+		if (scheme === undefined) return ''
+		const normalized = scheme.toLowerCase()
+		const allowed = 'has' in schemes ? schemes.has(normalized) : schemes.includes(normalized)
+		return allowed ? cleaned : ''
+	})
+	return outcome.success ? outcome.value : ''
+}
+
+/**
  * Snapshot an object's own enumerable string keys through a total boundary.
  *
  * @remarks
