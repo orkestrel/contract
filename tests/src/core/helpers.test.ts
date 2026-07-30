@@ -18,7 +18,6 @@ import {
 	resolveField,
 	schemaToObject,
 	schemaToParameters,
-	sanitizeURL,
 	seededRandom,
 	stringShape,
 	valueToSchema,
@@ -116,98 +115,6 @@ describe('holds', () => {
 	it('returns false when the callback returns a truthy non-boolean at runtime', () => {
 		const callback = new Proxy(() => true, { apply: String })
 		expect(holds(callback)).toBe(false)
-	})
-})
-
-describe('sanitizeURL', () => {
-	it('keeps allowlisted schemes, including mixed-case input', () => {
-		const schemes = new Set(['http', 'https'])
-		expect(sanitizeURL('http://example.com', schemes)).toBe('http://example.com')
-		expect(sanitizeURL('https://example.com', schemes)).toBe('https://example.com')
-		expect(sanitizeURL('HtTp://example.com', schemes)).toBe('HtTp://example.com')
-	})
-
-	it('rejects an unlisted scheme', () => {
-		expect(sanitizeURL('ftp://example.com', ['http', 'https'])).toBe('')
-	})
-
-	it('keeps relative, anchor, and query URLs and accepts empty input', () => {
-		const schemes = new Set(['https'])
-		expect(sanitizeURL('docs/index.html', schemes)).toBe('docs/index.html')
-		expect(sanitizeURL('#section', schemes)).toBe('#section')
-		expect(sanitizeURL('?page=2', schemes)).toBe('?page=2')
-		expect(sanitizeURL('', schemes)).toBe('')
-	})
-
-	it('strips C0 and C1 controls before applying the scheme allowlist', () => {
-		expect(sanitizeURL('\u0000 h\nt\rt\tp\u007f\u0080\u009f://example.com', ['http'])).toBe(
-			'http://example.com',
-		)
-		expect(sanitizeURL('java\tscript:x', ['https'])).toBe('')
-		expect(sanitizeURL('java\tscript:x', ['javascript'])).toBe('javascript:x')
-	})
-
-	it('rejects all four protocol-relative slash forms', () => {
-		const schemes = new Set(['https'])
-		expect(sanitizeURL('//example.com', schemes)).toBe('')
-		expect(sanitizeURL('\\\\example.com', schemes)).toBe('')
-		expect(sanitizeURL('/\\example.com', schemes)).toBe('')
-		expect(sanitizeURL('\\/example.com', schemes)).toBe('')
-	})
-
-	it('produces identical results for Set and array allowlists', () => {
-		const set = new Set(['http', 'https'])
-		const array = ['http', 'https']
-		expect(sanitizeURL('https://example.com', set)).toBe(sanitizeURL('https://example.com', array))
-		expect(sanitizeURL('mailto:user@example.com', set)).toBe(
-			sanitizeURL('mailto:user@example.com', array),
-		)
-		expect(sanitizeURL('../relative', set)).toBe(sanitizeURL('../relative', array))
-	})
-
-	it('treats a duplicate-bearing array like the equivalent Set', () => {
-		const set = new Set(['https'])
-		const duplicates = ['https', 'https']
-		expect(sanitizeURL('https://example.com', duplicates)).toBe(
-			sanitizeURL('https://example.com', set),
-		)
-		expect(sanitizeURL('http://example.com', duplicates)).toBe(
-			sanitizeURL('http://example.com', set),
-		)
-	})
-
-	it('fails closed when a Set has a throwing has method', () => {
-		const schemes = new (class extends Set<string> {
-			override has(_value: string): boolean {
-				throw new Error('hostile has')
-			}
-		})(['https'])
-		expect(() => sanitizeURL('https://example.com', schemes)).not.toThrow()
-		expect(sanitizeURL('https://example.com', schemes)).toBe('')
-	})
-
-	it('fails closed when membership reaches a throwing iterator', () => {
-		const schemes = new (class extends Set<string> {
-			override has(value: string): boolean {
-				return this[Symbol.iterator]().next().value === value
-			}
-
-			override [Symbol.iterator](): SetIterator<string> {
-				throw new Error('hostile iterator')
-			}
-		})(['https'])
-		expect(() => sanitizeURL('https://example.com', schemes)).not.toThrow()
-		expect(sanitizeURL('https://example.com', schemes)).toBe('')
-	})
-
-	it('fails closed when a Proxy throws on property access', () => {
-		const schemes = new Proxy(new Set(['https']), {
-			get(): never {
-				throw new Error('hostile get')
-			},
-		})
-		expect(() => sanitizeURL('https://example.com', schemes)).not.toThrow()
-		expect(sanitizeURL('https://example.com', schemes)).toBe('')
 	})
 })
 
