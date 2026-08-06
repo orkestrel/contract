@@ -17,6 +17,7 @@ import {
 	isInteger,
 	isJSONValue,
 	isNull,
+	isObject,
 	isRecord,
 	isRegExp,
 	isString,
@@ -27,6 +28,8 @@ import {
 	drawRandom,
 	enumerableKeys,
 	preview,
+	readArrayEntries,
+	readValue,
 	seededRandom,
 	shapeToKind,
 } from './helpers.js'
@@ -45,7 +48,14 @@ import {
 	unionOf,
 	whereOf,
 } from './combinators.js'
-import { parseBoolean, parseInteger, parseNumber, parseRecord, parseString } from './parsers.js'
+import {
+	parseBoolean,
+	parseInteger,
+	parseJSONValue,
+	parseNumber,
+	parseRecord,
+	parseString,
+} from './parsers.js'
 
 // The compilers walk a finite, developer-authored shape tree (never cyclic) and
 // recurse on themselves — branches are kept inline and public per AGENTS §5,
@@ -1393,7 +1403,7 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 		case 'null':
 			return (value) => (value === null ? null : undefined)
 		case 'json':
-			return (value) => (isJSONValue(value) ? value : undefined)
+			return parseJSONValue
 		// The literal parser trims a matching string but never numeric-coerces —
 		// `'42'` never parses to the literal `42`; only an exact (post-trim) match
 		// of one of the shape's `values` succeeds. This is an intended leniency,
@@ -1415,9 +1425,26 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 			const unbounded = owned.min === undefined && owned.max === undefined
 			const withinLength = boundsOf(owned.min, owned.max)
 			return (value) => {
+				if (isObject(value)) {
+					readValue(() => Array.isArray(value), 'compileParser', {
+						subject: 'array',
+						context: { shape: 'array' },
+					})
+				}
 				if (!isArray(value)) return undefined
+				const entries = readArrayEntries(value)
+				if (!entries.success) {
+					return readValue(
+						() => {
+							throw entries.error
+						},
+						'compileParser',
+						{ subject: 'array', context: { shape: 'array' } },
+					)
+				}
+				if (!entries.value.dense) return undefined
 				const result: unknown[] = []
-				for (const entry of value) {
+				for (const entry of entries.value.entries) {
 					const parsed = item(entry)
 					if (parsed === undefined) return undefined
 					result.push(parsed)
@@ -1490,7 +1517,15 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 					}
 					return result
 				})
-				return outcome.success ? outcome.value : undefined
+				if (outcome.success) return outcome.value
+				if (isContractError(outcome.error)) throw outcome.error
+				return readValue(
+					() => {
+						throw outcome.error
+					},
+					'compileParser',
+					{ subject: 'object', context: { shape: 'object' } },
+				)
 			}
 		}
 		case 'union': {
@@ -2027,8 +2062,8 @@ export function compileReporter(
  * separate calls, so it holds for a value whose reads are stable across calls;
  * see the read-stability precondition on {@link ContractInterface}. Every
  * recursive call returns at most {@link FAULT_LIMIT} entries. Hostile property
- * access is contained through {@link attempt} and collapses to one fault at the
- * current container path.
+ * access raises the shared coded read refusal with the current container path
+ * and shape, so unreadability never masquerades as a type mismatch.
  *
  * @param shape - The shape to audit against
  * @param value - The value to check
@@ -2141,51 +2176,69 @@ export function compileAuditor(
 				? []
 				: [{ reason: 'type', path, expected: 'literal', received: preview(value) }]
 		case 'array': {
+			if (isObject(value)) {
+				readValue(() => Array.isArray(value), 'compileAuditor', {
+					subject: 'array',
+					context: { path, shape: 'array' },
+				})
+			}
 			if (!isArray(value)) {
 				return [{ reason: 'type', path, expected: 'array', received: preview(value) }]
 			}
+			const entries = readArrayEntries(value)
+			if (!entries.success) {
+				return readValue(
+					() => {
+						throw entries.error
+					},
+					'compileAuditor',
+					{ subject: 'array', context: { path, shape: 'array' } },
+				)
+			}
 			const faults: AuditFault[] = []
-			const outcome = attempt(() => {
-				for (let index = 0; index < value.length; index += 1) {
-					if (faults.length >= FAULT_LIMIT) return
-					const entry = Object.hasOwn(value, index) ? value[index] : undefined
-					faults.push(...compileAuditor(owned.items, entry, [...path, String(index)]))
-				}
-				if (owned.min !== undefined && value.length < owned.min) {
-					faults.push({
-						reason: 'constraint',
-						path,
-						expected: 'array',
-						constraint: 'min',
-						limit: owned.min,
-						received: String(value.length),
-					})
-				}
-				if (owned.max !== undefined && value.length > owned.max) {
-					faults.push({
-						reason: 'constraint',
-						path,
-						expected: 'array',
-						constraint: 'max',
-						limit: owned.max,
-						received: String(value.length),
-					})
-				}
-			})
-			if (!outcome.success) {
-				return [{ reason: 'type', path, expected: 'array', received: preview(value) }]
+			for (let index = 0; index < entries.value.entries.length; index += 1) {
+				if (faults.length >= FAULT_LIMIT) break
+				faults.push(
+					...compileAuditor(owned.items, entries.value.entries[index], [...path, String(index)]),
+				)
+			}
+			if (owned.min !== undefined && entries.value.entries.length < owned.min) {
+				faults.push({
+					reason: 'constraint',
+					path,
+					expected: 'array',
+					constraint: 'min',
+					limit: owned.min,
+					received: String(entries.value.entries.length),
+				})
+			}
+			if (owned.max !== undefined && entries.value.entries.length > owned.max) {
+				faults.push({
+					reason: 'constraint',
+					path,
+					expected: 'array',
+					constraint: 'max',
+					limit: owned.max,
+					received: String(entries.value.entries.length),
+				})
 			}
 			return faults.length > FAULT_LIMIT ? faults.slice(0, FAULT_LIMIT) : faults
 		}
 		case 'object': {
+			if (isObject(value)) {
+				readValue(() => Reflect.getPrototypeOf(value), 'compileAuditor', {
+					subject: 'object',
+					context: { path, shape: 'object' },
+				})
+			}
 			if (!isRecord(value)) {
 				return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
 			}
 			const record = value
-			const keys = enumerableKeys(record)
-			if (keys === undefined) {
-				return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
-			}
+			const keys = readValue(() => Object.freeze([...Object.keys(record)]), 'compileAuditor', {
+				subject: 'object',
+				context: { path, shape: 'object' },
+			})
 			const present = new Set(keys)
 			const declaredKeys = Object.keys(owned.properties)
 			const declared = new Set(declaredKeys)
@@ -2223,7 +2276,14 @@ export function compileAuditor(
 				}
 			})
 			if (!outcome.success) {
-				return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
+				if (isContractError(outcome.error)) throw outcome.error
+				return readValue(
+					() => {
+						throw outcome.error
+					},
+					'compileAuditor',
+					{ subject: 'object', context: { path, shape: 'object' } },
+				)
 			}
 			return faults.length > FAULT_LIMIT ? faults.slice(0, FAULT_LIMIT) : faults
 		}

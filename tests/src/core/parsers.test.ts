@@ -156,6 +156,27 @@ describe('structural parsers', () => {
 		expect(parseArray(buildSparseArray(), isString)).toBeUndefined()
 	})
 
+	it('parseArray reads dense indices rather than caller-defined iteration', () => {
+		const value = [1, 2]
+		Object.defineProperty(value, Symbol.iterator, {
+			value() {
+				throw new Error('iterator must not run')
+			},
+		})
+
+		expect(parseArray(value, isNumber)).toBe(value)
+	})
+
+	it('parseArray returns undefined for a malformed array length view', () => {
+		const value = new Proxy([1, 2, 3], {
+			get(target, key, receiver) {
+				return key === 'length' ? -1 : Reflect.get(target, key, receiver)
+			},
+		})
+
+		expect(parseArray(value, isNumber)).toBeUndefined()
+	})
+
 	it('parseEnum matches one of the allowed literals', () => {
 		const allowed: readonly ['a', 'b'] = ['a', 'b']
 		expect(parseEnum('a', allowed)).toBe('a')

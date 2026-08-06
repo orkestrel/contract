@@ -10,7 +10,14 @@ import {
 	isRecord,
 	isString,
 } from './validators.js'
-import { attempt, holds, matchesJSONValue, readValue, resolveField } from './helpers.js'
+import {
+	attempt,
+	holds,
+	matchesJSONValue,
+	readArrayEntries,
+	readValue,
+	resolveField,
+} from './helpers.js'
 
 // AGENTS §14: a parser answers "give me a `T` or nothing" — it returns the
 // typed value or `undefined` for readable invalid input. `parseRecord` and
@@ -211,13 +218,13 @@ export function parseArray<T = unknown>(
 	guard?: Guard<T>,
 ): readonly T[] | undefined {
 	if (!isArray<T>(value)) return undefined
+	if (guard === undefined) return value
+	const entries = readArrayEntries(value)
+	if (!entries.success || !entries.value.dense) return undefined
 	if (
-		guard !== undefined &&
 		!holds(() => {
-			for (let index = 0; index < value.length; index += 1) {
-				if (!Object.hasOwn(value, index) || !guard(value[index])) {
-					return false
-				}
+			for (const entry of entries.value.entries) {
+				if (!guard(entry)) return false
 			}
 			return true
 		})
@@ -253,6 +260,7 @@ export function parseJSONValue(value: unknown): JSONValue | undefined {
 	return readValue(
 		() => (matchesJSONValue(value, new WeakSet()) ? value : undefined),
 		'parseJSONValue',
+		{ context: { shape: 'json' } },
 	)
 }
 

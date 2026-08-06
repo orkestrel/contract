@@ -1,7 +1,7 @@
 /** Compiler bodies protected from accidental executable changes. */
 export const PROTECTED_COMPILER_BODIES = Object.freeze([
 	Object.freeze({ name: 'compileGuard', hash: '8956106c2a5b310e' }),
-	Object.freeze({ name: 'compileParser', hash: '38cb8a315ec4664e' }),
+	Object.freeze({ name: 'compileParser', hash: 'e14787136cf275b3' }),
 	Object.freeze({ name: 'compileReporter', hash: '348331882c6002bf' }),
 ])
 
@@ -49,6 +49,7 @@ export const PROTECTED_COMPILER_CLOSURE = Object.freeze({
 		'parseRecord',
 		'parseString',
 		'preview',
+		'readArrayEntries',
 		'readOptions',
 		'readValue',
 		'shapeToKind',
@@ -58,5 +59,5 @@ export const PROTECTED_COMPILER_CLOSURE = Object.freeze({
 		'validateShapeDepth',
 		'whereOf',
 	]),
-	hash: '493e182ce803dd12',
+	hash: '35993ad4e131ba62',
 })

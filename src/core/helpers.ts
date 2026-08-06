@@ -1,4 +1,5 @@
 import type {
+	ArrayRead,
 	ContractCode,
 	ContractShape,
 	FaultKind,
@@ -6,12 +7,14 @@ import type {
 	JSONSchema,
 	JSONValue,
 	RandomFunction,
+	ReadValueOptions,
 	Result,
 } from './types.js'
 import { PREVIEW_LIMIT } from './constants.js'
 import { ContractError } from './errors.js'
 import {
 	isBigInt,
+	isArray,
 	isBoolean,
 	isFiniteNumber,
 	isNumber,
@@ -75,8 +78,7 @@ export function attempt<T>(callback: () => T): Result<T> {
  *
  * @param callback - The read operation to perform
  * @param reader - The public reader name used in the diagnostic
- * @param subject - The argument/domain noun used in the diagnostic
- * @param code - The machine-readable refusal code
+ * @param options - Optional subject, code, and structured context
  * @returns The successfully read value
  * @throws {ContractError} When the read operation fails
  *
@@ -85,18 +87,57 @@ export function attempt<T>(callback: () => T): Result<T> {
  * readValue(() => source.value, 'parseRecord')
  * ```
  */
-export function readValue<T>(
-	callback: () => T,
-	reader: string,
-	subject = 'value',
-	code: ContractCode = 'structure',
-): T {
+export function readValue<T>(callback: () => T, reader: string, options?: ReadValueOptions): T {
+	const diagnostics = attempt(() => {
+		const source = options?.context
+		const context =
+			source === undefined
+				? undefined
+				: {
+						...(source.path === undefined ? {} : { path: source.path }),
+						...(source.shape === undefined ? {} : { shape: source.shape }),
+						...(source.limit === undefined ? {} : { limit: source.limit }),
+						...(source.received === undefined ? {} : { received: source.received }),
+					}
+		const requested = options?.code
+		const code: ContractCode =
+			requested === 'bound' ||
+			requested === 'range' ||
+			requested === 'empty' ||
+			requested === 'placement' ||
+			requested === 'structure' ||
+			requested === 'literal' ||
+			requested === 'cycle' ||
+			requested === 'pattern' ||
+			requested === 'generate' ||
+			requested === 'random' ||
+			requested === 'clone' ||
+			requested === 'depth'
+				? requested
+				: 'structure'
+		return {
+			reader: isString(reader) ? reader : 'readValue',
+			subject: isString(options?.subject) ? options.subject : 'value',
+			code,
+			context,
+		}
+	})
+	if (!diagnostics.success) {
+		throw new ContractError('readValue: options could not be read', {
+			code: 'structure',
+			cause: diagnostics.error,
+		})
+	}
 	const outcome = attempt(callback)
 	if (!outcome.success) {
-		throw new ContractError(`${reader}: ${subject} could not be read`, {
-			code,
-			cause: outcome.error,
-		})
+		throw new ContractError(
+			`${diagnostics.value.reader}: ${diagnostics.value.subject} could not be read`,
+			{
+				code: diagnostics.value.code,
+				...(diagnostics.value.context === undefined ? {} : { context: diagnostics.value.context }),
+				cause: outcome.error,
+			},
+		)
 	}
 	return outcome.value
 }
@@ -115,6 +156,52 @@ export function readValue<T>(
 export function holds(callback: () => boolean): boolean {
 	const outcome = attempt(callback)
 	return outcome.success && outcome.value === true
+}
+
+/**
+ * Snapshot an array through its own indexed property view.
+ *
+ * @remarks
+ * Array artifacts deliberately ignore a caller-defined iterator and agree on
+ * the native index view. Missing indices are preserved as `undefined` and
+ * reflected by `dense: false`. The result fails when length is outside the
+ * native array domain, reflection throws, or the array's index views disagree.
+ *
+ * @param value - The array whose dense entries to read
+ * @returns A successful frozen entry snapshot with its dense fact, or the failed read
+ *
+ * @example
+ * ```ts
+ * readArrayEntries([1, 2]) // { success: true, value: { entries: [1, 2], dense: true } }
+ * ```
+ */
+export function readArrayEntries(value: readonly unknown[]): Result<ArrayRead> {
+	return attempt(() => {
+		const length = value.length
+		if (!Number.isSafeInteger(length) || length < 0 || length > 2 ** 32 - 1) {
+			throw new Error('Array length is outside the native array domain')
+		}
+		let indices = 0
+		for (const key of Reflect.ownKeys(value)) {
+			if (!isString(key)) continue
+			const index = Number(key)
+			if (Number.isInteger(index) && index >= 0 && index < 2 ** 32 - 1 && String(index) === key) {
+				indices += 1
+			}
+		}
+		const entries: unknown[] = []
+		let present = 0
+		for (let index = 0; index < length; index += 1) {
+			if (Object.hasOwn(value, index)) {
+				present += 1
+				entries.push(value[index])
+			} else {
+				entries.push(undefined)
+			}
+		}
+		if (indices !== present) throw new Error('Array index views disagree')
+		return Object.freeze({ entries: Object.freeze(entries), dense: present === length })
+	})
 }
 
 /**
@@ -206,7 +293,7 @@ export function readOptions<T extends object>(
 			return { snapshot, record }
 		},
 		builder,
-		'options',
+		{ subject: 'options', context: { shape } },
 	)
 	if (!result.record) {
 		throw new ContractError(`${builder}: options must be a plain record`, {
@@ -295,8 +382,9 @@ export function resolveField(record: Readonly<Record<string, unknown>>, path: Fi
  * The caller-owned ancestor set tracks only the active traversal path, so
  * cycles fail while shared references across sibling branches remain valid.
  * The set belongs to one traversal from one entry point; passing a shared or
- * pre-populated set is unsupported. Arrays and plain records recurse through
- * this helper; class instances and non-finite numbers are rejected.
+ * pre-populated set is unsupported. Arrays recurse through the shared dense
+ * own-index lens and plain records recurse by values; class instances and
+ * non-finite numbers are rejected.
  *
  * @param entry - The value to inspect
  * @param ancestors - Objects on the active traversal path
@@ -309,28 +397,35 @@ export function resolveField(record: Readonly<Record<string, unknown>>, path: Fi
  * ```
  */
 export function matchesJSONValue(entry: unknown, ancestors: WeakSet<object>): entry is JSONValue {
-	return readValue(() => {
-		if (entry === null || isString(entry) || isBoolean(entry) || isFiniteNumber(entry)) return true
-		if (Array.isArray(entry)) {
-			if (ancestors.has(entry)) return false
-			ancestors.add(entry)
-			let valid = true
-			for (let index = 0; index < entry.length; index += 1) {
-				if (!Object.hasOwn(entry, index) || !matchesJSONValue(entry[index], ancestors)) {
-					valid = false
-					break
+	return readValue(
+		() => {
+			if (entry === null || isString(entry) || isBoolean(entry) || isFiniteNumber(entry))
+				return true
+			if (Array.isArray(entry)) {
+				if (ancestors.has(entry)) return false
+				const snapshot = readArrayEntries(entry)
+				if (!snapshot.success) throw snapshot.error
+				if (!snapshot.value.dense) return false
+				ancestors.add(entry)
+				try {
+					for (const value of snapshot.value.entries) {
+						if (!matchesJSONValue(value, ancestors)) return false
+					}
+					return true
+				} finally {
+					ancestors.delete(entry)
 				}
 			}
+			if (!isRecord(entry)) return false
+			if (ancestors.has(entry)) return false
+			ancestors.add(entry)
+			const valid = Object.values(entry).every((value) => matchesJSONValue(value, ancestors))
 			ancestors.delete(entry)
 			return valid
-		}
-		if (!isRecord(entry)) return false
-		if (ancestors.has(entry)) return false
-		ancestors.add(entry)
-		const valid = Object.values(entry).every((value) => matchesJSONValue(value, ancestors))
-		ancestors.delete(entry)
-		return valid
-	}, 'matchesJSONValue')
+		},
+		'matchesJSONValue',
+		{ context: { shape: 'json' } },
+	)
 }
 
 // === Random
@@ -453,15 +548,20 @@ export function schemaToParameters(
  * ```
  */
 export function schemaToObject(schema: JSONSchema): JSONSchema {
-	return readValue(() => {
-		if (schema.type === 'object') return schema
-		return {
-			type: 'object',
-			properties: { value: schema },
-			required: ['value'],
-			additionalProperties: false,
-		}
-	}, 'schemaToObject')
+	return readValue(
+		() => {
+			Object.values(schema)
+			if (schema.type === 'object') return schema
+			return {
+				type: 'object',
+				properties: { value: schema },
+				required: ['value'],
+				additionalProperties: false,
+			}
+		},
+		'schemaToObject',
+		{ subject: 'schema' },
+	)
 }
 
 // === Inference option sanitization
@@ -534,6 +634,7 @@ export function preview(value: unknown): string {
 	if (isNumber(value) || isBoolean(value)) return String(value)
 	if (isBigInt(value)) return `${value}n`
 	if (isSymbol(value)) return value.toString()
+	if (isArray(value)) return 'array'
 	return typeof value
 }
 
@@ -589,6 +690,6 @@ export function shapeToKind(shape: ContractShape): FaultKind {
 			}
 		},
 		'shapeToKind',
-		'shape',
+		{ subject: 'shape' },
 	)
 }

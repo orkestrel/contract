@@ -406,9 +406,9 @@ describe('preview', () => {
 		expect(giant.length).toBeLessThanOrEqual(65)
 	})
 
-	it('renders objects, arrays, and functions as their typeof tag only — never traversed', () => {
+	it('labels arrays without traversing other hosts', () => {
 		expect(preview({ a: 1 })).toBe('object')
-		expect(preview([1, 2, 3])).toBe('object')
+		expect(preview([1, 2, 3])).toBe('array')
 		expect(preview(() => 1)).toBe('function')
 	})
 })

@@ -201,9 +201,9 @@ export function createStatefulGetter(): Readonly<Record<string, unknown>> {
  * Create an array whose own `slice` reports elements it does not hold.
  *
  * @remarks
- * The array-side unstable read: inference samples through `slice`, while the
- * compiled guard walks the real indices, so an overridden reader makes the two
- * views disagree by construction.
+ * The caller-defined method is outside the shared own-index lens. This fixture
+ * proves array inference and compiled artifacts agree on the real indices even
+ * when an unrelated reader advertises different values.
  *
  * @returns An array of numbers whose `slice` yields strings
  *

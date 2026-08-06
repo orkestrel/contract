@@ -17,7 +17,14 @@ import {
 	isRecord,
 	isString,
 } from './validators.js'
-import { attempt, enumerableKeys, readOptions, readValue, sanitizeBudget } from './helpers.js'
+import {
+	attempt,
+	enumerableKeys,
+	readArrayEntries,
+	readOptions,
+	readValue,
+	sanitizeBudget,
+} from './helpers.js'
 
 // The inferers walk an UNKNOWN, possibly adversarial runtime value (or a set
 // of example values) and emit a JSONSchema — the reverse direction of
@@ -35,8 +42,9 @@ import { attempt, enumerableKeys, readOptions, readValue, sanitizeBudget } from 
  * spine of {@link canonicalStringify}.
  *
  * @remarks
- * Arrays keep their element order; records sort their own keys before encoding,
- * recursively at every nesting level. Every other value is encoded by
+ * Arrays keep their element order through the shared dense own-index lens;
+ * records sort their own keys before encoding, recursively at every nesting
+ * level. Every other value is encoded by
  * `JSON.stringify`, so `NaN` / `±Infinity` collapse to `'null'` and `-0`
  * encodes as `'0'` — the same lossy-but-deterministic mapping real JSON makes.
  *
@@ -63,22 +71,21 @@ export function canonicalizeValue(value: unknown, ancestors: WeakSet<object>): s
 	return readValue(() => {
 		if (isArray(value)) {
 			if (ancestors.has(value)) return undefined
+			const snapshot = readArrayEntries(value)
+			if (!snapshot.success) throw snapshot.error
+			if (!snapshot.value.dense) return undefined
 			ancestors.add(value)
-			const parts: string[] = []
-			for (let index = 0; index < value.length; index += 1) {
-				// A hole is an absent element, not a value — the same `Object.hasOwn`
-				// rule `arrayOf` and `matchesJSONValue` apply.
-				const part = Object.hasOwn(value, index)
-					? canonicalizeValue(value[index], ancestors)
-					: undefined
-				if (part === undefined) {
-					ancestors.delete(value)
-					return undefined
+			try {
+				const parts: string[] = []
+				for (const entry of snapshot.value.entries) {
+					const part = canonicalizeValue(entry, ancestors)
+					if (part === undefined) return undefined
+					parts.push(part)
 				}
-				parts.push(part)
+				return `[${parts.join(',')}]`
+			} finally {
+				ancestors.delete(value)
 			}
-			ancestors.delete(value)
-			return `[${parts.join(',')}]`
 		}
 		if (isRecord(value)) {
 			if (ancestors.has(value)) return undefined
@@ -219,7 +226,7 @@ export function unifySchemas(schemas: readonly JSONSchema[]): JSONSchema {
 			return { anyOf: members }
 		},
 		'unifySchemas',
-		'schemas',
+		{ subject: 'schemas' },
 	)
 }
 
@@ -332,7 +339,7 @@ export function samplesToFormat(values: readonly unknown[]): SchemaFormat | unde
 			return rest.every((format) => format === first) ? first : undefined
 		},
 		'samplesToFormat',
-		'values',
+		{ subject: 'values' },
 	)
 }
 
@@ -397,7 +404,7 @@ export function inferPrimitiveEnum(
 			return { enum: sorted.map(([, value]) => value) }
 		},
 		'inferPrimitiveEnum',
-		'values',
+		{ subject: 'values' },
 	)
 }
 
@@ -537,10 +544,11 @@ export function inferArray(
 		if (cached) return cached
 		visited.add(value)
 		const outcome = attempt(() => {
-			const sampled = Array.from(value.slice(0, breadth))
-			return sampled.map((entry) =>
-				inferValue(entry, depth - 1, breadth, closed, format, visited, memo),
-			)
+			const snapshot = readArrayEntries(value)
+			if (!snapshot.success) throw snapshot.error
+			return snapshot.value.entries
+				.slice(0, breadth)
+				.map((entry) => inferValue(entry, depth - 1, breadth, closed, format, visited, memo))
 		})
 		visited.delete(value)
 		const sampled = readValue(() => {
@@ -793,7 +801,7 @@ export function inferSamples(
 			return unified
 		},
 		'inferSamples',
-		'samples',
+		{ subject: 'samples' },
 	)
 }
 
@@ -909,7 +917,7 @@ export function inferRecordSamples(
 			}
 		},
 		'inferRecordSamples',
-		'samples',
+		{ subject: 'samples' },
 	)
 }
 
@@ -963,6 +971,6 @@ export function samplesToSchema(
 	return readValue(
 		() => inferSamples(samples, maxDepth, maxProperties, closed, format, enumOn),
 		'samplesToSchema',
-		'samples',
+		{ subject: 'samples' },
 	)
 }

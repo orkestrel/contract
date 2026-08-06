@@ -24,7 +24,7 @@ import {
 	isString,
 	isSymbol,
 } from './validators.js'
-import { holds, readOptions, readValue } from './helpers.js'
+import { holds, readArrayEntries, readOptions, readValue } from './helpers.js'
 
 // Every combinator returns a `Guard<T>` — a total function (AGENTS §14). The
 // combinators that invoke a caller-supplied callback inside the guard body
@@ -50,13 +50,11 @@ export function arrayOf(elementGuard: (value: unknown) => boolean): Guard<readon
 export function arrayOf(elementGuard: (value: unknown) => boolean): Guard<readonly unknown[]> {
 	return (value: unknown): value is readonly unknown[] =>
 		holds(() => {
-			if (!isArray(value)) {
-				return false
-			}
-			for (let index = 0; index < value.length; index += 1) {
-				if (!Object.hasOwn(value, index) || !elementGuard(value[index])) {
-					return false
-				}
+			if (!isArray(value)) return false
+			const entries = readArrayEntries(value)
+			if (!entries.success || !entries.value.dense) return false
+			for (const entry of entries.value.entries) {
+				if (!elementGuard(entry)) return false
 			}
 			return true
 		})
@@ -135,18 +133,28 @@ export function literalOf(
 	...literals: ReadonlyArray<string | number | boolean | ReadonlyArray<string | number | boolean>>
 ): Guard<string | number | boolean> {
 	const [first] = literals
-	const values: readonly unknown[] = literals.length === 1 && isArray(first) ? first : literals
-	const allowed = readValue(
-		() => {
-			const snapshot = [...values]
-			if (!snapshot.every((value) => isString(value) || isNumber(value) || isBoolean(value))) {
-				throw new Error('invalid literal vocabulary')
-			}
-			return new Set<unknown>(snapshot)
-		},
-		'literalOf',
-		'literals',
-	)
+	const collected =
+		literals.length === 1
+			? readValue(() => Array.isArray(first), 'literalOf', {
+					subject: 'literals',
+					context: { path: ['literals'], shape: 'literal' },
+				})
+			: false
+	const values: readonly unknown[] = collected && isArray(first) ? first : literals
+	const snapshot = readValue(() => [...values], 'literalOf', {
+		subject: 'literals',
+		context: { path: ['literals'], shape: 'literal' },
+	})
+	if (!snapshot.every((value) => isString(value) || isNumber(value) || isBoolean(value))) {
+		throw new ContractError(
+			'literalOf: literals must contain only string, number, or boolean values',
+			{
+				code: 'literal',
+				context: { path: ['literals'], shape: 'literal' },
+			},
+		)
+	}
+	const allowed = new Set<unknown>(snapshot)
 	return (value: unknown): value is string | number | boolean => allowed.has(value)
 }
 
@@ -190,7 +198,9 @@ export function instanceOf<C extends abstract new (...args: never) => object>(
 export function enumOf<const E extends Record<string, string | number>>(
 	enumeration: E,
 ): Guard<E[keyof E]> {
-	const values = readValue(() => new Set(Object.values(enumeration)), 'enumOf', 'enumeration')
+	const values = readValue(() => new Set(Object.values(enumeration)), 'enumOf', {
+		subject: 'enumeration',
+	})
 	return (value: unknown): value is E[keyof E] =>
 		(isString(value) || isNumber(value)) && values.has(value)
 }
@@ -314,7 +324,7 @@ export function recordOf<
 			return keys
 		},
 		'recordOf',
-		'shape',
+		{ subject: 'shape' },
 	)
 	const optionalSet = readValue(
 		() =>
@@ -326,7 +336,7 @@ export function recordOf<
 						: [],
 			),
 		'recordOf',
-		'optional',
+		{ subject: 'optional' },
 	)
 
 	return (
@@ -407,7 +417,7 @@ export function pickOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 	// Honest typing: the accumulator IS the picked-shape type, so every write is
 	// checked against `S[P]` — no `as` / `!` / `asserts`. The seed is a genuine
 	// null-prototype empty object, filled before any read.
-	const selected = readValue(() => Object.freeze([...keys]), 'pickOf', 'keys')
+	const selected = readValue(() => Object.freeze([...keys]), 'pickOf', { subject: 'keys' })
 	return readValue(
 		() => {
 			const result: { [P in K[number]]: S[P] } = Object.create(null)
@@ -419,7 +429,7 @@ export function pickOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 			return result
 		},
 		'pickOf',
-		'shape',
+		{ subject: 'shape' },
 	)
 }
 
@@ -438,7 +448,7 @@ export function omitOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 	shape: S,
 	keys: K,
 ): Omit<S, K[number]> {
-	const skipped = readValue(() => new Set<PropertyKey>(keys), 'omitOf', 'keys')
+	const skipped = readValue(() => new Set<PropertyKey>(keys), 'omitOf', { subject: 'keys' })
 	// Sound over-approximation: only kept keys are written, so the value
 	// structurally satisfies `Omit<S, K[number]>`. Same honest typing as
 	// `pickOf` — no `as` / `!` / `asserts`.
@@ -456,7 +466,7 @@ export function omitOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 			return result
 		},
 		'omitOf',
-		'shape',
+		{ subject: 'shape' },
 	)
 }
 
@@ -739,8 +749,7 @@ export function matchOf(pattern: RegExp): Guard<string> {
 	const owned = readValue(
 		() => new RegExp(pattern.source, pattern.flags.replaceAll('g', '').replaceAll('y', '')),
 		'matchOf',
-		'pattern',
-		'pattern',
+		{ subject: 'pattern', code: 'pattern' },
 	)
 	return whereOf(isString, (value) => owned.test(value))
 }
@@ -789,8 +798,7 @@ export function stringOf(options?: {
 			: readValue(
 					() => new RegExp(source.source, source.flags.replaceAll('g', '').replaceAll('y', '')),
 					'stringOf',
-					'pattern',
-					'pattern',
+					{ subject: 'pattern', code: 'pattern', context: { shape: 'string' } },
 				)
 	if (min === undefined && max === undefined && pattern === undefined) {
 		return isString

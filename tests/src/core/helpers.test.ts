@@ -16,6 +16,7 @@ import {
 	isRecord,
 	matchesJSONValue,
 	objectShape,
+	readArrayEntries,
 	readOptions,
 	readValue,
 	resolveField,
@@ -109,6 +110,56 @@ describe('readValue', () => {
 		expect(error.code).toBe('structure')
 		expect(error.message).toBe('example: value could not be read')
 	})
+
+	it('carries structured context and contains hostile diagnostic options', () => {
+		const contextual = captureContractError(() =>
+			readValue(
+				() => {
+					throw new Error('hostile read')
+				},
+				'compileParser',
+				{ subject: 'array', context: { path: ['values'], shape: 'array' } },
+			),
+		)
+		expect(contextual.context).toEqual({ path: ['values'], shape: 'array' })
+
+		const revoked = createRevokedProxy()
+		const hostile = captureContractError(() =>
+			Reflect.apply(readValue, undefined, [
+				() => {
+					throw new Error('hostile read')
+				},
+				revoked,
+				{ code: revoked },
+			]),
+		)
+		expect(hostile.code).toBe('structure')
+		expect(hostile.message).toBe('readValue: value could not be read')
+	})
+})
+
+describe('readArrayEntries', () => {
+	it('freezes one own-index snapshot and derives density', () => {
+		const dense = readArrayEntries([1, 2])
+		expect(dense).toEqual({ success: true, value: { entries: [1, 2], dense: true } })
+		expect(dense.success && Object.isFrozen(dense.value)).toBe(true)
+		expect(dense.success && Object.isFrozen(dense.value.entries)).toBe(true)
+
+		const sparse = readArrayEntries(buildSparseArray())
+		expect(sparse).toEqual({
+			success: true,
+			value: { entries: [undefined, 'value', undefined], dense: false },
+		})
+	})
+
+	it('fails a non-native advertised length', () => {
+		const hostile = new Proxy([], {
+			get(target, property, receiver) {
+				return property === 'length' ? -1 : Reflect.get(target, property, receiver)
+			},
+		})
+		expect(readArrayEntries(hostile).success).toBe(false)
+	})
 })
 
 describe('holds', () => {
@@ -139,6 +190,17 @@ describe('matchesJSONValue', () => {
 		const hostile = createThrowingGetter()
 		const error = captureContractError(() => matchesJSONValue(hostile, new WeakSet()))
 
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('matchesJSONValue: value could not be read')
+	})
+
+	it('refuses a non-native advertised array length', () => {
+		const hostile = new Proxy([1, 2, 3], {
+			get(target, property, receiver) {
+				return property === 'length' ? -1 : Reflect.get(target, property, receiver)
+			},
+		})
+		const error = captureContractError(() => matchesJSONValue(hostile, new WeakSet()))
 		expect(error.code).toBe('structure')
 		expect(error.message).toBe('matchesJSONValue: value could not be read')
 	})
@@ -459,7 +521,19 @@ describe('schemaToObject', () => {
 		)
 		const error = captureContractError(() => schemaToObject(hostile))
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('schemaToObject: value could not be read')
+		expect(error.message).toBe('schemaToObject: schema could not be read')
+	})
+
+	it('refuses failed root enumeration before carrying the schema', () => {
+		const hostile = new Proxy({ type: 'string' } satisfies JSONSchema, {
+			ownKeys() {
+				throw new Error('hostile keys')
+			},
+		})
+		const error = captureContractError(() => schemaToObject(hostile))
+
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('schemaToObject: schema could not be read')
 	})
 
 	it('wraps a string-rooted schema as a single required "value" property', () => {

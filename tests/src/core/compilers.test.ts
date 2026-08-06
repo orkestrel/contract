@@ -2221,6 +2221,74 @@ describe('compileGuard', () => {
 })
 
 describe('compileParser', () => {
+	it('refuses failed dense-index reads at the root and through object parsing', () => {
+		const hostile = new Proxy([1, 2], {
+			get(target, key, receiver) {
+				if (key === '1') throw new Error('hostile index')
+				return Reflect.get(target, key, receiver)
+			},
+		})
+		const direct = createContract(arrayShape(numberShape()))
+		const nested = createContract(objectShape({ values: arrayShape(numberShape()) }))
+
+		for (const callback of [() => direct.parse(hostile), () => nested.parse({ values: hostile })]) {
+			const error = captureContractError(callback)
+			expect(error.code).toBe('structure')
+			expect(error.message).toBe('compileParser: array could not be read')
+			expect(error.context).toEqual({ shape: 'array' })
+		}
+	})
+
+	it('parses array indices consistently with is, audit, and explain', () => {
+		const iteratorThrow = [1, 2]
+		Object.defineProperty(iteratorThrow, Symbol.iterator, {
+			value() {
+				throw new Error('iterator must not run')
+			},
+		})
+		const divergent = [1, 2, 3]
+		Object.defineProperty(divergent, Symbol.iterator, {
+			value: () => ['x', 'y', 'z'][Symbol.iterator](),
+		})
+		const contract = createContract(arrayShape(numberShape()))
+
+		expect(contract.is(iteratorThrow)).toBe(true)
+		expect(contract.parse(iteratorThrow)).toEqual([1, 2])
+		expect(contract.audit(iteratorThrow)).toEqual([])
+		expect(contract.explain(iteratorThrow)).toEqual([])
+		expect(contract.parse(divergent)).toEqual([1, 2, 3])
+		expect(contract.explain(divergent)).toEqual([])
+	})
+
+	it('refuses a malformed array length instead of accepting an empty view', () => {
+		const hostile = new Proxy([1, 2, 3], {
+			get(target, key, receiver) {
+				return key === 'length' ? -1 : Reflect.get(target, key, receiver)
+			},
+		})
+		const contract = createContract(arrayShape(numberShape()))
+
+		expect(contract.is(hostile)).toBe(false)
+		expect(captureContractError(() => contract.parse(hostile)).code).toBe('structure')
+		expect(captureContractError(() => contract.audit(hostile)).code).toBe('structure')
+	})
+
+	it('refuses an unreadable json leaf instead of returning honest invalidity', () => {
+		const hostile = new Proxy(
+			{ value: 1 },
+			{
+				getOwnPropertyDescriptor() {
+					throw new Error('hostile descriptor')
+				},
+			},
+		)
+		const error = captureContractError(() => createContract(jsonShape()).parse(hostile))
+
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('parseJSONValue: value could not be read')
+		expect(error.context).toEqual({ shape: 'json' })
+	})
+
 	it('coerces whole objects and fails on a missing required field', () => {
 		const parse = compileParser(objectShape({ name: stringShape(), age: integerShape() }))
 		expect(parse({ name: 'Ada', age: '36' })).toEqual({
@@ -2739,6 +2807,8 @@ describe('shape separation registry', () => {
 
 	it('finds no corpus witness for source-argued coincident domains', () => {
 		let count = 0
+		let refusals = 0
+		let uncoded = 0
 		for (const separation of Object.values(SHAPE_SEPARATIONS)) {
 			if (separation.witness !== undefined) continue
 			count += 1
@@ -2746,11 +2816,19 @@ describe('shape separation registry', () => {
 			const guard = compileGuard(separation.shape)
 			const witnesses: unknown[] = []
 			for (const value of SOUNDNESS_SAMPLE) {
-				if (parse(value) !== undefined && !guard(value)) witnesses.push(value)
+				const parsed = attempt(() => parse(value))
+				if (!parsed.success) {
+					if (!isContractError(parsed.error)) uncoded += 1
+					refusals += 1
+					continue
+				}
+				if (parsed.value !== undefined && !guard(value)) witnesses.push(value)
 			}
 			expect(witnesses).toEqual([])
 		}
 		expect(count).toBe(3)
+		expect(uncoded).toBe(0)
+		expect(refusals).toBeGreaterThan(0)
 	})
 
 	it('validates and compiles representatives for all twelve shape kinds', () => {

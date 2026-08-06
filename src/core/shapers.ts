@@ -108,8 +108,7 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 			: readValue(
 					() => ({ source: pattern.source, flags: pattern.flags, text: pattern.toString() }),
 					'stringShape',
-					'pattern',
-					'pattern',
+					{ subject: 'pattern', code: 'pattern', context: { shape: 'string' } },
 				)
 	if (patternSnapshot !== undefined && patternSnapshot.flags.length > 0) {
 		throw new ContractError(
@@ -391,7 +390,7 @@ export function objectShape<
 			return { record, snapshot: Object.freeze(snapshot) }
 		},
 		'objectShape',
-		'properties',
+		{ subject: 'properties', context: { path: ['properties'], shape: 'object' } },
 	)
 	if (!copied.record) {
 		throw new ContractError('objectShape: properties must be a plain record', {
@@ -767,44 +766,47 @@ export function buildObjectShape(
 	memo: WeakMap<object, Map<number, ContractShape>>,
 	description: string | undefined,
 ): ContractShape {
-	const outcome = attempt(() => {
-		const propertiesSource = isRecord(schema.properties) ? schema.properties : undefined
-		const requiredSource = isArray(schema.required)
-			? schema.required.filter((entry): entry is string => isString(entry))
-			: []
-		// Honest typing: a null-prototype accumulator so a property literally
-		// named '__proto__' becomes an own data key instead of mutating the
-		// prototype — the same pattern inferObject uses (inferers.ts).
-		const properties: Record<string, ContractShape> = Object.create(null)
-		let truncated = false
-		if (propertiesSource) {
-			const allKeys = Object.keys(propertiesSource)
-			truncated = allKeys.length > INFER_BREADTH_LIMIT
-			const keys = allKeys.slice(0, INFER_BREADTH_LIMIT)
-			for (const key of keys) {
-				const child = propertiesSource[key]
-				const childShape = isRecord(child)
-					? schemaNodeToShape(child, depth - 1, visited, memo)
-					: rawShape({})
-				properties[key] = requiredSource.includes(key) ? childShape : optionalShape(childShape)
+	return readValue(
+		() => {
+			const propertiesSource = isRecord(schema.properties) ? schema.properties : undefined
+			const requiredSource = isArray(schema.required)
+				? schema.required.filter((entry): entry is string => isString(entry))
+				: []
+			// Honest typing: a null-prototype accumulator so a property literally
+			// named '__proto__' becomes an own data key instead of mutating the
+			// prototype — the same pattern inferObject uses (inferers.ts).
+			const properties: Record<string, ContractShape> = Object.create(null)
+			let truncated = false
+			if (propertiesSource) {
+				const allKeys = Object.keys(propertiesSource)
+				truncated = allKeys.length > INFER_BREADTH_LIMIT
+				const keys = allKeys.slice(0, INFER_BREADTH_LIMIT)
+				for (const key of keys) {
+					const child = propertiesSource[key]
+					const childShape = isRecord(child)
+						? schemaNodeToShape(child, depth - 1, visited, memo)
+						: rawShape({})
+					properties[key] = requiredSource.includes(key) ? childShape : optionalShape(childShape)
+				}
 			}
-		}
-		const extra = schema.additionalProperties
-		const additionalProperties: boolean | ContractShape = truncated
-			? true
-			: extra === false
-				? false
-				: isRecord(extra)
-					? schemaNodeToShape(extra, depth - 1, visited, memo)
-					: true
-		return Object.freeze({
-			type: 'object',
-			properties: Object.freeze(properties),
-			additionalProperties,
-			...(description === undefined ? {} : { description }),
-		})
-	})
-	return outcome.success ? outcome.value : rawShape({})
+			const extra = schema.additionalProperties
+			const additionalProperties: boolean | ContractShape = truncated
+				? true
+				: extra === false
+					? false
+					: isRecord(extra)
+						? schemaNodeToShape(extra, depth - 1, visited, memo)
+						: true
+			return Object.freeze({
+				type: 'object',
+				properties: Object.freeze(properties),
+				additionalProperties,
+				...(description === undefined ? {} : { description }),
+			})
+		},
+		'buildObjectShape',
+		{ subject: 'schema', context: { shape: 'schema' } },
+	)
 }
 
 /**
@@ -841,8 +843,8 @@ export function buildObjectShape(
  *    bounds from `minItems` / `maxItems`.
  * 6. `type: 'object'`, OR no `type` / `enum` / `oneOf` / `anyOf` but a
  *    record-valued `properties` — delegates to {@link buildObjectShape}.
- * 7. Everything else — an empty schema, an unrecognized/absent `type`,
- *    exhausted depth/breadth, or an attempt failure — widens to
+ * 7. Everything else — an empty schema, an unrecognized/absent `type`, or
+ *    exhausted depth/breadth — widens to
  *    {@link rawShape}, whose guard accepts every defined value and whose
  *    emitted schema is the same `{}` (plus `description`) the node carried.
  *    This is the exact inverse of `{}`, JSON Schema's accept-anything schema,
@@ -879,94 +881,97 @@ export function buildShapeFromNode(
 	visited: WeakSet<object>,
 	memo: WeakMap<object, Map<number, ContractShape>>,
 ): ContractShape {
-	const outcome = attempt(() => {
-		const description = isString(schema.description) ? schema.description : undefined
+	return readValue(
+		() => {
+			const description = isString(schema.description) ? schema.description : undefined
 
-		if (isArray(schema.enum)) {
-			const literals = schema.enum.filter(
-				(entry): entry is string | number | boolean =>
-					isString(entry) || isFiniteNumber(entry) || isBoolean(entry),
-			)
-			if (literals.length > 0) {
-				return literalShape(literals, description === undefined ? undefined : { description })
+			if (isArray(schema.enum)) {
+				const literals = schema.enum.filter(
+					(entry): entry is string | number | boolean =>
+						isString(entry) || isFiniteNumber(entry) || isBoolean(entry),
+				)
+				if (literals.length > 0) {
+					return literalShape(literals, description === undefined ? undefined : { description })
+				}
 			}
-		}
 
-		if (isArray(schema.oneOf)) {
-			const records = schema.oneOf.filter((entry): entry is JSONSchema => isRecord(entry))
-			if (records.length > INFER_BREADTH_LIMIT) {
-				return rawShape(description === undefined ? {} : { description })
+			if (isArray(schema.oneOf)) {
+				const records = schema.oneOf.filter((entry): entry is JSONSchema => isRecord(entry))
+				if (records.length > INFER_BREADTH_LIMIT) {
+					return rawShape(description === undefined ? {} : { description })
+				}
+				const variants = records.map((entry) => schemaNodeToShape(entry, depth - 1, visited, memo))
+				if (variants.length > 0) return oneOfShape(...variants)
 			}
-			const variants = records.map((entry) => schemaNodeToShape(entry, depth - 1, visited, memo))
-			if (variants.length > 0) return oneOfShape(...variants)
-		}
 
-		if (isArray(schema.anyOf)) {
-			const records = schema.anyOf.filter((entry): entry is JSONSchema => isRecord(entry))
-			if (records.length > INFER_BREADTH_LIMIT) {
-				return rawShape(description === undefined ? {} : { description })
+			if (isArray(schema.anyOf)) {
+				const records = schema.anyOf.filter((entry): entry is JSONSchema => isRecord(entry))
+				if (records.length > INFER_BREADTH_LIMIT) {
+					return rawShape(description === undefined ? {} : { description })
+				}
+				const variants = records.map((entry) => schemaNodeToShape(entry, depth - 1, visited, memo))
+				if (variants.length > 0) return unionShape(...variants)
 			}
-			const variants = records.map((entry) => schemaNodeToShape(entry, depth - 1, visited, memo))
-			if (variants.length > 0) return unionShape(...variants)
-		}
 
-		const type = isString(schema.type) ? schema.type : undefined
+			const type = isString(schema.type) ? schema.type : undefined
 
-		if (type === 'string') {
-			const bounds = deriveLengthBounds(schema.minLength, schema.maxLength)
-			return stringShape({
-				...bounds,
-				...(description === undefined ? {} : { description }),
-			})
-		}
-		if (type === 'number') {
-			const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
-			return numberShape({
-				...bounds,
-				...(description === undefined ? {} : { description }),
-			})
-		}
-		if (type === 'integer') {
-			const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
-			const emptyRange =
-				Math.ceil(bounds.min ?? Number.NEGATIVE_INFINITY) >
-				Math.floor(bounds.max ?? Number.POSITIVE_INFINITY)
-			return integerShape(
-				emptyRange
-					? description === undefined
-						? undefined
-						: { description }
-					: {
-							...bounds,
-							...(description === undefined ? {} : { description }),
-						},
-			)
-		}
-		if (type === 'boolean') {
-			return booleanShape(description === undefined ? undefined : { description })
-		}
-		if (type === 'null') {
-			return nullShape(description === undefined ? undefined : { description })
-		}
+			if (type === 'string') {
+				const bounds = deriveLengthBounds(schema.minLength, schema.maxLength)
+				return stringShape({
+					...bounds,
+					...(description === undefined ? {} : { description }),
+				})
+			}
+			if (type === 'number') {
+				const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
+				return numberShape({
+					...bounds,
+					...(description === undefined ? {} : { description }),
+				})
+			}
+			if (type === 'integer') {
+				const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
+				const emptyRange =
+					Math.ceil(bounds.min ?? Number.NEGATIVE_INFINITY) >
+					Math.floor(bounds.max ?? Number.POSITIVE_INFINITY)
+				return integerShape(
+					emptyRange
+						? description === undefined
+							? undefined
+							: { description }
+						: {
+								...bounds,
+								...(description === undefined ? {} : { description }),
+							},
+				)
+			}
+			if (type === 'boolean') {
+				return booleanShape(description === undefined ? undefined : { description })
+			}
+			if (type === 'null') {
+				return nullShape(description === undefined ? undefined : { description })
+			}
 
-		if (type === 'array') {
-			const items = isRecord(schema.items)
-				? schemaNodeToShape(schema.items, depth - 1, visited, memo)
-				: rawShape({})
-			const bounds = deriveLengthBounds(schema.minItems, schema.maxItems)
-			return arrayShape(items, {
-				...bounds,
-				...(description === undefined ? {} : { description }),
-			})
-		}
+			if (type === 'array') {
+				const items = isRecord(schema.items)
+					? schemaNodeToShape(schema.items, depth - 1, visited, memo)
+					: rawShape({})
+				const bounds = deriveLengthBounds(schema.minItems, schema.maxItems)
+				return arrayShape(items, {
+					...bounds,
+					...(description === undefined ? {} : { description }),
+				})
+			}
 
-		if (type === 'object' || (type === undefined && isRecord(schema.properties))) {
-			return buildObjectShape(schema, depth, visited, memo, description)
-		}
+			if (type === 'object' || (type === undefined && isRecord(schema.properties))) {
+				return buildObjectShape(schema, depth, visited, memo, description)
+			}
 
-		return rawShape(description === undefined ? {} : { description })
-	})
-	return outcome.success ? outcome.value : rawShape({})
+			return rawShape(description === undefined ? {} : { description })
+		},
+		'buildShapeFromNode',
+		{ subject: 'schema', context: { shape: 'schema' } },
+	)
 }
 
 /**
@@ -976,15 +981,15 @@ export function buildShapeFromNode(
  * `oneOf` / `anyOf` variants).
  *
  * @remarks
- * Total: never throws. Guards depth exhaustion, a non-record node (the
- * node's static `JSONSchema` type is not trusted at runtime), and a cyclic
- * re-encounter of `schema` — all three widen to {@link rawShape}. The
+ * Guards depth exhaustion, a readable non-record node (the node's static
+ * `JSONSchema` type is not trusted at runtime), and a cyclic re-encounter of
+ * `schema` — all three widen to {@link rawShape}. The
  * ancestor set is added to and removed from around the WHOLE subtree
  * conversion (not permanently), so a DAG-shaped schema reached twice via two
  * different, non-cyclic paths does not false-positive as a cycle. The
- * subtree conversion itself runs inside {@link attempt}, so a hostile
- * throwing getter/Proxy anywhere in `schema` cannot escape as a thrown error
- * — it degrades to {@link rawShape} instead. A same-node re-conversion at
+ * subtree conversion itself runs through {@link readValue}, so a hostile
+ * throwing getter/Proxy anywhere in `schema` raises a coded read refusal
+ * instead of degrading to an accept-anything shape. A same-node re-conversion at
  * the same remaining `depth` is served from `memo` (guards a
  * shared-reference schema DAG against exponential blowup), mirroring
  * {@link inferObject} / {@link inferArray} (inferers.ts).
@@ -999,7 +1004,8 @@ export function buildShapeFromNode(
  *   recursion state owned by the {@link schemaToShape} entry point; passing
  *   a shared or pre-populated `WeakMap` changes caching behavior and is not
  *   supported usage
- * @returns The built shape for `schema`, or {@link rawShape} on any failure
+ * @returns The built shape for `schema`, or {@link rawShape} for readable widening cases
+ * @throws {ContractError} When schema traversal fails
  *
  * @example
  * ```ts
@@ -1013,23 +1019,34 @@ export function schemaNodeToShape(
 	visited: WeakSet<object>,
 	memo: WeakMap<object, Map<number, ContractShape>>,
 ): ContractShape {
-	const contained = attempt(() => {
-		if (!(depth > 0) || !isRecord(schema) || visited.has(schema)) return rawShape({})
-		const cached = memo.get(schema)?.get(depth)
-		if (cached) return cached
-		visited.add(schema)
-		const outcome = attempt(() => buildShapeFromNode(schema, depth, visited, memo))
-		visited.delete(schema)
-		const shape = outcome.success ? outcome.value : rawShape({})
-		let depths = memo.get(schema)
-		if (!depths) {
-			depths = new Map()
-			memo.set(schema, depths)
-		}
-		depths.set(depth, shape)
-		return shape
-	})
-	return contained.success ? contained.value : rawShape({})
+	return readValue(
+		() => {
+			if (!(depth > 0)) return rawShape({})
+			const input: unknown = schema
+			if (!isObject(input)) return rawShape({})
+			if (Array.isArray(input)) return rawShape({})
+			const prototype = Reflect.getPrototypeOf(input)
+			if (prototype !== null && Reflect.getPrototypeOf(prototype) !== null) return rawShape({})
+			if (visited.has(input)) return rawShape({})
+			const cached = memo.get(schema)?.get(depth)
+			if (cached) return cached
+			visited.add(schema)
+			try {
+				const shape = buildShapeFromNode(schema, depth, visited, memo)
+				let depths = memo.get(schema)
+				if (!depths) {
+					depths = new Map()
+					memo.set(schema, depths)
+				}
+				depths.set(depth, shape)
+				return shape
+			} finally {
+				visited.delete(schema)
+			}
+		},
+		'schemaNodeToShape',
+		{ subject: 'schema', context: { shape: 'schema' } },
+	)
 }
 
 /**
@@ -1039,10 +1056,10 @@ export function schemaNodeToShape(
  * conversion is total and widens an inexpressible input to a valid raw `{}`.
  *
  * @remarks
- * Total: NEVER throws, for any input — a malformed, cyclic, deeply-nested, or
- * outright hostile (throwing-getter Proxy) `schema` value all degrade to
- * {@link rawShape} rather than escaping as an error, so
- * `createContract(schemaToShape(x))` is safe to call for any `x`. See
+ * Readable malformed, cyclic, or deeply nested schema nodes widen to
+ * {@link rawShape}; a failed traversal raises the shared coded refusal because
+ * an unreadable value is not a schema. `createContract(schemaToShape(x))`
+ * therefore remains safe for every readable `x`. See
  * {@link buildShapeFromNode} for the exact per-keyword precedence.
  *
  * `format` and `pattern` are NEVER asserted by the compiled shape — `format`
@@ -1061,7 +1078,7 @@ export function schemaNodeToShape(
  * hosts), which infer `{}` and widen back to an accept-anything
  * {@link rawShape}. An unreadable host is refused by {@link valueToSchema}
  * before this law produces a schema; direct hostile input to
- * {@link schemaToShape} still widens by that conversion's documented policy.
+ * {@link schemaToShape} receives the same coded refusal.
  * Widening is the only source of looseness. The law has three explicit host
  * limits:
  *
@@ -1088,6 +1105,7 @@ export function schemaNodeToShape(
  *
  * @param schema - The JSON Schema value to convert
  * @returns The built {@link ContractShape}
+ * @throws {ContractError} When schema traversal fails
  *
  * @example
  * ```ts

@@ -183,6 +183,18 @@ describe('literal and enum combinators', () => {
 		expect(error.code).toBe('structure')
 		expect(error.message).toBe('literalOf: literals could not be read')
 	})
+
+	it('classifies a readable malformed literal vocabulary as invalid', () => {
+		const error = captureContractError(() =>
+			Reflect.apply(literalOf, undefined, [['a', null, 'b']]),
+		)
+
+		expect(error.code).toBe('literal')
+		expect(error.message).toBe(
+			'literalOf: literals must contain only string, number, or boolean values',
+		)
+		expect(error.context).toEqual({ path: ['literals'], shape: 'literal' })
+	})
 })
 
 describe('recordOf, pickOf, omitOf', () => {

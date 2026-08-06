@@ -2,11 +2,13 @@ import type { ContractShape } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
 	arrayShape,
+	attempt,
 	booleanShape,
 	compileAuditor,
 	compileGuard,
 	FAULT_LIMIT,
 	integerShape,
+	isContractError,
 	literalShape,
 	nullableShape,
 	numberShape,
@@ -19,6 +21,7 @@ import {
 } from '@src/core'
 import {
 	SOUNDNESS_SAMPLE,
+	captureContractError,
 	compileWidenedContract,
 	compositeShape,
 	createHostileKeys,
@@ -37,17 +40,27 @@ describe('compileAuditor — strict soundness matrix', () => {
 	it('audit(v).length === 0 iff guard(v), across every leaf/composite shape and sample', () => {
 		const violations: string[] = []
 		let comparisons = 0
+		let refusals = 0
+		let uncoded = 0
 		for (const [label, shape] of shapes) {
 			const guard = compileGuard(shape)
 			for (let index = 0; index < SOUNDNESS_SAMPLE.length; index += 1) {
 				const value = SOUNDNESS_SAMPLE[index]
-				const empty = compileAuditor(shape, value).length === 0
+				const audited = attempt(() => compileAuditor(shape, value))
+				if (!audited.success) {
+					if (!isContractError(audited.error)) uncoded += 1
+					refusals += 1
+					continue
+				}
+				const empty = audited.value.length === 0
 				if (empty !== guard(value)) violations.push(`${label}@${String(index)}`)
 				comparisons += 1
 			}
 		}
 		expect(violations).toEqual([])
-		expect(comparisons).toBe(shapes.length * SOUNDNESS_SAMPLE.length)
+		expect(uncoded).toBe(0)
+		expect(refusals).toBeGreaterThan(0)
+		expect(comparisons + refusals).toBe(shapes.length * SOUNDNESS_SAMPLE.length)
 	})
 
 	it('covers every leaf variation plus the composite shape', () => {
@@ -167,15 +180,24 @@ describe('compileAuditor — strict unions', () => {
 })
 
 describe('compileAuditor — totality and cap', () => {
-	it('contains hostile getters and throwing reflection traps as one top-level fault', () => {
+	it('refuses hostile reads with their container context', () => {
 		const shape = objectShape({ value: stringShape() })
-		const expected = [{ reason: 'type', path: [], expected: 'object', received: 'object' }]
+		for (const value of [createThrowingGetter(), createHostileKeys(), createRevokedProxy()]) {
+			const error = captureContractError(() => compileAuditor(shape, value))
+			expect(error.code).toBe('structure')
+			expect(error.context).toEqual({ path: [], shape: 'object' })
+		}
 
-		expect(compileAuditor(shape, createThrowingGetter())).toEqual(expected)
-		expect(compileAuditor(shape, createHostileKeys())).toEqual(expected)
-		expect(compileAuditor(shape, createRevokedProxy())).toEqual(expected)
-		expect(compileAuditor(arrayShape(stringShape()), createRevokedArrayProxy())).toEqual([
-			{ reason: 'type', path: [], expected: 'array', received: 'object' },
+		const arrayError = captureContractError(() =>
+			compileAuditor(arrayShape(stringShape()), createRevokedArrayProxy()),
+		)
+		expect(arrayError.code).toBe('structure')
+		expect(arrayError.context).toEqual({ path: [], shape: 'array' })
+	})
+
+	it('reports an honest array as an array when an object shape rejects it', () => {
+		expect(compileAuditor(objectShape({}), [])).toEqual([
+			{ reason: 'type', path: [], expected: 'object', received: 'array' },
 		])
 	})
 

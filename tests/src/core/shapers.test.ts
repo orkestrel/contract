@@ -1379,15 +1379,14 @@ describe('schemaToShape — round-trip law: compileGuard(schemaToShape(valueToSc
 		expect(roundTrips(buildDeepNest(INFER_DEPTH_LIMIT + 8))).toEqual([true, true])
 	})
 
-	it('does NOT round-trip a value whose own reads differ between the two walks', () => {
+	it('limits the round-trip law to stable advertised reads and ignores unrelated array readers', () => {
 		// The third documented limit: inference samples the value once and the
-		// compiled guard reads it again, so a property whose getter drifts — or an
-		// element reader that reports what the indices do not hold — describes no
-		// single schema. This is a property of the VALUE, not a widening the
-		// conversion could repair.
+		// compiled guard reads it again, so a property whose getter drifts describes
+		// no single schema. A caller-defined slice is outside the shared own-index
+		// lens and cannot make the two array walks disagree.
 		const drifting = createStatefulGetter()
 		expect(compileGuard(schemaToShape(valueToSchema(drifting)))(drifting)).toBe(false)
-		expect(roundTrips(createUnstableArray())).toEqual([false, false])
+		expect(roundTrips(createUnstableArray())).toEqual([true, true])
 	})
 
 	// The whole-corpus invariant: the guard inferred from ANY sample accepts that
@@ -1706,7 +1705,7 @@ describe('schemaToShape — hostile schema triad', () => {
 		expect(contract.is).toBeDefined()
 	})
 
-	it('does not let a throwing-getter Proxy schema escape, falling back to rawShape', () => {
+	it('refuses a throwing-getter Proxy at every schema recursion entry', () => {
 		// A generic Proxy<JSONSchema> is JSONSchema-typed directly — no cast needed.
 		const hostile = new Proxy<JSONSchema>(
 			{ type: 'object' },
@@ -1726,12 +1725,13 @@ describe('schemaToShape — hostile schema triad', () => {
 			() => schemaToShape(hostile),
 		]
 		for (const run of runs) {
-			expect(run()).toEqual(rawShape({}))
-			expect(() => createContract(run())).not.toThrow()
+			const error = captureContractError(run)
+			expect(error.code).toBe('structure')
+			expect(error.context).toEqual({ shape: 'schema' })
 		}
 	})
 
-	it('does not let a throwing-getter Proxy nested keyword escape', () => {
+	it('refuses a throwing traversal at a nested schema keyword', () => {
 		const hostileProperties = new Proxy<Record<string, JSONSchema>>(
 			{},
 			{
@@ -1741,7 +1741,9 @@ describe('schemaToShape — hostile schema triad', () => {
 			},
 		)
 		const schema: JSONSchema = { type: 'object', properties: hostileProperties }
-		expect(() => createContract(schemaToShape(schema))).not.toThrow()
+		const error = captureContractError(() => schemaToShape(schema))
+		expect(error.code).toBe('structure')
+		expect(error.context).toEqual({ shape: 'schema' })
 	})
 
 	it('handles structurally-junk schemas arriving via JSON.parse of hostile text', () => {

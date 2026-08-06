@@ -96,6 +96,18 @@ describe('valueToSchema — arrays', () => {
 		})
 	})
 
+	it('uses the own-index lens when a Proxy has trap contradicts its indices', () => {
+		const value = new Proxy([1, 2, 3], {
+			has() {
+				return false
+			},
+		})
+		expect(valueToSchema(value)).toEqual({
+			type: 'array',
+			items: { type: 'integer' },
+		})
+	})
+
 	it('collapses integer + number into number ([1, 2.5])', () => {
 		expect(valueToSchema([1, 2.5])).toEqual({
 			type: 'array',
@@ -992,6 +1004,17 @@ describe('canonicalStringify — direct', () => {
 
 	it('preserves array element order', () => {
 		expect(canonicalStringify([3, 1, 2])).toBe('[3,1,2]')
+	})
+
+	it('refuses a non-native advertised array length', () => {
+		const hostile = new Proxy([1, 2, 3], {
+			get(target, property, receiver) {
+				return property === 'length' ? -1 : Reflect.get(target, property, receiver)
+			},
+		})
+		const error = captureContractError(() => canonicalStringify(hostile))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('canonicalStringify: value could not be read')
 	})
 
 	it('renders NaN as null (JSON.stringify semantics)', () => {

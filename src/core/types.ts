@@ -88,6 +88,24 @@ export interface ContractErrorOptions {
 	readonly cause?: unknown
 }
 
+/** Optional diagnostic metadata for a required read. */
+export interface ReadValueOptions {
+	/** Argument/domain noun used in the refusal message. */
+	readonly subject?: string
+	/** Machine-readable refusal category. */
+	readonly code?: ContractCode
+	/** Structured location and domain details retained by the refusal. */
+	readonly context?: ContractErrorContext
+}
+
+/** Owned result of reading one array through its own-index lens. */
+export interface ArrayRead {
+	/** Frozen entries in index order; a sparse position carries `undefined`. */
+	readonly entries: readonly unknown[]
+	/** Whether every index from zero through length minus one was present. */
+	readonly dense: boolean
+}
+
 // === Guards
 
 /** A runtime type guard: returns `true` when `value` satisfies `T` and narrows it. */
