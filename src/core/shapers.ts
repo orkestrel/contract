@@ -68,19 +68,26 @@ import {
  * ```
  */
 export function stringShape(options?: StringShapeOptions): StringShape {
-	const input: unknown = options
-	if (input !== undefined && !isRecord(input)) {
-		throw new ContractError('stringShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'string' },
-		})
-	}
-	const snapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	const snapshot = attempt(() => {
+		if (options === undefined) return undefined
+		Reflect.get(options, 'description')
+		Reflect.has(options, 'description')
+		Reflect.getOwnPropertyDescriptor(options, 'description')
+		Reflect.ownKeys(options)
+		return { ...options }
+	})
 	if (!snapshot.success) {
 		throw new ContractError('stringShape: options could not be read', {
 			code: 'structure',
 			context: { shape: 'string' },
 			cause: snapshot.error,
+		})
+	}
+	const input: unknown = options
+	if (input !== undefined && !isRecord(input)) {
+		throw new ContractError('stringShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'string' },
 		})
 	}
 	const safe = snapshot.value
@@ -158,19 +165,26 @@ export function stringShape(options?: StringShapeOptions): StringShape {
  * ```
  */
 export function numberShape(options?: NumberShapeOptions): NumberShape {
-	const input: unknown = options
-	if (input !== undefined && !isRecord(input)) {
-		throw new ContractError('numberShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'number' },
-		})
-	}
-	const snapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	const snapshot = attempt(() => {
+		if (options === undefined) return undefined
+		Reflect.get(options, 'description')
+		Reflect.has(options, 'description')
+		Reflect.getOwnPropertyDescriptor(options, 'description')
+		Reflect.ownKeys(options)
+		return { ...options }
+	})
 	if (!snapshot.success) {
 		throw new ContractError('numberShape: options could not be read', {
 			code: 'structure',
 			context: { shape: 'number' },
 			cause: snapshot.error,
+		})
+	}
+	const input: unknown = options
+	if (input !== undefined && !isRecord(input)) {
+		throw new ContractError('numberShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'number' },
 		})
 	}
 	const safe = snapshot.value
@@ -210,19 +224,26 @@ export function numberShape(options?: NumberShapeOptions): NumberShape {
  * @throws {ContractError} When a present bound is not finite
  */
 export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): NumberShape {
-	const input: unknown = options
-	if (input !== undefined && !isRecord(input)) {
-		throw new ContractError('integerShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'integer' },
-		})
-	}
-	const snapshot = attempt(() => (options === undefined ? {} : { ...options }))
+	const snapshot = attempt(() => {
+		if (options === undefined) return {}
+		Reflect.get(options, 'description')
+		Reflect.has(options, 'description')
+		Reflect.getOwnPropertyDescriptor(options, 'description')
+		Reflect.ownKeys(options)
+		return { ...options }
+	})
 	if (!snapshot.success) {
 		throw new ContractError('integerShape: options could not be read', {
 			code: 'structure',
 			context: { shape: 'integer' },
 			cause: snapshot.error,
+		})
+	}
+	const input: unknown = options
+	if (input !== undefined && !isRecord(input)) {
+		throw new ContractError('integerShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'integer' },
 		})
 	}
 	return numberShape({ ...snapshot.value, integer: true })
@@ -240,19 +261,26 @@ export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): Num
  * ```
  */
 export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
-	const input: unknown = options
-	if (input !== undefined && !isRecord(input)) {
-		throw new ContractError('booleanShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'boolean' },
-		})
-	}
-	const snapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	const snapshot = attempt(() => {
+		if (options === undefined) return undefined
+		Reflect.get(options, 'description')
+		Reflect.has(options, 'description')
+		Reflect.getOwnPropertyDescriptor(options, 'description')
+		Reflect.ownKeys(options)
+		return { ...options }
+	})
 	if (!snapshot.success) {
 		throw new ContractError('booleanShape: options could not be read', {
 			code: 'structure',
 			context: { shape: 'boolean' },
 			cause: snapshot.error,
+		})
+	}
+	const input: unknown = options
+	if (input !== undefined && !isRecord(input)) {
+		throw new ContractError('booleanShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'boolean' },
 		})
 	}
 	const safe = snapshot.value
@@ -276,19 +304,26 @@ export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
  * ```
  */
 export function nullShape(options?: NullShapeOptions): NullShape {
-	const input: unknown = options
-	if (input !== undefined && !isRecord(input)) {
-		throw new ContractError('nullShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'null' },
-		})
-	}
-	const snapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	const snapshot = attempt(() => {
+		if (options === undefined) return undefined
+		Reflect.get(options, 'description')
+		Reflect.has(options, 'description')
+		Reflect.getOwnPropertyDescriptor(options, 'description')
+		Reflect.ownKeys(options)
+		return { ...options }
+	})
 	if (!snapshot.success) {
 		throw new ContractError('nullShape: options could not be read', {
 			code: 'structure',
 			context: { shape: 'null' },
 			cause: snapshot.error,
+		})
+	}
+	const input: unknown = options
+	if (input !== undefined && !isRecord(input)) {
+		throw new ContractError('nullShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'null' },
 		})
 	}
 	const safe = snapshot.value
@@ -332,19 +367,26 @@ export function literalShape(
 			...(!array.success ? { cause: array.error } : {}),
 		})
 	}
-	const optionInput: unknown = options
-	if (optionInput !== undefined && !isRecord(optionInput)) {
-		throw new ContractError('literalShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'literal' },
-		})
-	}
-	const optionSnapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	const optionSnapshot = attempt(() => {
+		if (options === undefined) return undefined
+		Reflect.get(options, 'description')
+		Reflect.has(options, 'description')
+		Reflect.getOwnPropertyDescriptor(options, 'description')
+		Reflect.ownKeys(options)
+		return { ...options }
+	})
 	if (!optionSnapshot.success) {
 		throw new ContractError('literalShape: options could not be read', {
 			code: 'structure',
 			context: { shape: 'literal' },
 			cause: optionSnapshot.error,
+		})
+	}
+	const optionInput: unknown = options
+	if (optionInput !== undefined && !isRecord(optionInput)) {
+		throw new ContractError('literalShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'literal' },
 		})
 	}
 	const safe = optionSnapshot.value
@@ -387,19 +429,26 @@ export function arrayShape<S extends ContractShape>(
 	items: S,
 	options?: ArrayShapeOptions,
 ): ArrayShape<S> {
-	const input: unknown = options
-	if (input !== undefined && !isRecord(input)) {
-		throw new ContractError('arrayShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'array' },
-		})
-	}
-	const snapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	const snapshot = attempt(() => {
+		if (options === undefined) return undefined
+		Reflect.get(options, 'description')
+		Reflect.has(options, 'description')
+		Reflect.getOwnPropertyDescriptor(options, 'description')
+		Reflect.ownKeys(options)
+		return { ...options }
+	})
 	if (!snapshot.success) {
 		throw new ContractError('arrayShape: options could not be read', {
 			code: 'structure',
 			context: { shape: 'array' },
 			cause: snapshot.error,
+		})
+	}
+	const input: unknown = options
+	if (input !== undefined && !isRecord(input)) {
+		throw new ContractError('arrayShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'array' },
 		})
 	}
 	const safe = snapshot.value
@@ -466,19 +515,26 @@ export function objectShape<
 			context: { path: ['properties'], shape: 'object' },
 		})
 	}
-	const optionInput: unknown = options
-	if (optionInput !== undefined && !isRecord(optionInput)) {
-		throw new ContractError('objectShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'object' },
-		})
-	}
-	const optionSnapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	const optionSnapshot = attempt(() => {
+		if (options === undefined) return undefined
+		Reflect.get(options, 'description')
+		Reflect.has(options, 'description')
+		Reflect.getOwnPropertyDescriptor(options, 'description')
+		Reflect.ownKeys(options)
+		return { ...options }
+	})
 	if (!optionSnapshot.success) {
 		throw new ContractError('objectShape: options could not be read', {
 			code: 'structure',
 			context: { shape: 'object' },
 			cause: optionSnapshot.error,
+		})
+	}
+	const optionInput: unknown = options
+	if (optionInput !== undefined && !isRecord(optionInput)) {
+		throw new ContractError('objectShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'object' },
 		})
 	}
 	const safe = optionSnapshot.value
@@ -542,7 +598,14 @@ export function recordShape<S extends ContractShape>(
 			context: { path: ['additionalProperties'], shape: 'object' },
 		})
 	}
-	const snapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	const snapshot = attempt(() => {
+		if (options === undefined) return undefined
+		Reflect.get(options, 'description')
+		Reflect.has(options, 'description')
+		Reflect.getOwnPropertyDescriptor(options, 'description')
+		Reflect.ownKeys(options)
+		return { ...options }
+	})
 	if (!snapshot.success) {
 		throw new ContractError('recordShape: options could not be read', {
 			code: 'structure',
@@ -690,19 +753,26 @@ export function nullableShape<S extends ContractShape>(inner: S): NullableShape<
  * ```
  */
 export function jsonShape(options?: JSONShapeOptions): JSONShape {
-	const input: unknown = options
-	if (input !== undefined && !isRecord(input)) {
-		throw new ContractError('jsonShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'json' },
-		})
-	}
-	const snapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	const snapshot = attempt(() => {
+		if (options === undefined) return undefined
+		Reflect.get(options, 'description')
+		Reflect.has(options, 'description')
+		Reflect.getOwnPropertyDescriptor(options, 'description')
+		Reflect.ownKeys(options)
+		return { ...options }
+	})
 	if (!snapshot.success) {
 		throw new ContractError('jsonShape: options could not be read', {
 			code: 'structure',
 			context: { shape: 'json' },
 			cause: snapshot.error,
+		})
+	}
+	const input: unknown = options
+	if (input !== undefined && !isRecord(input)) {
+		throw new ContractError('jsonShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'json' },
 		})
 	}
 	const safe = snapshot.value

@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import * as ts from 'typescript'
 import type {
 	ContractShape,
 	Infer,
@@ -58,6 +61,11 @@ import {
 	createUnstableArray,
 	SOUNDNESS_SAMPLE,
 } from '../../setup.js'
+
+const shaperSource = readFileSync(
+	fileURLToPath(new URL('../../../src/core/shapers.ts', import.meta.url)),
+	'utf8',
+)
 
 type BuilderRole = 'options' | 'shape' | 'properties' | 'values' | 'schema'
 
@@ -354,6 +362,138 @@ describe('shape builders', () => {
 		const negative = attempt(() => Reflect.apply(stringShape, undefined, [null]))
 		expect(control.success).toBe(true)
 		expect(negative.success).toBe(false)
+	})
+
+	it('generates every builder options position across every hostile read trap', () => {
+		const builderEnd = shaperSource.indexOf('// === Schema inversion')
+		expect(builderEnd).toBeGreaterThan(0)
+		const source = ts.createSourceFile(
+			'shapers.ts',
+			shaperSource.slice(0, builderEnd),
+			ts.ScriptTarget.Latest,
+			true,
+			ts.ScriptKind.TS,
+		)
+		const builders = new Map<string, Set<number>>()
+		for (const statement of source.statements) {
+			if (!ts.isFunctionDeclaration(statement) || statement.name === undefined) continue
+			const exported = statement.modifiers?.some(
+				(modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+			)
+			if (exported !== true) continue
+			const name = statement.name.text
+			const positions = builders.get(name) ?? new Set<number>()
+			for (const [position, parameter] of statement.parameters.entries()) {
+				if (ts.isIdentifier(parameter.name) && parameter.name.text === 'options') {
+					positions.add(position)
+				}
+			}
+			builders.set(name, positions)
+		}
+
+		const registered = new Set(BUILDER_CASES.map((builder) => builder.name))
+		expect(builders.size).toBe(15)
+		expect([...registered].sort()).toEqual([...builders.keys()].sort())
+		for (const builder of BUILDER_CASES) {
+			const expected = [...(builders.get(builder.name) ?? [])].sort()
+			const actual = Object.entries(builder.positions)
+				.filter(([, role]) => role === 'options')
+				.map(([position]) => Number(position))
+				.sort()
+			expect(actual, `${builder.name} options positions`).toEqual(expected)
+		}
+
+		const traps = {
+			get: new Proxy(
+				{},
+				{
+					get() {
+						throw new Error('hostile get')
+					},
+				},
+			),
+			ownKeys: new Proxy(
+				{},
+				{
+					ownKeys() {
+						throw new Error('hostile ownKeys')
+					},
+				},
+			),
+			getOwnPropertyDescriptor: new Proxy(
+				{},
+				{
+					getOwnPropertyDescriptor() {
+						throw new Error('hostile descriptor')
+					},
+				},
+			),
+			has: new Proxy(
+				{},
+				{
+					has() {
+						throw new Error('hostile has')
+					},
+				},
+			),
+			revoked: createRevokedProxy(),
+		} satisfies Readonly<
+			Record<'get' | 'ownKeys' | 'getOwnPropertyDescriptor' | 'has' | 'revoked', object>
+		>
+
+		const probes = new Map<string, Result<unknown>>()
+		const controls = new Map<string, Result<unknown>>()
+		for (const builder of BUILDER_CASES) {
+			const base = builder.valid[0] ?? []
+			for (const position of builders.get(builder.name) ?? []) {
+				const controlArgs = [...base]
+				controlArgs[position] = {}
+				controls.set(
+					`${builder.name}[${position}]`,
+					attempt(() => builder.run(controlArgs)),
+				)
+				for (const [trap, options] of Object.entries(traps)) {
+					const args = [...base]
+					args[position] = options
+					probes.set(
+						`${builder.name}[${position}]:${trap}`,
+						attempt(() => builder.run(args)),
+					)
+				}
+			}
+		}
+
+		const expected = new Set<string>()
+		for (const [builder, positions] of builders) {
+			for (const position of positions) {
+				for (const trap of Object.keys(traps)) expected.add(`${builder}[${position}]:${trap}`)
+			}
+		}
+		expect(controls.size).toBe(10)
+		expect(probes.size).toBe(50)
+		expect([...probes.keys()].sort()).toEqual([...expected].sort())
+
+		const missing = new Set(probes.keys())
+		const first = missing.values().next().value
+		if (first !== undefined) missing.delete(first)
+		expect([...missing].sort()).not.toEqual([...expected].sort())
+
+		for (const [entry, outcome] of controls) {
+			expect(outcome.success, `${entry} rejected empty options`).toBe(true)
+		}
+		for (const [entry, outcome] of probes) {
+			expect(outcome.success, `${entry} accepted hostile options`).toBe(false)
+			if (outcome.success) continue
+			expect(isContractError(outcome.error), `${entry} leaked a raw throw`).toBe(true)
+			if (!isContractError(outcome.error)) continue
+			const separator = entry.indexOf('[')
+			const builder = entry.slice(0, separator)
+			expect(outcome.error.code).toBe('structure')
+			expect(outcome.error.message).toBe(`${builder}: options could not be read`)
+		}
+
+		const empty = attempt(() => stringShape({}))
+		expect(empty).toMatchObject({ success: true, value: { type: 'string' } })
 	})
 
 	it('rejects the audit malformed-argument corpus with coded errors', () => {
