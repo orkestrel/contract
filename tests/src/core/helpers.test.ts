@@ -16,6 +16,7 @@ import {
 	matchesJSONValue,
 	objectShape,
 	readOptions,
+	readValue,
 	resolveField,
 	schemaToObject,
 	schemaToParameters,
@@ -93,6 +94,19 @@ describe('attempt', () => {
 				throw new Error('anything')
 			}),
 		).not.toThrow()
+	})
+})
+
+describe('readValue', () => {
+	it('returns a successful read and gives every failed read one code and message shape', () => {
+		expect(readValue(() => 42, 'example')).toBe(42)
+		const error = captureContractError(() =>
+			readValue(() => {
+				throw new Error('hostile read')
+			}, 'example'),
+		)
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('example: value could not be read')
 	})
 })
 
@@ -356,6 +370,12 @@ describe('schemaToParameters', () => {
 		const notRecord: JSONSchema = new FakeSchema()
 		expect(schemaToParameters(notRecord)).toBeUndefined()
 	})
+
+	it('refuses an unreadable record schema with the shared coded read error', () => {
+		const error = captureContractError(() => schemaToParameters(createThrowingGetter()))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('schemaToParameters: value could not be read')
+	})
 })
 
 describe('schemaToObject', () => {
@@ -367,6 +387,20 @@ describe('schemaToObject', () => {
 			additionalProperties: false,
 		}
 		expect(schemaToObject(schema)).toBe(schema)
+	})
+
+	it('refuses an unreadable schema root with the shared coded read error', () => {
+		const hostile = new Proxy<JSONSchema>(
+			{},
+			{
+				get() {
+					throw new Error('hostile read')
+				},
+			},
+		)
+		const error = captureContractError(() => schemaToObject(hostile))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('schemaToObject: value could not be read')
 	})
 
 	it('wraps a string-rooted schema as a single required "value" property', () => {

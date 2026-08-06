@@ -17,7 +17,7 @@ import {
 	isRecord,
 	isString,
 } from './validators.js'
-import { attempt, enumerableKeys, sanitizeBudget } from './helpers.js'
+import { attempt, enumerableKeys, readValue, sanitizeBudget } from './helpers.js'
 
 // The inferers walk an UNKNOWN, possibly adversarial runtime value (or a set
 // of example values) and emit a JSONSchema — the reverse direction of
@@ -25,7 +25,8 @@ import { attempt, enumerableKeys, sanitizeBudget } from './helpers.js'
 // ContractShape tree. Recursion here is runtime-only and bounded on three
 // axes: a WeakSet of ancestor objects/arrays (cycle safety), a decrementing
 // depth budget (INFER_DEPTH_LIMIT default), and a per-container sampling cap
-// (INFER_BREADTH_LIMIT default) — every branch stays total, per AGENTS §14.
+// (INFER_BREADTH_LIMIT default). Readable unsupported values widen only where
+// documented; failed traversal is a coded refusal, never a permissive schema.
 
 // === Canonicalization
 
@@ -94,6 +95,7 @@ export function canonicalizeValue(value: unknown, ancestors: WeakSet<object>): s
 		ancestors.delete(value)
 		return `{${parts.join(',')}}`
 	}
+	if (typeof value === 'bigint') return undefined
 	// `JSON.stringify` returns `undefined` (never a string) for `undefined`, a
 	// function, and a symbol — exactly the values with no JSON encoding.
 	return JSON.stringify(value)
@@ -110,8 +112,8 @@ export function canonicalizeValue(value: unknown, ancestors: WeakSet<object>): s
  * `JSONSchema` fragments built independently always canonicalize to the same
  * string. Pure host-independent ECMAScript with no environment-specific imports.
  *
- * TOTAL: it NEVER throws, for any input. It returns `undefined` — never a
- * partial or invalid encoding — for every value JSON cannot faithfully encode:
+ * For READABLE input it returns `undefined` — never a partial or invalid
+ * encoding — for every value JSON cannot faithfully encode:
  *
  * - `undefined` itself, a function, a symbol, or an array hole (JSON encodes
  *   none of them), at the top level or anywhere inside a container;
@@ -119,8 +121,10 @@ export function canonicalizeValue(value: unknown, ancestors: WeakSet<object>): s
  * - cyclic input, tracked with the same ancestor-{@link WeakSet} discipline
  *   {@link inferArray} / {@link inferObject} use, so a shared (non-cyclic)
  *   reference reached twice through different paths still encodes;
- * - hostile traversal — a throwing own-getter, a hostile `ownKeys` trap, or a
- *   revoked `Proxy` anywhere in the value — contained via {@link attempt}.
+ * A hostile traversal is categorically different: a throwing own-getter,
+ * hostile `ownKeys` trap, or revoked `Proxy` throws a `structure`
+ * {@link ContractError} through {@link readValue}. A caller can therefore
+ * distinguish "not JSON-encodable" from "could not be read".
  *
  * A caller therefore treats `undefined` as "this value has no canonical key",
  * never as an encoding: see {@link unifySchemas} (an un-keyed member cannot
@@ -131,6 +135,7 @@ export function canonicalizeValue(value: unknown, ancestors: WeakSet<object>): s
  *                nested piece of one)
  * @returns A deterministic string encoding of `value`, or `undefined` when JSON
  *          cannot encode it
+ * @throws {ContractError} When the value cannot be read
  *
  * @example
  * ```ts
@@ -142,8 +147,7 @@ export function canonicalizeValue(value: unknown, ancestors: WeakSet<object>): s
  * ```
  */
 export function canonicalStringify(value: unknown): string | undefined {
-	const outcome = attempt(() => canonicalizeValue(value, new WeakSet()))
-	return outcome.success ? outcome.value : undefined
+	return readValue(() => canonicalizeValue(value, new WeakSet()), 'canonicalStringify')
 }
 
 /**
@@ -158,13 +162,14 @@ export function canonicalStringify(value: unknown): string | undefined {
  * `{ anyOf: [...] }`, sorted by their canonical key for deterministic output.
  * An empty input list returns the empty accept-anything schema `{}`.
  *
- * A member {@link canonicalStringify} cannot key — a cyclic, hostile, or
+ * A readable member {@link canonicalStringify} cannot key — a cyclic or
  * otherwise JSON-inexpressible fragment, which only a direct caller can supply
  * since the inferers always build plain encodable fragments — has NO
  * de-duplication key, so it can participate in neither de-duplication nor the
  * canonical-key ordering. It is KEPT (dropping a variant would narrow the
  * union, and unification only ever widens), appended in input order after the
- * sorted keyed members, so the result stays total and deterministic.
+ * sorted keyed members. A failed member read propagates the canonicalizer's
+ * coded refusal instead of participating in the union.
  *
  * @param schemas - The schemas to unify
  * @returns The unified schema
@@ -385,7 +390,8 @@ export function inferPrimitiveEnum(
  * {@link inferArray} / {@link inferObject}.
  *
  * @remarks
- * Total: never throws, and terminates on cyclic input via `visited`. Leaf
+ * Terminates on cyclic readable input via `visited`; failed traversal is
+ * refused by the containing public reader. Leaf
  * classification order: `null`, boolean, integer (`Number.isInteger`
  * semantics — `-0` counts), finite non-integer number, string (gaining a
  * `format` keyword when `format` is on and {@link stringToFormat} matches),
@@ -412,6 +418,7 @@ export function inferPrimitiveEnum(
  * @param memo - A per-call `(object, remaining depth) → schema` cache guarding
  *               against exponential re-inference of a shared-reference DAG
  * @returns The inferred schema fragment for `value`
+ * @throws {ContractError} When a traversed container cannot be read
  *
  * @example
  * ```ts
@@ -464,12 +471,11 @@ export function inferValue(
  * as a hole that would otherwise reach {@link unifySchemas} as `undefined`.
  *
  * ALL reads of `value` — including its `length` — happen inside
- * {@link attempt}: a hostile `length` getter (e.g. a Proxy-over-array whose
- * `get` trap throws) is exactly as contained as a throwing own-getter element
- * or a Proxy-over-array element access, and cannot escape as a thrown error.
- * On failure — or when the sampled/classified list ends up empty — this
- * returns `{ type: 'array' }` (no `items`), since `value` is still known to
- * be an array, mirroring the empty-array emission. A same-object
+ * {@link attempt}, then cross {@link readValue}: a hostile `length` getter,
+ * throwing own-getter element, or hostile element access raises the shared
+ * coded refusal instead of returning the empty-array schema. A genuinely
+ * empty sampled/classified list still returns `{ type: 'array' }` with no
+ * `items`. A same-object
  * re-inference at the same remaining `depth` is served from `memo` instead
  * of recomputing (guards a shared-reference DAG against exponential blowup).
  *
@@ -482,6 +488,7 @@ export function inferValue(
  * @param memo - A per-call `(object, remaining depth) → schema` cache guarding
  *               against exponential re-inference of a shared-reference DAG
  * @returns The inferred array schema
+ * @throws {ContractError} When the array cannot be read
  *
  * @example
  * ```ts
@@ -514,10 +521,12 @@ export function inferArray(
 		)
 	})
 	visited.delete(value)
+	const sampled = readValue(() => {
+		if (!outcome.success) throw outcome.error
+		return outcome.value
+	}, 'inferArray')
 	const schema: JSONSchema =
-		outcome.success && outcome.value.length > 0
-			? { type: 'array', items: unifySchemas(outcome.value) }
-			: { type: 'array' }
+		sampled.length > 0 ? { type: 'array', items: unifySchemas(sampled) } : { type: 'array' }
 	let depths = memo.get(value)
 	if (!depths) {
 		depths = new Map()
@@ -535,8 +544,9 @@ export function inferArray(
  * Own enumerable string keys via {@link enumerableKeys}, sorted
  * lexicographically for deterministic output, capped at `breadth`. This is the
  * same property view compiled object guards, parsers, and reporters use. Each
- * property value is read through {@link attempt} so a hostile getter cannot
- * escape as a thrown error; a property whose value is `undefined` is DROPPED
+ * property value is read through {@link attempt} and {@link readValue}; a
+ * hostile getter raises the shared coded refusal. A readable property whose
+ * value is `undefined` is DROPPED
  * — JSON encodes no such property (`JSON.stringify({ a: undefined })` is
  * `'{}'`), so it contributes neither a `properties` entry nor a `required`
  * entry. Every other present key is required (single-value mode).
@@ -564,6 +574,7 @@ export function inferArray(
  * @param memo - A per-call `(object, remaining depth) → schema` cache guarding
  *               against exponential re-inference of a shared-reference DAG
  * @returns The inferred object schema
+ * @throws {ContractError} When the record cannot be read
  *
  * @example
  * ```ts
@@ -614,8 +625,11 @@ export function inferObject(
 		return { properties, required, partial: truncated || dropped }
 	})
 	visited.delete(value)
-	if (!outcome.success) return {}
-	const { properties, required, partial } = outcome.value
+	const readable = readValue(() => {
+		if (!outcome.success) throw outcome.error
+		return outcome.value
+	}, 'inferObject')
+	const { properties, required, partial } = readable
 	const schema: JSONSchema = {
 		type: 'object',
 		...(Object.keys(properties).length > 0 ? { properties } : {}),
@@ -636,8 +650,9 @@ export function inferObject(
  * {@link compileSchema}.
  *
  * @remarks
- * Total: never throws, and is cycle/depth/breadth-bounded (see
- * {@link inferValue} / {@link inferArray} / {@link inferObject}). Nested
+ * Cycle/depth/breadth-bounded (see {@link inferValue} / {@link inferArray} /
+ * {@link inferObject}). A failed traversal throws a `structure`
+ * {@link ContractError}; it never becomes `{}` or another permissive schema. Nested
  * objects close to unknown keys (`additionalProperties: false`) by default;
  * pass `closed: false` to open them. `format` (default `false`) opts a
  * string/`Date` leaf into the `format` keyword. Structurally-equal inputs
@@ -657,6 +672,7 @@ export function inferObject(
  * @param value - The value to infer a schema from
  * @param options - Optional `maxDepth` / `maxProperties` / `closed` / `format` bounds
  * @returns The inferred `JSONSchema`
+ * @throws {ContractError} When the value or options cannot be read
  *
  * @example
  * ```ts
@@ -667,11 +683,13 @@ export function inferObject(
  * ```
  */
 export function valueToSchema(value: unknown, options?: ValueToSchemaOptions): JSONSchema {
-	const maxDepth = sanitizeBudget(options?.maxDepth, INFER_DEPTH_LIMIT)
-	const maxProperties = sanitizeBudget(options?.maxProperties, INFER_BREADTH_LIMIT)
-	const closed = options?.closed ?? true
-	const format = options?.format ?? false
-	return inferValue(value, maxDepth, maxProperties, closed, format, new WeakSet(), new WeakMap())
+	return readValue(() => {
+		const maxDepth = sanitizeBudget(options?.maxDepth, INFER_DEPTH_LIMIT)
+		const maxProperties = sanitizeBudget(options?.maxProperties, INFER_BREADTH_LIMIT)
+		const closed = options?.closed ?? true
+		const format = options?.format ?? false
+		return inferValue(value, maxDepth, maxProperties, closed, format, new WeakSet(), new WeakMap())
+	}, 'valueToSchema')
 }
 
 // === Multi-sample inference
@@ -752,18 +770,10 @@ export function inferSamples(
  * cycle back to an ancestor), so termination on cyclic row data relies on
  * the decrementing `depth` budget alone.
  *
- * `additionalProperties` is forced to `true` regardless of `closed` whenever
- * the declared key list stops describing every key the rows carry — the same
- * incomplete-sample-opens-the-schema rule {@link inferObject} applies, so a
- * closed schema never rejects the very rows it was inferred from. That happens
- * three ways: the union of sample keys exceeds `breadth` (truncation); a
- * hostile getter defeats a key's value walk (which drops that key for ALL
- * rows — a deliberate all-or-nothing scope, not a per-row partial failure);
- * or some row carries the key as an own property holding `undefined`, which
- * JSON encodes as no property at all, so the key is dropped rather than
- * declared with a shape that row would fail. When the KEY walk itself fails
- * (a hostile `ownKeys` trap on any row), nothing is known and the whole slot
- * widens to `{}`.
+ * `additionalProperties` is forced to `true` regardless of `closed` when the
+ * key union exceeds `breadth`, or a readable row carries a key as an own
+ * property holding `undefined`. A hostile getter or failed KEY walk throws the
+ * shared coded refusal instead of dropping a key or widening the whole slot.
  *
  * @param samples - The plain-record samples
  * @param depth - Remaining descent budget
@@ -772,6 +782,7 @@ export function inferSamples(
  * @param format - Whether a unanimous string column gains a `format` keyword
  * @param enumOn - Whether a low-cardinality column may emit `enum`
  * @returns The inferred object schema
+ * @throws {ContractError} When a sample row cannot be read
  *
  * @example
  * ```ts
@@ -789,22 +800,21 @@ export function inferRecordSamples(
 	enumOn: boolean,
 ): JSONSchema {
 	if (!(depth > 0)) return {}
-	// Contain the whole key-enumeration walk — a hostile ownKeys trap on any
-	// sample must yield an empty key set for this branch, never throw
-	// (AGENTS §14).
+	// Refuse the whole key-enumeration claim when any row cannot be read.
 	const keySet = new Set<string>()
 	for (const sample of samples) {
-		const sampleKeys = enumerableKeys(sample)
-		if (sampleKeys === undefined) return {}
+		const sampleKeys = readValue(() => {
+			const keys = enumerableKeys(sample)
+			if (keys === undefined) {
+				throw new Error('inferRecordSamples: property enumeration failed')
+			}
+			return keys
+		}, 'inferRecordSamples')
 		for (const key of sampleKeys) keySet.add(key)
 	}
 	const allKeys = [...keySet].sort()
 	const keys = allKeys.slice(0, breadth)
 	const truncated = allKeys.length > breadth
-	// A failed key walk means nothing at all is known about these rows — not even
-	// that they behave like readable objects — so the slot widens to `{}` rather
-	// than claiming `type: 'object'`, whose compiled guard re-enumerates the same
-	// hostile keys and would reject the very rows it was inferred from.
 	// Honest typing: a null-prototype accumulator so a key literally named
 	// '__proto__' becomes an own data key instead of mutating the prototype —
 	// the same pattern compileGuard / compileParser use (compilers.ts).
@@ -816,9 +826,7 @@ export function inferRecordSamples(
 	// sample rows is legitimate data (not a cycle back to an ancestor), so
 	// the decrementing depth budget is the sole termination guarantee here.
 	for (const key of keys) {
-		// Contain the per-sample value read — a hostile getter on any sample
-		// must yield an empty value list for this key, never throw
-		// (AGENTS §14).
+		// Refuse the whole per-key claim when any sample value cannot be read.
 		const valuesOutcome = attempt(() => {
 			const values: unknown[] = []
 			let dropped = false
@@ -832,11 +840,11 @@ export function inferRecordSamples(
 			}
 			return { values, dropped }
 		})
-		if (!valuesOutcome.success) {
-			partial = true
-			continue
-		}
-		const { values, dropped } = valuesOutcome.value
+		const readable = readValue(() => {
+			if (!valuesOutcome.success) throw valuesOutcome.error
+			return valuesOutcome.value
+		}, 'inferRecordSamples')
+		const { values, dropped } = readable
 		if (dropped) {
 			partial = true
 			continue
@@ -876,6 +884,7 @@ export function inferRecordSamples(
  * @param samples - The example values to infer a schema from
  * @param options - Optional `maxDepth` / `maxProperties` / `closed` / `format` / `enum` bounds
  * @returns The inferred `JSONSchema`
+ * @throws {ContractError} When the samples or options cannot be read
  *
  * @example
  * ```ts
@@ -889,10 +898,12 @@ export function samplesToSchema(
 	samples: readonly unknown[],
 	options?: ValueToSchemaOptions,
 ): JSONSchema {
-	const maxDepth = sanitizeBudget(options?.maxDepth, INFER_DEPTH_LIMIT)
-	const maxProperties = sanitizeBudget(options?.maxProperties, INFER_BREADTH_LIMIT)
-	const closed = options?.closed ?? true
-	const format = options?.format ?? false
-	const enumOn = options?.enum ?? false
-	return inferSamples(samples, maxDepth, maxProperties, closed, format, enumOn)
+	return readValue(() => {
+		const maxDepth = sanitizeBudget(options?.maxDepth, INFER_DEPTH_LIMIT)
+		const maxProperties = sanitizeBudget(options?.maxProperties, INFER_BREADTH_LIMIT)
+		const closed = options?.closed ?? true
+		const format = options?.format ?? false
+		const enumOn = options?.enum ?? false
+		return inferSamples(samples, maxDepth, maxProperties, closed, format, enumOn)
+	}, 'samplesToSchema')
 }

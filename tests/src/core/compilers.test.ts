@@ -2162,7 +2162,8 @@ describe('compileGuard', () => {
 		expect(guard({ constructor: 'x' })).toBe(false)
 		expect(parse({ constructor: 'x' })).toBeUndefined()
 
-		// A throwing getter must yield `false` / `undefined`, never throw.
+		// A throwing getter remains false for the total guard, while the parser
+		// distinguishes unreadability from an honest invalid result.
 		const hostile: Record<string, unknown> = {}
 		Object.defineProperty(hostile, 'bad', {
 			enumerable: true,
@@ -2172,8 +2173,9 @@ describe('compileGuard', () => {
 		})
 		expect(() => guard(hostile)).not.toThrow()
 		expect(guard(hostile)).toBe(false)
-		expect(() => parse(hostile)).not.toThrow()
-		expect(parse(hostile)).toBeUndefined()
+		const error = captureContractError(() => parse(hostile))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('parseRecord: value could not be read')
 	})
 
 	it('an open object guard/parse agree that a __proto__ own key round-trips faithfully', () => {
@@ -2335,7 +2337,12 @@ describe('compileParser', () => {
 			const parse = compileParser(shape)
 			const guard = compileGuard(shape)
 			for (let index = 0; index < SOUNDNESS_SAMPLE.length; index += 1) {
-				const parsed = parse(SOUNDNESS_SAMPLE[index])
+				const outcome = attempt(() => parse(SOUNDNESS_SAMPLE[index]))
+				if (!outcome.success) {
+					if (!isContractError(outcome.error)) violations.push(`raw@shape${shapeIndex}@${index}`)
+					continue
+				}
+				const parsed = outcome.value
 				if (parsed !== undefined && !guard(parsed)) violations.push(`shape${shapeIndex}@${index}`)
 			}
 		}

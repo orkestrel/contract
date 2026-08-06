@@ -1315,9 +1315,15 @@ describe('schemaToShape — round-trip law: compileGuard(schemaToShape(valueToSc
 		expect(roundTrips(createNonEnumerableRecord('hidden', 'value'))).toEqual([true, true])
 	})
 
-	it('round-trips hostile and cyclic hosts (throwing getter, hostile ownKeys, cyclic record/array)', () => {
-		expect(roundTrips(createThrowingGetter())).toEqual([true, true])
-		expect(roundTrips(createHostileKeys())).toEqual([true, true])
+	it('refuses unreadable hosts and still round-trips readable cycles', () => {
+		for (const value of [createThrowingGetter(), createHostileKeys()]) {
+			const fromValue = captureContractError(() => valueToSchema(value))
+			const fromSamples = captureContractError(() => samplesToSchema([value]))
+			expect(fromValue.code).toBe('structure')
+			expect(fromValue.message).toBe('valueToSchema: value could not be read')
+			expect(fromSamples.code).toBe('structure')
+			expect(fromSamples.message).toBe('samplesToSchema: value could not be read')
+		}
 		expect(roundTrips(buildCyclicRecord())).toEqual([true, true])
 		expect(roundTrips(buildCyclicArray())).toEqual([true, true])
 	})
@@ -1341,10 +1347,16 @@ describe('schemaToShape — round-trip law: compileGuard(schemaToShape(valueToSc
 	// sample. The exceptions are asserted EXPLICITLY (rather than filtered out of
 	// the corpus) so a NEW dishonesty cannot hide behind them — each one is a
 	// documented, deliberate limit of the inference direction, not an oversight.
-	it('accepts every SOUNDNESS_SAMPLE member except the documented absence and Date-serialization limits', () => {
+	it('accepts every readable SOUNDNESS_SAMPLE member except the documented limits', () => {
 		const rejected: unknown[] = []
+		const refused: string[] = []
 		for (const value of SOUNDNESS_SAMPLE) {
-			if (!compileGuard(schemaToShape(valueToSchema(value)))(value)) rejected.push(value)
+			const outcome = attempt(() => valueToSchema(value))
+			if (!outcome.success) {
+				refused.push(isContractError(outcome.error) ? outcome.error.message : 'raw')
+				continue
+			}
+			if (!compileGuard(schemaToShape(outcome.value))(value)) rejected.push(value)
 		}
 		// In corpus order: `undefined` is absence, not a value — no compiled guard
 		// accepts it (`rawShape` reserves it as the parser failure sentinel); a
@@ -1355,17 +1367,31 @@ describe('schemaToShape — round-trip law: compileGuard(schemaToShape(valueToSc
 		expect(rejected[0]).toBeUndefined()
 		expect(rejected[1]).toBeInstanceOf(Date)
 		expect(rejected[2]).toEqual(buildSparseArray())
+		expect(refused).toEqual([
+			'valueToSchema: value could not be read',
+			'valueToSchema: value could not be read',
+		])
 	})
 
-	it('accepts every SOUNDNESS_SAMPLE member for a samplesToSchema-derived guard on the same terms', () => {
+	it('accepts every readable SOUNDNESS_SAMPLE member for a samples-derived guard', () => {
 		const rejected: unknown[] = []
+		const refused: string[] = []
 		for (const value of SOUNDNESS_SAMPLE) {
-			if (!compileGuard(schemaToShape(samplesToSchema([value])))(value)) rejected.push(value)
+			const outcome = attempt(() => samplesToSchema([value]))
+			if (!outcome.success) {
+				refused.push(isContractError(outcome.error) ? outcome.error.message : 'raw')
+				continue
+			}
+			if (!compileGuard(schemaToShape(outcome.value))(value)) rejected.push(value)
 		}
 		expect(rejected).toHaveLength(3)
 		expect(rejected[0]).toBeUndefined()
 		expect(rejected[1]).toBeInstanceOf(Date)
 		expect(rejected[2]).toEqual(buildSparseArray())
+		expect(refused).toEqual([
+			'samplesToSchema: value could not be read',
+			'samplesToSchema: value could not be read',
+		])
 	})
 })
 

@@ -9,6 +9,7 @@ import {
 	INFER_BREADTH_LIMIT,
 	INFER_DEPTH_LIMIT,
 	INFER_ENUM_LIMIT,
+	isContractError,
 	isValidISOInstant,
 	literalShape,
 	objectShape,
@@ -25,6 +26,8 @@ import {
 	buildCyclicArray,
 	buildCyclicRecord,
 	buildSparseArray,
+	captureContractError,
+	createClassInstance,
 	createHostileKeys,
 	createThrowingGetter,
 	SOUNDNESS_SAMPLE,
@@ -117,6 +120,29 @@ describe('valueToSchema — objects', () => {
 		expect(valueToSchema({})).toEqual({ type: 'object', additionalProperties: false })
 	})
 
+	it('preserves readable empty, frozen, null-prototype, inherited, and class-instance controls', () => {
+		expect(valueToSchema(Object.freeze({ a: 1 }))).toEqual(valueToSchema({ a: 1 }))
+		const nullPrototype = Object.assign(Object.create(null), { a: 1 })
+		expect(valueToSchema(nullPrototype)).toEqual(valueToSchema({ a: 1 }))
+		const inherited = Object.create({ inherited: 1 })
+		expect(valueToSchema(inherited)).toEqual({})
+		expect(valueToSchema(createClassInstance())).toEqual({})
+	})
+
+	it('refuses the exact advertised-key throwing-read probe instead of inferring {}', () => {
+		const hostile = new Proxy(
+			{ a: 1 },
+			{
+				get() {
+					throw new Error('hostile read')
+				},
+			},
+		)
+		const error = captureContractError(() => valueToSchema(hostile))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('valueToSchema: value could not be read')
+	})
+
 	it('infers properties/required/additionalProperties, matching compileSchema round-trip parity', () => {
 		const shape = objectShape({
 			age: integerShape(),
@@ -185,7 +211,7 @@ describe('valueToSchema — hostile input', () => {
 		expect(Object.keys(schema.properties ?? {}).sort()).toEqual([...(schema.required ?? [])].sort())
 	})
 
-	it('is total when Object.keys throws (hostile ownKeys trap)', () => {
+	it('refuses when Object.keys throws (hostile ownKeys trap)', () => {
 		const hostile = new Proxy(
 			{},
 			{
@@ -194,9 +220,9 @@ describe('valueToSchema — hostile input', () => {
 				},
 			},
 		)
-		expect(() => valueToSchema(hostile)).not.toThrow()
-		const schema = valueToSchema(hostile)
-		expect(typeof schema).toBe('object')
+		const error = captureContractError(() => valueToSchema(hostile))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('valueToSchema: value could not be read')
 	})
 })
 
@@ -273,7 +299,7 @@ describe('samplesToSchema — records', () => {
 		expect(Object.keys(schema.properties ?? {}).sort()).toEqual([...(schema.required ?? [])].sort())
 	})
 
-	it('is total when a sample row throws on key enumeration (hostile ownKeys trap)', () => {
+	it('refuses when a sample row throws on key enumeration (hostile ownKeys trap)', () => {
 		const hostile = new Proxy(
 			{},
 			{
@@ -282,12 +308,9 @@ describe('samplesToSchema — records', () => {
 				},
 			},
 		)
-		expect(() => samplesToSchema([hostile])).not.toThrow()
-		// A failed key walk knows nothing about the rows — not even that they
-		// enumerate — so the slot widens to {} instead of claiming `type: 'object'`,
-		// whose compiled guard would re-enumerate the same hostile keys and reject
-		// the very row it was inferred from.
-		expect(samplesToSchema([hostile])).toEqual({})
+		const error = captureContractError(() => samplesToSchema([hostile]))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('samplesToSchema: value could not be read')
 	})
 
 	it('terminates on a cyclic sample row, bounded by depth alone', () => {
@@ -583,7 +606,7 @@ describe('determinism — format and enum resolution across insertion order', ()
 })
 
 describe('valueToSchema — hostile input with format on', () => {
-	it('is total when Object.keys throws (hostile ownKeys trap), format enabled', () => {
+	it('refuses when Object.keys throws (hostile ownKeys trap), format enabled', () => {
 		const hostile = new Proxy(
 			{},
 			{
@@ -592,7 +615,9 @@ describe('valueToSchema — hostile input with format on', () => {
 				},
 			},
 		)
-		expect(() => valueToSchema(hostile, { format: true })).not.toThrow()
+		const error = captureContractError(() => valueToSchema(hostile, { format: true }))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('valueToSchema: value could not be read')
 	})
 
 	it('does not drop an own "__proto__" key with format enabled', () => {
@@ -610,7 +635,7 @@ describe('valueToSchema — hostile input with format on', () => {
 })
 
 describe('samplesToSchema — hostile input with enum/format on', () => {
-	it('is total when a sample row throws on key enumeration (hostile ownKeys trap)', () => {
+	it('refuses when a sample row throws on key enumeration (hostile ownKeys trap)', () => {
 		const hostile = new Proxy(
 			{},
 			{
@@ -619,7 +644,11 @@ describe('samplesToSchema — hostile input with enum/format on', () => {
 				},
 			},
 		)
-		expect(() => samplesToSchema([hostile], { enum: true, format: true })).not.toThrow()
+		const error = captureContractError(() =>
+			samplesToSchema([hostile], { enum: true, format: true }),
+		)
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('samplesToSchema: value could not be read')
 	})
 
 	it('terminates on a cyclic sample row with enum/format enabled', () => {
@@ -629,8 +658,8 @@ describe('samplesToSchema — hostile input with enum/format on', () => {
 	})
 })
 
-describe('inferArray — hostile own-getter / Proxy-over-array totality (C1)', () => {
-	it('does not throw when a throwing own-getter sits at array index 0', () => {
+describe('inferArray — hostile own-getter / Proxy-over-array refusal (C1)', () => {
+	it('refuses when a throwing own-getter sits at array index 0', () => {
 		const hostile: unknown[] = [1, 2, 3]
 		Object.defineProperty(hostile, 0, {
 			get() {
@@ -639,22 +668,24 @@ describe('inferArray — hostile own-getter / Proxy-over-array totality (C1)', (
 			enumerable: true,
 			configurable: true,
 		})
-		expect(() => valueToSchema(hostile)).not.toThrow()
-		expect(valueToSchema(hostile)).toEqual({ type: 'array' })
+		const error = captureContractError(() => valueToSchema(hostile))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('valueToSchema: value could not be read')
 	})
 
-	it('does not throw for a Proxy-over-array (isArray === Array.isArray)', () => {
+	it('refuses a Proxy-over-array whose element read fails', () => {
 		const hostile = new Proxy([1, 2, 3], {
 			get(target, property, receiver) {
 				if (property === '0') throw new Error('hostile proxy element')
 				return Reflect.get(target, property, receiver)
 			},
 		})
-		expect(() => valueToSchema(hostile)).not.toThrow()
-		expect(valueToSchema(hostile)).toEqual({ type: 'array' })
+		const error = captureContractError(() => valueToSchema(hostile))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('valueToSchema: value could not be read')
 	})
 
-	it('does not throw for a hostile element nested inside an array of arrays', () => {
+	it('refuses a hostile element nested inside an array of arrays', () => {
 		const inner: unknown[] = [1]
 		Object.defineProperty(inner, 0, {
 			get() {
@@ -664,10 +695,12 @@ describe('inferArray — hostile own-getter / Proxy-over-array totality (C1)', (
 			configurable: true,
 		})
 		const outer = [inner]
-		expect(() => valueToSchema(outer)).not.toThrow()
+		const error = captureContractError(() => valueToSchema(outer))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('valueToSchema: value could not be read')
 	})
 
-	it('does not throw for a hostile array element with format: true', () => {
+	it('refuses a hostile array element with format: true', () => {
 		const hostile: unknown[] = [1]
 		Object.defineProperty(hostile, 0, {
 			get() {
@@ -676,11 +709,12 @@ describe('inferArray — hostile own-getter / Proxy-over-array totality (C1)', (
 			enumerable: true,
 			configurable: true,
 		})
-		expect(() => valueToSchema(hostile, { format: true })).not.toThrow()
-		expect(valueToSchema(hostile, { format: true })).toEqual({ type: 'array' })
+		const error = captureContractError(() => valueToSchema(hostile, { format: true }))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('valueToSchema: value could not be read')
 	})
 
-	it('does not throw for a hostile array element via samplesToSchema', () => {
+	it('refuses a hostile array element via samplesToSchema', () => {
 		const hostile: unknown[] = [1]
 		Object.defineProperty(hostile, 0, {
 			get() {
@@ -689,38 +723,45 @@ describe('inferArray — hostile own-getter / Proxy-over-array totality (C1)', (
 			enumerable: true,
 			configurable: true,
 		})
-		expect(() => samplesToSchema([hostile])).not.toThrow()
+		const error = captureContractError(() => samplesToSchema([hostile]))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('samplesToSchema: value could not be read')
 	})
 
-	it('does not throw for a Proxy-over-array whose `length` getter is hostile', () => {
+	it('refuses a Proxy-over-array whose `length` getter is hostile', () => {
 		const hostile = new Proxy([1, 2, 3], {
 			get(target, property, receiver) {
 				if (property === 'length') throw new Error('hostile')
 				return Reflect.get(target, property, receiver)
 			},
 		})
-		expect(() => valueToSchema(hostile)).not.toThrow()
-		expect(valueToSchema(hostile)).toEqual({ type: 'array' })
+		const error = captureContractError(() => valueToSchema(hostile))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('valueToSchema: value could not be read')
 	})
 
-	it('does not throw for a hostile-`length` Proxy-over-array nested as an object property', () => {
+	it('refuses a hostile-`length` Proxy-over-array nested as an object property', () => {
 		const hostile = new Proxy([1, 2, 3], {
 			get(target, property, receiver) {
 				if (property === 'length') throw new Error('hostile')
 				return Reflect.get(target, property, receiver)
 			},
 		})
-		expect(() => valueToSchema({ items: hostile })).not.toThrow()
+		const error = captureContractError(() => valueToSchema({ items: hostile }))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('valueToSchema: value could not be read')
 	})
 
-	it('does not throw for a hostile-`length` Proxy-over-array nested as an outer array element', () => {
+	it('refuses a hostile-`length` Proxy-over-array nested as an outer array element', () => {
 		const hostile = new Proxy([1, 2, 3], {
 			get(target, property, receiver) {
 				if (property === 'length') throw new Error('hostile')
 				return Reflect.get(target, property, receiver)
 			},
 		})
-		expect(() => valueToSchema([hostile])).not.toThrow()
+		const error = captureContractError(() => valueToSchema([hostile]))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('valueToSchema: value could not be read')
 	})
 })
 
@@ -899,7 +940,7 @@ describe('canonicalStringify — direct', () => {
 	})
 })
 
-describe('canonicalStringify — totality', () => {
+describe('canonicalStringify — encoding and read refusal', () => {
 	it('returns undefined for a value JSON cannot encode at the top level', () => {
 		expect(canonicalStringify(undefined)).toBeUndefined()
 		expect(canonicalStringify(() => 1)).toBeUndefined()
@@ -928,23 +969,28 @@ describe('canonicalStringify — totality', () => {
 		expect(canonicalStringify([shared, shared])).toBe('[{"a":1},{"a":1}]')
 	})
 
-	it('returns undefined for hostile traversal, never throwing', () => {
+	it('refuses hostile traversal while retaining undefined for JSON-inexpressible values', () => {
 		const hostileGetter = createThrowingGetter()
 		const hostileKeys = createHostileKeys()
-		expect(() => canonicalStringify(hostileGetter)).not.toThrow()
-		expect(canonicalStringify(hostileGetter)).toBeUndefined()
-		expect(() => canonicalStringify(hostileKeys)).not.toThrow()
-		expect(canonicalStringify(hostileKeys)).toBeUndefined()
-		expect(canonicalStringify({ nested: hostileGetter })).toBeUndefined()
+		for (const hostile of [hostileGetter, hostileKeys, { nested: hostileGetter }]) {
+			const error = captureContractError(() => canonicalStringify(hostile))
+			expect(error.code).toBe('structure')
+			expect(error.message).toBe('canonicalStringify: value could not be read')
+		}
 	})
 
-	it('never throws for any sample in the corpus', () => {
-		const thrown: unknown[] = []
+	it('returns normally or gives the shared coded read refusal for every sample in the corpus', () => {
+		const raw: unknown[] = []
 		for (const value of SOUNDNESS_SAMPLE) {
 			const outcome = attempt(() => canonicalStringify(value))
-			if (!outcome.success) thrown.push(value)
+			if (
+				!outcome.success &&
+				(!isContractError(outcome.error) || outcome.error.code !== 'structure')
+			) {
+				raw.push(value)
+			}
 		}
-		expect(thrown).toEqual([])
+		expect(raw).toEqual([])
 	})
 })
 
@@ -1109,7 +1155,7 @@ describe('samplesToSchema — nested containers and mixed sample shapes', () => 
 		})
 	})
 
-	it('is total for a hostile ownKeys Proxy used as an array element', () => {
+	it('refuses a hostile ownKeys Proxy used as an array element', () => {
 		const hostile = new Proxy(
 			{},
 			{
@@ -1118,8 +1164,12 @@ describe('samplesToSchema — nested containers and mixed sample shapes', () => 
 				},
 			},
 		)
-		expect(() => valueToSchema([hostile])).not.toThrow()
-		expect(() => samplesToSchema([[hostile]])).not.toThrow()
+		const singleError = captureContractError(() => valueToSchema([hostile]))
+		expect(singleError.code).toBe('structure')
+		expect(singleError.message).toBe('valueToSchema: value could not be read')
+		const sampleError = captureContractError(() => samplesToSchema([[hostile]]))
+		expect(sampleError.code).toBe('structure')
+		expect(sampleError.message).toBe('samplesToSchema: value could not be read')
 	})
 
 	it('includes an own "__proto__" key inside a heterogeneous array element via anyOf unification', () => {
@@ -1129,7 +1179,7 @@ describe('samplesToSchema — nested containers and mixed sample shapes', () => 
 		expect(objectMember?.properties).toHaveProperty('__proto__')
 	})
 
-	it('one hostile-getter row drops that key for ALL rows (all-or-nothing scope)', () => {
+	it('one hostile-getter row refuses the whole sample claim', () => {
 		const good = { a: 1, b: 2 }
 		const hostile: Record<string, unknown> = { a: 1 }
 		Object.defineProperty(hostile, 'b', {
@@ -1139,9 +1189,9 @@ describe('samplesToSchema — nested containers and mixed sample shapes', () => 
 			enumerable: true,
 			configurable: true,
 		})
-		const schema = samplesToSchema([good, hostile])
-		expect(schema.properties).toHaveProperty('a')
-		expect(schema.properties).not.toHaveProperty('b')
+		const error = captureContractError(() => samplesToSchema([good, hostile]))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('samplesToSchema: value could not be read')
 	})
 })
 

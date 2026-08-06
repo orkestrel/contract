@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+	attempt,
 	arrayOf,
 	isArray,
 	isBoolean,
@@ -37,7 +38,9 @@ import {
 } from '@src/core'
 import {
 	buildSparseArray,
+	captureContractError,
 	createRevokedArrayProxy,
+	createThrowingGetter,
 	soundnessViolations,
 	throwHostileAccess,
 } from '../../setup.js'
@@ -111,9 +114,21 @@ describe('structural parsers', () => {
 	it('parseRecord narrows a plain record by reference', () => {
 		const record = { a: 1 }
 		expect(parseRecord(record)).toBe(record)
+		const frozen = Object.freeze({ a: 1 })
+		expect(parseRecord(frozen)).toBe(frozen)
+		const nullPrototype = Object.assign(Object.create(null), { a: 1 })
+		expect(parseRecord(nullPrototype)).toBe(nullPrototype)
+		const inherited = Object.create({ inherited: 1 })
+		expect(parseRecord(inherited)).toBeUndefined()
 		expect(parseRecord([])).toBeUndefined()
 		expect(parseRecord(null)).toBeUndefined()
 		expect(parseRecord(new Date())).toBeUndefined()
+	})
+
+	it('parseRecord refuses a record whose advertised property cannot be read', () => {
+		const error = captureContractError(() => parseRecord(createThrowingGetter()))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('parseRecord: value could not be read')
 	})
 
 	it('parseArray narrows an array by reference, optionally guarding elements', () => {
@@ -183,6 +198,13 @@ describe('structural parsers', () => {
 		const cyclic: Record<string, unknown> = { a: 1 }
 		cyclic.self = cyclic
 		expect(parseJSONValue(cyclic)).toBeUndefined()
+	})
+
+	it('parseJSONValue distinguishes an unreadable tree from an invalid JSON value', () => {
+		expect(parseJSONValue(Number.NaN)).toBeUndefined()
+		const error = captureContractError(() => parseJSONValue(createThrowingGetter()))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('parseJSONValue: value could not be read')
 	})
 })
 
@@ -280,7 +302,11 @@ describe('parse ↔ guard soundness (AGENTS §14)', () => {
 	})
 
 	it('parseRecord ↔ isRecord', () => {
-		expect(soundnessViolations(isRecord, parseRecord)).toEqual([])
+		const records = [{}, { a: 1 }, Object.freeze({ a: 1 }), Object.create(null)]
+		for (const record of records) {
+			expect(isRecord(record)).toBe(true)
+			expect(parseRecord(record)).toBe(record)
+		}
 	})
 
 	it('parseArray (guarded) ↔ arrayOf(isNumber)', () => {
@@ -312,7 +338,12 @@ describe('parse ↔ guard soundness (AGENTS §14)', () => {
 	})
 
 	it('parseJSONValue ↔ isJSONValue', () => {
-		expect(soundnessViolations(isJSONValue, parseJSONValue)).toEqual([])
+		expect(
+			soundnessViolations(isJSONValue, (value) => {
+				const outcome = attempt(() => parseJSONValue(value))
+				return outcome.success ? outcome.value : undefined
+			}),
+		).toEqual([])
 	})
 })
 

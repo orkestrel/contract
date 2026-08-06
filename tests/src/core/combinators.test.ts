@@ -39,6 +39,7 @@ import {
 	buildDeepNest,
 	buildSparseArray,
 	buildWideVocabulary,
+	captureContractError,
 	createHostileKeys,
 	createRevokedArrayProxy,
 	createRevokedProxy,
@@ -86,6 +87,20 @@ describe('literal and enum combinators', () => {
 		expect(color('RED')).toBe(true)
 		expect(color('BLUE')).toBe(true)
 		expect(color('GREEN')).toBe(false)
+	})
+
+	it('enumOf refuses an unreadable enumeration with a coded read error', () => {
+		const enumeration = new Proxy(
+			{ a: 1 },
+			{
+				get() {
+					throw new Error('hostile read')
+				},
+			},
+		)
+		const error = captureContractError(() => enumOf(enumeration))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('enumOf: value could not be read')
 	})
 
 	it('enumOf narrows an inline object literal argument to its literal value union (type-level)', () => {
@@ -522,6 +537,20 @@ describe('stringOf', () => {
 		// The fast path returns the very same isString reference.
 		expect(stringOf()).toBe(isString)
 		expect(stringOf({})).toBe(isString)
+	})
+
+	it('refuses unreadable options with the shared coded read error', () => {
+		const options = new Proxy(
+			{},
+			{
+				get() {
+					throw new Error('hostile read')
+				},
+			},
+		)
+		const error = captureContractError(() => stringOf(options))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('stringOf: value could not be read')
 	})
 
 	it('enforces length bounds via boundsOf on .length', () => {

@@ -4,16 +4,18 @@ import {
 	isArray,
 	isBoolean,
 	isFiniteNumber,
-	isJSONValue,
 	isNull,
 	isNumber,
+	isObject,
 	isRecord,
 	isString,
 } from './validators.js'
-import { attempt, holds, resolveField } from './helpers.js'
+import { attempt, holds, matchesJSONValue, readValue, resolveField } from './helpers.js'
 
 // AGENTS §14: a parser answers "give me a `T` or nothing" — it returns the
-// typed value or `undefined`, and it never throws. Each leaf parser here forms a
+// typed value or `undefined` for readable invalid input. `parseRecord` and
+// `parseJSONValue` refuse a failed traversal with a coded `ContractError`, so
+// unreadability cannot masquerade as ordinary invalidity. Each leaf parser here forms a
 // SOUND pair with the guard for its output TYPE: a guard-valid input is returned
 // UNCHANGED (by identity, never rejected), and every non-`undefined` output
 // satisfies that type guard. The pairings (verified in parsers.test.ts):
@@ -179,8 +181,10 @@ export function parseNull(value: unknown): null | undefined {
  *
  * @param value - The value to parse
  * @returns The record, or `undefined`
+ * @throws {ContractError} When an object value cannot be read
  */
 export function parseRecord(value: unknown): Record<string, unknown> | undefined {
+	if (isObject(value)) readValue(() => Object.values(value), 'parseRecord')
 	return isRecord(value) ? value : undefined
 }
 
@@ -230,13 +234,14 @@ export function parseArray<T = unknown>(
  * @remarks
  * Unlike {@link parseRecord} / {@link parseArray}, this is a DEEP gate: it
  * walks the entire tree via {@link isJSONValue} rather than checking only the
- * top-level shape. That walk is cycle-safe and total (never throws) because
- * `isJSONValue` runs its own probe inside a guard, so an adversarial
- * structure (a cycle, a hostile getter) yields `undefined` instead of hanging
- * or throwing.
+ * top-level shape. That walk is cycle-safe. A readable non-JSON structure,
+ * including a cycle, returns `undefined`; a failed property read throws a
+ * `structure` {@link ContractError}, keeping unreadability distinct from an
+ * honest invalid result.
  *
  * @param value - The value to parse
  * @returns The value, or `undefined` when it is not a valid JSON value
+ * @throws {ContractError} When the JSON tree cannot be read
  *
  * @example
  * ```ts
@@ -245,7 +250,10 @@ export function parseArray<T = unknown>(
  * ```
  */
 export function parseJSONValue(value: unknown): JSONValue | undefined {
-	return isJSONValue(value) ? value : undefined
+	return readValue(
+		() => (matchesJSONValue(value, new WeakSet()) ? value : undefined),
+		'parseJSONValue',
+	)
 }
 
 // === Enum parser

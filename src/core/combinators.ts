@@ -21,7 +21,7 @@ import {
 	isString,
 	isSymbol,
 } from './validators.js'
-import { holds } from './helpers.js'
+import { holds, readValue } from './helpers.js'
 
 // Every combinator returns a `Guard<T>` — a total function (AGENTS §14). The
 // combinators that invoke a caller-supplied callback inside the guard body
@@ -161,6 +161,10 @@ export function instanceOf<C extends abstract new (...args: never) => object>(
 /**
  * Build a guard from a native `enum` or any object whose values are strings or
  * numbers.
+
+ * @param enumeration - The readable enumeration whose values the guard accepts
+ * @returns A guard accepting one enumeration value
+ * @throws {ContractError} When the enumeration cannot be read
  *
  * @example
  * ```ts
@@ -173,7 +177,7 @@ export function instanceOf<C extends abstract new (...args: never) => object>(
 export function enumOf<const E extends Record<string, string | number>>(
 	enumeration: E,
 ): Guard<E[keyof E]> {
-	const values = new Set(Object.values(enumeration))
+	const values = readValue(() => new Set(Object.values(enumeration)), 'enumOf')
 	return (value: unknown): value is E[keyof E] =>
 		(isString(value) || isNumber(value)) && values.has(value)
 }
@@ -710,6 +714,7 @@ export function matchOf(pattern: RegExp): Guard<string> {
  *
  * @param options - Optional length bounds and regular expression refinement
  * @returns A string guard enforcing the requested refinements
+ * @throws {ContractError} When the options cannot be read
  *
  * @example
  * ```ts
@@ -726,13 +731,17 @@ export function stringOf(options?: {
 	max?: number
 	pattern?: RegExp
 }): Guard<string> {
-	const min = options?.min
-	const max = options?.max
-	const source = options?.pattern
-	const pattern =
-		source === undefined
-			? undefined
-			: new RegExp(source.source, source.flags.replaceAll('g', '').replaceAll('y', ''))
+	const readable = readValue(() => {
+		const min = options?.min
+		const max = options?.max
+		const source = options?.pattern
+		const pattern =
+			source === undefined
+				? undefined
+				: new RegExp(source.source, source.flags.replaceAll('g', '').replaceAll('y', ''))
+		return { min, max, pattern }
+	}, 'stringOf')
+	const { min, max, pattern } = readable
 	if (min === undefined && max === undefined && pattern === undefined) {
 		return isString
 	}

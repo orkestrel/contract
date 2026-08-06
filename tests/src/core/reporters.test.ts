@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 import type { Fault } from '@src/core'
 import {
 	arrayShape,
+	attempt,
 	compileParser,
 	compileReporter,
 	createContract,
 	integerShape,
+	isContractError,
 	nullableShape,
 	objectShape,
 	oneOfShape,
@@ -26,14 +28,19 @@ const FAULT_LIMIT = 64
 describe('compileReporter — soundness matrix', () => {
 	const shapes = [...leafShapeVariations(), ['composite', compositeShape(2)] as const]
 
-	it('explain(v).length === 0 iff parse(v) !== undefined, across every leaf/composite shape and the full sample corpus', () => {
+	it('explain(v).length === 0 iff parse(v) is defined across the readable sample corpus', () => {
 		const violations: string[] = []
 		for (const [label, shape] of shapes) {
 			const parse = compileParser(shape)
 			for (let index = 0; index < SOUNDNESS_SAMPLE.length; index += 1) {
 				const value = SOUNDNESS_SAMPLE[index]
 				const empty = compileReporter(shape, value).length === 0
-				const defined = parse(value) !== undefined
+				const outcome = attempt(() => parse(value))
+				if (!outcome.success) {
+					if (!isContractError(outcome.error)) violations.push(`raw@${label}@${index}`)
+					continue
+				}
+				const defined = outcome.value !== undefined
 				if (empty !== defined) violations.push(`${label}@${index}`)
 			}
 		}

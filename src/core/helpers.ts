@@ -3,6 +3,7 @@ import type {
 	FaultKind,
 	FieldPath,
 	JSONSchema,
+	JSONValue,
 	RandomFunction,
 	Result,
 } from './types.js'
@@ -56,6 +57,38 @@ export function attempt<T>(callback: () => T): Result<T> {
 			return { success: false, error: new Error('Unknown thrown value') }
 		}
 	}
+}
+
+/**
+ * Read a value through the shared containment boundary or refuse it with the
+ * contract module's uniform read diagnostic.
+ *
+ * @remarks
+ * Unlike {@link attempt}, this is not an optional-result boundary: a caller
+ * has committed to reading the supplied value, so a failed read cannot be
+ * represented as absence or another permissive answer. Every reader using
+ * this helper throws code `structure` with the same message shape and retains
+ * the normalized host error as its cause.
+ *
+ * @param callback - The read operation to perform
+ * @param reader - The public reader name used in the diagnostic
+ * @returns The successfully read value
+ * @throws {ContractError} When the read operation fails
+ *
+ * @example
+ * ```ts
+ * readValue(() => source.value, 'parseRecord')
+ * ```
+ */
+export function readValue<T>(callback: () => T, reader: string): T {
+	const outcome = attempt(callback)
+	if (!outcome.success) {
+		throw new ContractError(`${reader}: value could not be read`, {
+			code: 'structure',
+			cause: outcome.error,
+		})
+	}
+	return outcome.value
 }
 
 /**
@@ -253,7 +286,7 @@ export function resolveField(record: Readonly<Record<string, unknown>>, path: Fi
  * matchesJSONValue(Number.NaN, new WeakSet())                 // false
  * ```
  */
-export function matchesJSONValue(entry: unknown, ancestors: WeakSet<object>): boolean {
+export function matchesJSONValue(entry: unknown, ancestors: WeakSet<object>): entry is JSONValue {
 	if (entry === null || isString(entry) || isBoolean(entry) || isFiniteNumber(entry)) return true
 	if (Array.isArray(entry)) {
 		if (ancestors.has(entry)) return false
@@ -351,6 +384,7 @@ export function enumerableSymbolCount(value: object): number {
  *
  * @param schema - The compiled JSON Schema (a contract's `schema`)
  * @returns The schema as the open tool-parameters record, or `undefined` when it is not a record
+ * @throws {ContractError} When the schema cannot be read
  *
  * @example
  * ```ts
@@ -363,6 +397,7 @@ export function enumerableSymbolCount(value: object): number {
 export function schemaToParameters(
 	schema: JSONSchema,
 ): Readonly<Record<string, unknown>> | undefined {
+	readValue(() => Object.values(schema), 'schemaToParameters')
 	return isRecord(schema) ? schema : undefined
 }
 
@@ -372,7 +407,7 @@ export function schemaToParameters(
  * as an MCP-compatible `inputSchema`.
  *
  * @remarks
- * Total and deterministic. `schema.type === 'object'` passes through
+ * Deterministic for readable input. `schema.type === 'object'` passes through
  * unchanged; every other root (a primitive/array `type`, an `anyOf`/`enum`-only
  * schema with no `type`, or the empty `{}`) is wrapped as a single required
  * `value` property: `{ type: 'object', properties: { value: schema },
@@ -381,6 +416,7 @@ export function schemaToParameters(
  *
  * @param schema - The schema to wrap
  * @returns `schema` unchanged when object-rooted, otherwise the wrapped object schema
+ * @throws {ContractError} When the schema root cannot be read
  *
  * @example
  * ```ts
@@ -391,13 +427,15 @@ export function schemaToParameters(
  * ```
  */
 export function schemaToObject(schema: JSONSchema): JSONSchema {
-	if (schema.type === 'object') return schema
-	return {
-		type: 'object',
-		properties: { value: schema },
-		required: ['value'],
-		additionalProperties: false,
-	}
+	return readValue(() => {
+		if (schema.type === 'object') return schema
+		return {
+			type: 'object',
+			properties: { value: schema },
+			required: ['value'],
+			additionalProperties: false,
+		}
+	}, 'schemaToObject')
 }
 
 // === Inference option sanitization
