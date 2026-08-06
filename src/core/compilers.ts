@@ -1063,9 +1063,11 @@ export function compileGenerator(
  * holds structurally — `explain` mirrors `parse`, not the stricter `is` (a
  * coercible value like `'42'` against a `numberShape` reports no fault, the
  * same leniency `parse` grants, even though the strict guard would reject it).
- * {@link compileAuditor} is the counterpart report for the strict domain,
- * mirroring {@link compileGuard} the way this one mirrors
- * {@link compileParser}.
+ * The invariant relates two separate calls, so it holds for a value whose reads
+ * are stable across calls; see the read-stability precondition on
+ * {@link ContractInterface}. {@link compileAuditor} is the counterpart report
+ * for the strict domain, mirroring {@link compileGuard} the way this one
+ * mirrors {@link compileParser}.
  *
  * Faults are collected in stable pre-order (declared key/index order); every
  * call — object, array, and union alike, including a union's `oneOf` "no
@@ -1334,15 +1336,20 @@ export function compileReporter(
  * describe, where {@link compileReporter} diagnoses the wider preimage
  * {@link compileParser} maps into it. This walk therefore mirrors the guard:
  * leaf coercions are faults, closed-object extras are faults, and union
- * acceptance is decided from each variant's strict audit emptiness. Every
- * recursive call returns at most {@link FAULT_LIMIT} entries. Hostile property
- * access is contained through {@link attempt} and collapses to one fault at the
- * current container path.
+ * acceptance is decided from each variant's strict audit emptiness, so the
+ * soundness invariant
+ * `compileAuditor(shape, v).length === 0 ⟺ compileGuard(shape)(v)` holds
+ * structurally. The invariant relates two separate calls, so it holds for a
+ * value whose reads are stable across calls; see the read-stability
+ * precondition on {@link ContractInterface}. Every recursive call returns at
+ * most {@link FAULT_LIMIT} entries. Hostile property access is contained
+ * through {@link attempt} and collapses to one fault at the current container
+ * path.
  *
  * @param shape - The shape to audit against
  * @param value - The value to check
  * @param path - The path prefix for faults produced at this call
- * @returns The strict faults found, empty exactly when the compiled guard accepts the value
+ * @returns The strict faults found, empty exactly when the compiled guard accepts a stably-read value
  *
  * @example
  * ```ts

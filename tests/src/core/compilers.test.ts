@@ -35,7 +35,7 @@ import {
 	buildWideVocabulary,
 	captureContractError,
 	createNonEnumerableRecord,
-	SHAPE_STANCES,
+	SHAPE_SEPARATIONS,
 	SOUNDNESS_SAMPLE,
 } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
@@ -1073,55 +1073,55 @@ describe('compileGenerator generic overload (finding #6)', () => {
 	})
 })
 
-describe('shape stance registry', () => {
+describe('shape separation registry', () => {
 	it('demonstrates every declared parser-versus-guard separation', () => {
 		let count = 0
-		for (const stance of Object.values(SHAPE_STANCES)) {
-			if (stance.witness === undefined) continue
+		for (const separation of Object.values(SHAPE_SEPARATIONS)) {
+			if (separation.witness === undefined) continue
 			count += 1
-			const parse = compileParser(stance.shape)
-			const guard = compileGuard(stance.shape)
+			const parse = compileParser(separation.shape)
+			const guard = compileGuard(separation.shape)
 
-			expect(parse(stance.witness)).not.toBeUndefined()
-			expect(guard(stance.witness)).toBe(false)
-			expect(compileAuditor(stance.shape, stance.witness).length).toBeGreaterThan(0)
-			expect(compileReporter(stance.shape, stance.witness)).toHaveLength(0)
+			expect(parse(separation.witness)).not.toBeUndefined()
+			expect(guard(separation.witness)).toBe(false)
+			expect(compileAuditor(separation.shape, separation.witness).length).toBeGreaterThan(0)
+			expect(compileReporter(separation.shape, separation.witness)).toHaveLength(0)
 		}
 		expect(count).toBe(9)
 	})
 
-	it('finds no corpus separator for source-argued coincident domains', () => {
+	it('finds no corpus witness for source-argued coincident domains', () => {
 		let count = 0
-		for (const stance of Object.values(SHAPE_STANCES)) {
-			if (stance.witness !== undefined) continue
+		for (const separation of Object.values(SHAPE_SEPARATIONS)) {
+			if (separation.witness !== undefined) continue
 			count += 1
-			const parse = compileParser(stance.shape)
-			const guard = compileGuard(stance.shape)
-			const separators: unknown[] = []
+			const parse = compileParser(separation.shape)
+			const guard = compileGuard(separation.shape)
+			const witnesses: unknown[] = []
 			for (const value of SOUNDNESS_SAMPLE) {
-				if (parse(value) !== undefined && !guard(value)) separators.push(value)
+				if (parse(value) !== undefined && !guard(value)) witnesses.push(value)
 			}
-			expect(separators).toEqual([])
+			expect(witnesses).toEqual([])
 		}
 		expect(count).toBe(3)
 	})
 
 	it('validates and compiles representatives for all twelve shape kinds', () => {
-		expect(Object.keys(SHAPE_STANCES)).toHaveLength(12)
-		for (const stance of Object.values(SHAPE_STANCES)) {
-			expect(() => validateShape(stance.shape)).not.toThrow()
-			expect(() => validateShapeDepth(stance.shape)).not.toThrow()
-			const schema = compileSchema(stance.shape)
-			const guard = compileGuard(stance.shape)
-			const parse = compileParser(stance.shape)
+		expect(Object.keys(SHAPE_SEPARATIONS)).toHaveLength(12)
+		for (const separation of Object.values(SHAPE_SEPARATIONS)) {
+			expect(() => validateShape(separation.shape)).not.toThrow()
+			expect(() => validateShapeDepth(separation.shape)).not.toThrow()
+			const schema = compileSchema(separation.shape)
+			const guard = compileGuard(separation.shape)
+			const parse = compileParser(separation.shape)
 			expect(schema).toBeDefined()
 			expect(guard).toBeTypeOf('function')
 			expect(parse).toBeTypeOf('function')
-			expect(compileAuditor(stance.shape, null)).toBeInstanceOf(Array)
-			expect(compileReporter(stance.shape, null)).toBeInstanceOf(Array)
+			expect(compileAuditor(separation.shape, null)).toBeInstanceOf(Array)
+			expect(compileReporter(separation.shape, null)).toBeInstanceOf(Array)
 		}
 
-		const raw = SHAPE_STANCES.raw
+		const raw = SHAPE_SEPARATIONS.raw
 		const rawGuard = compileGuard(raw.shape)
 		const rawParse = compileParser(raw.shape)
 		expect(rawGuard(null)).toBe(true)
@@ -1131,16 +1131,16 @@ describe('shape stance registry', () => {
 		const error = captureContractError(() => compileGenerator(raw.shape, seededRandom(7)))
 		expect(error.code).toBe('generate')
 
-		const generatedEntries = Object.entries(SHAPE_STANCES).filter(([type]) => type !== 'raw')
-		for (const [, stance] of generatedEntries) {
-			const guard = compileGuard(stance.shape)
-			const parse = compileParser(stance.shape)
-			const generated = compileGenerator(stance.shape, seededRandom(7))
+		const generatedEntries = Object.entries(SHAPE_SEPARATIONS).filter(([type]) => type !== 'raw')
+		for (const [, separation] of generatedEntries) {
+			const guard = compileGuard(separation.shape)
+			const parse = compileParser(separation.shape)
+			const generated = compileGenerator(separation.shape, seededRandom(7))
 			expect(generated).not.toBeUndefined()
 			expect(guard(generated)).toBe(true)
 			expect(parse(generated)).not.toBeUndefined()
-			expect(compileAuditor(stance.shape, generated)).toHaveLength(0)
-			expect(compileReporter(stance.shape, generated)).toHaveLength(0)
+			expect(compileAuditor(separation.shape, generated)).toHaveLength(0)
+			expect(compileReporter(separation.shape, generated)).toHaveLength(0)
 		}
 	})
 })

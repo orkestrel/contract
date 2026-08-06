@@ -411,7 +411,8 @@ export function preview(value: unknown): string {
  *
  * @remarks
  * A structural mapping used by {@link compileReporter} to fill a `Fault`'s
- * `expected` field: most shapes map to their own `type` (`numberShape` maps to
+ * `expected` field and by {@link compileAuditor} to fill an `AuditFault`'s:
+ * most shapes map to their own `type` (`numberShape` maps to
  * `'integer'` when `integer: true`, else `'number'`); `optionalShape` /
  * `nullableShape` project through to their inner shape's kind, and `rawShape`
  * (an arbitrary embedded schema with no fixed kind) projects to `'json'`.

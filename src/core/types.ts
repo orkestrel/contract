@@ -762,6 +762,17 @@ export type RandomFunction = () => number
  * domain, while `parse` is a map into that domain whose preimage is
  * deliberately larger (it coerces leaves and drops a closed object's undeclared
  * keys). `audit` diagnoses the domain; `explain` diagnoses the map.
+ *
+ * READ STABILITY is the precondition on both soundness laws — `audit` against
+ * `is`, `explain` against `parse`. Each law relates two separate calls, and
+ * every call reads the value it is handed, so both hold for a STABLE value: one
+ * whose observable reads do not change between calls. A getter that answers a
+ * declared string on its first read and a number on its second, or a `Proxy`
+ * whose traps change behavior mid-flight, can leave `audit` empty and still
+ * fail `is`; no law spanning two calls can promise otherwise, and no artifact
+ * re-reads a value to close the gap. This is a statement of scope, not a hedge:
+ * for every value that reads the same twice — every primitive, every plain
+ * record, every frozen structure — both laws hold exactly as written.
  */
 export interface ContractInterface<T> {
 	readonly schema: JSONSchema
@@ -772,9 +783,11 @@ export interface ContractInterface<T> {
 	 *
 	 * @remarks
 	 * An empty report means the value is strictly valid. Soundness invariant:
-	 * `audit(v).length === 0` if and only if `is(v)`. It is the report for the
-	 * stricter of the two domains, so a coercible leaf and a closed object's
-	 * undeclared key both fault here and neither faults in `explain`.
+	 * `audit(v).length === 0` if and only if `is(v)`, for a value whose reads are
+	 * stable across calls (see the read-stability precondition on
+	 * {@link ContractInterface}). It is the report for the stricter of the two
+	 * domains, so a coercible leaf and a closed object's undeclared key both
+	 * fault here and neither faults in `explain`.
 	 *
 	 * @param value - The value to check
 	 * @returns The faults found, empty when the value is strictly valid
@@ -785,10 +798,11 @@ export interface ContractInterface<T> {
 	 *
 	 * @remarks
 	 * An empty report means the value is valid. Soundness invariant:
-	 * `explain(v).length === 0` if and only if `parse(v) !== undefined` — explain
-	 * mirrors `parse`'s coercion, not the stricter `is`, and `audit` is the
-	 * report that mirrors `is`. Faults are listed in stable pre-order (declared
-	 * key/index order).
+	 * `explain(v).length === 0` if and only if `parse(v) !== undefined`, for a
+	 * value whose reads are stable across calls (see the read-stability
+	 * precondition on {@link ContractInterface}) — explain mirrors `parse`'s
+	 * coercion, not the stricter `is`, and `audit` is the report that mirrors
+	 * `is`. Faults are listed in stable pre-order (declared key/index order).
 	 *
 	 * @param value - The value to check
 	 * @returns The faults found, empty when the value parses successfully

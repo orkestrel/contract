@@ -571,8 +571,8 @@ export function soundnessViolations<T>(
 // matrix and by the existing shape/compiler suites to avoid re-declaring the
 // same shapes locally.
 
-/** One shape kind's declared relationship between its compiled parser and its compiled guard. */
-export interface ShapeStance {
+/** One shape kind's declared separation between its compiled parser's domain and its compiled guard's. */
+export interface ShapeSeparation {
 	/** A representative shape of this kind, legal in the position the kind permits. */
 	readonly shape: ContractShape
 	/** A value that shape's parser accepts and its guard rejects — absent when the domains coincide. */
@@ -580,34 +580,35 @@ export interface ShapeStance {
 }
 
 /**
- * Exhaustive test-only evidence for every contract-shape kind's parse-versus-guard domain.
+ * Exhaustive test-only evidence for every contract-shape kind's parse-versus-guard separation.
  */
-export const SHAPE_STANCES: Readonly<Record<ContractShape['type'], ShapeStance>> = Object.freeze({
-	string: Object.freeze({ shape: stringShape(), witness: 42 }),
-	number: Object.freeze({ shape: numberShape(), witness: '42' }),
-	boolean: Object.freeze({ shape: booleanShape(), witness: 'true' }),
-	// Both artifacts accept only strict null; the corpus supplements, rather than proves, equality.
-	null: Object.freeze({ shape: nullShape() }),
-	literal: Object.freeze({ shape: literalShape(['allowed']), witness: ' allowed ' }),
-	array: Object.freeze({ shape: arrayShape(integerShape()), witness: Object.freeze(['42']) }),
-	object: Object.freeze({
-		shape: objectShape({ value: integerShape() }),
-		witness: Object.freeze({ value: 1, extra: true }),
-	}),
-	union: Object.freeze({
-		shape: unionShape(integerShape(), booleanShape()),
-		witness: '42',
-	}),
-	optional: Object.freeze({
-		shape: objectShape({ value: optionalShape(integerShape()) }),
-		witness: Object.freeze({ value: '42' }),
-	}),
-	nullable: Object.freeze({ shape: nullableShape(integerShape()), witness: '42' }),
-	// Both artifacts delegate to isJSONValue; the corpus supplements, rather than proves, equality.
-	json: Object.freeze({ shape: jsonShape() }),
-	// Both artifacts accept every defined value unchanged; the corpus supplements, rather than proves, equality.
-	raw: Object.freeze({ shape: rawShape({}) }),
-})
+export const SHAPE_SEPARATIONS: Readonly<Record<ContractShape['type'], ShapeSeparation>> =
+	Object.freeze({
+		string: Object.freeze({ shape: stringShape(), witness: 42 }),
+		number: Object.freeze({ shape: numberShape(), witness: '42' }),
+		boolean: Object.freeze({ shape: booleanShape(), witness: 'true' }),
+		// Both artifacts accept only strict null; the corpus supplements rather than proves coincidence.
+		null: Object.freeze({ shape: nullShape() }),
+		literal: Object.freeze({ shape: literalShape(['allowed']), witness: ' allowed ' }),
+		array: Object.freeze({ shape: arrayShape(integerShape()), witness: Object.freeze(['42']) }),
+		object: Object.freeze({
+			shape: objectShape({ value: integerShape() }),
+			witness: Object.freeze({ value: 1, extra: true }),
+		}),
+		union: Object.freeze({
+			shape: unionShape(integerShape(), booleanShape()),
+			witness: '42',
+		}),
+		optional: Object.freeze({
+			shape: objectShape({ value: optionalShape(integerShape()) }),
+			witness: Object.freeze({ value: '42' }),
+		}),
+		nullable: Object.freeze({ shape: nullableShape(integerShape()), witness: '42' }),
+		// Both artifacts delegate to isJSONValue; the corpus supplements rather than proves coincidence.
+		json: Object.freeze({ shape: jsonShape() }),
+		// Both artifacts accept any defined value; the corpus supplements rather than proves coincidence.
+		raw: Object.freeze({ shape: rawShape({}) }),
+	})
 
 /** Every `stringShape` variation: plain, min-only, max-only, min+max, described. */
 export function stringShapeVariations(): readonly (readonly [string, ContractShape])[] {

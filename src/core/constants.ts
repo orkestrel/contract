@@ -33,17 +33,21 @@ export const JSON_SCHEMA_TYPES: readonly JSONSchemaType[] = Object.freeze([
 	'string',
 ])
 
-// Reporting-surface bounds (`compileReporter` / `ContractInterface.explain`).
+// Reporting-surface bounds (`compileReporter` / `compileAuditor` —
+// `ContractInterface.explain` / `ContractInterface.audit`).
 
 /**
- * The maximum number of {@link Fault} entries a single `explain` report ever
- * returns, frozen.
+ * The maximum number of {@link Fault} / {@link AuditFault} entries a single
+ * `explain` or `audit` report ever returns, frozen.
  *
  * @remarks
- * Bounds the report against adversarial input (a giant array, a wide record) —
- * `compileReporter` collects faults in stable pre-order and stops once this cap
- * is reached, so the report size (and the work to build it) stays finite and
- * deterministic regardless of the input's size.
+ * Bounds BOTH reports against adversarial input (a giant array, a wide record)
+ * — `compileReporter` and `compileAuditor` each collect faults in stable
+ * pre-order and stop once this cap is reached, and every recursive call slices
+ * to it, so the report size (and the work to build it) stays finite and
+ * deterministic at every nesting level regardless of the input's size. Size a
+ * diagnostic surface off this constant and it bounds `audit` exactly as it
+ * bounds `explain`.
  */
 export const FAULT_LIMIT = 64
 
