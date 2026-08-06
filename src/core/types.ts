@@ -728,25 +728,46 @@ export type Fault =
 	| { readonly reason: 'variant'; readonly path: FieldPath; readonly variants: number }
 	| { readonly reason: 'oneOf'; readonly path: FieldPath; readonly matched: number }
 
+/** A key present on a value that its closed object shape does not declare. */
+export interface ExtraFault {
+	readonly reason: 'extra'
+	readonly path: FieldPath
+}
+
+/** Every fault an audit reports — the parse faults plus undeclared keys. */
+export type AuditFault = Fault | ExtraFault
+
 // === Contract compilation
 
 /** A deterministic random source returning a value in `[0, 1)`. */
 export type RandomFunction = () => number
 
 /**
- * A compiled contract — the five lockstep outputs derived from one shape.
+ * A compiled contract — the six lockstep outputs derived from one shape.
  *
  * @remarks
- * Built by `createContract`: `is` narrows, `parse` coerces (returning the typed
- * value or `undefined`), `schema` is an owned deeply frozen emitted JSON
- * Schema, `explain` reports the structured faults behind a failed `parse`, and
- * `generate` produces deterministic seed data from a {@link RandomFunction}
- * (defaulting to a wall-clock-seeded source when none is supplied).
+ * Built by `createContract`: `is` narrows, `audit` diagnoses strict rejection,
+ * `parse` coerces (returning the typed value or `undefined`), `schema` is an
+ * owned deeply frozen emitted JSON Schema, `explain` reports the structured
+ * faults behind a failed `parse`, and `generate` produces deterministic seed
+ * data from a {@link RandomFunction} (defaulting to a wall-clock-seeded source
+ * when none is supplied).
  */
 export interface ContractInterface<T> {
 	readonly schema: JSONSchema
 	readonly is: Guard<T>
 	parse(value: unknown): T | undefined
+	/**
+	 * Report every strict fault a value has against this contract.
+	 *
+	 * @remarks
+	 * An empty report means the value is strictly valid. Soundness invariant:
+	 * `audit(v).length === 0` if and only if `is(v)`.
+	 *
+	 * @param value - The value to check
+	 * @returns The faults found, empty when the value is strictly valid
+	 */
+	audit(value: unknown): readonly AuditFault[]
 	/**
 	 * Report every structured parse fault a value has against this contract.
 	 *

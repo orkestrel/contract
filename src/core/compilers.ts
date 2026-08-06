@@ -1,4 +1,5 @@
 import type {
+	AuditFault,
 	ContractInterface,
 	ContractShape,
 	Fault,
@@ -48,7 +49,7 @@ import { parseBoolean, parseInteger, parseNumber, parseRecord, parseString } fro
 // The compilers walk a finite, developer-authored shape tree (never cyclic) and
 // recurse on themselves — branches are kept inline and public per AGENTS §5,
 // never hidden behind private helpers. `compileGuard` / `compileParser` /
-// `compileReporter` reuse the existing combinators and parsers rather than
+// `compileReporter` / `compileAuditor` reuse the existing combinators and parsers rather than
 // re-implementing them — including `literalOf` for literal membership, so
 // SameValueZero matching has one implementation package-wide. Every entry point
 // opens with `ownShape` (cloners.ts), the one place the frozen-means-owned
@@ -1310,10 +1311,253 @@ export function compileReporter(
 	}
 }
 
+/**
+ * Audit a value against the strict acceptance domain of a {@link ContractShape}.
+ *
+ * @remarks
+ * Unlike {@link compileReporter}, this walk mirrors {@link compileGuard}: leaf
+ * coercions are faults, closed-object extras are faults, and union acceptance
+ * is decided from each variant's strict audit emptiness. Every recursive call
+ * returns at most {@link FAULT_LIMIT} entries. Hostile property access is
+ * contained through {@link attempt} and collapses to one fault at the current
+ * container path.
+ *
+ * @param shape - The shape to audit against
+ * @param value - The value to check
+ * @param path - The path prefix for faults produced at this call
+ * @returns The strict faults found, empty exactly when the compiled guard accepts the value
+ *
+ * @example
+ * ```ts
+ * const user = objectShape({ name: stringShape() })
+ * compileAuditor(user, { name: 'Ada', extra: true })
+ * // [{ reason: 'extra', path: ['extra'] }]
+ * ```
+ */
+export function compileAuditor(
+	shape: ContractShape,
+	value: unknown,
+	path: string[] = [],
+): readonly AuditFault[] {
+	const owned = ownShape(shape)
+	validateShapeDepth(owned)
+	switch (owned.type) {
+		case 'string': {
+			if (!isString(value)) {
+				return [{ reason: 'type', path, expected: 'string', received: preview(value) }]
+			}
+			const faults: AuditFault[] = []
+			if (owned.min !== undefined && value.length < owned.min) {
+				faults.push({
+					reason: 'constraint',
+					path,
+					expected: 'string',
+					constraint: 'min',
+					limit: owned.min,
+					received: preview(value),
+				})
+			}
+			if (owned.max !== undefined && value.length > owned.max) {
+				faults.push({
+					reason: 'constraint',
+					path,
+					expected: 'string',
+					constraint: 'max',
+					limit: owned.max,
+					received: preview(value),
+				})
+			}
+			if (owned.pattern !== undefined && !matchOf(owned.pattern)(value)) {
+				faults.push({
+					reason: 'constraint',
+					path,
+					expected: 'string',
+					constraint: 'pattern',
+					limit: owned.pattern.source,
+					received: preview(value),
+				})
+			}
+			return faults
+		}
+		case 'number': {
+			const kind: FaultKind = owned.integer === true ? 'integer' : 'number'
+			if (!isFiniteNumber(value)) {
+				return [{ reason: 'type', path, expected: kind, received: preview(value) }]
+			}
+			const faults: AuditFault[] = []
+			if (owned.integer === true && !Number.isInteger(value)) {
+				faults.push({
+					reason: 'constraint',
+					path,
+					expected: kind,
+					constraint: 'integer',
+					received: preview(value),
+				})
+			}
+			if (owned.min !== undefined && value < owned.min) {
+				faults.push({
+					reason: 'constraint',
+					path,
+					expected: kind,
+					constraint: 'min',
+					limit: owned.min,
+					received: preview(value),
+				})
+			}
+			if (owned.max !== undefined && value > owned.max) {
+				faults.push({
+					reason: 'constraint',
+					path,
+					expected: kind,
+					constraint: 'max',
+					limit: owned.max,
+					received: preview(value),
+				})
+			}
+			return faults
+		}
+		case 'boolean':
+			return isBoolean(value)
+				? []
+				: [{ reason: 'type', path, expected: 'boolean', received: preview(value) }]
+		case 'null':
+			return value === null
+				? []
+				: [{ reason: 'type', path, expected: 'null', received: preview(value) }]
+		case 'json':
+			return isJSONValue(value)
+				? []
+				: [{ reason: 'type', path, expected: 'json', received: preview(value) }]
+		case 'literal':
+			return literalOf(owned.values)(value)
+				? []
+				: [{ reason: 'type', path, expected: 'literal', received: preview(value) }]
+		case 'array': {
+			if (!isArray(value)) {
+				return [{ reason: 'type', path, expected: 'array', received: preview(value) }]
+			}
+			const faults: AuditFault[] = []
+			const outcome = attempt(() => {
+				for (let index = 0; index < value.length; index += 1) {
+					if (faults.length >= FAULT_LIMIT) return
+					const entry = Object.hasOwn(value, index) ? value[index] : undefined
+					faults.push(...compileAuditor(owned.items, entry, [...path, String(index)]))
+				}
+				if (owned.min !== undefined && value.length < owned.min) {
+					faults.push({
+						reason: 'constraint',
+						path,
+						expected: 'array',
+						constraint: 'min',
+						limit: owned.min,
+						received: String(value.length),
+					})
+				}
+				if (owned.max !== undefined && value.length > owned.max) {
+					faults.push({
+						reason: 'constraint',
+						path,
+						expected: 'array',
+						constraint: 'max',
+						limit: owned.max,
+						received: String(value.length),
+					})
+				}
+			})
+			if (!outcome.success) {
+				return [{ reason: 'type', path, expected: 'array', received: preview(value) }]
+			}
+			return faults.length > FAULT_LIMIT ? faults.slice(0, FAULT_LIMIT) : faults
+		}
+		case 'object': {
+			if (!isRecord(value)) {
+				return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
+			}
+			const record = value
+			const keys = enumerableKeys(record)
+			if (keys === undefined) {
+				return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
+			}
+			const present = new Set(keys)
+			const declaredKeys = Object.keys(owned.properties)
+			const declared = new Set(declaredKeys)
+			const faults: AuditFault[] = []
+			const extra = owned.additionalProperties
+			const closed = extra === undefined || extra === false
+			const additional = closed || extra === true ? undefined : extra
+			const outcome = attempt(() => {
+				for (const key of declaredKeys) {
+					if (faults.length >= FAULT_LIMIT) return
+					const child = owned.properties[key]
+					if (child === undefined) continue
+					const optional = child.type === 'optional'
+					const inner = optional ? child.inner : child
+					if (!present.has(key)) {
+						if (!optional) {
+							faults.push({
+								reason: 'missing',
+								path: [...path, key],
+								expected: shapeToKind(inner),
+							})
+						}
+						continue
+					}
+					faults.push(...compileAuditor(inner, record[key], [...path, key]))
+				}
+				for (const key of keys) {
+					if (faults.length >= FAULT_LIMIT) return
+					if (declared.has(key)) continue
+					if (closed) {
+						faults.push({ reason: 'extra', path: [...path, key] })
+					} else if (additional !== undefined) {
+						faults.push(...compileAuditor(additional, record[key], [...path, key]))
+					}
+				}
+			})
+			if (!outcome.success) {
+				return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
+			}
+			return faults.length > FAULT_LIMIT ? faults.slice(0, FAULT_LIMIT) : faults
+		}
+		case 'union': {
+			const perVariant = owned.variants.map((variant) => compileAuditor(variant, value, path))
+			const matched = perVariant.filter((faults) => faults.length === 0).length
+			if (owned.mode === 'oneOf') {
+				if (matched === 1) return []
+				if (matched > 1) return [{ reason: 'oneOf', path, matched }]
+			} else if (matched > 0) {
+				return []
+			}
+			let bestIndex = 0
+			for (let index = 1; index < perVariant.length; index += 1) {
+				const current = perVariant[index]
+				const best = perVariant[bestIndex]
+				if (current !== undefined && best !== undefined && current.length < best.length) {
+					bestIndex = index
+				}
+			}
+			const closest = perVariant[bestIndex] ?? []
+			const summary: AuditFault =
+				owned.mode === 'oneOf'
+					? { reason: 'oneOf', path, matched: 0 }
+					: { reason: 'variant', path, variants: owned.variants.length }
+			return [summary, ...closest].slice(0, FAULT_LIMIT)
+		}
+		case 'optional':
+			return value === undefined ? [] : compileAuditor(owned.inner, value, path)
+		case 'nullable':
+			return value === null ? [] : compileAuditor(owned.inner, value, path)
+		case 'raw':
+			return value === undefined
+				? [{ reason: 'type', path, expected: 'json', received: preview(value) }]
+				: []
+	}
+}
+
 // === Contract
 
 /**
- * Compile a {@link ContractShape} into a {@link ContractInterface} — the five
+ * Compile a {@link ContractShape} into a {@link ContractInterface} — the six
  * lockstep outputs from one declaration.
  *
  * @remarks
@@ -1322,13 +1566,13 @@ export function compileReporter(
  * takes its own {@link cloneShape} snapshot — never merely a frozen node's word
  * — and hands that same graph to every artifact compiler.
  * Then it precompiles the deeply frozen owned schema, guard, and parser once;
- * `generate` walks the
- * snapshot per call with the supplied random source, and `explain` compiles the
- * diagnostic report via {@link compileReporter} at zero added compile-time cost
- * (it re-walks the snapshot per call, exactly like `generate`).
+ * `generate` walks the snapshot per call with the supplied random source;
+ * `audit` and `explain` compile their diagnostic reports via
+ * {@link compileAuditor} and {@link compileReporter} at zero added compile-time
+ * cost (they re-walk the snapshot per call, exactly like `generate`).
  *
  * @param shape - The shape to compile
- * @returns A contract bundling `schema` / `is` / `parse` / `explain` / `generate`
+ * @returns A contract bundling `schema` / `is` / `parse` / `audit` / `explain` / `generate`
  *
  * @example
  * ```ts
@@ -1351,6 +1595,9 @@ export function createContract(shape: ContractShape): ContractInterface<unknown>
 		is: guard,
 		parse(value: unknown): unknown {
 			return parser(value)
+		},
+		audit(value: unknown): readonly AuditFault[] {
+			return compileAuditor(snapshot, value)
 		},
 		explain(value: unknown): readonly Fault[] {
 			return compileReporter(snapshot, value)
