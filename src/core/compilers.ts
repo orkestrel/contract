@@ -58,26 +58,35 @@ import { parseBoolean, parseInteger, parseNumber, parseRecord, parseString } fro
 // === Validation
 
 /**
- * Gate recursive compiler work on shape depth and structural cycles.
+ * Gate recursive compiler work on shape structure, depth, and cycles.
  *
  * @remarks
- * Walks the shape graph iteratively in linear time and stack space, tracking
- * active ancestors so shared children remain legal. Every standalone compiler
- * calls this gate before its recursive branch begins. The depth check runs
- * before the active-ancestor check, so a back-edge first reached beyond
- * {@link COMPILE_DEPTH_LIMIT} reports `depth`; a shallower cycle reports
- * `cycle`.
+ * Walks the shape graph iteratively in linear time and stack space. Every
+ * structural child slot must contain a shape node before it can enter the walk;
+ * a missing child or unknown shape discriminant reports `placement`. This is a
+ * structural-safety prerequisite rather than the full well-formedness pass in
+ * {@link validateShape}: it does not diagnose bounds, empty vocabularies, or
+ * optional-shape policy. Active ancestors are tracked so shared children remain
+ * legal. Every standalone compiler calls this gate before its recursive branch
+ * begins. The depth check runs before the child and active-ancestor checks, so a
+ * malformed edge first reached beyond {@link COMPILE_DEPTH_LIMIT} reports
+ * `depth`; a shallower cycle reports `cycle`.
  *
  * @param shape - The shape graph to gate
- * @returns Nothing; successful return means recursive compilation is depth-safe
- * @throws {ContractError} When the shape is cyclic or exceeds the compilation depth limit
+ * @returns Nothing; successful return means recursive compilation is structurally safe and depth-safe
+ * @throws {ContractError} When a structural child is not a shape, the graph is cyclic, or it exceeds the compilation depth limit
  */
 export function validateShapeDepth(shape: ContractShape): void {
 	const active = new WeakSet<ContractShape>()
 	const stack: (
-		| { readonly operation: 'enter'; readonly shape: ContractShape; readonly depth: number }
+		| {
+				readonly operation: 'enter'
+				readonly shape: ContractShape | undefined
+				readonly path: readonly string[]
+				readonly depth: number
+		  }
 		| { readonly operation: 'exit'; readonly shape: ContractShape }
-	)[] = [{ operation: 'enter', shape, depth: 0 }]
+	)[] = [{ operation: 'enter', shape, path: [], depth: 0 }]
 
 	while (stack.length > 0) {
 		const frame = stack.pop()
@@ -91,12 +100,19 @@ export function validateShapeDepth(shape: ContractShape): void {
 		if (frame.depth > COMPILE_DEPTH_LIMIT) {
 			throw new ContractError('validateShapeDepth: a shape exceeds the compilation depth limit', {
 				code: 'depth',
-				context: { shape: current.type, limit: COMPILE_DEPTH_LIMIT },
+				context: { path: frame.path, limit: COMPILE_DEPTH_LIMIT },
+			})
+		}
+		if (typeof current !== 'object' || current === null) {
+			throw new ContractError('validateShapeDepth: every structural child must be a shape', {
+				code: 'placement',
+				context: { path: frame.path },
 			})
 		}
 		if (active.has(current)) {
 			throw new ContractError('validateShapeDepth: a shape graph may not contain a cycle', {
 				code: 'cycle',
+				context: { path: frame.path },
 			})
 		}
 		active.add(current)
@@ -104,38 +120,86 @@ export function validateShapeDepth(shape: ContractShape): void {
 
 		switch (current.type) {
 			case 'array':
-				stack.push({ operation: 'enter', shape: current.items, depth: frame.depth + 1 })
+				stack.push({
+					operation: 'enter',
+					shape: current.items,
+					path: [...frame.path, 'items'],
+					depth: frame.depth + 1,
+				})
 				break
 			case 'object': {
+				if (
+					typeof current.properties !== 'object' ||
+					current.properties === null ||
+					Array.isArray(current.properties)
+				) {
+					throw new ContractError('validateShapeDepth: every structural child must be a shape', {
+						code: 'placement',
+						context: { path: [...frame.path, 'properties'] },
+					})
+				}
 				const extra = current.additionalProperties
 				if (extra !== undefined && extra !== true && extra !== false) {
-					stack.push({ operation: 'enter', shape: extra, depth: frame.depth + 1 })
+					stack.push({
+						operation: 'enter',
+						shape: extra,
+						path: [...frame.path, 'additionalProperties'],
+						depth: frame.depth + 1,
+					})
 				}
 				const keys = Object.keys(current.properties)
 				for (let index = keys.length - 1; index >= 0; index -= 1) {
 					const key = keys[index]
 					if (key === undefined) continue
 					const child = current.properties[key]
-					if (child !== undefined) {
-						stack.push({ operation: 'enter', shape: child, depth: frame.depth + 1 })
-					}
+					stack.push({
+						operation: 'enter',
+						shape: child,
+						path: [...frame.path, 'properties', key],
+						depth: frame.depth + 1,
+					})
 				}
 				break
 			}
 			case 'union':
+				if (!Array.isArray(current.variants)) {
+					throw new ContractError('validateShapeDepth: every structural child must be a shape', {
+						code: 'placement',
+						context: { path: [...frame.path, 'variants'] },
+					})
+				}
 				for (let index = current.variants.length - 1; index >= 0; index -= 1) {
 					const variant = current.variants[index]
-					if (variant !== undefined) {
-						stack.push({ operation: 'enter', shape: variant, depth: frame.depth + 1 })
-					}
+					stack.push({
+						operation: 'enter',
+						shape: variant,
+						path: [...frame.path, 'variants', String(index)],
+						depth: frame.depth + 1,
+					})
 				}
 				break
 			case 'optional':
 			case 'nullable':
-				stack.push({ operation: 'enter', shape: current.inner, depth: frame.depth + 1 })
+				stack.push({
+					operation: 'enter',
+					shape: current.inner,
+					path: [...frame.path, 'inner'],
+					depth: frame.depth + 1,
+				})
+				break
+			case 'string':
+			case 'number':
+			case 'boolean':
+			case 'null':
+			case 'json':
+			case 'literal':
+			case 'raw':
 				break
 			default:
-				break
+				throw new ContractError('validateShapeDepth: every structural child must be a shape', {
+					code: 'placement',
+					context: { path: frame.path },
+				})
 		}
 	}
 }
@@ -147,9 +211,11 @@ export function validateShapeDepth(shape: ContractShape): void {
  * @remarks
  * Fail-fast, per AGENTS §12: a malformed shape is a programmer error, so this
  * throws a coded {@link ContractError} immediately rather than surfacing as a
- * silently-wrong guard, parser, schema, or generator later. The iterative walk
- * tracks active ancestors, so a structural cycle reports its precise path while
- * a shared child reached through separate paths remains legal. Checks:
+ * silently-wrong guard, parser, schema, or generator later. It first runs
+ * {@link validateShapeDepth}, which rejects a structural child that is not a
+ * shape before this well-formedness walk begins. The iterative walk tracks
+ * active ancestors, so a structural cycle reports its precise path while a
+ * shared child reached through separate paths remains legal. Checks:
  *
  * - An {@link OptionalShape} is only legal as a direct object-property value —
  *   `optionalShape` wrapping an array item, a union variant, another
@@ -183,6 +249,7 @@ export function validateShapeDepth(shape: ContractShape): void {
  * ```
  */
 export function validateShape(shape: ContractShape): void {
+	validateShapeDepth(shape)
 	const active = new WeakSet<ContractShape>()
 	const stack: (
 		| {
@@ -1339,12 +1406,14 @@ export function compileReporter(
  * acceptance is decided from each variant's strict audit emptiness, so the
  * soundness invariant
  * `compileAuditor(shape, v).length === 0 ⟺ compileGuard(shape)(v)` holds
- * structurally. The invariant relates two separate calls, so it holds for a
- * value whose reads are stable across calls; see the read-stability
- * precondition on {@link ContractInterface}. Every recursive call returns at
- * most {@link FAULT_LIMIT} entries. Hostile property access is contained
- * through {@link attempt} and collapses to one fault at the current container
- * path.
+ * structurally. {@link validateShapeDepth} rejects a missing or unrecognized
+ * child before either artifact recurses, so a malformed declaration cannot
+ * create an empty audit beside a rejecting guard. The invariant relates two
+ * separate calls, so it holds for a value whose reads are stable across calls;
+ * see the read-stability precondition on {@link ContractInterface}. Every
+ * recursive call returns at most {@link FAULT_LIMIT} entries. Hostile property
+ * access is contained through {@link attempt} and collapses to one fault at the
+ * current container path.
  *
  * @param shape - The shape to audit against
  * @param value - The value to check

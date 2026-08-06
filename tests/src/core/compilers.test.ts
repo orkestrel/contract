@@ -258,6 +258,97 @@ describe('validateShape', () => {
 	})
 })
 
+describe('malformed shape children', () => {
+	it('rejects every non-shape child with a placement ContractError at every entry point', () => {
+		const source: { readonly child: ContractShape } = JSON.parse('{}')
+		const child = source.child
+		const cases: readonly {
+			readonly shape: ContractShape
+			readonly path: readonly string[]
+		}[] = [
+			{
+				shape: objectShape({ k: child }),
+				path: ['properties', 'k'],
+			},
+			{ shape: arrayShape(child), path: ['items'] },
+			{ shape: unionShape(stringShape(), child), path: ['variants', '1'] },
+			{ shape: oneOfShape(stringShape(), child), path: ['variants', '1'] },
+			{ shape: optionalShape(child), path: ['inner'] },
+			{ shape: nullableShape(child), path: ['inner'] },
+		]
+
+		for (const entry of cases) {
+			const depth = captureContractError(() => validateShapeDepth(entry.shape))
+			const validation = captureContractError(() => validateShape(entry.shape))
+			const schema = captureContractError(() => compileSchema(entry.shape))
+			const guard = captureContractError(() => compileGuard(entry.shape))
+			const parser = captureContractError(() => compileParser(entry.shape))
+			const generator = captureContractError(() => compileGenerator(entry.shape, () => 0))
+			const reporter = captureContractError(() => compileReporter(entry.shape, undefined))
+			const auditor = captureContractError(() => compileAuditor(entry.shape, undefined))
+
+			for (const error of [
+				depth,
+				validation,
+				schema,
+				guard,
+				parser,
+				generator,
+				reporter,
+				auditor,
+			]) {
+				expect(error.code).toBe('placement')
+				expect(error.context?.path).toEqual(entry.path)
+				expect(error).not.toBeInstanceOf(TypeError)
+			}
+		}
+	})
+
+	it('rejects malformed children nested under legal parents and additional properties', () => {
+		const source: { readonly child: ContractShape } = JSON.parse('{}')
+		const missing = source.child
+		const malformed: ContractShape = JSON.parse('{}')
+		const malformedObject: ContractShape = JSON.parse('{"type":"object"}')
+		const malformedUnion: ContractShape = JSON.parse('{"type":"union"}')
+		let deep: ContractShape = nullableShape(missing)
+		for (let level = 0; level < 64; level += 1) deep = arrayShape(deep)
+
+		const nested = captureContractError(() =>
+			compileGuard(objectShape({ values: arrayShape(missing) })),
+		)
+		const additional = captureContractError(() => compileAuditor(recordShape(malformed), {}))
+		const discriminant = captureContractError(() =>
+			compileParser(objectShape({ value: malformed })),
+		)
+		const properties = captureContractError(() =>
+			compileSchema(objectShape({ value: malformedObject })),
+		)
+		const variants = captureContractError(() =>
+			compileGenerator(objectShape({ value: malformedUnion }), () => 0),
+		)
+		const depth = captureContractError(() => compileReporter(deep, undefined))
+
+		expect(nested.code).toBe('placement')
+		expect(nested.context?.path).toEqual(['properties', 'values', 'items'])
+		expect(additional.code).toBe('placement')
+		expect(additional.context?.path).toEqual(['additionalProperties'])
+		expect(discriminant.code).toBe('placement')
+		expect(discriminant.context?.path).toEqual(['properties', 'value'])
+		expect(properties.code).toBe('placement')
+		expect(properties.context?.path).toEqual(['properties', 'value', 'properties'])
+		expect(variants.code).toBe('placement')
+		expect(variants.context?.path).toEqual(['properties', 'value', 'variants'])
+		expect(depth.code).toBe('placement')
+		expect(depth.context?.path).toEqual([...Array.from({ length: 64 }, () => 'items'), 'inner'])
+		const undefinedAdditional = recordShape(missing)
+		expect(compileGuard(undefinedAdditional)({ k: 'present' })).toBe(false)
+		expect(compileAuditor(undefinedAdditional, { k: 'present' })).toEqual([
+			{ reason: 'extra', path: ['k'] },
+		])
+		expect(() => validateShape(objectShape({}))).not.toThrow()
+	})
+})
+
 describe('createContract fail-fast', () => {
 	it('throws at creation time for a degenerate shape, not at use', () => {
 		expect(() => createContract(stringShape({ min: 5, max: 1 }))).toThrow(
