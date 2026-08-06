@@ -489,6 +489,26 @@ describe('cloneShape', () => {
 		expect(clone.properties.first).not.toBe(child)
 	})
 
+	it('refuses a property declaration whose repeated enumeration disagrees', () => {
+		let reads = 0
+		const properties = new Proxy(
+			{ a: stringShape(), b: stringShape() },
+			{
+				ownKeys(target) {
+					reads += 1
+					return reads === 1 ? Reflect.ownKeys(target) : ['a']
+				},
+			},
+		)
+		const source: ContractShape = { type: 'object', properties }
+		const error = captureContractError(() => cloneShape(source))
+
+		expect(reads).toBe(2)
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('cloneShape: property keys must be stable data')
+		expect(error.context?.path).toEqual(['properties'])
+	})
+
 	it('rejects a cyclic shape with the shared gate diagnosis', () => {
 		const raw = JSON.parse('{"type":"array","items":{"type":"string"}}')
 		raw.items = raw

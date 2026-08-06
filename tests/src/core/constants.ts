@@ -49,6 +49,7 @@ export const PROTECTED_COMPILER_CLOSURE = Object.freeze({
 		'parseRecord',
 		'parseString',
 		'preview',
+		'readOptions',
 		'readValue',
 		'shapeToKind',
 		'stringOf',
@@ -57,5 +58,5 @@ export const PROTECTED_COMPILER_CLOSURE = Object.freeze({
 		'validateShapeDepth',
 		'whereOf',
 	]),
-	hash: '086a91d430cfd79a',
+	hash: '493e182ce803dd12',
 })

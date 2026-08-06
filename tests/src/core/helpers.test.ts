@@ -13,6 +13,7 @@ import {
 	enumerableKeys,
 	enumerableSymbolCount,
 	holds,
+	isRecord,
 	matchesJSONValue,
 	objectShape,
 	readOptions,
@@ -184,26 +185,51 @@ describe('readOptions', () => {
 		expect(snapshot).toEqual({ min: 1 })
 	})
 
-	it('refuses a readable consumed property when the snapshot cannot carry it', () => {
+	it('carries a consumed non-enumerable property into the snapshot', () => {
 		const source: { readonly min?: number } = {}
 		Object.defineProperty(source, 'min', { value: 1, enumerable: false })
-		const error = captureContractError(() => readOptions(source, ['min'], 'stringShape', 'string'))
+		const snapshot = readOptions(source, ['min'], 'stringShape', 'string')
 
 		expect(Reflect.get(source, 'min')).toBe(1)
-		expect(error.code).toBe('structure')
-		expect(error.message).toBe('stringShape: min must be an own enumerable option')
-		expect(error.context?.path).toEqual(['min'])
+		expect(snapshot).toEqual({ min: 1 })
+		expect(Object.keys(snapshot ?? {})).toEqual(['min'])
 	})
 
-	it('refuses an inherited consumed property by the same snapshot-view rule', () => {
+	it('carries a consumed inherited property into the snapshot', () => {
 		const prototype: { min?: number } = Object.create(null)
 		prototype.min = 1
 		const source: { readonly min?: number } = Object.create(prototype)
-		const error = captureContractError(() => readOptions(source, ['min'], 'stringShape', 'string'))
+		const snapshot = readOptions(source, ['min'], 'stringShape', 'string')
 
 		expect(Reflect.get(source, 'min')).toBe(1)
-		expect(error.code).toBe('structure')
-		expect(error.message).toBe('stringShape: min must be an own enumerable option')
+		expect(snapshot).toEqual({ min: 1 })
+		expect(Object.hasOwn(snapshot ?? {}, 'min')).toBe(true)
+	})
+
+	it('omits consumed undefined values and unrelated properties', () => {
+		const snapshot = readOptions({ min: undefined, unrelated: 4 }, ['min'], 'stringShape', 'string')
+
+		expect(snapshot).toEqual({})
+		expect(Object.hasOwn(snapshot ?? {}, 'min')).toBe(false)
+		expect(Object.hasOwn(snapshot ?? {}, 'unrelated')).toBe(false)
+	})
+
+	it('rejects arrays and class instances as non-record options', () => {
+		class Options {
+			readonly min = 1
+		}
+		for (const source of [[1], new Options()]) {
+			const error = captureContractError(() =>
+				Reflect.apply(readOptions<{ readonly min?: number }>, undefined, [
+					source,
+					['min'],
+					'stringShape',
+					'string',
+				]),
+			)
+			expect(error.code).toBe('structure')
+			expect(error.message).toBe('stringShape: options must be a plain record')
+		}
 	})
 
 	it('rejects a primitive before reflection with the precise plain-record message', () => {
@@ -281,6 +307,15 @@ describe('resolveField', () => {
 		expect(resolveField({ a: 1 }, ['a', 'b'])).toBeUndefined()
 		expect(resolveField({ a: null }, ['a', 'b'])).toBeUndefined()
 		expect(resolveField({ a: 'x' }, ['a', 'b'])).toBeUndefined()
+	})
+
+	it('requires a record root and reads only own properties at every segment', () => {
+		const inherited = Object.create({ role: 'admin' })
+		const nested = { defaults: Object.create({ role: 'admin' }) }
+
+		expect(isRecord(inherited)).toBe(false)
+		expect(resolveField(inherited, 'role')).toBeUndefined()
+		expect(resolveField(nested, ['defaults', 'role'])).toBeUndefined()
 	})
 
 	it('returns undefined against a hostile getter without throwing', () => {

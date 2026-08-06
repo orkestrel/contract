@@ -415,9 +415,10 @@ export function cloneSchema(schema: JSONSchema): JSONSchema {
  * Uses an explicit memo to preserve shared-child identity while building the
  * candidate snapshot. Shape-node shells are created iteratively, then their
  * structural edges are wired and their copied collections frozen. Before the
- * snapshot returns, the original declaration is re-checked by
- * {@link validateShapeDepth}, so a cyclic or otherwise malformed shape is
- * refused rather than normalized by the copy.
+ * snapshot returns, the original graph is checked by {@link validateShapeDepth}
+ * so a cyclic or otherwise malformed shape is refused. Repeated property-map
+ * enumeration is compared before copying, so disagreement is refused instead
+ * of producing a snapshot that contradicts the declaration.
  * String patterns are captured by source and flags behind an enumerable
  * accessor that returns a fresh frozen zero-state `RegExp` on every read.
  * A raw schema delegates to {@link cloneSchema}. Ownership never erases a
@@ -443,6 +444,10 @@ export function cloneShape(shape: ContractShape): ContractShape {
 	try {
 		const memo = new Map<ContractShape, ContractShape>()
 		const paths = new Map<ContractShape, readonly string[]>([[shape, []]])
+		const propertySnapshots = new Map<
+			ContractShape,
+			ReadonlyMap<string, ContractShape | undefined>
+		>()
 		const pending: ContractShape[] = [shape]
 		const sources: ContractShape[] = []
 		let root = shape
@@ -770,13 +775,16 @@ export function cloneShape(shape: ContractShape): ContractShape {
 							: { additionalProperties: extra }),
 						...(source.description === undefined ? {} : { description: source.description }),
 					}
+					const properties = new Map<string, ContractShape | undefined>()
 					for (const key of Object.keys(source.properties)) {
 						const child = source.properties[key]
+						properties.set(key, child)
 						if (child !== undefined) {
 							paths.set(child, [...path, 'properties', key])
 							pending.push(child)
 						}
 					}
+					propertySnapshots.set(source, properties)
 					if (extra !== undefined && extra !== true && extra !== false) {
 						paths.set(extra, [...path, 'additionalProperties'])
 						pending.push(extra)
@@ -881,8 +889,27 @@ export function cloneShape(shape: ContractShape): ContractShape {
 				}
 				case 'object': {
 					const properties: Record<string, ContractShape> = Object.create(null)
-					for (const key of Object.keys(source.properties)) {
-						const child = source.properties[key]
+					const snapshot = propertySnapshots.get(source)
+					if (snapshot === undefined) {
+						diagnosis = new ContractError('cloneShape: properties could not be read', {
+							code: 'clone',
+							context: { path: [...path, 'properties'], shape: 'object' },
+						})
+						throw diagnosis
+					}
+					const snapshotKeys = [...snapshot.keys()]
+					const repeated = Object.keys(source.properties)
+					if (
+						repeated.length !== snapshotKeys.length ||
+						repeated.some((key, index) => key !== snapshotKeys[index])
+					) {
+						diagnosis = new ContractError('cloneShape: property keys must be stable data', {
+							code: 'structure',
+							context: { path: [...path, 'properties'] },
+						})
+						throw diagnosis
+					}
+					for (const [key, child] of snapshot) {
 						if (child === undefined) {
 							diagnosis = new ContractError('cloneShape: every structural child must be a shape', {
 								code: 'structure',

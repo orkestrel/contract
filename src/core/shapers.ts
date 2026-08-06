@@ -27,12 +27,13 @@ import { cloneSchema, cloneShape } from './cloners.js'
 import { validateShapeDepth } from './compilers.js'
 import { INFER_BREADTH_LIMIT, INFER_DEPTH_LIMIT } from './constants.js'
 import { ContractError } from './errors.js'
-import { attempt, readOptions, readValue } from './helpers.js'
+import { attempt, preview, readOptions, readValue } from './helpers.js'
 import {
 	isArray,
 	isBoolean,
 	isFiniteNumber,
 	isInteger,
+	isObject,
 	isRecord,
 	isRegExp,
 	isString,
@@ -81,7 +82,7 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 			context: {
 				shape: 'string',
 				limit: 'non-negative safe integer',
-				received: String(safe.min),
+				received: preview(safe.min),
 			},
 		})
 	}
@@ -91,7 +92,7 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 			context: {
 				shape: 'string',
 				limit: 'non-negative safe integer',
-				received: String(safe.max),
+				received: preview(safe.max),
 			},
 		})
 	}
@@ -153,13 +154,13 @@ export function numberShape(options?: NumberShapeOptions): NumberShape {
 	if (safe?.min !== undefined && !Number.isFinite(safe.min)) {
 		throw new ContractError('numberShape: min must be finite', {
 			code: 'bound',
-			context: { shape, limit: 'finite number', received: String(safe.min) },
+			context: { shape, limit: 'finite number', received: preview(safe.min) },
 		})
 	}
 	if (safe?.max !== undefined && !Number.isFinite(safe.max)) {
 		throw new ContractError('numberShape: max must be finite', {
 			code: 'bound',
-			context: { shape, limit: 'finite number', received: String(safe.max) },
+			context: { shape, limit: 'finite number', received: preview(safe.max) },
 		})
 	}
 	const result: NumberShape = {
@@ -310,7 +311,7 @@ export function arrayShape<S extends ContractShape>(
 			context: {
 				shape: 'array',
 				limit: 'non-negative safe integer',
-				received: String(safe.min),
+				received: preview(safe.min),
 			},
 		})
 	}
@@ -320,7 +321,7 @@ export function arrayShape<S extends ContractShape>(
 			context: {
 				shape: 'array',
 				limit: 'non-negative safe integer',
-				received: String(safe.max),
+				received: preview(safe.max),
 			},
 		})
 	}
@@ -361,7 +362,7 @@ export function objectShape<
 	const A extends boolean | ContractShape = false,
 >(properties: P, options?: ObjectShapeOptions<A>): ObjectShape<P, A> {
 	const input: unknown = properties
-	if (!isRecord(input)) {
+	if (!isObject(input)) {
 		throw new ContractError('objectShape: properties must be a plain record', {
 			code: 'structure',
 			context: { path: ['properties'], shape: 'object' },
@@ -373,36 +374,41 @@ export function objectShape<
 		'objectShape',
 		'object',
 	)
-	validateShapeDepth({
-		type: 'object',
-		properties,
-		...(safe?.additionalProperties === undefined
-			? {}
-			: { additionalProperties: safe.additionalProperties }),
-		...(safe?.description === undefined ? {} : { description: safe.description }),
-	})
-	const copied = attempt(() => {
-		const snapshot: { [K in keyof P]: P[K] } = Object.create(null)
-		for (const key in properties) {
-			if (Object.hasOwn(properties, key)) snapshot[key] = properties[key]
-		}
-		return Object.freeze(snapshot)
-	})
-	if (!copied.success) {
-		throw new ContractError('objectShape: properties could not be copied', {
+	const copied = readValue(
+		() => {
+			const array = Array.isArray(input)
+			const prototype = Reflect.getPrototypeOf(input)
+			const record = !array && (prototype === null || Reflect.getPrototypeOf(prototype) === null)
+			const snapshot: { [K in keyof P]: P[K] } = Object.create(null)
+			for (const key of Object.keys(input)) {
+				Reflect.defineProperty(snapshot, key, {
+					value: Reflect.get(input, key),
+					enumerable: true,
+					configurable: true,
+					writable: true,
+				})
+			}
+			return { record, snapshot: Object.freeze(snapshot) }
+		},
+		'objectShape',
+		'properties',
+	)
+	if (!copied.record) {
+		throw new ContractError('objectShape: properties must be a plain record', {
 			code: 'structure',
 			context: { path: ['properties'], shape: 'object' },
-			cause: copied.error,
 		})
 	}
-	return Object.freeze({
+	const shape: ObjectShape<P, A> = {
 		type: 'object',
-		properties: copied.value,
+		properties: copied.snapshot,
 		...(safe?.additionalProperties === undefined
 			? {}
 			: { additionalProperties: safe.additionalProperties }),
 		...(safe?.description === undefined ? {} : { description: safe.description }),
-	})
+	}
+	validateShapeDepth(shape)
+	return Object.freeze(shape)
 }
 
 /**

@@ -752,6 +752,31 @@ describe('user-callback throw containment (AGENTS §14)', () => {
 })
 
 describe('combinator totality sweep', () => {
+	it('carries inherited and non-enumerable string options into its guard', () => {
+		const prototype: { min?: number } = Object.create(null)
+		prototype.min = 2
+		const inherited: { readonly min?: number } = Object.create(prototype)
+		const hidden: { readonly min?: number } = {}
+		Object.defineProperty(hidden, 'min', { value: 2, enumerable: false })
+
+		for (const options of [inherited, hidden]) {
+			const guard = stringOf(options)
+			expect(guard('a')).toBe(false)
+			expect(guard('ab')).toBe(true)
+		}
+	})
+
+	it('rejects array and class-instance string options as non-record containers', () => {
+		class Options {
+			readonly min = 2
+		}
+		for (const options of [[2], new Options()]) {
+			const error = captureContractError(() => Reflect.apply(stringOf, undefined, [options]))
+			expect(error.code).toBe('structure')
+			expect(error.message).toBe('stringOf: options must be a plain record')
+		}
+	})
+
 	it('uses one pattern refusal vocabulary across the three sibling APIs', () => {
 		const hostile = new Proxy(/value/, {
 			get(target, property, receiver) {

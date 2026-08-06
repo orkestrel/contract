@@ -146,11 +146,11 @@ export function enumerableKeys(value: object): readonly string[] | undefined {
  *
  * @remarks
  * Primitive inputs are rejected before reflection so ordinary caller mistakes
- * retain the builder's precise plain-record diagnostic. For an object, every
+ * retain the reader's precise plain-record diagnostic. For an object, every
  * consumed key is read exactly once, checked for presence, and inspected for an
- * own descriptor even when the host reports no own keys. That one value enters
- * the own-enumerable snapshot. A consumed inherited or non-enumerable key is
- * refused because the snapshot cannot carry it. A hostile host is reported
+ * own descriptor while the container is enumerated once. Every successfully
+ * read non-`undefined` consumed value enters the fresh own-enumerable snapshot,
+ * including an inherited or non-enumerable option. A hostile host is reported
  * uniformly as an unreadable options record, while a readable array or class
  * instance retains the plain-record diagnostic.
  *
@@ -183,24 +183,19 @@ export function readOptions<T extends object>(
 	const result = readValue(
 		() => {
 			const values = new Map<PropertyKey, unknown>()
-			const descriptors = new Map<PropertyKey, PropertyDescriptor | undefined>()
-			const presence = new Map<string, boolean>()
 			for (const key of keys) {
 				values.set(key, Reflect.get(input, key))
-				presence.set(key, Reflect.has(input, key))
-				descriptors.set(key, Reflect.getOwnPropertyDescriptor(input, key))
+				Reflect.has(input, key)
+				Reflect.getOwnPropertyDescriptor(input, key)
 			}
-			const ownKeys = Reflect.ownKeys(input)
+			Reflect.ownKeys(input)
+			const array = Array.isArray(input)
 			const prototype = Reflect.getPrototypeOf(input)
-			const record = prototype === null || Reflect.getPrototypeOf(prototype) === null
-			const own = new Set<PropertyKey>(ownKeys)
+			const record = !array && (prototype === null || Reflect.getPrototypeOf(prototype) === null)
 			const snapshot: T = Object.create(Object.prototype)
-			for (const key of ownKeys) {
-				const descriptor = descriptors.has(key)
-					? descriptors.get(key)
-					: Reflect.getOwnPropertyDescriptor(input, key)
-				if (descriptor?.enumerable !== true) continue
-				const value = values.has(key) ? values.get(key) : Reflect.get(input, key)
+			for (const key of keys) {
+				const value = values.get(key)
+				if (value === undefined) continue
 				Reflect.defineProperty(snapshot, key, {
 					value,
 					enumerable: true,
@@ -208,15 +203,7 @@ export function readOptions<T extends object>(
 					writable: true,
 				})
 			}
-			const invalid = keys.find((key) => {
-				const descriptor = descriptors.get(key)
-				const present = presence.get(key) === true
-				return (
-					(descriptor !== undefined && (!descriptor.enumerable || !own.has(key))) ||
-					(descriptor === undefined && present)
-				)
-			})
-			return { snapshot, invalid, record }
+			return { snapshot, record }
 		},
 		builder,
 		'options',
@@ -225,12 +212,6 @@ export function readOptions<T extends object>(
 		throw new ContractError(`${builder}: options must be a plain record`, {
 			code: 'structure',
 			context: { shape },
-		})
-	}
-	if (result.invalid !== undefined) {
-		throw new ContractError(`${builder}: ${result.invalid} must be an own enumerable option`, {
-			code: 'structure',
-			context: { path: [result.invalid], shape },
 		})
 	}
 	return result.snapshot
@@ -275,11 +256,12 @@ export function drawRandom(random: RandomFunction, shape: string): number {
  *
  * @remarks
  * A single `string` is ONE key (never split on `.`, so dotted keys are safe); a
- * string array descends left-to-right through nested objects. Intermediates may
- * be any object — records, class instances, or arrays indexed by string. Returns
- * `undefined` the moment a segment is missing or lands on a non-object, so the
- * lookup is total — even against a hostile getter or Proxy trap that throws on
- * read, contained via {@link attempt} so the throw never escapes.
+ * string array descends left-to-right through own properties of nested objects.
+ * The root must satisfy {@link isRecord}; inherited properties are never fields.
+ * Intermediates may be objects or arrays indexed by string. Returns `undefined`
+ * the moment a segment is missing or lands on a non-object, so the lookup is
+ * total — even against a hostile getter or Proxy trap that throws on read,
+ * contained via {@link attempt} so the throw never escapes.
  *
  * @param record - The source record
  * @param path - A property key, or a key path descending into nested objects
@@ -294,10 +276,11 @@ export function drawRandom(random: RandomFunction, shape: string): number {
  */
 export function resolveField(record: Readonly<Record<string, unknown>>, path: FieldPath): unknown {
 	const outcome = attempt(() => {
+		if (!isRecord(record)) return undefined
 		const keys = isString(path) ? [path] : path
 		let current: unknown = record
 		for (const key of keys) {
-			if (!isObject(current)) return undefined
+			if (!isObject(current) || !Object.hasOwn(current, key)) return undefined
 			current = Reflect.get(current, key)
 		}
 		return current

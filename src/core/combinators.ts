@@ -24,7 +24,7 @@ import {
 	isString,
 	isSymbol,
 } from './validators.js'
-import { holds, readValue } from './helpers.js'
+import { holds, readOptions, readValue } from './helpers.js'
 
 // Every combinator returns a `Guard<T>` — a total function (AGENTS §14). The
 // combinators that invoke a caller-supplied callback inside the guard body
@@ -776,17 +776,10 @@ export function stringOf(options?: {
 	max?: number
 	pattern?: RegExp
 }): Guard<string> {
-	const readable = readValue(
-		() => {
-			const min = options?.min
-			const max = options?.max
-			const source = options?.pattern
-			return { min, max, source }
-		},
-		'stringOf',
-		'options',
-	)
-	const { min, max, source } = readable
+	const safe = readOptions(options, ['min', 'max', 'pattern'], 'stringOf', 'string')
+	const min = safe?.min
+	const max = safe?.max
+	const source = safe?.pattern
 	if (source !== undefined && !isRegExp(source)) {
 		throw new ContractError('stringOf: pattern must be a RegExp', { code: 'pattern' })
 	}

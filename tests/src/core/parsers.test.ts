@@ -253,6 +253,19 @@ describe('record-field parsers', () => {
 		expect(parseEnumField(record, ['user', 'roles', '0'], allowed)).toBe('admin')
 	})
 
+	it('rejects inherited fields and roots that are not records', () => {
+		const defaults = { role: 'admin', count: 7, flag: true }
+		const inherited = Object.create(defaults)
+		const nested = { defaults: Object.create(defaults) }
+
+		expect(isRecord(inherited)).toBe(false)
+		expect(parseStringField(inherited, 'role')).toBeUndefined()
+		expect(parseIntegerField(inherited, 'count')).toBeUndefined()
+		expect(parseBooleanField(inherited, 'flag')).toBeUndefined()
+		expect(parseEnumField(inherited, 'role', ['admin', 'member'])).toBeUndefined()
+		expect(parseStringField(nested, ['defaults', 'role'])).toBeUndefined()
+	})
+
 	it('parseNullField and parseJSONValueField read present, absent, and nested paths', () => {
 		const record: Record<string, unknown> = {
 			flag: null,

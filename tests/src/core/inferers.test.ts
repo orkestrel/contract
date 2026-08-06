@@ -161,6 +161,38 @@ describe('valueToSchema — objects', () => {
 		expect(error.message).toBe('valueToSchema: options could not be read')
 	})
 
+	it('carries inherited and non-enumerable inference options', () => {
+		const prototype: { format?: boolean } = Object.create(null)
+		prototype.format = true
+		const inherited: { readonly format?: boolean } = Object.create(prototype)
+		const hidden: { readonly enum?: boolean } = {}
+		Object.defineProperty(hidden, 'enum', { value: true, enumerable: false })
+
+		expect(valueToSchema('2024-01-01', inherited)).toEqual({
+			type: 'string',
+			format: 'date',
+		})
+		expect(samplesToSchema(['active', 'inactive', 'active'], hidden)).toEqual({
+			enum: ['active', 'inactive'],
+		})
+	})
+
+	it('rejects array and class-instance inference options as non-record containers', () => {
+		class Options {
+			readonly format = true
+		}
+		for (const options of [[], new Options()]) {
+			for (const [reader, run] of [
+				['valueToSchema', () => Reflect.apply(valueToSchema, undefined, ['value', options])],
+				['samplesToSchema', () => Reflect.apply(samplesToSchema, undefined, [['value'], options])],
+			] satisfies readonly (readonly [string, () => unknown])[]) {
+				const error = captureContractError(run)
+				expect(error.code).toBe('structure')
+				expect(error.message).toBe(`${reader}: options must be a plain record`)
+			}
+		}
+	})
+
 	it('infers properties/required/additionalProperties, matching compileSchema round-trip parity', () => {
 		const shape = objectShape({
 			age: integerShape(),

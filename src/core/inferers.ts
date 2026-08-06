@@ -17,7 +17,7 @@ import {
 	isRecord,
 	isString,
 } from './validators.js'
-import { attempt, enumerableKeys, readValue, sanitizeBudget } from './helpers.js'
+import { attempt, enumerableKeys, readOptions, readValue, sanitizeBudget } from './helpers.js'
 
 // The inferers walk an UNKNOWN, possibly adversarial runtime value (or a set
 // of example values) and emit a JSONSchema — the reverse direction of
@@ -715,28 +715,18 @@ export function inferObject(
  * ```
  */
 export function valueToSchema(value: unknown, options?: ValueToSchemaOptions): JSONSchema {
-	const safe = readValue(
-		() => {
-			const maxDepth = sanitizeBudget(options?.maxDepth, INFER_DEPTH_LIMIT)
-			const maxProperties = sanitizeBudget(options?.maxProperties, INFER_BREADTH_LIMIT)
-			const closed = options?.closed ?? true
-			const format = options?.format ?? false
-			return { maxDepth, maxProperties, closed, format }
-		},
+	const optionsSnapshot = readOptions(
+		options,
+		['maxDepth', 'maxProperties', 'closed', 'format', 'enum'],
 		'valueToSchema',
-		'options',
+		'schema',
 	)
+	const maxDepth = sanitizeBudget(optionsSnapshot?.maxDepth, INFER_DEPTH_LIMIT)
+	const maxProperties = sanitizeBudget(optionsSnapshot?.maxProperties, INFER_BREADTH_LIMIT)
+	const closed = optionsSnapshot?.closed ?? true
+	const format = optionsSnapshot?.format ?? false
 	return readValue(
-		() =>
-			inferValue(
-				value,
-				safe.maxDepth,
-				safe.maxProperties,
-				safe.closed,
-				safe.format,
-				new WeakSet(),
-				new WeakMap(),
-			),
+		() => inferValue(value, maxDepth, maxProperties, closed, format, new WeakSet(), new WeakMap()),
 		'valueToSchema',
 	)
 }
@@ -959,28 +949,19 @@ export function samplesToSchema(
 	samples: readonly unknown[],
 	options?: ValueToSchemaOptions,
 ): JSONSchema {
-	const safe = readValue(
-		() => {
-			const maxDepth = sanitizeBudget(options?.maxDepth, INFER_DEPTH_LIMIT)
-			const maxProperties = sanitizeBudget(options?.maxProperties, INFER_BREADTH_LIMIT)
-			const closed = options?.closed ?? true
-			const format = options?.format ?? false
-			const enumOn = options?.enum ?? false
-			return { maxDepth, maxProperties, closed, format, enumOn }
-		},
+	const optionsSnapshot = readOptions(
+		options,
+		['maxDepth', 'maxProperties', 'closed', 'format', 'enum'],
 		'samplesToSchema',
-		'options',
+		'schema',
 	)
+	const maxDepth = sanitizeBudget(optionsSnapshot?.maxDepth, INFER_DEPTH_LIMIT)
+	const maxProperties = sanitizeBudget(optionsSnapshot?.maxProperties, INFER_BREADTH_LIMIT)
+	const closed = optionsSnapshot?.closed ?? true
+	const format = optionsSnapshot?.format ?? false
+	const enumOn = optionsSnapshot?.enum ?? false
 	return readValue(
-		() =>
-			inferSamples(
-				samples,
-				safe.maxDepth,
-				safe.maxProperties,
-				safe.closed,
-				safe.format,
-				safe.enumOn,
-			),
+		() => inferSamples(samples, maxDepth, maxProperties, closed, format, enumOn),
 		'samplesToSchema',
 		'samples',
 	)

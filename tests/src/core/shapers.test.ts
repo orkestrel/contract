@@ -767,14 +767,61 @@ describe('shape builders', () => {
 		}
 	})
 
-	it('refuses a consumed non-enumerable option instead of silently dropping it', () => {
+	it('carries a consumed non-enumerable option into the built shape', () => {
 		const options: { readonly min?: number } = {}
 		Object.defineProperty(options, 'min', { value: 5, enumerable: false })
-		const error = captureContractError(() => stringShape(options))
+		const shape = stringShape(options)
 
 		expect(Reflect.get(options, 'min')).toBe(5)
-		expect(error.code).toBe('structure')
-		expect(error.message).toBe('stringShape: min must be an own enumerable option')
+		expect(shape.min).toBe(5)
+	})
+
+	it('contains diagnostic coercion for every builder bound position', () => {
+		const poison = {
+			[Symbol.toPrimitive]() {
+				throw new Error('poisoned')
+			},
+		}
+		const cases: readonly (readonly [string, () => unknown])[] = [
+			['stringShape.min', () => Reflect.apply(stringShape, undefined, [{ min: poison }])],
+			['stringShape.max', () => Reflect.apply(stringShape, undefined, [{ max: poison }])],
+			['numberShape.min', () => Reflect.apply(numberShape, undefined, [{ min: poison }])],
+			['numberShape.max', () => Reflect.apply(numberShape, undefined, [{ max: poison }])],
+			['integerShape.min', () => Reflect.apply(integerShape, undefined, [{ min: poison }])],
+			['integerShape.max', () => Reflect.apply(integerShape, undefined, [{ max: poison }])],
+			[
+				'arrayShape.min',
+				() => Reflect.apply(arrayShape, undefined, [stringShape(), { min: poison }]),
+			],
+			[
+				'arrayShape.max',
+				() => Reflect.apply(arrayShape, undefined, [stringShape(), { max: poison }]),
+			],
+		]
+
+		for (const [position, run] of cases) {
+			const error = captureContractError(run)
+			expect({ position, code: error.code }).toEqual({ position, code: 'bound' })
+		}
+	})
+
+	it('enumerates a caller-owned property declaration once and carries that snapshot', () => {
+		let reads = 0
+		const properties = new Proxy(
+			{ a: stringShape(), b: stringShape() },
+			{
+				ownKeys(target) {
+					reads += 1
+					return reads === 1 ? Reflect.ownKeys(target) : ['a']
+				},
+			},
+		)
+		const contract = createContract(objectShape(properties))
+
+		expect(reads).toBe(1)
+		expect(Object.keys(contract.schema.properties ?? {})).toEqual(['a', 'b'])
+		expect(contract.is({ a: 'a', b: 'b' })).toBe(true)
+		expect(contract.is({ a: 'a' })).toBe(false)
 	})
 
 	it('integerShape rejects non-finite bounds like numberShape', () => {
