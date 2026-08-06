@@ -172,25 +172,25 @@ describe('validateShape', () => {
 
 	it('throws on an empty union', () => {
 		expect(() => validateShape(unionShape())).toThrow(
-			'validateShape: a union shape needs at least one variant',
+			'validateShapeDepth: a union shape needs at least one variant',
 		)
 	})
 
 	it('throws on an empty literal', () => {
 		expect(() => validateShape(literalShape([]))).toThrow(
-			'validateShape: a literal shape needs at least one value',
+			'validateShapeDepth: a literal shape needs at least one value',
 		)
 	})
 
 	it('throws on a literal shape containing a non-finite number value', () => {
 		expect(() => validateShape(literalShape([Number.NaN]))).toThrow(
-			'validateShape: a literal shape may not contain non-finite number values',
+			'validateShapeDepth: a literal shape may not contain non-finite number values',
 		)
 		expect(() => validateShape(literalShape([Number.POSITIVE_INFINITY]))).toThrow(
-			'validateShape: a literal shape may not contain non-finite number values',
+			'validateShapeDepth: a literal shape may not contain non-finite number values',
 		)
 		expect(() => validateShape(literalShape([Number.NEGATIVE_INFINITY]))).toThrow(
-			'validateShape: a literal shape may not contain non-finite number values',
+			'validateShapeDepth: a literal shape may not contain non-finite number values',
 		)
 		// A finite number literal alongside other values still passes.
 		expect(() => validateShape(literalShape([1, 'a', 2.5]))).not.toThrow()
@@ -375,16 +375,16 @@ describe('malformed shape children', () => {
 		)
 
 		expect(throwingCodes).toEqual([
-			'clone',
-			'clone',
 			'structure',
 			'structure',
-			'clone',
-			'clone',
-			'clone',
-			'clone',
-			'clone',
-			'clone',
+			'structure',
+			'structure',
+			'structure',
+			'structure',
+			'structure',
+			'structure',
+			'structure',
+			'structure',
 			'structure',
 		])
 
@@ -976,6 +976,160 @@ describe('malformed shape children', () => {
 		}
 	})
 
+	it('refuses every launderable declaration at all eleven named shape entry points', () => {
+		const mapped: ContractShape = JSON.parse('{"type":"object","properties":{}}')
+		Object.defineProperty(mapped, 'properties', { value: new Map(), enumerable: true })
+		const inherited: ContractShape = JSON.parse('{}')
+		Object.setPrototypeOf(inherited, { type: 'string' })
+		const accessorType: ContractShape = JSON.parse('{}')
+		Object.defineProperty(accessorType, 'type', {
+			enumerable: true,
+			get() {
+				return 'string'
+			},
+		})
+		const accessorMin: ContractShape = JSON.parse('{"type":"string"}')
+		Object.defineProperty(accessorMin, 'min', {
+			enumerable: true,
+			get() {
+				return 1
+			},
+		})
+		const cases: readonly { readonly name: string; readonly shape: ContractShape }[] = [
+			{
+				name: 'array properties',
+				shape: JSON.parse('{"type":"object","properties":[]}'),
+			},
+			{ name: 'Map properties', shape: mapped },
+			{ name: 'record variants', shape: JSON.parse('{"type":"union","variants":{}}') },
+			{
+				name: 'array-like variants',
+				shape: JSON.parse('{"type":"union","variants":{"length":0}}'),
+			},
+			{ name: 'inherited type', shape: inherited },
+			{ name: 'accessor type', shape: accessorType },
+			{ name: 'accessor min', shape: accessorMin },
+		]
+
+		for (const entry of cases) {
+			const outcomes = [
+				{ name: 'cloneShape', outcome: attempt(() => cloneShape(entry.shape)) },
+				{ name: 'ownShape', outcome: attempt(() => ownShape(entry.shape)) },
+				{
+					name: 'validateShapeDepth',
+					outcome: attempt(() => validateShapeDepth(entry.shape)),
+				},
+				{ name: 'validateShape', outcome: attempt(() => validateShape(entry.shape)) },
+				{ name: 'compileSchema', outcome: attempt(() => compileSchema(entry.shape)) },
+				{ name: 'compileGuard', outcome: attempt(() => compileGuard(entry.shape)) },
+				{ name: 'compileParser', outcome: attempt(() => compileParser(entry.shape)) },
+				{
+					name: 'compileGenerator',
+					outcome: attempt(() => compileGenerator(entry.shape, () => 0)),
+				},
+				{
+					name: 'compileReporter',
+					outcome: attempt(() => compileReporter(entry.shape, '')),
+				},
+				{
+					name: 'compileAuditor',
+					outcome: attempt(() => compileAuditor(entry.shape, '')),
+				},
+				{ name: 'createContract', outcome: attempt(() => createContract(entry.shape)) },
+			]
+
+			expect(outcomes.map((outcome) => outcome.name)).toEqual([
+				'cloneShape',
+				'ownShape',
+				'validateShapeDepth',
+				'validateShape',
+				'compileSchema',
+				'compileGuard',
+				'compileParser',
+				'compileGenerator',
+				'compileReporter',
+				'compileAuditor',
+				'createContract',
+			])
+			for (const result of outcomes) {
+				expect(result.outcome.success, `${entry.name} at ${result.name}`).toBe(false)
+				if (result.outcome.success) continue
+				expect(isContractError(result.outcome.error), `${entry.name} at ${result.name}`).toBe(true)
+				if (!isContractError(result.outcome.error)) continue
+				expect(result.outcome.error.code, `${entry.name} at ${result.name}`).toBe('structure')
+			}
+		}
+
+		const control = stringShape()
+		const controls = [
+			attempt(() => cloneShape(control)),
+			attempt(() => ownShape(control)),
+			attempt(() => validateShapeDepth(control)),
+			attempt(() => validateShape(control)),
+			attempt(() => compileSchema(control)),
+			attempt(() => compileGuard(control)),
+			attempt(() => compileParser(control)),
+			attempt(() => compileGenerator(control, () => 0)),
+			attempt(() => compileReporter(control, '')),
+			attempt(() => compileAuditor(control, '')),
+			attempt(() => createContract(control)),
+		]
+		expect(controls.every((outcome) => outcome.success)).toBe(true)
+	})
+
+	it('refuses only an unfrozen accessor result among valid pattern declaration forms', () => {
+		const data: ContractShape = { type: 'string', pattern: /^[a-z0-9]*$/ }
+		const ownedAccessor: ContractShape = JSON.parse('{"type":"string"}')
+		Object.defineProperty(ownedAccessor, 'pattern', {
+			enumerable: true,
+			get() {
+				return Object.freeze(/^[a-z0-9]*$/)
+			},
+		})
+		const unownedAccessor: ContractShape = JSON.parse('{"type":"string"}')
+		Object.defineProperty(unownedAccessor, 'pattern', {
+			enumerable: true,
+			get() {
+				return /^unowned$/
+			},
+		})
+
+		for (const shape of [data, ownedAccessor]) {
+			const outcomes = [
+				attempt(() => cloneShape(shape)),
+				attempt(() => ownShape(shape)),
+				attempt(() => validateShapeDepth(shape)),
+				attempt(() => validateShape(shape)),
+				attempt(() => compileSchema(shape)),
+				attempt(() => compileGuard(shape)),
+				attempt(() => compileParser(shape)),
+				attempt(() => compileGenerator(shape, () => 0)),
+				attempt(() => compileReporter(shape, 'owned')),
+				attempt(() => compileAuditor(shape, 'owned')),
+				attempt(() => createContract(shape)),
+			]
+			expect(outcomes.every((outcome) => outcome.success)).toBe(true)
+		}
+
+		const errors = [
+			captureContractError(() => cloneShape(unownedAccessor)),
+			captureContractError(() => ownShape(unownedAccessor)),
+			captureContractError(() => validateShapeDepth(unownedAccessor)),
+			captureContractError(() => validateShape(unownedAccessor)),
+			captureContractError(() => compileSchema(unownedAccessor)),
+			captureContractError(() => compileGuard(unownedAccessor)),
+			captureContractError(() => compileParser(unownedAccessor)),
+			captureContractError(() => compileGenerator(unownedAccessor, () => 0)),
+			captureContractError(() => compileReporter(unownedAccessor, 'unowned')),
+			captureContractError(() => compileAuditor(unownedAccessor, 'unowned')),
+			captureContractError(() => createContract(unownedAccessor)),
+		]
+		for (const error of errors) {
+			expect(error.code).toBe('structure')
+			expect(error.context?.path).toEqual(['pattern'])
+		}
+	})
+
 	it('rejects malformed children nested under legal parents and additional properties', () => {
 		const source: { readonly child: ContractShape } = JSON.parse('{}')
 		const missing = source.child
@@ -1025,10 +1179,10 @@ describe('createContract fail-fast', () => {
 			'validateShapeDepth: a string shape has min greater than max',
 		)
 		expect(() => createContract(unionShape())).toThrow(
-			'validateShape: a union shape needs at least one variant',
+			'validateShapeDepth: a union shape needs at least one variant',
 		)
 		expect(() => createContract(literalShape([]))).toThrow(
-			'validateShape: a literal shape needs at least one value',
+			'validateShapeDepth: a literal shape needs at least one value',
 		)
 		expect(() => createContract(integerShape({ min: 2.5, max: 2.6 }))).toThrow(
 			'validateShape: an integer number shape has an empty integer range',
@@ -1036,6 +1190,51 @@ describe('createContract fail-fast', () => {
 		expect(() => createContract(arrayShape(optionalShape(stringShape())))).toThrow(
 			'validateShape: an optional shape may only appear as a direct object-property value',
 		)
+	})
+})
+
+describe('JSON Schema vocabulary safety', () => {
+	it('refuses empty applicator vocabularies and non-finite literal members at the shared gate', () => {
+		const cases: readonly { readonly shape: ContractShape; readonly code: 'empty' | 'literal' }[] =
+			[
+				{ shape: JSON.parse('{"type":"union","variants":[]}'), code: 'empty' },
+				{ shape: JSON.parse('{"type":"union","variants":[],"mode":"oneOf"}'), code: 'empty' },
+				{ shape: literalShape([]), code: 'empty' },
+				{ shape: literalShape([Number.NaN]), code: 'literal' },
+				{ shape: literalShape([Number.POSITIVE_INFINITY]), code: 'literal' },
+				{ shape: literalShape([Number.NEGATIVE_INFINITY]), code: 'literal' },
+			]
+
+		for (const entry of cases) {
+			const errors = [
+				captureContractError(() => validateShapeDepth(entry.shape)),
+				captureContractError(() => validateShape(entry.shape)),
+				captureContractError(() => compileSchema(entry.shape)),
+				captureContractError(() => compileGuard(entry.shape)),
+				captureContractError(() => compileParser(entry.shape)),
+				captureContractError(() => compileGenerator(entry.shape, () => 0)),
+				captureContractError(() => compileReporter(entry.shape, undefined)),
+				captureContractError(() => compileAuditor(entry.shape, undefined)),
+				captureContractError(() => createContract(entry.shape)),
+			]
+			for (const error of errors) expect(error.code).toBe(entry.code)
+		}
+	})
+
+	it('emits applicator, enum, and numeric keywords inside their vocabulary domains', () => {
+		const anyOf = compileSchema(unionShape(stringShape()))
+		const oneOf = compileSchema(oneOfShape(booleanShape()))
+		const enumeration = compileSchema(literalShape(['ready', 1, true]))
+		const bounded = compileSchema(numberShape({ min: 0, max: 1 }))
+
+		expect(Array.isArray(anyOf.anyOf) && anyOf.anyOf.length >= 1).toBe(true)
+		expect(Array.isArray(oneOf.oneOf) && oneOf.oneOf.length >= 1).toBe(true)
+		expect(
+			enumeration.enum?.every((value) => typeof value !== 'number' || Number.isFinite(value)),
+		).toBe(true)
+		expect(bounded.minimum).toBe(0)
+		expect(bounded.maximum).toBe(1)
+		expect(JSON.stringify(bounded)).not.toContain('null')
 	})
 })
 
@@ -1722,17 +1921,20 @@ describe('compileGenerator', () => {
 		expect(throwing.context?.shape).toBe('string')
 	})
 
-	it('uses ContractError generate for every direct generator failure category', () => {
-		const shapes: readonly ContractShape[] = [
+	it('distinguishes shared-gate failures from direct generator failures', () => {
+		const generation: readonly ContractShape[] = [
 			stringShape({ min: 1, pattern: /^z$/ }),
-			literalShape([]),
-			unionShape(),
 			rawShape({}),
 		]
 
-		for (const shape of shapes) {
+		for (const shape of generation) {
 			const error = captureContractError(() => compileGenerator(shape, () => 0))
 			expect(error.code).toBe('generate')
+			expect(error.context?.shape).toBe(shape.type)
+		}
+		for (const shape of [literalShape([]), unionShape()]) {
+			const error = captureContractError(() => compileGenerator(shape, () => 0))
+			expect(error.code).toBe('empty')
 			expect(error.context?.shape).toBe(shape.type)
 		}
 	})

@@ -27,7 +27,15 @@ import { cloneSchema, cloneShape } from './cloners.js'
 import { INFER_BREADTH_LIMIT, INFER_DEPTH_LIMIT } from './constants.js'
 import { ContractError } from './errors.js'
 import { attempt } from './helpers.js'
-import { isArray, isBoolean, isFiniteNumber, isInteger, isRecord, isString } from './validators.js'
+import {
+	isArray,
+	isBoolean,
+	isFiniteNumber,
+	isInteger,
+	isRecord,
+	isRegExp,
+	isString,
+} from './validators.js'
 
 // The builders return the parameterized types.ts interfaces (e.g. `ArrayShape<S>`,
 // `ObjectShape<P>`), never inline object literals — the generic parameter keeps
@@ -51,7 +59,7 @@ import { isArray, isBoolean, isFiniteNumber, isInteger, isRecord, isString } fro
  *
  * @param options - Optional length (`min` / `max`), `pattern`, and `description`
  * @returns A string shape
- * @throws {ContractError} When a present bound is invalid or `pattern` has flags
+ * @throws {ContractError} When a present bound is invalid, `pattern` is not a `RegExp`, or `pattern` has flags
  *
  * @example
  * ```ts
@@ -78,6 +86,12 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 				limit: 'non-negative safe integer',
 				received: String(options.max),
 			},
+		})
+	}
+	if (pattern !== undefined && !isRegExp(pattern)) {
+		throw new ContractError('stringShape: pattern must be a RegExp', {
+			code: 'pattern',
+			context: { shape: 'string', received: typeof pattern },
 		})
 	}
 	if (pattern !== undefined && pattern.flags.length > 0) {

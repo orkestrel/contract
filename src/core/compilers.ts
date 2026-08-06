@@ -62,22 +62,26 @@ import { parseBoolean, parseInteger, parseNumber, parseRecord, parseString } fro
  * Gate recursive compiler work on shape structure, depth, and cycles.
  *
  * @remarks
- * Walks the shape graph iteratively in linear time and stack space. Every
+ * Walks the shape graph iteratively with explicit stack space. A tree is
+ * linear in its nodes; a shared-child DAG is re-walked once per incoming path
+ * because active ancestors, not a root-wide visited set, define cycle safety.
+ * Every
  * structural child slot must contain a shape node before it can enter the walk;
  * every scalar field must hold its declared runtime domain before a compiler
  * can use it; and a missing child, corrupt container, inherited discriminant,
  * or unrecognized node reports `structure`. This is a structural-safety
  * prerequisite rather than the full well-formedness pass in
  * {@link validateShape}: it enforces every bound domain and range used by the
- * artifacts, but does not diagnose empty vocabularies or optional-shape policy. Active
- * ancestors are tracked so shared children remain legal. Every standalone
+ * artifacts, including non-empty literal/union vocabularies and finite literal
+ * numbers, but does not diagnose integer-range satisfiability or optional-shape
+ * policy. Active ancestors are tracked so shared children remain legal. Every standalone
  * compiler calls this gate before its recursive branch begins. Failures have
  * deterministic precedence independent of traversal order: depth, then
- * structure, then cycle, then bound policy.
+ * structure, then cycle, then field and vocabulary policy.
  *
  * @param shape - The shape graph to gate
  * @returns Nothing; successful return means recursive compilation is structurally safe and depth-safe
- * @throws {ContractError} When a node or structural slot is corrupt, a bound is outside its declared domain, the graph is cyclic, or it exceeds the compilation depth limit
+ * @throws {ContractError} When a node or structural slot is corrupt, a bound or vocabulary is outside its declared domain, the graph is cyclic, or it exceeds the compilation depth limit
  */
 export function validateShapeDepth(shape: ContractShape): void {
 	const active = new WeakSet<ContractShape>()
@@ -85,7 +89,7 @@ export function validateShapeDepth(shape: ContractShape): void {
 	let structurePath: readonly string[] | undefined
 	let structureMessage: string | undefined
 	let cyclePath: readonly string[] | undefined
-	let domainCode: 'bound' | 'range' | undefined
+	let domainCode: 'bound' | 'range' | 'empty' | 'literal' | undefined
 	let domainMessage: string | undefined
 	let domainPath: readonly string[] | undefined
 	let domainShape: string | undefined
@@ -462,6 +466,12 @@ export function validateShapeDepth(shape: ContractShape): void {
 						nodeMessage = 'validateShapeDepth: variants must be a finite array'
 						return false
 					}
+					if (domainCode === undefined && length === 0) {
+						domainCode = 'empty'
+						domainMessage = 'validateShapeDepth: a union shape needs at least one variant'
+						domainPath = [...path]
+						domainShape = 'union'
+					}
 					for (let index = 0; index < length; index += 1) {
 						const key = String(index)
 						nodeSecond = key
@@ -493,6 +503,12 @@ export function validateShapeDepth(shape: ContractShape): void {
 						nodeMessage = 'validateShapeDepth: values must be a finite literal array'
 						return false
 					}
+					if (domainCode === undefined && length === 0) {
+						domainCode = 'empty'
+						domainMessage = 'validateShapeDepth: a literal shape needs at least one value'
+						domainPath = [...path]
+						domainShape = 'literal'
+					}
 					for (let index = 0; index < length; index += 1) {
 						const key = String(index)
 						nodeSecond = key
@@ -517,6 +533,14 @@ export function validateShapeDepth(shape: ContractShape): void {
 							nodeMessage =
 								'validateShapeDepth: every literal value must be a string, number, or boolean'
 							return false
+						}
+						if (domainCode === undefined && typeof value === 'number' && !Number.isFinite(value)) {
+							domainCode = 'literal'
+							domainMessage =
+								'validateShapeDepth: a literal shape may not contain non-finite number values'
+							domainPath = [...path]
+							domainShape = 'literal'
+							domainReceived = String(value)
 						}
 					}
 					break
@@ -614,12 +638,8 @@ export function validateShapeDepth(shape: ContractShape): void {
  *   shape all throw. An object property IS the one legal placement: its value
  *   is unwrapped to `.inner` before recursing, so `.inner` itself is validated
  *   as a normal (non-optional-wrapping) shape.
- * - A {@link UnionShape} needs at least one variant; a {@link LiteralShape}
- *   needs at least one value and rejects non-finite (`NaN` / `Infinity` /
- *   `-Infinity`) number values.
- * - A bounded {@link StringShape} / {@link NumberShape} / {@link ArrayShape}
- *   needs `min <= max` when both are set.
- * - Every present number bound is finite.
+ * - The structural pass has already required non-empty union/literal
+ *   vocabularies, finite literal numbers, valid bound domains and `min <= max`.
  * - An integer {@link NumberShape} (`integer: true`) needs a non-empty integer
  *   range: `Math.ceil(min ?? -Infinity) <= Math.floor(max ?? Infinity)`.
  * - Shape nesting may not exceed {@link COMPILE_DEPTH_LIMIT}; excessive depth
@@ -702,23 +722,6 @@ export function validateShape(shape: ContractShape): void {
 				case 'raw':
 					break
 				case 'literal':
-					if (current.values.length === 0) {
-						throw new ContractError('validateShape: a literal shape needs at least one value', {
-							code: 'empty',
-							context: { path: frame.path, shape: 'literal' },
-						})
-					}
-					for (const value of current.values) {
-						if (typeof value === 'number' && !Number.isFinite(value)) {
-							throw new ContractError(
-								'validateShape: a literal shape may not contain non-finite number values',
-								{
-									code: 'literal',
-									context: { path: frame.path, shape: 'literal', received: String(value) },
-								},
-							)
-						}
-					}
 					break
 				case 'array':
 					stack.push({
@@ -757,12 +760,6 @@ export function validateShape(shape: ContractShape): void {
 					break
 				}
 				case 'union':
-					if (current.variants.length === 0) {
-						throw new ContractError('validateShape: a union shape needs at least one variant', {
-							code: 'empty',
-							context: { path: frame.path, shape: 'union' },
-						})
-					}
 					for (let index = current.variants.length - 1; index >= 0; index -= 1) {
 						const variant = current.variants[index]
 						if (variant === undefined) continue
@@ -1295,15 +1292,15 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
  * from the wall clock when none is supplied. Shape-generation failures throw a
  * {@link ContractError} with code `'generate'`; {@link drawRandom} failures use
  * code `'random'` and retain the consuming shape category in context.
- * Failures include a degenerate empty `literalShape` / `unionShape`, a
- * pattern-constrained `stringShape` whose generated sample cannot satisfy the
- * pattern, an invalid random sample, and a `rawShape` whose arbitrary embedded
- * schema cannot be auto-generated. {@link validateShapeDepth} iteratively
+ * Failures include a pattern-constrained `stringShape` whose generated sample
+ * cannot satisfy the pattern, an invalid random sample, and a `rawShape` whose
+ * arbitrary embedded schema cannot be auto-generated. Degenerate empty
+ * literal/union vocabularies fail earlier with the shared gate's `empty` code.
+ * {@link validateShapeDepth} iteratively
  * rejects excessive nesting or cycles before recursive generation begins.
- * `createContract` runs
- * {@link validateShape} first, so a degenerate `literalShape` / `unionShape` /
- * bounded shape is normally caught there; these throws remain here as defense
- * for standalone `compileGenerator` use. Union candidates are bounded by
+ * `createContract` runs {@link validateShape} first, so malformed vocabulary
+ * and bounded shapes are caught before generation. The local empty checks
+ * remain defensive after the shared gate. Union candidates are bounded by
  * {@link GENERATION_ATTEMPT_LIMIT} and accepted only when they satisfy the
  * union's compiled guard.
  *

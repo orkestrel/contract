@@ -6,6 +6,7 @@ import type {
 	JSONSchema,
 	JSONValue,
 	ObjectShape,
+	StringShapeOptions,
 	StringShape,
 } from '@src/core'
 import {
@@ -71,6 +72,16 @@ describe('shape builders', () => {
 		expect(pattern).toBeInstanceOf(ContractError)
 		expect(pattern.code).toBe('pattern')
 		expect(pattern.message).toContain('inline pattern constructs')
+	})
+
+	it('rejects non-RegExp string patterns with a coded ContractError', () => {
+		for (const value of ['x', {}]) {
+			const options: StringShapeOptions = JSON.parse('{}')
+			Object.defineProperty(options, 'pattern', { value, enumerable: true })
+			const error = captureContractError(() => stringShape(options))
+			expect(error.code).toBe('pattern')
+			expect(error.context?.shape).toBe('string')
+		}
 	})
 
 	it('integerShape rejects non-finite bounds like numberShape', () => {

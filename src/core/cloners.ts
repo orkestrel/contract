@@ -447,6 +447,97 @@ export function cloneShape(shape: ContractShape): ContractShape {
 			const source = pending.pop()
 			if (source === undefined || memo.has(source)) continue
 			const path = paths.get(source) ?? []
+			if (source === null) {
+				diagnosis = new ContractError('cloneShape: every structural child must be a shape', {
+					code: 'structure',
+					context: { path },
+				})
+				throw diagnosis
+			}
+
+			const typeDescriptor = Object.getOwnPropertyDescriptor(source, 'type')
+			if (
+				typeDescriptor === undefined ||
+				!Object.hasOwn(typeDescriptor, 'value') ||
+				!Object.is(typeDescriptor.value, source.type)
+			) {
+				diagnosis = new ContractError('cloneShape: every node needs an own data discriminant', {
+					code: 'structure',
+					context: { path },
+				})
+				throw diagnosis
+			}
+
+			let declaredFields: readonly string[]
+			switch (source.type) {
+				case 'string':
+					declaredFields = ['min', 'max', 'pattern', 'description']
+					break
+				case 'number':
+					declaredFields = ['integer', 'min', 'max', 'description']
+					break
+				case 'boolean':
+				case 'null':
+				case 'json':
+					declaredFields = ['description']
+					break
+				case 'literal':
+					declaredFields = ['values', 'description']
+					break
+				case 'array':
+					declaredFields = ['items', 'min', 'max', 'description']
+					break
+				case 'object':
+					declaredFields = ['properties', 'additionalProperties', 'description']
+					break
+				case 'union':
+					declaredFields = ['variants', 'mode', 'description']
+					break
+				case 'optional':
+				case 'nullable':
+					declaredFields = ['inner']
+					break
+				case 'raw':
+					declaredFields = ['schema']
+					break
+			}
+			for (const field of declaredFields) {
+				const descriptor = Object.getOwnPropertyDescriptor(source, field)
+				const first: unknown = Reflect.get(source, field)
+				const second: unknown = Reflect.get(source, field)
+				if (descriptor === undefined) {
+					if (first === undefined && second === undefined) continue
+					diagnosis = new ContractError('cloneShape: inherited shape fields cannot be owned', {
+						code: 'structure',
+						context: { path: [...path, field] },
+					})
+					throw diagnosis
+				}
+				if (Object.hasOwn(descriptor, 'value')) {
+					if (Object.is(first, descriptor.value) && Object.is(second, first)) continue
+					diagnosis = new ContractError('cloneShape: shape fields must be stable data', {
+						code: 'structure',
+						context: { path: [...path, field] },
+					})
+					throw diagnosis
+				}
+				if (
+					field === 'pattern' &&
+					isRegExp(first) &&
+					isRegExp(second) &&
+					first.source === second.source &&
+					first.flags === second.flags &&
+					Object.isFrozen(first) &&
+					Object.isFrozen(second)
+				) {
+					continue
+				}
+				diagnosis = new ContractError('cloneShape: shape accessors cannot be owned faithfully', {
+					code: 'structure',
+					context: { path: [...path, field] },
+				})
+				throw diagnosis
+			}
 
 			let clone: ContractShape
 			switch (source.type) {
@@ -628,6 +719,13 @@ export function cloneShape(shape: ContractShape): ContractShape {
 					break
 				case 'object': {
 					const extra = source.additionalProperties
+					if (!isRecord(source.properties)) {
+						diagnosis = new ContractError('cloneShape: properties must be a plain property map', {
+							code: 'structure',
+							context: { path: [...path, 'properties'] },
+						})
+						throw diagnosis
+					}
 					clone = {
 						type: 'object',
 						properties: Object.create(null),
@@ -650,6 +748,13 @@ export function cloneShape(shape: ContractShape): ContractShape {
 					break
 				}
 				case 'union':
+					if (!Array.isArray(source.variants)) {
+						diagnosis = new ContractError('cloneShape: variants must be a finite array', {
+							code: 'structure',
+							context: { path: [...path, 'variants'] },
+						})
+						throw diagnosis
+					}
 					clone = {
 						type: 'union',
 						variants: [],

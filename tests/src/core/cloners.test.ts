@@ -547,10 +547,14 @@ describe('cloneShape', () => {
 		}
 		properties.revoke()
 
-		for (const shape of [revoked.proxy, getterShape, propertiesShape]) {
+		for (const [shape, code] of [
+			[revoked.proxy, 'clone'],
+			[getterShape, 'clone'],
+			[propertiesShape, 'structure'],
+		] satisfies readonly (readonly [ContractShape, 'clone' | 'structure'])[]) {
 			const cloneError = captureContractError(() => cloneShape(shape))
 			const contractError = captureContractError(() => createContract(shape))
-			expect(cloneError.code).toBe('clone')
+			expect(cloneError.code).toBe(code)
 			expect(contractError.code).toBe('structure')
 		}
 	})
@@ -598,5 +602,30 @@ describe('ownShape', () => {
 		if (owned.type !== 'array') return
 		expect(ownShape(owned.items)).not.toBe(child)
 		expect(Object.isFrozen(ownShape(owned.items))).toBe(true)
+	})
+
+	it('refuses null in every structural slot for unfrozen and frozen roots', () => {
+		const cases: readonly { readonly shape: ContractShape; readonly path: readonly string[] }[] = [
+			{ shape: JSON.parse('{"type":"array","items":null}'), path: ['items'] },
+			{
+				shape: JSON.parse('{"type":"object","properties":{"value":null}}'),
+				path: ['properties', 'value'],
+			},
+			{
+				shape: JSON.parse('{"type":"object","properties":{},"additionalProperties":null}'),
+				path: ['additionalProperties'],
+			},
+			{ shape: JSON.parse('{"type":"union","variants":[null]}'), path: ['variants', '0'] },
+			{ shape: JSON.parse('{"type":"optional","inner":null}'), path: ['inner'] },
+			{ shape: JSON.parse('{"type":"nullable","inner":null}'), path: ['inner'] },
+		]
+
+		for (const entry of cases) {
+			for (const shape of [entry.shape, Object.freeze(entry.shape)]) {
+				const error = captureContractError(() => ownShape(shape))
+				expect(error.code).toBe('structure')
+				expect(error.context?.path).toEqual(entry.path)
+			}
+		}
 	})
 })
