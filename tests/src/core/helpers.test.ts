@@ -15,6 +15,7 @@ import {
 	holds,
 	matchesJSONValue,
 	objectShape,
+	readOptions,
 	resolveField,
 	schemaToObject,
 	schemaToParameters,
@@ -133,6 +134,45 @@ describe('enumerableKeys', () => {
 
 	it('returns undefined for hostile property enumeration', () => {
 		expect(enumerableKeys(createRevokedProxy())).toBeUndefined()
+	})
+})
+
+describe('readOptions', () => {
+	it('returns an owned snapshot after probing every consumed key', () => {
+		const source = { min: 1, max: 4 }
+		const snapshot = readOptions(source, ['min', 'max'], 'stringShape', 'string')
+		source.min = 2
+
+		expect(snapshot).toEqual({ min: 1, max: 4 })
+	})
+
+	it('rejects a primitive before reflection with the precise plain-record message', () => {
+		const error = captureContractError(() =>
+			Reflect.apply(readOptions, undefined, [null, ['min'], 'stringShape', 'string']),
+		)
+
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('stringShape: options must be a plain record')
+		expect(error.cause).toBeUndefined()
+	})
+
+	it('rejects a key-hiding hostile host with the uniform unreadable-options message', () => {
+		const source = new Proxy(
+			{},
+			{
+				get(_target, key) {
+					if (key === 'min') throw new Error('hostile min')
+					return undefined
+				},
+			},
+		)
+		const error = captureContractError(() =>
+			readOptions(source, ['min', 'max'], 'stringShape', 'string'),
+		)
+
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('stringShape: options could not be read')
+		expect(error.cause).toBeInstanceOf(Error)
 	})
 })
 

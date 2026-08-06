@@ -98,6 +98,70 @@ export function enumerableKeys(value: object): readonly string[] | undefined {
 }
 
 /**
+ * Validate and snapshot a shape-builder options record through every reflective
+ * operation the builder relies on.
+ *
+ * @remarks
+ * Primitive inputs are rejected before reflection so ordinary caller mistakes
+ * retain the builder's precise plain-record diagnostic. For an object, every
+ * consumed key is read directly, checked for presence, and inspected for an own
+ * descriptor even when the host reports no own keys; the full own-key snapshot
+ * and spread then contain enumeration and copying failures. A hostile host is
+ * reported uniformly as an unreadable options record, while a readable array or
+ * class instance retains the plain-record diagnostic.
+ *
+ * @param source - The optional builder options value
+ * @param keys - Every option key consumed by that builder
+ * @param builder - The builder name used in diagnostics
+ * @param shape - The shape category used in structured error context
+ * @returns An owned options snapshot, or `undefined` when options are absent
+ * @throws {ContractError} When the value is not a plain record or reflection fails
+ *
+ * @example
+ * ```ts
+ * const options = readOptions(source, ['min', 'max'], 'numberShape', 'number')
+ * ```
+ */
+export function readOptions<T extends object>(
+	source: T | undefined,
+	keys: readonly string[],
+	builder: string,
+	shape: string,
+): T | undefined {
+	if (source === undefined) return undefined
+	const input: unknown = source
+	if (!isObject(input)) {
+		throw new ContractError(`${builder}: options must be a plain record`, {
+			code: 'structure',
+			context: { shape },
+		})
+	}
+	const snapshot = attempt<T>(() => {
+		for (const key of keys) {
+			Reflect.get(input, key)
+			Reflect.has(input, key)
+			Reflect.getOwnPropertyDescriptor(input, key)
+		}
+		Reflect.ownKeys(input)
+		return { ...source }
+	})
+	if (!snapshot.success) {
+		throw new ContractError(`${builder}: options could not be read`, {
+			code: 'structure',
+			context: { shape },
+			cause: snapshot.error,
+		})
+	}
+	if (!isRecord(input)) {
+		throw new ContractError(`${builder}: options must be a plain record`, {
+			code: 'structure',
+			context: { shape },
+		})
+	}
+	return snapshot.value
+}
+
+/**
  * Draw and validate one generator random sample.
  *
  * @param random - The caller-supplied random source

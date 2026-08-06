@@ -27,7 +27,7 @@ import { cloneSchema, cloneShape } from './cloners.js'
 import { validateShapeDepth } from './compilers.js'
 import { INFER_BREADTH_LIMIT, INFER_DEPTH_LIMIT } from './constants.js'
 import { ContractError } from './errors.js'
-import { attempt } from './helpers.js'
+import { attempt, readOptions } from './helpers.js'
 import {
 	isArray,
 	isBoolean,
@@ -68,29 +68,12 @@ import {
  * ```
  */
 export function stringShape(options?: StringShapeOptions): StringShape {
-	const snapshot = attempt(() => {
-		if (options === undefined) return undefined
-		Reflect.get(options, 'description')
-		Reflect.has(options, 'description')
-		Reflect.getOwnPropertyDescriptor(options, 'description')
-		Reflect.ownKeys(options)
-		return { ...options }
-	})
-	if (!snapshot.success) {
-		throw new ContractError('stringShape: options could not be read', {
-			code: 'structure',
-			context: { shape: 'string' },
-			cause: snapshot.error,
-		})
-	}
-	const input: unknown = options
-	if (input !== undefined && !isRecord(input)) {
-		throw new ContractError('stringShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'string' },
-		})
-	}
-	const safe = snapshot.value
+	const safe = readOptions(
+		options,
+		['min', 'max', 'pattern', 'description'],
+		'stringShape',
+		'string',
+	)
 	const pattern = safe?.pattern
 	if (safe?.min !== undefined && (!Number.isSafeInteger(safe.min) || safe.min < 0)) {
 		throw new ContractError('stringShape: min must be a non-negative safe integer', {
@@ -165,29 +148,12 @@ export function stringShape(options?: StringShapeOptions): StringShape {
  * ```
  */
 export function numberShape(options?: NumberShapeOptions): NumberShape {
-	const snapshot = attempt(() => {
-		if (options === undefined) return undefined
-		Reflect.get(options, 'description')
-		Reflect.has(options, 'description')
-		Reflect.getOwnPropertyDescriptor(options, 'description')
-		Reflect.ownKeys(options)
-		return { ...options }
-	})
-	if (!snapshot.success) {
-		throw new ContractError('numberShape: options could not be read', {
-			code: 'structure',
-			context: { shape: 'number' },
-			cause: snapshot.error,
-		})
-	}
-	const input: unknown = options
-	if (input !== undefined && !isRecord(input)) {
-		throw new ContractError('numberShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'number' },
-		})
-	}
-	const safe = snapshot.value
+	const safe = readOptions(
+		options,
+		['min', 'max', 'integer', 'description'],
+		'numberShape',
+		'number',
+	)
 	const shape = safe?.integer === true ? 'integer' : 'number'
 	if (safe?.min !== undefined && !Number.isFinite(safe.min)) {
 		throw new ContractError('numberShape: min must be finite', {
@@ -224,29 +190,8 @@ export function numberShape(options?: NumberShapeOptions): NumberShape {
  * @throws {ContractError} When a present bound is not finite
  */
 export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): NumberShape {
-	const snapshot = attempt(() => {
-		if (options === undefined) return {}
-		Reflect.get(options, 'description')
-		Reflect.has(options, 'description')
-		Reflect.getOwnPropertyDescriptor(options, 'description')
-		Reflect.ownKeys(options)
-		return { ...options }
-	})
-	if (!snapshot.success) {
-		throw new ContractError('integerShape: options could not be read', {
-			code: 'structure',
-			context: { shape: 'integer' },
-			cause: snapshot.error,
-		})
-	}
-	const input: unknown = options
-	if (input !== undefined && !isRecord(input)) {
-		throw new ContractError('integerShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'integer' },
-		})
-	}
-	return numberShape({ ...snapshot.value, integer: true })
+	const safe = readOptions(options, ['min', 'max', 'description'], 'integerShape', 'integer')
+	return numberShape({ ...safe, integer: true })
 }
 
 /**
@@ -261,29 +206,7 @@ export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): Num
  * ```
  */
 export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
-	const snapshot = attempt(() => {
-		if (options === undefined) return undefined
-		Reflect.get(options, 'description')
-		Reflect.has(options, 'description')
-		Reflect.getOwnPropertyDescriptor(options, 'description')
-		Reflect.ownKeys(options)
-		return { ...options }
-	})
-	if (!snapshot.success) {
-		throw new ContractError('booleanShape: options could not be read', {
-			code: 'structure',
-			context: { shape: 'boolean' },
-			cause: snapshot.error,
-		})
-	}
-	const input: unknown = options
-	if (input !== undefined && !isRecord(input)) {
-		throw new ContractError('booleanShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'boolean' },
-		})
-	}
-	const safe = snapshot.value
+	const safe = readOptions(options, ['description'], 'booleanShape', 'boolean')
 	const shape: BooleanShape = {
 		type: 'boolean',
 		...(safe?.description === undefined ? {} : { description: safe.description }),
@@ -304,29 +227,7 @@ export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
  * ```
  */
 export function nullShape(options?: NullShapeOptions): NullShape {
-	const snapshot = attempt(() => {
-		if (options === undefined) return undefined
-		Reflect.get(options, 'description')
-		Reflect.has(options, 'description')
-		Reflect.getOwnPropertyDescriptor(options, 'description')
-		Reflect.ownKeys(options)
-		return { ...options }
-	})
-	if (!snapshot.success) {
-		throw new ContractError('nullShape: options could not be read', {
-			code: 'structure',
-			context: { shape: 'null' },
-			cause: snapshot.error,
-		})
-	}
-	const input: unknown = options
-	if (input !== undefined && !isRecord(input)) {
-		throw new ContractError('nullShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'null' },
-		})
-	}
-	const safe = snapshot.value
+	const safe = readOptions(options, ['description'], 'nullShape', 'null')
 	const shape: NullShape = {
 		type: 'null',
 		...(safe?.description === undefined ? {} : { description: safe.description }),
@@ -367,29 +268,7 @@ export function literalShape(
 			...(!array.success ? { cause: array.error } : {}),
 		})
 	}
-	const optionSnapshot = attempt(() => {
-		if (options === undefined) return undefined
-		Reflect.get(options, 'description')
-		Reflect.has(options, 'description')
-		Reflect.getOwnPropertyDescriptor(options, 'description')
-		Reflect.ownKeys(options)
-		return { ...options }
-	})
-	if (!optionSnapshot.success) {
-		throw new ContractError('literalShape: options could not be read', {
-			code: 'structure',
-			context: { shape: 'literal' },
-			cause: optionSnapshot.error,
-		})
-	}
-	const optionInput: unknown = options
-	if (optionInput !== undefined && !isRecord(optionInput)) {
-		throw new ContractError('literalShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'literal' },
-		})
-	}
-	const safe = optionSnapshot.value
+	const safe = readOptions(options, ['description'], 'literalShape', 'literal')
 	validateShapeDepth({
 		type: 'literal',
 		values,
@@ -429,29 +308,7 @@ export function arrayShape<S extends ContractShape>(
 	items: S,
 	options?: ArrayShapeOptions,
 ): ArrayShape<S> {
-	const snapshot = attempt(() => {
-		if (options === undefined) return undefined
-		Reflect.get(options, 'description')
-		Reflect.has(options, 'description')
-		Reflect.getOwnPropertyDescriptor(options, 'description')
-		Reflect.ownKeys(options)
-		return { ...options }
-	})
-	if (!snapshot.success) {
-		throw new ContractError('arrayShape: options could not be read', {
-			code: 'structure',
-			context: { shape: 'array' },
-			cause: snapshot.error,
-		})
-	}
-	const input: unknown = options
-	if (input !== undefined && !isRecord(input)) {
-		throw new ContractError('arrayShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'array' },
-		})
-	}
-	const safe = snapshot.value
+	const safe = readOptions(options, ['min', 'max', 'description'], 'arrayShape', 'array')
 	if (safe?.min !== undefined && (!Number.isSafeInteger(safe.min) || safe.min < 0)) {
 		throw new ContractError('arrayShape: min must be a non-negative safe integer', {
 			code: 'bound',
@@ -515,29 +372,12 @@ export function objectShape<
 			context: { path: ['properties'], shape: 'object' },
 		})
 	}
-	const optionSnapshot = attempt(() => {
-		if (options === undefined) return undefined
-		Reflect.get(options, 'description')
-		Reflect.has(options, 'description')
-		Reflect.getOwnPropertyDescriptor(options, 'description')
-		Reflect.ownKeys(options)
-		return { ...options }
-	})
-	if (!optionSnapshot.success) {
-		throw new ContractError('objectShape: options could not be read', {
-			code: 'structure',
-			context: { shape: 'object' },
-			cause: optionSnapshot.error,
-		})
-	}
-	const optionInput: unknown = options
-	if (optionInput !== undefined && !isRecord(optionInput)) {
-		throw new ContractError('objectShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'object' },
-		})
-	}
-	const safe = optionSnapshot.value
+	const safe = readOptions(
+		options,
+		['additionalProperties', 'description'],
+		'objectShape',
+		'object',
+	)
 	validateShapeDepth({
 		type: 'object',
 		properties,
@@ -598,29 +438,7 @@ export function recordShape<S extends ContractShape>(
 			context: { path: ['additionalProperties'], shape: 'object' },
 		})
 	}
-	const snapshot = attempt(() => {
-		if (options === undefined) return undefined
-		Reflect.get(options, 'description')
-		Reflect.has(options, 'description')
-		Reflect.getOwnPropertyDescriptor(options, 'description')
-		Reflect.ownKeys(options)
-		return { ...options }
-	})
-	if (!snapshot.success) {
-		throw new ContractError('recordShape: options could not be read', {
-			code: 'structure',
-			context: { shape: 'object' },
-			cause: snapshot.error,
-		})
-	}
-	const safe = snapshot.value
-	const input: unknown = options
-	if (input !== undefined && !isRecord(input)) {
-		throw new ContractError('recordShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'object' },
-		})
-	}
+	const safe = readOptions(options, ['description'], 'recordShape', 'object')
 	const shape: ObjectShape<Record<never, never>, S> = {
 		type: 'object',
 		properties: Object.freeze({}),
@@ -753,29 +571,7 @@ export function nullableShape<S extends ContractShape>(inner: S): NullableShape<
  * ```
  */
 export function jsonShape(options?: JSONShapeOptions): JSONShape {
-	const snapshot = attempt(() => {
-		if (options === undefined) return undefined
-		Reflect.get(options, 'description')
-		Reflect.has(options, 'description')
-		Reflect.getOwnPropertyDescriptor(options, 'description')
-		Reflect.ownKeys(options)
-		return { ...options }
-	})
-	if (!snapshot.success) {
-		throw new ContractError('jsonShape: options could not be read', {
-			code: 'structure',
-			context: { shape: 'json' },
-			cause: snapshot.error,
-		})
-	}
-	const input: unknown = options
-	if (input !== undefined && !isRecord(input)) {
-		throw new ContractError('jsonShape: options must be a plain record', {
-			code: 'structure',
-			context: { shape: 'json' },
-		})
-	}
-	const safe = snapshot.value
+	const safe = readOptions(options, ['description'], 'jsonShape', 'json')
 	const shape: JSONShape = {
 		type: 'json',
 		...(safe?.description === undefined ? {} : { description: safe.description }),

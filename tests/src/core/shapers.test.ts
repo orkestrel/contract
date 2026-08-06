@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import * as ts from 'typescript'
+import * as shapers from '../../../src/core/shapers.js'
 import type {
 	ContractShape,
 	Infer,
@@ -64,6 +65,10 @@ import {
 
 const shaperSource = readFileSync(
 	fileURLToPath(new URL('../../../src/core/shapers.ts', import.meta.url)),
+	'utf8',
+)
+const typeSource = readFileSync(
+	fileURLToPath(new URL('../../../src/core/types.ts', import.meta.url)),
 	'utf8',
 )
 
@@ -365,34 +370,119 @@ describe('shape builders', () => {
 	})
 
 	it('generates every builder options position across every hostile read trap', () => {
-		const builderEnd = shaperSource.indexOf('// === Schema inversion')
-		expect(builderEnd).toBeGreaterThan(0)
 		const source = ts.createSourceFile(
 			'shapers.ts',
-			shaperSource.slice(0, builderEnd),
+			shaperSource,
 			ts.ScriptTarget.Latest,
 			true,
 			ts.ScriptKind.TS,
 		)
-		const builders = new Map<string, Set<number>>()
+		const types = ts.createSourceFile(
+			'types.ts',
+			typeSource,
+			ts.ScriptTarget.Latest,
+			true,
+			ts.ScriptKind.TS,
+		)
+		const optionInterfaces = new Map<string, Set<string>>()
+		for (const statement of types.statements) {
+			if (!ts.isInterfaceDeclaration(statement) || !statement.name.text.endsWith('ShapeOptions')) {
+				continue
+			}
+			const keys = new Set<string>()
+			for (const member of statement.members) {
+				if (!ts.isPropertySignature(member) || member.name === undefined) continue
+				if (ts.isIdentifier(member.name) || ts.isStringLiteral(member.name)) {
+					keys.add(member.name.text)
+				}
+			}
+			optionInterfaces.set(statement.name.text, keys)
+		}
+
+		const nonBuilders = new Set(['buildObjectShape', 'schemaNodeToShape', 'schemaToShape'])
+		const functions: {
+			readonly name: string
+			readonly parameters: ts.NodeArray<ts.ParameterDeclaration>
+			readonly body?: ts.ConciseBody
+		}[] = []
 		for (const statement of source.statements) {
-			if (!ts.isFunctionDeclaration(statement) || statement.name === undefined) continue
+			if (!ts.isFunctionDeclaration(statement) && !ts.isVariableStatement(statement)) continue
 			const exported = statement.modifiers?.some(
 				(modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
 			)
 			if (exported !== true) continue
-			const name = statement.name.text
-			const positions = builders.get(name) ?? new Set<number>()
-			for (const [position, parameter] of statement.parameters.entries()) {
+			if (ts.isFunctionDeclaration(statement) && statement.name !== undefined) {
+				functions.push({
+					name: statement.name.text,
+					parameters: statement.parameters,
+					...(statement.body === undefined ? {} : { body: statement.body }),
+				})
+				continue
+			}
+			if (!ts.isVariableStatement(statement)) continue
+			for (const declaration of statement.declarationList.declarations) {
+				if (!ts.isIdentifier(declaration.name) || declaration.initializer === undefined) continue
+				if (
+					!ts.isArrowFunction(declaration.initializer) &&
+					!ts.isFunctionExpression(declaration.initializer)
+				) {
+					continue
+				}
+				functions.push({
+					name: declaration.name.text,
+					parameters: declaration.initializer.parameters,
+					body: declaration.initializer.body,
+				})
+			}
+		}
+
+		const builders = new Map<string, Set<number>>()
+		const implementations = new Map<string, ts.Block>()
+		const optionKeys = new Map<string, Map<number, Set<string>>>()
+		for (const entry of functions) {
+			if (!entry.name.endsWith('Shape') || nonBuilders.has(entry.name)) continue
+			const positions = builders.get(entry.name) ?? new Set<number>()
+			for (const [position, parameter] of entry.parameters.entries()) {
 				if (ts.isIdentifier(parameter.name) && parameter.name.text === 'options') {
 					positions.add(position)
+					if (parameter.type === undefined || !ts.isTypeReferenceNode(parameter.type)) continue
+					let optionName = parameter.type.typeName.getText(source)
+					const omitted = new Set<string>()
+					if (optionName === 'Omit') {
+						const [base, exclusions] = parameter.type.typeArguments ?? []
+						if (base !== undefined && ts.isTypeReferenceNode(base)) {
+							optionName = base.typeName.getText(source)
+						}
+						if (exclusions !== undefined && ts.isLiteralTypeNode(exclusions)) {
+							if (ts.isStringLiteral(exclusions.literal)) omitted.add(exclusions.literal.text)
+						}
+					}
+					const declared = optionInterfaces.get(optionName)
+					if (declared === undefined) {
+						throw new Error(`${entry.name}: missing ${optionName} interface`)
+					}
+					const expected = new Set([...declared].filter((key) => !omitted.has(key)))
+					const byPosition = optionKeys.get(entry.name) ?? new Map<number, Set<string>>()
+					byPosition.set(position, expected)
+					optionKeys.set(entry.name, byPosition)
 				}
 			}
-			builders.set(name, positions)
+			builders.set(entry.name, positions)
+			if (entry.body !== undefined && ts.isBlock(entry.body)) {
+				implementations.set(entry.name, entry.body)
+			}
 		}
 
 		const registered = new Set(BUILDER_CASES.map((builder) => builder.name))
-		expect(builders.size).toBe(15)
+		const runtime = new Set(
+			Object.entries(shapers)
+				.filter(
+					([name, value]) =>
+						name.endsWith('Shape') && typeof value === 'function' && !nonBuilders.has(name),
+				)
+				.map(([name]) => name),
+		)
+		expect([...runtime].sort()).toEqual([...builders.keys()].sort())
 		expect([...registered].sort()).toEqual([...builders.keys()].sort())
 		for (const builder of BUILDER_CASES) {
 			const expected = [...(builders.get(builder.name) ?? [])].sort()
@@ -401,17 +491,44 @@ describe('shape builders', () => {
 				.map(([position]) => Number(position))
 				.sort()
 			expect(actual, `${builder.name} options positions`).toEqual(expected)
+			for (const position of expected) {
+				const body = implementations.get(builder.name)
+				expect(body, `${builder.name} implementation`).toBeDefined()
+				if (body === undefined) continue
+				const calls: ts.CallExpression[] = []
+				for (const statement of body.statements) {
+					if (!ts.isVariableStatement(statement)) continue
+					for (const declaration of statement.declarationList.declarations) {
+						const initializer = declaration.initializer
+						if (
+							initializer !== undefined &&
+							ts.isCallExpression(initializer) &&
+							ts.isIdentifier(initializer.expression) &&
+							initializer.expression.text === 'readOptions'
+						) {
+							calls.push(initializer)
+						}
+					}
+				}
+				expect(calls, `${builder.name} readOptions calls`).toHaveLength(1)
+				const [call] = calls
+				if (call === undefined) continue
+				const keysArgument = call.arguments[1]
+				expect(
+					keysArgument !== undefined && ts.isArrayLiteralExpression(keysArgument),
+					`${builder.name} readOptions keys`,
+				).toBe(true)
+				if (keysArgument === undefined || !ts.isArrayLiteralExpression(keysArgument)) continue
+				const actualKeys = keysArgument.elements
+					.filter(ts.isStringLiteral)
+					.map((element) => element.text)
+					.sort()
+				const expectedKeys = [...(optionKeys.get(builder.name)?.get(position) ?? [])].sort()
+				expect(actualKeys, `${builder.name} consumed option keys`).toEqual(expectedKeys)
+			}
 		}
 
-		const traps = {
-			get: new Proxy(
-				{},
-				{
-					get() {
-						throw new Error('hostile get')
-					},
-				},
-			),
+		const hostTraps = {
 			ownKeys: new Proxy(
 				{},
 				{
@@ -420,39 +537,82 @@ describe('shape builders', () => {
 					},
 				},
 			),
-			getOwnPropertyDescriptor: new Proxy(
-				{},
-				{
-					getOwnPropertyDescriptor() {
-						throw new Error('hostile descriptor')
-					},
-				},
-			),
-			has: new Proxy(
-				{},
-				{
-					has() {
-						throw new Error('hostile has')
-					},
-				},
-			),
 			revoked: createRevokedProxy(),
-		} satisfies Readonly<
-			Record<'get' | 'ownKeys' | 'getOwnPropertyDescriptor' | 'has' | 'revoked', object>
-		>
+		} satisfies Readonly<Record<'ownKeys' | 'revoked', object>>
+		const nullPrototype: object = Object.create(null)
+		const validOptions = {
+			empty: {},
+			frozen: Object.freeze({}),
+			spread: { ...{ description: undefined } },
+			nullPrototype,
+			defaults: new Proxy(
+				{},
+				{
+					get() {
+						return undefined
+					},
+				},
+			),
+		} satisfies Readonly<Record<string, object>>
 
 		const probes = new Map<string, Result<unknown>>()
 		const controls = new Map<string, Result<unknown>>()
 		for (const builder of BUILDER_CASES) {
 			const base = builder.valid[0] ?? []
 			for (const position of builders.get(builder.name) ?? []) {
-				const controlArgs = [...base]
-				controlArgs[position] = {}
-				controls.set(
-					`${builder.name}[${position}]`,
-					attempt(() => builder.run(controlArgs)),
-				)
-				for (const [trap, options] of Object.entries(traps)) {
+				for (const [control, options] of Object.entries(validOptions)) {
+					const args = [...base]
+					args[position] = options
+					controls.set(
+						`${builder.name}[${position}]:${control}`,
+						attempt(() => builder.run(args)),
+					)
+				}
+				for (const key of optionKeys.get(builder.name)?.get(position) ?? []) {
+					const getArgs = [...base]
+					getArgs[position] = new Proxy(
+						{},
+						{
+							get(_target, property) {
+								if (property === key) throw new Error(`hostile get ${key}`)
+								return undefined
+							},
+						},
+					)
+					probes.set(
+						`${builder.name}[${position}]:get:${key}`,
+						attempt(() => builder.run(getArgs)),
+					)
+					const hasArgs = [...base]
+					hasArgs[position] = new Proxy(
+						{},
+						{
+							has(_target, property) {
+								if (property === key) throw new Error(`hostile has ${key}`)
+								return false
+							},
+						},
+					)
+					probes.set(
+						`${builder.name}[${position}]:has:${key}`,
+						attempt(() => builder.run(hasArgs)),
+					)
+					const descriptorArgs = [...base]
+					descriptorArgs[position] = new Proxy(
+						{},
+						{
+							getOwnPropertyDescriptor(_target, property) {
+								if (property === key) throw new Error(`hostile descriptor ${key}`)
+								return undefined
+							},
+						},
+					)
+					probes.set(
+						`${builder.name}[${position}]:getOwnPropertyDescriptor:${key}`,
+						attempt(() => builder.run(descriptorArgs)),
+					)
+				}
+				for (const [trap, options] of Object.entries(hostTraps)) {
 					const args = [...base]
 					args[position] = options
 					probes.set(
@@ -466,20 +626,18 @@ describe('shape builders', () => {
 		const expected = new Set<string>()
 		for (const [builder, positions] of builders) {
 			for (const position of positions) {
-				for (const trap of Object.keys(traps)) expected.add(`${builder}[${position}]:${trap}`)
+				for (const key of optionKeys.get(builder)?.get(position) ?? []) {
+					for (const trap of ['get', 'has', 'getOwnPropertyDescriptor']) {
+						expected.add(`${builder}[${position}]:${trap}:${key}`)
+					}
+				}
+				for (const trap of Object.keys(hostTraps)) expected.add(`${builder}[${position}]:${trap}`)
 			}
 		}
-		expect(controls.size).toBe(10)
-		expect(probes.size).toBe(50)
 		expect([...probes.keys()].sort()).toEqual([...expected].sort())
 
-		const missing = new Set(probes.keys())
-		const first = missing.values().next().value
-		if (first !== undefined) missing.delete(first)
-		expect([...missing].sort()).not.toEqual([...expected].sort())
-
 		for (const [entry, outcome] of controls) {
-			expect(outcome.success, `${entry} rejected empty options`).toBe(true)
+			expect(outcome.success, `${entry} rejected valid options`).toBe(true)
 		}
 		for (const [entry, outcome] of probes) {
 			expect(outcome.success, `${entry} accepted hostile options`).toBe(false)
@@ -492,8 +650,21 @@ describe('shape builders', () => {
 			expect(outcome.error.message).toBe(`${builder}: options could not be read`)
 		}
 
-		const empty = attempt(() => stringShape({}))
-		expect(empty).toMatchObject({ success: true, value: { type: 'string' } })
+		for (const builder of BUILDER_CASES) {
+			const base = builder.valid[0] ?? []
+			for (const position of builders.get(builder.name) ?? []) {
+				for (const primitive of [null, 0, 'x']) {
+					const args = [...base]
+					args[position] = primitive
+					const outcome = attempt(() => builder.run(args))
+					expect(outcome.success, `${builder.name}[${position}] accepted a primitive`).toBe(false)
+					if (outcome.success) continue
+					expect(isContractError(outcome.error)).toBe(true)
+					if (!isContractError(outcome.error)) continue
+					expect(outcome.error.message).toBe(`${builder.name}: options must be a plain record`)
+				}
+			}
+		}
 	})
 
 	it('rejects the audit malformed-argument corpus with coded errors', () => {
