@@ -45,7 +45,7 @@ A successor brief:
 - **states what changed in the brief itself**, so a reader can see which claims are new;
 - **adds claims that attack the previous round's own rulings.**
 
-That last one is the highest-yield idea in this process. A fix round makes *decisions* — it rules
+That last one is the highest-yield idea in this process. A fix round makes _decisions_ — it rules
 that some input should be refused rather than carried, that some widening is deliberate, that some
 site is sound and needs no change. Those rulings are the freshest and least-examined surface in the
 package, and they were made by the engine least able to see their consequences. Write a claim for
@@ -57,7 +57,7 @@ each one.
   rather than trust any registry, table, or sweep the writer produced.
 - **"No refusal was widened into a regression."** Every hardening round risks over-correcting. Ask
   which legitimate caller pattern broke, and require it to be named.
-- **"The instruments bind."** Attack the instrument's *rule*, not its output: name a change it would
+- **"The instruments bind."** Attack the instrument's _rule_, not its output: name a change it would
   not catch. An instrument nobody has tried to evade is not evidence.
 - **"No instrument is vacuous."** Ask for a control that cannot produce its failing verdict. If a
   previous round shipped one, say so and name it — a round told a tautology already shipped here
@@ -72,15 +72,15 @@ each one.
 
 ## Instructions that change auditor behaviour
 
-- *"CONFIRMED requires naming the attack you tried that failed."* — the single most effective
+- _"CONFIRMED requires naming the attack you tried that failed."_ — the single most effective
   sentence, because it converts a confirmation from an opinion into a report of work done.
-- *"A claim you cannot decide is UNRESOLVED, not CONFIRMED — say what would settle it."*
-- *"Assume this chain has one more."* — with the count of prior rounds and how many were provoked by
+- _"A claim you cannot decide is UNRESOLVED, not CONFIRMED — say what would settle it."_
+- _"Assume this chain has one more."_ — with the count of prior rounds and how many were provoked by
   a defect the previous round believed closed.
-- *"Do not hedge toward an imagined consensus."* — when two auditors run blind, each will otherwise
+- _"Do not hedge toward an imagined consensus."_ — when two auditors run blind, each will otherwise
   soften toward what it guesses the other said.
 
-Do **not** write *"an audit returning only confirmations has not tried."* It reads as pressure to
+Do **not** write _"an audit returning only confirmations has not tried."_ It reads as pressure to
 produce a finding, and an auditor that manufactures one to satisfy the brief has corrupted the round
 in the more expensive direction — a false finding costs a fix unit, an argument, and the credibility
 of the true findings beside it. The adequacy of an all-confirmed round is tested afterwards, against

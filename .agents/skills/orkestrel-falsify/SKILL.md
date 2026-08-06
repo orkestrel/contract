@@ -47,11 +47,11 @@ skill's, because `CLAUDE.md` assigns it here; everything else about auditor cond
 The brief supplies the evidence its subject actually has. Requiring a diff for a subject that has no
 diff is a rule the brief cannot satisfy.
 
-| subject | required evidence |
-| --- | --- |
-| a code change | the actual diff and the actual status output; omitting either is a dispatch deviation |
-| a rendered or externally driven surface | the capture portfolio as primary, source as corroboration |
-| a policy, design, or process proposal | the proposal, the canon it must satisfy, and the record of what motivated it |
+| subject                                 | required evidence                                                                     |
+| --------------------------------------- | ------------------------------------------------------------------------------------- |
+| a code change                           | the actual diff and the actual status output; omitting either is a dispatch deviation |
+| a rendered or externally driven surface | the capture portfolio as primary, source as corroboration                             |
+| a policy, design, or process proposal   | the proposal, the canon it must satisfy, and the record of what motivated it          |
 
 **A subject can occupy more than one row; supply every row it occupies.** A ruling whose fixes
 already landed as edits is both the third row and the first, and withholding the diff on the grounds
@@ -80,12 +80,12 @@ comparable; a round that invents its own cannot be read against the last one.
 
 1. **Numbered verdicts**, one per claim, in the brief's order. Exactly one of four values:
 
-   | value | meaning | evidence |
-   | --- | --- | --- |
-   | `CONFIRMED` | attacked and it held | as the Falsification law requires |
-   | `BROKEN` | falsified | as the Falsification law requires — note it says *input, **state, or interleaving***, so a concurrency claim is falsified by an interleaving, not by an input |
-   | `UNRESOLVED` | cannot be decided from the evidence available | what would settle it |
-   | `NOT-EVIDENCED` | a claim about a rendered or externally driven surface the supplied capture cannot show | which capture is missing |
+   | value           | meaning                                                                                | evidence                                                                                                                                                      |
+   | --------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | `CONFIRMED`     | attacked and it held                                                                   | as the Falsification law requires                                                                                                                             |
+   | `BROKEN`        | falsified                                                                              | as the Falsification law requires — note it says _input, **state, or interleaving**_, so a concurrency claim is falsified by an interleaving, not by an input |
+   | `UNRESOLVED`    | cannot be decided from the evidence available                                          | what would settle it                                                                                                                                          |
+   | `NOT-EVIDENCED` | a claim about a rendered or externally driven surface the supplied capture cannot show | which capture is missing                                                                                                                                      |
 
    The first two rows defer; only the last two are this skill's, because the law does not name them.
    `BROKEN` and `UNRESOLVED` are **separate**: a claim nobody could decide has not been falsified,
@@ -121,7 +121,7 @@ Follow `references/reconcile.md`. The obligations that are not delegable:
   hypothesis until the orchestrator has run it.
 - **A disagreement between auditors is rarely a tie to average.** It is usually two correct answers
   to two different questions. Find the question each one answered.
-- **Bound every finding**: state what is *not* broken, and why the adjacent behaviour that looks the
+- **Bound every finding**: state what is _not_ broken, and why the adjacent behaviour that looks the
   same is correct. An audit that reports everything is as useless as one that reports nothing.
 - **Bound the fix before briefing it.** Establish what over-correcting would break, and include that
   in the fix brief as a constraint.

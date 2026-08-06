@@ -9,7 +9,7 @@ An auditor's finding is a **hypothesis** until the orchestrator has run it. Repr
 claim by hand, against the built output, before it enters a fix brief.
 
 **Build the hostile input outside the `try`.** A probe that wraps construction and invocation in one
-catch cannot distinguish *the subject threw* from *my harness threw* — a missing import, a wrong
+catch cannot distinguish _the subject threw_ from _my harness threw_ — a missing import, a wrong
 arity, a `require` in an ESM context all surface as the finding you were hoping to see. Construct
 first, let harness failures crash loudly, and only guard the call under test. Every campaign that has
 run this process has produced at least one finding that was the instrument failing.
@@ -109,7 +109,7 @@ leaves this round is the procedure.
 
 When a round certifies an instrument — a pin, an identity check, a generated sweep — the controls
 are usually drawn from whatever the instrument obviously covers, because that is where the examples
-are easiest to construct. That sampling proves discrimination *within* the population and is
+are easiest to construct. That sampling proves discrimination _within_ the population and is
 routinely reported as proof the instrument works.
 
 So before running controls, write down the instrument's **membership rule** in one sentence, then
