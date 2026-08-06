@@ -1,7 +1,9 @@
 import type { ContractShape, JSONSchema, RawShape } from '@src/core'
 import {
 	arrayShape,
+	attempt,
 	booleanShape,
+	cloneShape,
 	COMPILE_DEPTH_LIMIT,
 	compileAuditor,
 	compileGenerator,
@@ -22,6 +24,7 @@ import {
 	objectShape,
 	oneOfShape,
 	optionalShape,
+	ownShape,
 	rawShape,
 	recordShape,
 	seededRandom,
@@ -35,6 +38,7 @@ import {
 	buildWideVocabulary,
 	captureContractError,
 	createNonEnumerableRecord,
+	createRevokedProxy,
 	SHAPE_SEPARATIONS,
 	SOUNDNESS_SAMPLE,
 } from '../../setup.js'
@@ -48,7 +52,11 @@ describe('validateShape', () => {
 			{ type: 'string', min: -1 },
 			{ type: 'string', max: 1.5 },
 			{ type: 'array', items: stringShape(), min: Number.NaN },
-			{ type: 'array', items: stringShape(), max: Number.POSITIVE_INFINITY },
+			{
+				type: 'array',
+				items: stringShape(),
+				max: Number.POSITIVE_INFINITY,
+			},
 			{ type: 'array', items: stringShape(), min: -1 },
 			{ type: 'array', items: stringShape(), max: 1.5 },
 		]
@@ -275,7 +283,12 @@ describe('validateShape', () => {
 		expect(() =>
 			validateShape(
 				objectShape({
-					tags: arrayShape(objectShape({ id: stringShape(), note: optionalShape(stringShape()) })),
+					tags: arrayShape(
+						objectShape({
+							id: stringShape(),
+							note: optionalShape(stringShape()),
+						}),
+					),
 					kind: unionShape(nullShape(), jsonShape(), rawShape({})),
 					meta: nullableShape(objectShape({ value: optionalShape(integerShape()) })),
 					extra: optionalShape(recordShape(jsonShape())),
@@ -286,6 +299,119 @@ describe('validateShape', () => {
 })
 
 describe('malformed shape children', () => {
+	it('contains a revoked Proxy root at every compiler and contract entry point', () => {
+		const source: { readonly shape: ContractShape } = JSON.parse('{}')
+		Object.defineProperty(source, 'shape', { value: createRevokedProxy() })
+		const shape = source.shape
+		const outcomes = [
+			attempt(() => compileSchema(shape)),
+			attempt(() => compileGuard(shape)),
+			attempt(() => compileParser(shape)),
+			attempt(() => compileGenerator(shape, () => 0)),
+			attempt(() => compileReporter(shape, undefined)),
+			attempt(() => compileAuditor(shape, undefined)),
+			attempt(() => createContract(shape)),
+		]
+		const errors = outcomes.map((outcome) =>
+			outcome.success
+				? 'returned'
+				: isContractError(outcome.error)
+					? outcome.error.code
+					: outcome.error.name,
+		)
+
+		expect(errors).toEqual(Array.from({ length: outcomes.length }, () => 'clone'))
+	})
+
+	it('contains hostile roots across ownership, validation, compilation, and contracts', () => {
+		const revokedSource: { readonly shape: ContractShape } = JSON.parse('{}')
+		Object.defineProperty(revokedSource, 'shape', {
+			value: createRevokedProxy(),
+		})
+
+		const throwing: ContractShape = JSON.parse('{"type":"string"}')
+		Object.defineProperty(throwing, 'type', {
+			enumerable: true,
+			get() {
+				throw 'caller getter'
+			},
+		})
+
+		const revokedOutcomes = [
+			attempt(() => ownShape(revokedSource.shape)),
+			attempt(() => cloneShape(revokedSource.shape)),
+			attempt(() => validateShapeDepth(revokedSource.shape)),
+			attempt(() => validateShape(revokedSource.shape)),
+		]
+		const revokedCodes = revokedOutcomes.map((outcome) =>
+			outcome.success
+				? 'returned'
+				: isContractError(outcome.error)
+					? outcome.error.code
+					: outcome.error.name,
+		)
+
+		expect(revokedCodes).toEqual(['clone', 'clone', 'structure', 'structure'])
+
+		const throwingOutcomes = [
+			attempt(() => ownShape(throwing)),
+			attempt(() => cloneShape(throwing)),
+			attempt(() => validateShapeDepth(throwing)),
+			attempt(() => validateShape(throwing)),
+			attempt(() => compileSchema(throwing)),
+			attempt(() => compileGuard(throwing)),
+			attempt(() => compileParser(throwing)),
+			attempt(() => compileGenerator(throwing, () => 0)),
+			attempt(() => compileReporter(throwing, undefined)),
+			attempt(() => compileAuditor(throwing, undefined)),
+			attempt(() => createContract(throwing)),
+		]
+		const throwingCodes = throwingOutcomes.map((outcome) =>
+			outcome.success
+				? 'returned'
+				: isContractError(outcome.error)
+					? outcome.error.code
+					: outcome.error.name,
+		)
+
+		expect(throwingCodes).toEqual([
+			'clone',
+			'clone',
+			'structure',
+			'structure',
+			'clone',
+			'clone',
+			'clone',
+			'clone',
+			'clone',
+			'clone',
+			'clone',
+		])
+
+		const primitive: ContractShape = JSON.parse('{"type":"string"}')
+		Object.defineProperty(primitive, Symbol.toPrimitive, {
+			value() {
+				throw new Error('primitive trap')
+			},
+		})
+		expect(() => String(primitive)).toThrow('primitive trap')
+		const outcomes = [
+			attempt(() => ownShape(primitive)),
+			attempt(() => cloneShape(primitive)),
+			attempt(() => validateShapeDepth(primitive)),
+			attempt(() => validateShape(primitive)),
+			attempt(() => compileSchema(primitive)),
+			attempt(() => compileGuard(primitive)),
+			attempt(() => compileParser(primitive)),
+			attempt(() => compileGenerator(primitive, () => 0)),
+			attempt(() => compileReporter(primitive, '')),
+			attempt(() => compileAuditor(primitive, '')),
+			attempt(() => createContract(primitive)),
+		]
+
+		expect(outcomes.every((outcome) => outcome.success)).toBe(true)
+	})
+
 	it('rejects non-primitive scalar fields before any standalone compiler uses them', () => {
 		const trap = Object.freeze({
 			[Symbol.toPrimitive]() {
@@ -297,12 +423,36 @@ describe('malformed shape children', () => {
 			readonly field: string
 			readonly path: readonly string[]
 		}[] = [
-			{ shape: JSON.parse('{"type":"string"}'), field: 'min', path: ['min'] },
-			{ shape: JSON.parse('{"type":"string"}'), field: 'max', path: ['max'] },
-			{ shape: JSON.parse('{"type":"string"}'), field: 'pattern', path: ['pattern'] },
-			{ shape: JSON.parse('{"type":"number"}'), field: 'min', path: ['min'] },
-			{ shape: JSON.parse('{"type":"number"}'), field: 'max', path: ['max'] },
-			{ shape: JSON.parse('{"type":"number"}'), field: 'integer', path: ['integer'] },
+			{
+				shape: JSON.parse('{"type":"string"}'),
+				field: 'min',
+				path: ['min'],
+			},
+			{
+				shape: JSON.parse('{"type":"string"}'),
+				field: 'max',
+				path: ['max'],
+			},
+			{
+				shape: JSON.parse('{"type":"string"}'),
+				field: 'pattern',
+				path: ['pattern'],
+			},
+			{
+				shape: JSON.parse('{"type":"number"}'),
+				field: 'min',
+				path: ['min'],
+			},
+			{
+				shape: JSON.parse('{"type":"number"}'),
+				field: 'max',
+				path: ['max'],
+			},
+			{
+				shape: JSON.parse('{"type":"number"}'),
+				field: 'integer',
+				path: ['integer'],
+			},
 			{
 				shape: JSON.parse('{"type":"array","items":{"type":"string"}}'),
 				field: 'min',
@@ -318,10 +468,26 @@ describe('malformed shape children', () => {
 				field: 'mode',
 				path: ['mode'],
 			},
-			{ shape: JSON.parse('{"type":"string"}'), field: 'description', path: ['description'] },
-			{ shape: JSON.parse('{"type":"number"}'), field: 'description', path: ['description'] },
-			{ shape: JSON.parse('{"type":"boolean"}'), field: 'description', path: ['description'] },
-			{ shape: JSON.parse('{"type":"null"}'), field: 'description', path: ['description'] },
+			{
+				shape: JSON.parse('{"type":"string"}'),
+				field: 'description',
+				path: ['description'],
+			},
+			{
+				shape: JSON.parse('{"type":"number"}'),
+				field: 'description',
+				path: ['description'],
+			},
+			{
+				shape: JSON.parse('{"type":"boolean"}'),
+				field: 'description',
+				path: ['description'],
+			},
+			{
+				shape: JSON.parse('{"type":"null"}'),
+				field: 'description',
+				path: ['description'],
+			},
 			{
 				shape: JSON.parse('{"type":"literal","values":["ok"]}'),
 				field: 'description',
@@ -342,11 +508,18 @@ describe('malformed shape children', () => {
 				field: 'description',
 				path: ['description'],
 			},
-			{ shape: JSON.parse('{"type":"json"}'), field: 'description', path: ['description'] },
+			{
+				shape: JSON.parse('{"type":"json"}'),
+				field: 'description',
+				path: ['description'],
+			},
 		]
 
 		for (const entry of fields) {
-			Object.defineProperty(entry.shape, entry.field, { value: trap, enumerable: true })
+			Object.defineProperty(entry.shape, entry.field, {
+				value: trap,
+				enumerable: true,
+			})
 			Object.freeze(entry.shape)
 			const errors = [
 				captureContractError(() => validateShapeDepth(entry.shape)),
@@ -367,7 +540,10 @@ describe('malformed shape children', () => {
 
 		const literal: ContractShape = JSON.parse('{"type":"literal","values":[null]}')
 		if (literal.type !== 'literal') throw new Error('test setup: expected a literal shape')
-		Object.defineProperty(literal.values, '0', { value: trap, enumerable: true })
+		Object.defineProperty(literal.values, '0', {
+			value: trap,
+			enumerable: true,
+		})
 		Object.freeze(literal.values)
 		Object.freeze(literal)
 		for (const error of [
@@ -421,7 +597,9 @@ describe('malformed shape children', () => {
 		const revocable = Proxy.revocable({}, {})
 		revocable.revoke()
 		const revokedSource: { readonly child: ContractShape } = JSON.parse('{}')
-		Object.defineProperty(revokedSource, 'child', { value: revocable.proxy })
+		Object.defineProperty(revokedSource, 'child', {
+			value: revocable.proxy,
+		})
 
 		const throwing: ContractShape = JSON.parse('{"type":"string"}')
 		Object.defineProperty(throwing, 'type', {
@@ -474,7 +652,10 @@ describe('malformed shape children', () => {
 			},
 		})
 		Object.freeze(pattern)
-		const hostilePattern: ContractShape = Object.freeze({ type: 'string', pattern })
+		const hostilePattern: ContractShape = Object.freeze({
+			type: 'string',
+			pattern,
+		})
 
 		const hostileProperties = new Proxy<Record<string, ContractShape>>(
 			{},
@@ -600,8 +781,14 @@ describe('malformed shape children', () => {
 				path: ['properties', 'k'],
 			},
 			{ shape: arrayShape(child), path: ['items'] },
-			{ shape: unionShape(stringShape(), child), path: ['variants', '1'] },
-			{ shape: oneOfShape(stringShape(), child), path: ['variants', '1'] },
+			{
+				shape: unionShape(stringShape(), child),
+				path: ['variants', '1'],
+			},
+			{
+				shape: oneOfShape(stringShape(), child),
+				path: ['variants', '1'],
+			},
 			{ shape: optionalShape(child), path: ['inner'] },
 			{ shape: nullableShape(child), path: ['inner'] },
 		]
@@ -785,14 +972,35 @@ describe('null / json compileGenerator', () => {
 describe('compileSchema', () => {
 	it('emits string / number constraints', () => {
 		expect(
-			compileSchema(stringShape({ min: 1, max: 8, pattern: /^a+$/, description: 'd' })),
-		).toEqual({ type: 'string', minLength: 1, maxLength: 8, pattern: '^a+$', description: 'd' })
-		expect(compileSchema(integerShape({ min: 0 }))).toEqual({ type: 'integer', minimum: 0 })
-		expect(compileSchema(numberShape({ max: 9 }))).toEqual({ type: 'number', maximum: 9 })
+			compileSchema(
+				stringShape({
+					min: 1,
+					max: 8,
+					pattern: /^a+$/,
+					description: 'd',
+				}),
+			),
+		).toEqual({
+			type: 'string',
+			minLength: 1,
+			maxLength: 8,
+			pattern: '^a+$',
+			description: 'd',
+		})
+		expect(compileSchema(integerShape({ min: 0 }))).toEqual({
+			type: 'integer',
+			minimum: 0,
+		})
+		expect(compileSchema(numberShape({ max: 9 }))).toEqual({
+			type: 'number',
+			maximum: 9,
+		})
 	})
 
 	it('emits literals as enum and arrays with items + bounds', () => {
-		expect(compileSchema(literalShape(['a', 'b']))).toEqual({ enum: ['a', 'b'] })
+		expect(compileSchema(literalShape(['a', 'b']))).toEqual({
+			enum: ['a', 'b'],
+		})
 		expect(compileSchema(arrayShape(stringShape(), { max: 2 }))).toEqual({
 			type: 'array',
 			items: { type: 'string' },
@@ -802,7 +1010,12 @@ describe('compileSchema', () => {
 
 	it('emits objects with required (optional excluded) + additionalProperties:false', () => {
 		expect(
-			compileSchema(objectShape({ name: stringShape(), bio: optionalShape(stringShape()) })),
+			compileSchema(
+				objectShape({
+					name: stringShape(),
+					bio: optionalShape(stringShape()),
+				}),
+			),
 		).toEqual({
 			type: 'object',
 			properties: { name: { type: 'string' }, bio: { type: 'string' } },
@@ -844,7 +1057,10 @@ describe('compileSchema', () => {
 
 	it('owns and deeply freezes a raw schema even when the root shape is caller-frozen', () => {
 		const child: JSONSchema = { type: 'string' }
-		const schema: JSONSchema = { type: 'object', properties: { value: child } }
+		const schema: JSONSchema = {
+			type: 'object',
+			properties: { value: child },
+		}
 		const shape: RawShape = Object.freeze({ type: 'raw', schema })
 		const compiled = compileSchema(shape)
 
@@ -876,7 +1092,10 @@ describe('compileGuard', () => {
 
 	it('validates a closed object with an optional field', () => {
 		const guard = compileGuard(
-			objectShape({ name: stringShape(), bio: optionalShape(stringShape()) }),
+			objectShape({
+				name: stringShape(),
+				bio: optionalShape(stringShape()),
+			}),
 		)
 		expect(guard({ name: 'Ada' })).toBe(true)
 		expect(guard({ name: 'Ada', bio: 'hi' })).toBe(true)
@@ -1033,13 +1252,19 @@ describe('compileGuard', () => {
 describe('compileParser', () => {
 	it('coerces whole objects and fails on a missing required field', () => {
 		const parse = compileParser(objectShape({ name: stringShape(), age: integerShape() }))
-		expect(parse({ name: 'Ada', age: '36' })).toEqual({ name: 'Ada', age: 36 })
+		expect(parse({ name: 'Ada', age: '36' })).toEqual({
+			name: 'Ada',
+			age: 36,
+		})
 		expect(parse({ name: 'Ada' })).toBeUndefined()
 	})
 
 	it('skips absent optional fields and coerces nullable', () => {
 		const parse = compileParser(
-			objectShape({ name: stringShape(), bio: optionalShape(stringShape()) }),
+			objectShape({
+				name: stringShape(),
+				bio: optionalShape(stringShape()),
+			}),
 		)
 		expect(parse({ name: 'Ada' })).toEqual({ name: 'Ada' })
 		expect(compileParser(nullableShape(integerShape()))(null)).toBeNull()
@@ -1105,9 +1330,15 @@ describe('compileParser', () => {
 
 	it('enforces a refinement on a leaf nested inside an object', () => {
 		const parse = compileParser(
-			objectShape({ name: stringShape({ min: 1 }), age: integerShape({ min: 0 }) }),
+			objectShape({
+				name: stringShape({ min: 1 }),
+				age: integerShape({ min: 0 }),
+			}),
 		)
-		expect(parse({ name: 'Ada', age: '36' })).toEqual({ name: 'Ada', age: 36 })
+		expect(parse({ name: 'Ada', age: '36' })).toEqual({
+			name: 'Ada',
+			age: 36,
+		})
 		expect(parse({ name: '', age: 36 })).toBeUndefined() // name under min:1
 		expect(parse({ name: 'Ada', age: -1 })).toBeUndefined() // age under min:0
 	})
@@ -1125,7 +1356,10 @@ describe('compileParser', () => {
 			numberShape({ min: -1, max: 1 }),
 			integerShape({ min: 0, max: 10 }),
 			arrayShape(integerShape(), { min: 1, max: 2 }),
-			objectShape({ tag: stringShape({ min: 1 }), score: integerShape({ min: 0, max: 100 }) }),
+			objectShape({
+				tag: stringShape({ min: 1 }),
+				score: integerShape({ min: 0, max: 100 }),
+			}),
 		]
 		const violations: string[] = []
 		for (const [shapeIndex, shape] of shapes.entries()) {
@@ -1141,7 +1375,10 @@ describe('compileParser', () => {
 
 	it('an in-bounds value round-trips through createContract.parse and is', () => {
 		const contract = createContract(
-			objectShape({ name: stringShape({ min: 1, max: 5 }), age: integerShape({ min: 0 }) }),
+			objectShape({
+				name: stringShape({ min: 1, max: 5 }),
+				age: integerShape({ min: 0 }),
+			}),
 		)
 		const parsed = contract.parse({ name: 'Ada', age: '36' })
 		expect(parsed).toEqual({ name: 'Ada', age: 36 })
@@ -1153,7 +1390,10 @@ describe('compileParser', () => {
 
 describe('compileGenerator', () => {
 	it('is deterministic for a given seed', () => {
-		const shape = objectShape({ name: stringShape(), age: integerShape({ min: 0, max: 100 }) })
+		const shape = objectShape({
+			name: stringShape(),
+			age: integerShape({ min: 0, max: 100 }),
+		})
 		expect(compileGenerator(shape, seededRandom(42))).toEqual(
 			compileGenerator(shape, seededRandom(42)),
 		)
@@ -1376,13 +1616,19 @@ describe('createContract', () => {
 		)
 		expect(contract.schema).toEqual({
 			type: 'object',
-			properties: { name: { type: 'string', minLength: 1 }, age: { type: 'integer' } },
+			properties: {
+				name: { type: 'string', minLength: 1 },
+				age: { type: 'integer' },
+			},
 			required: ['name', 'age'],
 			additionalProperties: false,
 		})
 		expect(contract.is({ name: 'Ada', age: 36 })).toBe(true)
 		expect(contract.is({ name: 'Ada', age: 36.5 })).toBe(false)
-		expect(contract.parse({ name: 'Ada', age: '36' })).toEqual({ name: 'Ada', age: 36 })
+		expect(contract.parse({ name: 'Ada', age: '36' })).toEqual({
+			name: 'Ada',
+			age: 36,
+		})
 		// The generator's output satisfies the contract's own guard.
 		expect(contract.is(contract.generate(seededRandom(3)))).toBe(true)
 	})

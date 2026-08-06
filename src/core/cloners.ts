@@ -1,6 +1,6 @@
 import type { ContractShape, JSONRecord, JSONSchema, JSONValue, StringShape } from './types.js'
 import { ContractError, isContractError } from './errors.js'
-import { attempt, enumerableKeys } from './helpers.js'
+import { attempt, enumerableKeys, holds } from './helpers.js'
 import { isRecord } from './validators.js'
 
 /**
@@ -360,7 +360,10 @@ export function cloneSchema(schema: JSONSchema): JSONSchema {
 				if (!outcome.success) {
 					throw new ContractError('cloneSchema: property access failed', {
 						code: 'clone',
-						context: { path: [...frame.path, key], shape: 'schema' },
+						context: {
+							path: [...frame.path, key],
+							shape: 'schema',
+						},
 						cause: outcome.error,
 					})
 				}
@@ -636,6 +639,11 @@ export function cloneShape(shape: ContractShape): ContractShape {
  * protect `RegExp` internal slots; leave that shape unfrozen for this function
  * to snapshot, or pass it through {@link cloneShape} first.
  *
+ * Frozen-state inspection is itself contained through {@link holds}: when a
+ * hostile root prevents that check, this function falls through to
+ * {@link cloneShape}, which exposes the failure as a clone-coded
+ * {@link ContractError}.
+ *
  * Every compiler entry point (`compileSchema` / `compileGuard` /
  * `compileParser` / `compileGenerator` / `compileReporter` / `compileAuditor`)
  * opens with this call, and the check applies per node as the recursion
@@ -655,5 +663,5 @@ export function cloneShape(shape: ContractShape): ContractShape {
  * ```
  */
 export function ownShape(shape: ContractShape): ContractShape {
-	return Object.isFrozen(shape) ? shape : cloneShape(shape)
+	return holds(() => Object.isFrozen(shape)) ? shape : cloneShape(shape)
 }
