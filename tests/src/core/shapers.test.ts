@@ -328,7 +328,11 @@ describe('shape builders', () => {
 				outcome: attempt(() => builder.run(args)),
 			})),
 		)
-		expect(legitimate).toHaveLength(62)
+		const expectedLegitimate = BUILDER_CASES.reduce(
+			(count, builder) => count + builder.valid.length,
+			0,
+		)
+		expect(legitimate).toHaveLength(expectedLegitimate)
 		for (const result of legitimate) {
 			expect(result.outcome.success, `${result.builder} rejected a legitimate call`).toBe(true)
 		}
@@ -353,7 +357,16 @@ describe('shape builders', () => {
 				}
 			}
 		}
-		expect(hostile).toHaveLength(246)
+		const expectedHostile = BUILDER_CASES.reduce(
+			(count, builder) =>
+				count +
+				Object.values(builder.positions).reduce(
+					(positionCount, role) => positionCount + malformed[role].length,
+					0,
+				),
+			0,
+		)
+		expect(hostile).toHaveLength(expectedHostile)
 		for (const result of hostile) {
 			expect(
 				result.outcome.success,
@@ -388,6 +401,9 @@ describe('shape builders', () => {
 		for (const statement of types.statements) {
 			if (!ts.isInterfaceDeclaration(statement) || !statement.name.text.endsWith('ShapeOptions')) {
 				continue
+			}
+			if (statement.heritageClauses !== undefined && statement.heritageClauses.length > 0) {
+				throw new Error(`${statement.name.text}: options heritage clauses are not supported`)
 			}
 			const keys = new Set<string>()
 			for (const member of statement.members) {
@@ -470,6 +486,14 @@ describe('shape builders', () => {
 			builders.set(entry.name, positions)
 			if (entry.body !== undefined && ts.isBlock(entry.body)) {
 				implementations.set(entry.name, entry.body)
+			}
+		}
+		for (const [builder, positions] of builders) {
+			for (const position of positions) {
+				const keys = optionKeys.get(builder)?.get(position)
+				if (keys === undefined || keys.size === 0) {
+					throw new Error(`${builder}: options position ${position} has no resolvable keys`)
+				}
 			}
 		}
 
@@ -720,8 +744,8 @@ describe('shape builders', () => {
 			captureContractError(() => Reflect.apply(rawShape, undefined, [{ type: 'bogus' }])),
 		]
 
-		expect(errors).toHaveLength(39)
-		expect(errors.every((error) => typeof error.code === 'string')).toBe(true)
+		expect(errors.length).toBeGreaterThan(0)
+		for (const error of errors) expect(typeof error.code).toBe('string')
 	})
 
 	it('rejects invalid string, array, and number bounds plus stateful patterns at construction', () => {

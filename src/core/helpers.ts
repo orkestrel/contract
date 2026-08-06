@@ -108,7 +108,10 @@ export function enumerableKeys(value: object): readonly string[] | undefined {
  * descriptor even when the host reports no own keys; the full own-key snapshot
  * and spread then contain enumeration and copying failures. A hostile host is
  * reported uniformly as an unreadable options record, while a readable array or
- * class instance retains the plain-record diagnostic.
+ * class instance retains the plain-record diagnostic. The snapshot follows
+ * object-spread semantics: only own enumerable properties survive, and a
+ * consumed accessor is observed once by the direct readability probe and again
+ * when spread copies it.
  *
  * @param source - The optional builder options value
  * @param keys - Every option key consumed by that builder
@@ -124,7 +127,7 @@ export function enumerableKeys(value: object): readonly string[] | undefined {
  */
 export function readOptions<T extends object>(
 	source: T | undefined,
-	keys: readonly string[],
+	keys: readonly (keyof T & string)[],
 	builder: string,
 	shape: string,
 ): T | undefined {

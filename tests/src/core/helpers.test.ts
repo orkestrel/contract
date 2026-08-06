@@ -146,9 +146,36 @@ describe('readOptions', () => {
 		expect(snapshot).toEqual({ min: 1, max: 4 })
 	})
 
+	it('observes a consumed accessor during the probe and enumerable snapshot', () => {
+		let reads = 0
+		const source = {
+			get min() {
+				reads += 1
+				return reads
+			},
+		}
+		const snapshot = readOptions(source, ['min'], 'stringShape', 'string')
+
+		expect(reads).toBe(2)
+		expect(snapshot).toEqual({ min: 2 })
+	})
+
+	it('omits a readable consumed property when it is not enumerable', () => {
+		const source: { readonly min?: number } = {}
+		Object.defineProperty(source, 'min', { value: 1, enumerable: false })
+		const snapshot = readOptions(source, ['min'], 'stringShape', 'string')
+
+		expect(snapshot).toEqual({})
+	})
+
 	it('rejects a primitive before reflection with the precise plain-record message', () => {
 		const error = captureContractError(() =>
-			Reflect.apply(readOptions, undefined, [null, ['min'], 'stringShape', 'string']),
+			Reflect.apply(readOptions<{ readonly min?: number }>, undefined, [
+				null,
+				['min'],
+				'stringShape',
+				'string',
+			]),
 		)
 
 		expect(error.code).toBe('structure')
@@ -157,7 +184,7 @@ describe('readOptions', () => {
 	})
 
 	it('rejects a key-hiding hostile host with the uniform unreadable-options message', () => {
-		const source = new Proxy(
+		const source: { readonly min?: number; readonly max?: number } = new Proxy(
 			{},
 			{
 				get(_target, key) {
