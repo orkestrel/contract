@@ -1,4 +1,5 @@
 import type {
+	ContractCode,
 	ContractShape,
 	FaultKind,
 	FieldPath,
@@ -67,11 +68,15 @@ export function attempt<T>(callback: () => T): Result<T> {
  * Unlike {@link attempt}, this is not an optional-result boundary: a caller
  * has committed to reading the supplied value, so a failed read cannot be
  * represented as absence or another permissive answer. Every reader using
- * this helper throws code `structure` with the same message shape and retains
- * the normalized host error as its cause.
+ * this helper throws with the same `<reader>: <subject> could not be read`
+ * message shape and retains the normalized host error as its cause. Required
+ * structural readers use the defaults; pattern readers supply `pattern` for
+ * both the subject and code.
  *
  * @param callback - The read operation to perform
  * @param reader - The public reader name used in the diagnostic
+ * @param subject - The argument/domain noun used in the diagnostic
+ * @param code - The machine-readable refusal code
  * @returns The successfully read value
  * @throws {ContractError} When the read operation fails
  *
@@ -80,11 +85,16 @@ export function attempt<T>(callback: () => T): Result<T> {
  * readValue(() => source.value, 'parseRecord')
  * ```
  */
-export function readValue<T>(callback: () => T, reader: string): T {
+export function readValue<T>(
+	callback: () => T,
+	reader: string,
+	subject = 'value',
+	code: ContractCode = 'structure',
+): T {
 	const outcome = attempt(callback)
 	if (!outcome.success) {
-		throw new ContractError(`${reader}: value could not be read`, {
-			code: 'structure',
+		throw new ContractError(`${reader}: ${subject} could not be read`, {
+			code,
 			cause: outcome.error,
 		})
 	}
@@ -137,14 +147,12 @@ export function enumerableKeys(value: object): readonly string[] | undefined {
  * @remarks
  * Primitive inputs are rejected before reflection so ordinary caller mistakes
  * retain the builder's precise plain-record diagnostic. For an object, every
- * consumed key is read directly, checked for presence, and inspected for an own
- * descriptor even when the host reports no own keys; the full own-key snapshot
- * and spread then contain enumeration and copying failures. A hostile host is
- * reported uniformly as an unreadable options record, while a readable array or
- * class instance retains the plain-record diagnostic. The snapshot follows
- * object-spread semantics: only own enumerable properties survive, and a
- * consumed accessor is observed once by the direct readability probe and again
- * when spread copies it.
+ * consumed key is read exactly once, checked for presence, and inspected for an
+ * own descriptor even when the host reports no own keys. That one value enters
+ * the own-enumerable snapshot. A consumed inherited or non-enumerable key is
+ * refused because the snapshot cannot carry it. A hostile host is reported
+ * uniformly as an unreadable options record, while a readable array or class
+ * instance retains the plain-record diagnostic.
  *
  * @param source - The optional builder options value
  * @param keys - Every option key consumed by that builder
@@ -172,29 +180,60 @@ export function readOptions<T extends object>(
 			context: { shape },
 		})
 	}
-	const snapshot = attempt<T>(() => {
-		for (const key of keys) {
-			Reflect.get(input, key)
-			Reflect.has(input, key)
-			Reflect.getOwnPropertyDescriptor(input, key)
-		}
-		Reflect.ownKeys(input)
-		return { ...source }
-	})
-	if (!snapshot.success) {
-		throw new ContractError(`${builder}: options could not be read`, {
-			code: 'structure',
-			context: { shape },
-			cause: snapshot.error,
-		})
-	}
-	if (!isRecord(input)) {
+	const result = readValue(
+		() => {
+			const values = new Map<PropertyKey, unknown>()
+			const descriptors = new Map<PropertyKey, PropertyDescriptor | undefined>()
+			const presence = new Map<string, boolean>()
+			for (const key of keys) {
+				values.set(key, Reflect.get(input, key))
+				presence.set(key, Reflect.has(input, key))
+				descriptors.set(key, Reflect.getOwnPropertyDescriptor(input, key))
+			}
+			const ownKeys = Reflect.ownKeys(input)
+			const prototype = Reflect.getPrototypeOf(input)
+			const record = prototype === null || Reflect.getPrototypeOf(prototype) === null
+			const own = new Set<PropertyKey>(ownKeys)
+			const snapshot: T = Object.create(Object.prototype)
+			for (const key of ownKeys) {
+				const descriptor = descriptors.has(key)
+					? descriptors.get(key)
+					: Reflect.getOwnPropertyDescriptor(input, key)
+				if (descriptor?.enumerable !== true) continue
+				const value = values.has(key) ? values.get(key) : Reflect.get(input, key)
+				Reflect.defineProperty(snapshot, key, {
+					value,
+					enumerable: true,
+					configurable: true,
+					writable: true,
+				})
+			}
+			const invalid = keys.find((key) => {
+				const descriptor = descriptors.get(key)
+				const present = presence.get(key) === true
+				return (
+					(descriptor !== undefined && (!descriptor.enumerable || !own.has(key))) ||
+					(descriptor === undefined && present)
+				)
+			})
+			return { snapshot, invalid, record }
+		},
+		builder,
+		'options',
+	)
+	if (!result.record) {
 		throw new ContractError(`${builder}: options must be a plain record`, {
 			code: 'structure',
 			context: { shape },
 		})
 	}
-	return snapshot.value
+	if (result.invalid !== undefined) {
+		throw new ContractError(`${builder}: ${result.invalid} must be an own enumerable option`, {
+			code: 'structure',
+			context: { path: [result.invalid], shape },
+		})
+	}
+	return result.snapshot
 }
 
 /**
@@ -254,16 +293,16 @@ export function drawRandom(random: RandomFunction, shape: string): number {
  * ```
  */
 export function resolveField(record: Readonly<Record<string, unknown>>, path: FieldPath): unknown {
-	const keys = isString(path) ? [path] : path
-	let current: unknown = record
-	for (const key of keys) {
-		if (!isObject(current)) return undefined
-		const container = current
-		const outcome = attempt(() => Reflect.get(container, key))
-		if (!outcome.success) return undefined
-		current = outcome.value
-	}
-	return current
+	const outcome = attempt(() => {
+		const keys = isString(path) ? [path] : path
+		let current: unknown = record
+		for (const key of keys) {
+			if (!isObject(current)) return undefined
+			current = Reflect.get(current, key)
+		}
+		return current
+	})
+	return outcome.success ? outcome.value : undefined
 }
 
 /**
@@ -287,26 +326,28 @@ export function resolveField(record: Readonly<Record<string, unknown>>, path: Fi
  * ```
  */
 export function matchesJSONValue(entry: unknown, ancestors: WeakSet<object>): entry is JSONValue {
-	if (entry === null || isString(entry) || isBoolean(entry) || isFiniteNumber(entry)) return true
-	if (Array.isArray(entry)) {
+	return readValue(() => {
+		if (entry === null || isString(entry) || isBoolean(entry) || isFiniteNumber(entry)) return true
+		if (Array.isArray(entry)) {
+			if (ancestors.has(entry)) return false
+			ancestors.add(entry)
+			let valid = true
+			for (let index = 0; index < entry.length; index += 1) {
+				if (!Object.hasOwn(entry, index) || !matchesJSONValue(entry[index], ancestors)) {
+					valid = false
+					break
+				}
+			}
+			ancestors.delete(entry)
+			return valid
+		}
+		if (!isRecord(entry)) return false
 		if (ancestors.has(entry)) return false
 		ancestors.add(entry)
-		let valid = true
-		for (let index = 0; index < entry.length; index += 1) {
-			if (!Object.hasOwn(entry, index) || !matchesJSONValue(entry[index], ancestors)) {
-				valid = false
-				break
-			}
-		}
+		const valid = Object.values(entry).every((value) => matchesJSONValue(value, ancestors))
 		ancestors.delete(entry)
 		return valid
-	}
-	if (!isRecord(entry)) return false
-	if (ancestors.has(entry)) return false
-	ancestors.add(entry)
-	const valid = Object.values(entry).every((value) => matchesJSONValue(value, ancestors))
-	ancestors.delete(entry)
-	return valid
+	}, 'matchesJSONValue')
 }
 
 // === Random
@@ -360,13 +401,15 @@ export function seededRandom(seed: number): RandomFunction {
  * ```
  */
 export function enumerableSymbolCount(value: object): number {
-	let count = 0
-	for (const symbol of Object.getOwnPropertySymbols(value)) {
-		if (Object.getOwnPropertyDescriptor(value, symbol)?.enumerable) {
-			count += 1
+	return readValue(() => {
+		let count = 0
+		for (const symbol of Object.getOwnPropertySymbols(value)) {
+			if (Object.getOwnPropertyDescriptor(value, symbol)?.enumerable) {
+				count += 1
+			}
 		}
-	}
-	return count
+		return count
+	}, 'enumerableSymbolCount')
 }
 
 /**
@@ -533,30 +576,36 @@ export function preview(value: unknown): string {
  * ```
  */
 export function shapeToKind(shape: ContractShape): FaultKind {
-	switch (shape.type) {
-		case 'string':
-			return 'string'
-		case 'number':
-			return shape.integer === true ? 'integer' : 'number'
-		case 'boolean':
-			return 'boolean'
-		case 'null':
-			return 'null'
-		case 'literal':
-			return 'literal'
-		case 'array':
-			return 'array'
-		case 'object':
-			return 'object'
-		case 'union':
-			return 'union'
-		case 'json':
-			return 'json'
-		case 'optional':
-			return shapeToKind(shape.inner)
-		case 'nullable':
-			return shapeToKind(shape.inner)
-		case 'raw':
-			return 'json'
-	}
+	return readValue(
+		() => {
+			switch (shape.type) {
+				case 'string':
+					return 'string'
+				case 'number':
+					return shape.integer === true ? 'integer' : 'number'
+				case 'boolean':
+					return 'boolean'
+				case 'null':
+					return 'null'
+				case 'literal':
+					return 'literal'
+				case 'array':
+					return 'array'
+				case 'object':
+					return 'object'
+				case 'union':
+					return 'union'
+				case 'json':
+					return 'json'
+				case 'optional':
+					return shapeToKind(shape.inner)
+				case 'nullable':
+					return shapeToKind(shape.inner)
+				case 'raw':
+					return 'json'
+			}
+		},
+		'shapeToKind',
+		'shape',
+	)
 }

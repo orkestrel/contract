@@ -27,7 +27,7 @@ import { cloneSchema, cloneShape } from './cloners.js'
 import { validateShapeDepth } from './compilers.js'
 import { INFER_BREADTH_LIMIT, INFER_DEPTH_LIMIT } from './constants.js'
 import { ContractError } from './errors.js'
-import { attempt, readOptions } from './helpers.js'
+import { attempt, readOptions, readValue } from './helpers.js'
 import {
 	isArray,
 	isBoolean,
@@ -101,24 +101,21 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 			context: { shape: 'string', received: typeof pattern },
 		})
 	}
-	const patternSnapshot = attempt(() =>
+	const patternSnapshot =
 		pattern === undefined
 			? undefined
-			: { source: pattern.source, flags: pattern.flags, text: pattern.toString() },
-	)
-	if (!patternSnapshot.success) {
-		throw new ContractError('stringShape: pattern could not be read', {
-			code: 'pattern',
-			context: { shape: 'string' },
-			cause: patternSnapshot.error,
-		})
-	}
-	if (patternSnapshot.value !== undefined && patternSnapshot.value.flags.length > 0) {
+			: readValue(
+					() => ({ source: pattern.source, flags: pattern.flags, text: pattern.toString() }),
+					'stringShape',
+					'pattern',
+					'pattern',
+				)
+	if (patternSnapshot !== undefined && patternSnapshot.flags.length > 0) {
 		throw new ContractError(
 			'stringShape: pattern must not use flags; use inline pattern constructs instead',
 			{
 				code: 'pattern',
-				context: { shape: 'string', received: patternSnapshot.value.text },
+				context: { shape: 'string', received: patternSnapshot.text },
 			},
 		)
 	}
@@ -126,9 +123,7 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 		type: 'string',
 		...(safe?.min === undefined ? {} : { min: safe.min }),
 		...(safe?.max === undefined ? {} : { max: safe.max }),
-		...(patternSnapshot.value === undefined
-			? {}
-			: { pattern: new RegExp(patternSnapshot.value.source) }),
+		...(patternSnapshot === undefined ? {} : { pattern: new RegExp(patternSnapshot.source) }),
 		...(safe?.description === undefined ? {} : { description: safe.description }),
 	}
 	validateShapeDepth(shape)
@@ -766,41 +761,44 @@ export function buildObjectShape(
 	memo: WeakMap<object, Map<number, ContractShape>>,
 	description: string | undefined,
 ): ContractShape {
-	const propertiesSource = isRecord(schema.properties) ? schema.properties : undefined
-	const requiredSource = isArray(schema.required)
-		? schema.required.filter((entry): entry is string => isString(entry))
-		: []
-	// Honest typing: a null-prototype accumulator so a property literally
-	// named '__proto__' becomes an own data key instead of mutating the
-	// prototype — the same pattern inferObject uses (inferers.ts).
-	const properties: Record<string, ContractShape> = Object.create(null)
-	let truncated = false
-	if (propertiesSource) {
-		const allKeys = Object.keys(propertiesSource)
-		truncated = allKeys.length > INFER_BREADTH_LIMIT
-		const keys = allKeys.slice(0, INFER_BREADTH_LIMIT)
-		for (const key of keys) {
-			const child = propertiesSource[key]
-			const childShape = isRecord(child)
-				? schemaNodeToShape(child, depth - 1, visited, memo)
-				: rawShape({})
-			properties[key] = requiredSource.includes(key) ? childShape : optionalShape(childShape)
+	const outcome = attempt(() => {
+		const propertiesSource = isRecord(schema.properties) ? schema.properties : undefined
+		const requiredSource = isArray(schema.required)
+			? schema.required.filter((entry): entry is string => isString(entry))
+			: []
+		// Honest typing: a null-prototype accumulator so a property literally
+		// named '__proto__' becomes an own data key instead of mutating the
+		// prototype — the same pattern inferObject uses (inferers.ts).
+		const properties: Record<string, ContractShape> = Object.create(null)
+		let truncated = false
+		if (propertiesSource) {
+			const allKeys = Object.keys(propertiesSource)
+			truncated = allKeys.length > INFER_BREADTH_LIMIT
+			const keys = allKeys.slice(0, INFER_BREADTH_LIMIT)
+			for (const key of keys) {
+				const child = propertiesSource[key]
+				const childShape = isRecord(child)
+					? schemaNodeToShape(child, depth - 1, visited, memo)
+					: rawShape({})
+				properties[key] = requiredSource.includes(key) ? childShape : optionalShape(childShape)
+			}
 		}
-	}
-	const extra = schema.additionalProperties
-	const additionalProperties: boolean | ContractShape = truncated
-		? true
-		: extra === false
-			? false
-			: isRecord(extra)
-				? schemaNodeToShape(extra, depth - 1, visited, memo)
-				: true
-	return Object.freeze({
-		type: 'object',
-		properties: Object.freeze(properties),
-		additionalProperties,
-		...(description === undefined ? {} : { description }),
+		const extra = schema.additionalProperties
+		const additionalProperties: boolean | ContractShape = truncated
+			? true
+			: extra === false
+				? false
+				: isRecord(extra)
+					? schemaNodeToShape(extra, depth - 1, visited, memo)
+					: true
+		return Object.freeze({
+			type: 'object',
+			properties: Object.freeze(properties),
+			additionalProperties,
+			...(description === undefined ? {} : { description }),
+		})
 	})
+	return outcome.success ? outcome.value : rawShape({})
 }
 
 /**
@@ -875,91 +873,94 @@ export function buildShapeFromNode(
 	visited: WeakSet<object>,
 	memo: WeakMap<object, Map<number, ContractShape>>,
 ): ContractShape {
-	const description = isString(schema.description) ? schema.description : undefined
+	const outcome = attempt(() => {
+		const description = isString(schema.description) ? schema.description : undefined
 
-	if (isArray(schema.enum)) {
-		const literals = schema.enum.filter(
-			(entry): entry is string | number | boolean =>
-				isString(entry) || isFiniteNumber(entry) || isBoolean(entry),
-		)
-		if (literals.length > 0) {
-			return literalShape(literals, description === undefined ? undefined : { description })
+		if (isArray(schema.enum)) {
+			const literals = schema.enum.filter(
+				(entry): entry is string | number | boolean =>
+					isString(entry) || isFiniteNumber(entry) || isBoolean(entry),
+			)
+			if (literals.length > 0) {
+				return literalShape(literals, description === undefined ? undefined : { description })
+			}
 		}
-	}
 
-	if (isArray(schema.oneOf)) {
-		const records = schema.oneOf.filter((entry): entry is JSONSchema => isRecord(entry))
-		if (records.length > INFER_BREADTH_LIMIT) {
-			return rawShape(description === undefined ? {} : { description })
+		if (isArray(schema.oneOf)) {
+			const records = schema.oneOf.filter((entry): entry is JSONSchema => isRecord(entry))
+			if (records.length > INFER_BREADTH_LIMIT) {
+				return rawShape(description === undefined ? {} : { description })
+			}
+			const variants = records.map((entry) => schemaNodeToShape(entry, depth - 1, visited, memo))
+			if (variants.length > 0) return oneOfShape(...variants)
 		}
-		const variants = records.map((entry) => schemaNodeToShape(entry, depth - 1, visited, memo))
-		if (variants.length > 0) return oneOfShape(...variants)
-	}
 
-	if (isArray(schema.anyOf)) {
-		const records = schema.anyOf.filter((entry): entry is JSONSchema => isRecord(entry))
-		if (records.length > INFER_BREADTH_LIMIT) {
-			return rawShape(description === undefined ? {} : { description })
+		if (isArray(schema.anyOf)) {
+			const records = schema.anyOf.filter((entry): entry is JSONSchema => isRecord(entry))
+			if (records.length > INFER_BREADTH_LIMIT) {
+				return rawShape(description === undefined ? {} : { description })
+			}
+			const variants = records.map((entry) => schemaNodeToShape(entry, depth - 1, visited, memo))
+			if (variants.length > 0) return unionShape(...variants)
 		}
-		const variants = records.map((entry) => schemaNodeToShape(entry, depth - 1, visited, memo))
-		if (variants.length > 0) return unionShape(...variants)
-	}
 
-	const type = isString(schema.type) ? schema.type : undefined
+		const type = isString(schema.type) ? schema.type : undefined
 
-	if (type === 'string') {
-		const bounds = deriveLengthBounds(schema.minLength, schema.maxLength)
-		return stringShape({
-			...bounds,
-			...(description === undefined ? {} : { description }),
-		})
-	}
-	if (type === 'number') {
-		const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
-		return numberShape({
-			...bounds,
-			...(description === undefined ? {} : { description }),
-		})
-	}
-	if (type === 'integer') {
-		const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
-		const emptyRange =
-			Math.ceil(bounds.min ?? Number.NEGATIVE_INFINITY) >
-			Math.floor(bounds.max ?? Number.POSITIVE_INFINITY)
-		return integerShape(
-			emptyRange
-				? description === undefined
-					? undefined
-					: { description }
-				: {
-						...bounds,
-						...(description === undefined ? {} : { description }),
-					},
-		)
-	}
-	if (type === 'boolean') {
-		return booleanShape(description === undefined ? undefined : { description })
-	}
-	if (type === 'null') {
-		return nullShape(description === undefined ? undefined : { description })
-	}
+		if (type === 'string') {
+			const bounds = deriveLengthBounds(schema.minLength, schema.maxLength)
+			return stringShape({
+				...bounds,
+				...(description === undefined ? {} : { description }),
+			})
+		}
+		if (type === 'number') {
+			const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
+			return numberShape({
+				...bounds,
+				...(description === undefined ? {} : { description }),
+			})
+		}
+		if (type === 'integer') {
+			const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
+			const emptyRange =
+				Math.ceil(bounds.min ?? Number.NEGATIVE_INFINITY) >
+				Math.floor(bounds.max ?? Number.POSITIVE_INFINITY)
+			return integerShape(
+				emptyRange
+					? description === undefined
+						? undefined
+						: { description }
+					: {
+							...bounds,
+							...(description === undefined ? {} : { description }),
+						},
+			)
+		}
+		if (type === 'boolean') {
+			return booleanShape(description === undefined ? undefined : { description })
+		}
+		if (type === 'null') {
+			return nullShape(description === undefined ? undefined : { description })
+		}
 
-	if (type === 'array') {
-		const items = isRecord(schema.items)
-			? schemaNodeToShape(schema.items, depth - 1, visited, memo)
-			: rawShape({})
-		const bounds = deriveLengthBounds(schema.minItems, schema.maxItems)
-		return arrayShape(items, {
-			...bounds,
-			...(description === undefined ? {} : { description }),
-		})
-	}
+		if (type === 'array') {
+			const items = isRecord(schema.items)
+				? schemaNodeToShape(schema.items, depth - 1, visited, memo)
+				: rawShape({})
+			const bounds = deriveLengthBounds(schema.minItems, schema.maxItems)
+			return arrayShape(items, {
+				...bounds,
+				...(description === undefined ? {} : { description }),
+			})
+		}
 
-	if (type === 'object' || (type === undefined && isRecord(schema.properties))) {
-		return buildObjectShape(schema, depth, visited, memo, description)
-	}
+		if (type === 'object' || (type === undefined && isRecord(schema.properties))) {
+			return buildObjectShape(schema, depth, visited, memo, description)
+		}
 
-	return rawShape(description === undefined ? {} : { description })
+		return rawShape(description === undefined ? {} : { description })
+	})
+	return outcome.success ? outcome.value : rawShape({})
 }
 
 /**
@@ -1006,20 +1007,23 @@ export function schemaNodeToShape(
 	visited: WeakSet<object>,
 	memo: WeakMap<object, Map<number, ContractShape>>,
 ): ContractShape {
-	if (!(depth > 0) || !isRecord(schema) || visited.has(schema)) return rawShape({})
-	const cached = memo.get(schema)?.get(depth)
-	if (cached) return cached
-	visited.add(schema)
-	const outcome = attempt(() => buildShapeFromNode(schema, depth, visited, memo))
-	visited.delete(schema)
-	const shape = outcome.success ? outcome.value : rawShape({})
-	let depths = memo.get(schema)
-	if (!depths) {
-		depths = new Map()
-		memo.set(schema, depths)
-	}
-	depths.set(depth, shape)
-	return shape
+	const contained = attempt(() => {
+		if (!(depth > 0) || !isRecord(schema) || visited.has(schema)) return rawShape({})
+		const cached = memo.get(schema)?.get(depth)
+		if (cached) return cached
+		visited.add(schema)
+		const outcome = attempt(() => buildShapeFromNode(schema, depth, visited, memo))
+		visited.delete(schema)
+		const shape = outcome.success ? outcome.value : rawShape({})
+		let depths = memo.get(schema)
+		if (!depths) {
+			depths = new Map()
+			memo.set(schema, depths)
+		}
+		depths.set(depth, shape)
+		return shape
+	})
+	return contained.success ? contained.value : rawShape({})
 }
 
 /**
@@ -1044,12 +1048,16 @@ export function schemaNodeToShape(
  * cyclic re-encounter — widens to {@link rawShape} (accept any defined
  * value), never narrows.
  *
- * ROUND TRIP: `compileGuard(schemaToShape(valueToSchema(v)))(v)` is `true` for
- * every `v` — including the values no JSON Schema keyword describes (`NaN`,
- * `±Infinity`, a `Map`, a `Set`, a class instance, a function, a symbol, a
- * bigint, a cyclic or hostile host), which infer `{}` and widen back to an
- * accept-anything {@link rawShape}. Widening is the only source of looseness.
- * The law has three explicit host limits:
+ * ROUND TRIP: for every readable `v`,
+ * `compileGuard(schemaToShape(valueToSchema(v)))(v)` is `true` — including
+ * values no JSON Schema keyword describes (`NaN`, `±Infinity`, a `Map`, a
+ * `Set`, a class instance, a function, a symbol, a bigint, and readable cyclic
+ * hosts), which infer `{}` and widen back to an accept-anything
+ * {@link rawShape}. An unreadable host is refused by {@link valueToSchema}
+ * before this law produces a schema; direct hostile input to
+ * {@link schemaToShape} still widens by that conversion's documented policy.
+ * Widening is the only source of looseness. The law has three explicit host
+ * limits:
  *
  * - **Absence.** `undefined` is not a value: no compiled guard accepts it
  *   (`rawShape` reserves it as the parser failure sentinel). So `undefined`

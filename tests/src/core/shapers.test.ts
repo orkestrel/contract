@@ -18,6 +18,8 @@ import {
 	arrayShape,
 	attempt,
 	booleanShape,
+	buildObjectShape,
+	buildShapeFromNode,
 	compileGenerator,
 	compileGuard,
 	compileParser,
@@ -40,6 +42,7 @@ import {
 	rawShape,
 	recordShape,
 	samplesToSchema,
+	schemaNodeToShape,
 	schemaToShape,
 	stringShape,
 	unionShape,
@@ -328,11 +331,7 @@ describe('shape builders', () => {
 				outcome: attempt(() => builder.run(args)),
 			})),
 		)
-		const expectedLegitimate = BUILDER_CASES.reduce(
-			(count, builder) => count + builder.valid.length,
-			0,
-		)
-		expect(legitimate).toHaveLength(expectedLegitimate)
+		expect(legitimate).toHaveLength(62)
 		for (const result of legitimate) {
 			expect(result.outcome.success, `${result.builder} rejected a legitimate call`).toBe(true)
 		}
@@ -357,16 +356,7 @@ describe('shape builders', () => {
 				}
 			}
 		}
-		const expectedHostile = BUILDER_CASES.reduce(
-			(count, builder) =>
-				count +
-				Object.values(builder.positions).reduce(
-					(positionCount, role) => positionCount + malformed[role].length,
-					0,
-				),
-			0,
-		)
-		expect(hostile).toHaveLength(expectedHostile)
+		expect(hostile).toHaveLength(246)
 		for (const result of hostile) {
 			expect(
 				result.outcome.success,
@@ -775,6 +765,16 @@ describe('shape builders', () => {
 			expect(error.code).toBe('pattern')
 			expect(error.context?.shape).toBe('string')
 		}
+	})
+
+	it('refuses a consumed non-enumerable option instead of silently dropping it', () => {
+		const options: { readonly min?: number } = {}
+		Object.defineProperty(options, 'min', { value: 5, enumerable: false })
+		const error = captureContractError(() => stringShape(options))
+
+		expect(Reflect.get(options, 'min')).toBe(5)
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('stringShape: min must be an own enumerable option')
 	})
 
 	it('integerShape rejects non-finite bounds like numberShape', () => {
@@ -1322,7 +1322,7 @@ describe('schemaToShape — round-trip law: compileGuard(schemaToShape(valueToSc
 			expect(fromValue.code).toBe('structure')
 			expect(fromValue.message).toBe('valueToSchema: value could not be read')
 			expect(fromSamples.code).toBe('structure')
-			expect(fromSamples.message).toBe('samplesToSchema: value could not be read')
+			expect(fromSamples.message).toBe('samplesToSchema: samples could not be read')
 		}
 		expect(roundTrips(buildCyclicRecord())).toEqual([true, true])
 		expect(roundTrips(buildCyclicArray())).toEqual([true, true])
@@ -1389,8 +1389,8 @@ describe('schemaToShape — round-trip law: compileGuard(schemaToShape(valueToSc
 		expect(rejected[1]).toBeInstanceOf(Date)
 		expect(rejected[2]).toEqual(buildSparseArray())
 		expect(refused).toEqual([
-			'samplesToSchema: value could not be read',
-			'samplesToSchema: value could not be read',
+			'samplesToSchema: samples could not be read',
+			'samplesToSchema: samples could not be read',
 		])
 	})
 })
@@ -1672,7 +1672,16 @@ describe('schemaToShape — hostile schema triad', () => {
 				},
 			},
 		)
-		expect(() => createContract(schemaToShape(hostile))).not.toThrow()
+		const runs = [
+			() => buildObjectShape(hostile, INFER_DEPTH_LIMIT, new WeakSet(), new WeakMap(), undefined),
+			() => buildShapeFromNode(hostile, INFER_DEPTH_LIMIT, new WeakSet(), new WeakMap()),
+			() => schemaNodeToShape(hostile, INFER_DEPTH_LIMIT, new WeakSet(), new WeakMap()),
+			() => schemaToShape(hostile),
+		]
+		for (const run of runs) {
+			expect(run()).toEqual(rawShape({}))
+			expect(() => createContract(run())).not.toThrow()
+		}
 	})
 
 	it('does not let a throwing-getter Proxy nested keyword escape', () => {

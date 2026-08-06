@@ -133,6 +133,16 @@ describe('holds', () => {
 	})
 })
 
+describe('matchesJSONValue', () => {
+	it('refuses a failed direct traversal through the shared coded boundary', () => {
+		const hostile = createThrowingGetter()
+		const error = captureContractError(() => matchesJSONValue(hostile, new WeakSet()))
+
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('matchesJSONValue: value could not be read')
+	})
+})
+
 describe('enumerableKeys', () => {
 	it('returns a frozen owned snapshot of only own enumerable string keys', () => {
 		const symbol = Symbol('symbol')
@@ -160,7 +170,7 @@ describe('readOptions', () => {
 		expect(snapshot).toEqual({ min: 1, max: 4 })
 	})
 
-	it('observes a consumed accessor during the probe and enumerable snapshot', () => {
+	it('reads a consumed enumerable accessor once and snapshots that same value', () => {
 		let reads = 0
 		const source = {
 			get min() {
@@ -170,16 +180,30 @@ describe('readOptions', () => {
 		}
 		const snapshot = readOptions(source, ['min'], 'stringShape', 'string')
 
-		expect(reads).toBe(2)
-		expect(snapshot).toEqual({ min: 2 })
+		expect(reads).toBe(1)
+		expect(snapshot).toEqual({ min: 1 })
 	})
 
-	it('omits a readable consumed property when it is not enumerable', () => {
+	it('refuses a readable consumed property when the snapshot cannot carry it', () => {
 		const source: { readonly min?: number } = {}
 		Object.defineProperty(source, 'min', { value: 1, enumerable: false })
-		const snapshot = readOptions(source, ['min'], 'stringShape', 'string')
+		const error = captureContractError(() => readOptions(source, ['min'], 'stringShape', 'string'))
 
-		expect(snapshot).toEqual({})
+		expect(Reflect.get(source, 'min')).toBe(1)
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('stringShape: min must be an own enumerable option')
+		expect(error.context?.path).toEqual(['min'])
+	})
+
+	it('refuses an inherited consumed property by the same snapshot-view rule', () => {
+		const prototype: { min?: number } = Object.create(null)
+		prototype.min = 1
+		const source: { readonly min?: number } = Object.create(prototype)
+		const error = captureContractError(() => readOptions(source, ['min'], 'stringShape', 'string'))
+
+		expect(Reflect.get(source, 'min')).toBe(1)
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('stringShape: min must be an own enumerable option')
 	})
 
 	it('rejects a primitive before reflection with the precise plain-record message', () => {

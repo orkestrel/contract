@@ -8,8 +8,10 @@ import type {
 	TupleFromGuards,
 } from './types.js'
 import { GUARD_DEPTH_LIMIT } from './constants.js'
+import { ContractError } from './errors.js'
 import {
 	isArray,
+	isBoolean,
 	isConstructor,
 	isFiniteNumber,
 	isInstance,
@@ -17,6 +19,7 @@ import {
 	isNumber,
 	isObject,
 	isRecord,
+	isRegExp,
 	isSet,
 	isString,
 	isSymbol,
@@ -133,7 +136,17 @@ export function literalOf(
 ): Guard<string | number | boolean> {
 	const [first] = literals
 	const values: readonly unknown[] = literals.length === 1 && isArray(first) ? first : literals
-	const allowed = new Set<unknown>(values)
+	const allowed = readValue(
+		() => {
+			const snapshot = [...values]
+			if (!snapshot.every((value) => isString(value) || isNumber(value) || isBoolean(value))) {
+				throw new Error('invalid literal vocabulary')
+			}
+			return new Set<unknown>(snapshot)
+		},
+		'literalOf',
+		'literals',
+	)
 	return (value: unknown): value is string | number | boolean => allowed.has(value)
 }
 
@@ -177,7 +190,7 @@ export function instanceOf<C extends abstract new (...args: never) => object>(
 export function enumOf<const E extends Record<string, string | number>>(
 	enumeration: E,
 ): Guard<E[keyof E]> {
-	const values = readValue(() => new Set(Object.values(enumeration)), 'enumOf')
+	const values = readValue(() => new Set(Object.values(enumeration)), 'enumOf', 'enumeration')
 	return (value: unknown): value is E[keyof E] =>
 		(isString(value) || isNumber(value)) && values.has(value)
 }
@@ -292,14 +305,28 @@ export function recordOf<
 			? OptionalFromGuards<S, K>
 			: FromGuards<S>
 > {
-	const allowed = new Set<string>()
-	for (const key of Reflect.ownKeys(shape)) {
-		if (isString(key)) {
-			allowed.add(key)
-		}
-	}
-	const optionalSet = new Set<string>(
-		optional === true ? [...allowed] : isArray(optional) ? optional.map((key) => String(key)) : [],
+	const allowed = readValue(
+		() => {
+			const keys = new Set<string>()
+			for (const key of Reflect.ownKeys(shape)) {
+				if (isString(key)) keys.add(key)
+			}
+			return keys
+		},
+		'recordOf',
+		'shape',
+	)
+	const optionalSet = readValue(
+		() =>
+			new Set<string>(
+				optional === true
+					? [...allowed]
+					: isArray(optional)
+						? optional.map((key) => String(key))
+						: [],
+			),
+		'recordOf',
+		'optional',
 	)
 
 	return (
@@ -380,13 +407,20 @@ export function pickOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 	// Honest typing: the accumulator IS the picked-shape type, so every write is
 	// checked against `S[P]` — no `as` / `!` / `asserts`. The seed is a genuine
 	// null-prototype empty object, filled before any read.
-	const result: { [P in K[number]]: S[P] } = Object.create(null)
-	for (const key of keys) {
-		if (Object.prototype.hasOwnProperty.call(shape, key)) {
-			result[key] = shape[key]
-		}
-	}
-	return result
+	const selected = readValue(() => Object.freeze([...keys]), 'pickOf', 'keys')
+	return readValue(
+		() => {
+			const result: { [P in K[number]]: S[P] } = Object.create(null)
+			for (const key of selected) {
+				if (Object.prototype.hasOwnProperty.call(shape, key)) {
+					result[key] = shape[key]
+				}
+			}
+			return result
+		},
+		'pickOf',
+		'shape',
+	)
 }
 
 /**
@@ -404,23 +438,26 @@ export function omitOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 	shape: S,
 	keys: K,
 ): Omit<S, K[number]> {
-	const skipped = new Set<PropertyKey>()
-	for (const key of keys) {
-		skipped.add(key)
-	}
+	const skipped = readValue(() => new Set<PropertyKey>(keys), 'omitOf', 'keys')
 	// Sound over-approximation: only kept keys are written, so the value
 	// structurally satisfies `Omit<S, K[number]>`. Same honest typing as
 	// `pickOf` — no `as` / `!` / `asserts`.
-	const result: { [P in keyof S]: S[P] } = Object.create(null)
-	for (const key in shape) {
-		if (!Object.prototype.hasOwnProperty.call(shape, key)) {
-			continue
-		}
-		if (!skipped.has(key)) {
-			result[key] = shape[key]
-		}
-	}
-	return result
+	return readValue(
+		() => {
+			const result: { [P in keyof S]: S[P] } = Object.create(null)
+			for (const key in shape) {
+				if (!Object.prototype.hasOwnProperty.call(shape, key)) {
+					continue
+				}
+				if (!skipped.has(key)) {
+					result[key] = shape[key]
+				}
+			}
+			return result
+		},
+		'omitOf',
+		'shape',
+	)
 }
 
 /**
@@ -696,7 +733,15 @@ export function boundsOf(min?: number, max?: number): Guard<number> {
  * ```
  */
 export function matchOf(pattern: RegExp): Guard<string> {
-	const owned = new RegExp(pattern.source, pattern.flags.replaceAll('g', '').replaceAll('y', ''))
+	if (!isRegExp(pattern)) {
+		throw new ContractError('matchOf: pattern must be a RegExp', { code: 'pattern' })
+	}
+	const owned = readValue(
+		() => new RegExp(pattern.source, pattern.flags.replaceAll('g', '').replaceAll('y', '')),
+		'matchOf',
+		'pattern',
+		'pattern',
+	)
 	return whereOf(isString, (value) => owned.test(value))
 }
 
@@ -731,17 +776,29 @@ export function stringOf(options?: {
 	max?: number
 	pattern?: RegExp
 }): Guard<string> {
-	const readable = readValue(() => {
-		const min = options?.min
-		const max = options?.max
-		const source = options?.pattern
-		const pattern =
-			source === undefined
-				? undefined
-				: new RegExp(source.source, source.flags.replaceAll('g', '').replaceAll('y', ''))
-		return { min, max, pattern }
-	}, 'stringOf')
-	const { min, max, pattern } = readable
+	const readable = readValue(
+		() => {
+			const min = options?.min
+			const max = options?.max
+			const source = options?.pattern
+			return { min, max, source }
+		},
+		'stringOf',
+		'options',
+	)
+	const { min, max, source } = readable
+	if (source !== undefined && !isRegExp(source)) {
+		throw new ContractError('stringOf: pattern must be a RegExp', { code: 'pattern' })
+	}
+	const pattern =
+		source === undefined
+			? undefined
+			: readValue(
+					() => new RegExp(source.source, source.flags.replaceAll('g', '').replaceAll('y', '')),
+					'stringOf',
+					'pattern',
+					'pattern',
+				)
 	if (min === undefined && max === undefined && pattern === undefined) {
 		return isString
 	}

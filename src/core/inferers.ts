@@ -44,10 +44,9 @@ import { attempt, enumerableKeys, readValue, sanitizeBudget } from './helpers.js
  * function, a symbol, an array hole, or a cyclic back-edge to an ancestor. A
  * container carrying such a member is itself un-encodable and returns
  * `undefined` too, so the result is either a faithful encoding of the WHOLE
- * value or nothing — a partially-encoded key is never emitted. Traversal is NOT
- * contained here: a hostile getter or `Proxy` trap throws through to
- * {@link canonicalStringify}, which owns the single {@link attempt} boundary
- * for the walk.
+ * value or nothing — a partially-encoded key is never emitted. A hostile
+ * getter or `Proxy` trap is refused through this function's own required-read
+ * boundary, including when this recursive spine is called directly.
  *
  * @param value - The value to encode
  * @param ancestors - Objects on the active traversal path, guarding cycles
@@ -61,44 +60,46 @@ import { attempt, enumerableKeys, readValue, sanitizeBudget } from './helpers.js
  * ```
  */
 export function canonicalizeValue(value: unknown, ancestors: WeakSet<object>): string | undefined {
-	if (isArray(value)) {
-		if (ancestors.has(value)) return undefined
-		ancestors.add(value)
-		const parts: string[] = []
-		for (let index = 0; index < value.length; index += 1) {
-			// A hole is an absent element, not a value — the same `Object.hasOwn`
-			// rule `arrayOf` and `matchesJSONValue` apply.
-			const part = Object.hasOwn(value, index)
-				? canonicalizeValue(value[index], ancestors)
-				: undefined
-			if (part === undefined) {
-				ancestors.delete(value)
-				return undefined
+	return readValue(() => {
+		if (isArray(value)) {
+			if (ancestors.has(value)) return undefined
+			ancestors.add(value)
+			const parts: string[] = []
+			for (let index = 0; index < value.length; index += 1) {
+				// A hole is an absent element, not a value — the same `Object.hasOwn`
+				// rule `arrayOf` and `matchesJSONValue` apply.
+				const part = Object.hasOwn(value, index)
+					? canonicalizeValue(value[index], ancestors)
+					: undefined
+				if (part === undefined) {
+					ancestors.delete(value)
+					return undefined
+				}
+				parts.push(part)
 			}
-			parts.push(part)
+			ancestors.delete(value)
+			return `[${parts.join(',')}]`
 		}
-		ancestors.delete(value)
-		return `[${parts.join(',')}]`
-	}
-	if (isRecord(value)) {
-		if (ancestors.has(value)) return undefined
-		ancestors.add(value)
-		const parts: string[] = []
-		for (const key of Object.keys(value).sort()) {
-			const part = canonicalizeValue(value[key], ancestors)
-			if (part === undefined) {
-				ancestors.delete(value)
-				return undefined
+		if (isRecord(value)) {
+			if (ancestors.has(value)) return undefined
+			ancestors.add(value)
+			const parts: string[] = []
+			for (const key of Object.keys(value).sort()) {
+				const part = canonicalizeValue(value[key], ancestors)
+				if (part === undefined) {
+					ancestors.delete(value)
+					return undefined
+				}
+				parts.push(`${JSON.stringify(key)}:${part}`)
 			}
-			parts.push(`${JSON.stringify(key)}:${part}`)
+			ancestors.delete(value)
+			return `{${parts.join(',')}}`
 		}
-		ancestors.delete(value)
-		return `{${parts.join(',')}}`
-	}
-	if (typeof value === 'bigint') return undefined
-	// `JSON.stringify` returns `undefined` (never a string) for `undefined`, a
-	// function, and a symbol — exactly the values with no JSON encoding.
-	return JSON.stringify(value)
+		if (typeof value === 'bigint') return undefined
+		// `JSON.stringify` returns `undefined` (never a string) for `undefined`, a
+		// function, and a symbol — exactly the values with no JSON encoding.
+		return JSON.stringify(value)
+	}, 'canonicalizeValue')
 }
 
 /**
@@ -182,38 +183,44 @@ export function canonicalStringify(value: unknown): string | undefined {
  * ```
  */
 export function unifySchemas(schemas: readonly JSONSchema[]): JSONSchema {
-	if (schemas.length === 0) return {}
-	const seen = new Map<string, JSONSchema>()
-	const unkeyed: JSONSchema[] = []
-	for (const schema of schemas) {
-		const key = canonicalStringify(schema)
-		if (key === undefined) {
-			unkeyed.push(schema)
-			continue
-		}
-		if (!seen.has(key)) seen.set(key, schema)
-	}
-	// Both literals always canonicalize; the explicit checks keep the
-	// subsumption total against `canonicalStringify`'s optional result.
-	const integerKey = canonicalStringify({ type: 'integer' })
-	const numberKey = canonicalStringify({ type: 'number' })
-	if (
-		integerKey !== undefined &&
-		numberKey !== undefined &&
-		seen.has(integerKey) &&
-		seen.has(numberKey)
-	) {
-		seen.delete(integerKey)
-	}
-	const distinct = [...seen.entries()]
-		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-		.map(([, schema]) => schema)
-	const members = [...distinct, ...unkeyed]
-	if (members.length <= 1) {
-		const [only] = members
-		return only ?? {}
-	}
-	return { anyOf: members }
+	return readValue(
+		() => {
+			if (schemas.length === 0) return {}
+			const seen = new Map<string, JSONSchema>()
+			const unkeyed: JSONSchema[] = []
+			for (const schema of schemas) {
+				const key = canonicalStringify(schema)
+				if (key === undefined) {
+					unkeyed.push(schema)
+					continue
+				}
+				if (!seen.has(key)) seen.set(key, schema)
+			}
+			// Both literals always canonicalize; the explicit checks keep the
+			// subsumption total against `canonicalStringify`'s optional result.
+			const integerKey = canonicalStringify({ type: 'integer' })
+			const numberKey = canonicalStringify({ type: 'number' })
+			if (
+				integerKey !== undefined &&
+				numberKey !== undefined &&
+				seen.has(integerKey) &&
+				seen.has(numberKey)
+			) {
+				seen.delete(integerKey)
+			}
+			const distinct = [...seen.entries()]
+				.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+				.map(([, schema]) => schema)
+			const members = [...distinct, ...unkeyed]
+			if (members.length <= 1) {
+				const [only] = members
+				return only ?? {}
+			}
+			return { anyOf: members }
+		},
+		'unifySchemas',
+		'schemas',
+	)
 }
 
 // === Format inference
@@ -316,11 +323,17 @@ export function stringToFormat(value: string): SchemaFormat | undefined {
  * ```
  */
 export function samplesToFormat(values: readonly unknown[]): SchemaFormat | undefined {
-	if (values.length === 0 || !values.every((value) => isString(value))) return undefined
-	const formats = values.map((value) => stringToFormat(value))
-	const [first, ...rest] = formats
-	if (first === undefined) return undefined
-	return rest.every((format) => format === first) ? first : undefined
+	return readValue(
+		() => {
+			if (values.length === 0 || !values.every((value) => isString(value))) return undefined
+			const formats = values.map((value) => stringToFormat(value))
+			const [first, ...rest] = formats
+			if (first === undefined) return undefined
+			return rest.every((format) => format === first) ? first : undefined
+		},
+		'samplesToFormat',
+		'values',
+	)
 }
 
 // === Enum inference
@@ -364,22 +377,28 @@ export function inferPrimitiveEnum(
 	values: readonly unknown[],
 	limit: number,
 ): JSONSchema | undefined {
-	if (values.length < 2) return undefined
-	const allString = values.every((value) => isString(value))
-	const allNumber = !allString && values.every((value) => isFiniteNumber(value))
-	if (!allString && !allNumber) return undefined
-	const distinct = new Map<string, string | number>()
-	for (const value of values) {
-		if (!isString(value) && !isFiniteNumber(value)) continue
-		const key = canonicalStringify(value)
-		if (key === undefined) return undefined
-		distinct.set(key, value)
-	}
-	if (distinct.size >= values.length || distinct.size > limit) return undefined
-	const sorted = [...distinct.entries()].sort(([left], [right]) =>
-		left < right ? -1 : left > right ? 1 : 0,
+	return readValue(
+		() => {
+			if (values.length < 2) return undefined
+			const allString = values.every((value) => isString(value))
+			const allNumber = !allString && values.every((value) => isFiniteNumber(value))
+			if (!allString && !allNumber) return undefined
+			const distinct = new Map<string, string | number>()
+			for (const value of values) {
+				if (!isString(value) && !isFiniteNumber(value)) continue
+				const key = canonicalStringify(value)
+				if (key === undefined) return undefined
+				distinct.set(key, value)
+			}
+			if (distinct.size >= values.length || distinct.size > limit) return undefined
+			const sorted = [...distinct.entries()].sort(([left], [right]) =>
+				left < right ? -1 : left > right ? 1 : 0,
+			)
+			return { enum: sorted.map(([, value]) => value) }
+		},
+		'inferPrimitiveEnum',
+		'values',
 	)
-	return { enum: sorted.map(([, value]) => value) }
 }
 
 // === Single-value inference
@@ -434,25 +453,27 @@ export function inferValue(
 	visited: WeakSet<object>,
 	memo: WeakMap<object, Map<number, JSONSchema>>,
 ): JSONSchema {
-	if (isNull(value)) return { type: 'null' }
-	if (isBoolean(value)) return { type: 'boolean' }
-	if (isInteger(value)) return { type: 'integer' }
-	if (isFiniteNumber(value)) return { type: 'number' }
-	// A non-finite number has no JSON representation at all, so it widens to
-	// `{}` with the other inexpressible values rather than claiming a `number`
-	// type no validator would accept it under.
-	if (isNumber(value)) return {}
-	if (isString(value)) {
-		if (format) {
-			const detected = stringToFormat(value)
-			if (detected) return { type: 'string', format: detected }
+	return readValue(() => {
+		if (isNull(value)) return { type: 'null' }
+		if (isBoolean(value)) return { type: 'boolean' }
+		if (isInteger(value)) return { type: 'integer' }
+		if (isFiniteNumber(value)) return { type: 'number' }
+		// A non-finite number has no JSON representation at all, so it widens to
+		// `{}` with the other inexpressible values rather than claiming a `number`
+		// type no validator would accept it under.
+		if (isNumber(value)) return {}
+		if (isString(value)) {
+			if (format) {
+				const detected = stringToFormat(value)
+				if (detected) return { type: 'string', format: detected }
+			}
+			return { type: 'string' }
 		}
-		return { type: 'string' }
-	}
-	if (isArray(value)) return inferArray(value, depth, breadth, closed, format, visited, memo)
-	if (isRecord(value)) return inferObject(value, depth, breadth, closed, format, visited, memo)
-	if (isDate(value)) return format ? { type: 'string', format: 'date-time' } : { type: 'string' }
-	return {}
+		if (isArray(value)) return inferArray(value, depth, breadth, closed, format, visited, memo)
+		if (isRecord(value)) return inferObject(value, depth, breadth, closed, format, visited, memo)
+		if (isDate(value)) return format ? { type: 'string', format: 'date-time' } : { type: 'string' }
+		return {}
+	}, 'inferValue')
 }
 
 /**
@@ -505,35 +526,37 @@ export function inferArray(
 	visited: WeakSet<object>,
 	memo: WeakMap<object, Map<number, JSONSchema>>,
 ): JSONSchema {
-	if (!(depth > 0) || visited.has(value)) return {}
-	// At a node reached through a cycle at the SAME remaining depth via two
-	// different paths, the memo may serve the first traversal's already
-	// cycle-truncated fragment (`{}`) to the second path instead of a fully
-	// re-descended schema — a sound, deterministic over-approximation, never
-	// a false-reject (a schema too permissive, never too strict).
-	const cached = memo.get(value)?.get(depth)
-	if (cached) return cached
-	visited.add(value)
-	const outcome = attempt(() => {
-		const sampled = Array.from(value.slice(0, breadth))
-		return sampled.map((entry) =>
-			inferValue(entry, depth - 1, breadth, closed, format, visited, memo),
-		)
-	})
-	visited.delete(value)
-	const sampled = readValue(() => {
-		if (!outcome.success) throw outcome.error
-		return outcome.value
+	return readValue(() => {
+		if (!(depth > 0) || visited.has(value)) return {}
+		// At a node reached through a cycle at the SAME remaining depth via two
+		// different paths, the memo may serve the first traversal's already
+		// cycle-truncated fragment (`{}`) to the second path instead of a fully
+		// re-descended schema — a sound, deterministic over-approximation, never
+		// a false-reject (a schema too permissive, never too strict).
+		const cached = memo.get(value)?.get(depth)
+		if (cached) return cached
+		visited.add(value)
+		const outcome = attempt(() => {
+			const sampled = Array.from(value.slice(0, breadth))
+			return sampled.map((entry) =>
+				inferValue(entry, depth - 1, breadth, closed, format, visited, memo),
+			)
+		})
+		visited.delete(value)
+		const sampled = readValue(() => {
+			if (!outcome.success) throw outcome.error
+			return outcome.value
+		}, 'inferArray')
+		const schema: JSONSchema =
+			sampled.length > 0 ? { type: 'array', items: unifySchemas(sampled) } : { type: 'array' }
+		let depths = memo.get(value)
+		if (!depths) {
+			depths = new Map()
+			memo.set(value, depths)
+		}
+		depths.set(depth, schema)
+		return schema
 	}, 'inferArray')
-	const schema: JSONSchema =
-		sampled.length > 0 ? { type: 'array', items: unifySchemas(sampled) } : { type: 'array' }
-	let depths = memo.get(value)
-	if (!depths) {
-		depths = new Map()
-		memo.set(value, depths)
-	}
-	depths.set(depth, schema)
-	return schema
 }
 
 /**
@@ -592,57 +615,66 @@ export function inferObject(
 	visited: WeakSet<object>,
 	memo: WeakMap<object, Map<number, JSONSchema>>,
 ): JSONSchema {
-	if (!(depth > 0) || visited.has(value)) return {}
-	const cached = memo.get(value)?.get(depth)
-	if (cached) return cached
-	visited.add(value)
-	// Contain the whole key-enumeration + value-read walk — a hostile ownKeys
-	// trap or property getter on `value` must yield {} for this object, never
-	// throw (AGENTS §14) — mirroring compileGuard's object branch
-	// (compilers.ts).
-	const outcome = attempt(() => {
-		const snapshot = enumerableKeys(value)
-		if (snapshot === undefined) throw new Error('inferObject: property enumeration failed')
-		const allKeys = [...snapshot].sort()
-		const keys = allKeys.slice(0, breadth)
-		const truncated = allKeys.length > breadth
-		// Honest typing: a null-prototype accumulator so a property literally
-		// named '__proto__' becomes an own data key instead of mutating the
-		// prototype — the same pattern compileGuard / compileParser use
-		// (compilers.ts).
-		const properties: Record<string, JSONSchema> = Object.create(null)
-		const required: string[] = []
-		let dropped = false
-		for (const key of keys) {
-			const propertyValue = value[key]
-			if (propertyValue === undefined) {
-				dropped = true
-				continue
+	return readValue(() => {
+		if (!(depth > 0) || visited.has(value)) return {}
+		const cached = memo.get(value)?.get(depth)
+		if (cached) return cached
+		visited.add(value)
+		// Contain the whole key-enumeration + value-read walk before converting a
+		// failed advertised read to the shared coded refusal below. Readable depth
+		// or cycle exhaustion widens to `{}`; unreadability never does.
+		const outcome = attempt(() => {
+			const snapshot = enumerableKeys(value)
+			if (snapshot === undefined) throw new Error('inferObject: property enumeration failed')
+			const allKeys = [...snapshot].sort()
+			const keys = allKeys.slice(0, breadth)
+			const truncated = allKeys.length > breadth
+			// Honest typing: a null-prototype accumulator so a property literally
+			// named '__proto__' becomes an own data key instead of mutating the
+			// prototype — the same pattern compileGuard / compileParser use
+			// (compilers.ts).
+			const properties: Record<string, JSONSchema> = Object.create(null)
+			const required: string[] = []
+			let dropped = false
+			for (const key of keys) {
+				const propertyValue = value[key]
+				if (propertyValue === undefined) {
+					dropped = true
+					continue
+				}
+				properties[key] = inferValue(
+					propertyValue,
+					depth - 1,
+					breadth,
+					closed,
+					format,
+					visited,
+					memo,
+				)
+				required.push(key)
 			}
-			properties[key] = inferValue(propertyValue, depth - 1, breadth, closed, format, visited, memo)
-			required.push(key)
+			return { properties, required, partial: truncated || dropped }
+		})
+		visited.delete(value)
+		const readable = readValue(() => {
+			if (!outcome.success) throw outcome.error
+			return outcome.value
+		}, 'inferObject')
+		const { properties, required, partial } = readable
+		const schema: JSONSchema = {
+			type: 'object',
+			...(Object.keys(properties).length > 0 ? { properties } : {}),
+			...(required.length > 0 ? { required } : {}),
+			additionalProperties: partial ? true : !closed,
 		}
-		return { properties, required, partial: truncated || dropped }
-	})
-	visited.delete(value)
-	const readable = readValue(() => {
-		if (!outcome.success) throw outcome.error
-		return outcome.value
+		let depths = memo.get(value)
+		if (!depths) {
+			depths = new Map()
+			memo.set(value, depths)
+		}
+		depths.set(depth, schema)
+		return schema
 	}, 'inferObject')
-	const { properties, required, partial } = readable
-	const schema: JSONSchema = {
-		type: 'object',
-		...(Object.keys(properties).length > 0 ? { properties } : {}),
-		...(required.length > 0 ? { required } : {}),
-		additionalProperties: partial ? true : !closed,
-	}
-	let depths = memo.get(value)
-	if (!depths) {
-		depths = new Map()
-		memo.set(value, depths)
-	}
-	depths.set(depth, schema)
-	return schema
 }
 
 /**
@@ -683,13 +715,30 @@ export function inferObject(
  * ```
  */
 export function valueToSchema(value: unknown, options?: ValueToSchemaOptions): JSONSchema {
-	return readValue(() => {
-		const maxDepth = sanitizeBudget(options?.maxDepth, INFER_DEPTH_LIMIT)
-		const maxProperties = sanitizeBudget(options?.maxProperties, INFER_BREADTH_LIMIT)
-		const closed = options?.closed ?? true
-		const format = options?.format ?? false
-		return inferValue(value, maxDepth, maxProperties, closed, format, new WeakSet(), new WeakMap())
-	}, 'valueToSchema')
+	const safe = readValue(
+		() => {
+			const maxDepth = sanitizeBudget(options?.maxDepth, INFER_DEPTH_LIMIT)
+			const maxProperties = sanitizeBudget(options?.maxProperties, INFER_BREADTH_LIMIT)
+			const closed = options?.closed ?? true
+			const format = options?.format ?? false
+			return { maxDepth, maxProperties, closed, format }
+		},
+		'valueToSchema',
+		'options',
+	)
+	return readValue(
+		() =>
+			inferValue(
+				value,
+				safe.maxDepth,
+				safe.maxProperties,
+				safe.closed,
+				safe.format,
+				new WeakSet(),
+				new WeakMap(),
+			),
+		'valueToSchema',
+	)
 }
 
 // === Multi-sample inference
@@ -733,23 +782,29 @@ export function inferSamples(
 	format: boolean,
 	enumOn: boolean,
 ): JSONSchema {
-	if (samples.length === 0) return {}
-	if (samples.every((sample) => isRecord(sample))) {
-		return inferRecordSamples(samples, depth, breadth, closed, format, enumOn)
-	}
-	if (enumOn) {
-		const enumSchema = inferPrimitiveEnum(samples, INFER_ENUM_LIMIT)
-		if (enumSchema) return enumSchema
-	}
-	const schemas = samples.map((sample) =>
-		inferValue(sample, depth, breadth, closed, false, new WeakSet(), new WeakMap()),
+	return readValue(
+		() => {
+			if (samples.length === 0) return {}
+			if (samples.every((sample) => isRecord(sample))) {
+				return inferRecordSamples(samples, depth, breadth, closed, format, enumOn)
+			}
+			if (enumOn) {
+				const enumSchema = inferPrimitiveEnum(samples, INFER_ENUM_LIMIT)
+				if (enumSchema) return enumSchema
+			}
+			const schemas = samples.map((sample) =>
+				inferValue(sample, depth, breadth, closed, false, new WeakSet(), new WeakMap()),
+			)
+			const unified = unifySchemas(schemas)
+			if (format && unified.type === 'string' && Object.keys(unified).length === 1) {
+				const detected = samplesToFormat(samples)
+				if (detected) return { type: 'string', format: detected }
+			}
+			return unified
+		},
+		'inferSamples',
+		'samples',
 	)
-	const unified = unifySchemas(schemas)
-	if (format && unified.type === 'string' && Object.keys(unified).length === 1) {
-		const detected = samplesToFormat(samples)
-		if (detected) return { type: 'string', format: detected }
-	}
-	return unified
 }
 
 /**
@@ -799,67 +854,73 @@ export function inferRecordSamples(
 	format: boolean,
 	enumOn: boolean,
 ): JSONSchema {
-	if (!(depth > 0)) return {}
-	// Refuse the whole key-enumeration claim when any row cannot be read.
-	const keySet = new Set<string>()
-	for (const sample of samples) {
-		const sampleKeys = readValue(() => {
-			const keys = enumerableKeys(sample)
-			if (keys === undefined) {
-				throw new Error('inferRecordSamples: property enumeration failed')
-			}
-			return keys
-		}, 'inferRecordSamples')
-		for (const key of sampleKeys) keySet.add(key)
-	}
-	const allKeys = [...keySet].sort()
-	const keys = allKeys.slice(0, breadth)
-	const truncated = allKeys.length > breadth
-	// Honest typing: a null-prototype accumulator so a key literally named
-	// '__proto__' becomes an own data key instead of mutating the prototype —
-	// the same pattern compileGuard / compileParser use (compilers.ts).
-	const properties: Record<string, JSONSchema> = Object.create(null)
-	const required: string[] = []
-	let partial = truncated
-	// Bounded by depth alone: unlike inferObject/inferArray, this record-
-	// sample path carries no `visited` WeakSet. A shared reference across
-	// sample rows is legitimate data (not a cycle back to an ancestor), so
-	// the decrementing depth budget is the sole termination guarantee here.
-	for (const key of keys) {
-		// Refuse the whole per-key claim when any sample value cannot be read.
-		const valuesOutcome = attempt(() => {
-			const values: unknown[] = []
-			let dropped = false
+	return readValue(
+		() => {
+			if (!(depth > 0)) return {}
+			// Refuse the whole key-enumeration claim when any row cannot be read.
+			const keySet = new Set<string>()
 			for (const sample of samples) {
-				const propertyValue = sample[key]
-				if (propertyValue === undefined) {
-					if (Object.hasOwn(sample, key)) dropped = true
+				const sampleKeys = readValue(() => {
+					const keys = enumerableKeys(sample)
+					if (keys === undefined) {
+						throw new Error('inferRecordSamples: property enumeration failed')
+					}
+					return keys
+				}, 'inferRecordSamples')
+				for (const key of sampleKeys) keySet.add(key)
+			}
+			const allKeys = [...keySet].sort()
+			const keys = allKeys.slice(0, breadth)
+			const truncated = allKeys.length > breadth
+			// Honest typing: a null-prototype accumulator so a key literally named
+			// '__proto__' becomes an own data key instead of mutating the prototype —
+			// the same pattern compileGuard / compileParser use (compilers.ts).
+			const properties: Record<string, JSONSchema> = Object.create(null)
+			const required: string[] = []
+			let partial = truncated
+			// Bounded by depth alone: unlike inferObject/inferArray, this record-
+			// sample path carries no `visited` WeakSet. A shared reference across
+			// sample rows is legitimate data (not a cycle back to an ancestor), so
+			// the decrementing depth budget is the sole termination guarantee here.
+			for (const key of keys) {
+				// Refuse the whole per-key claim when any sample value cannot be read.
+				const valuesOutcome = attempt(() => {
+					const values: unknown[] = []
+					let dropped = false
+					for (const sample of samples) {
+						const propertyValue = sample[key]
+						if (propertyValue === undefined) {
+							if (Object.hasOwn(sample, key)) dropped = true
+							continue
+						}
+						values.push(propertyValue)
+					}
+					return { values, dropped }
+				})
+				const readable = readValue(() => {
+					if (!valuesOutcome.success) throw valuesOutcome.error
+					return valuesOutcome.value
+				}, 'inferRecordSamples')
+				const { values, dropped } = readable
+				if (dropped) {
+					partial = true
 					continue
 				}
-				values.push(propertyValue)
+				if (values.length > 0) {
+					properties[key] = inferSamples(values, depth - 1, breadth, closed, format, enumOn)
+				}
+				if (values.length === samples.length) required.push(key)
 			}
-			return { values, dropped }
-		})
-		const readable = readValue(() => {
-			if (!valuesOutcome.success) throw valuesOutcome.error
-			return valuesOutcome.value
-		}, 'inferRecordSamples')
-		const { values, dropped } = readable
-		if (dropped) {
-			partial = true
-			continue
-		}
-		if (values.length > 0) {
-			properties[key] = inferSamples(values, depth - 1, breadth, closed, format, enumOn)
-		}
-		if (values.length === samples.length) required.push(key)
-	}
-	return {
-		type: 'object',
-		...(Object.keys(properties).length > 0 ? { properties } : {}),
-		...(required.length > 0 ? { required } : {}),
-		additionalProperties: partial ? true : !closed,
-	}
+			return {
+				type: 'object',
+				...(Object.keys(properties).length > 0 ? { properties } : {}),
+				...(required.length > 0 ? { required } : {}),
+				additionalProperties: partial ? true : !closed,
+			}
+		},
+		'inferRecordSamples',
+		'samples',
+	)
 }
 
 /**
@@ -898,12 +959,29 @@ export function samplesToSchema(
 	samples: readonly unknown[],
 	options?: ValueToSchemaOptions,
 ): JSONSchema {
-	return readValue(() => {
-		const maxDepth = sanitizeBudget(options?.maxDepth, INFER_DEPTH_LIMIT)
-		const maxProperties = sanitizeBudget(options?.maxProperties, INFER_BREADTH_LIMIT)
-		const closed = options?.closed ?? true
-		const format = options?.format ?? false
-		const enumOn = options?.enum ?? false
-		return inferSamples(samples, maxDepth, maxProperties, closed, format, enumOn)
-	}, 'samplesToSchema')
+	const safe = readValue(
+		() => {
+			const maxDepth = sanitizeBudget(options?.maxDepth, INFER_DEPTH_LIMIT)
+			const maxProperties = sanitizeBudget(options?.maxProperties, INFER_BREADTH_LIMIT)
+			const closed = options?.closed ?? true
+			const format = options?.format ?? false
+			const enumOn = options?.enum ?? false
+			return { maxDepth, maxProperties, closed, format, enumOn }
+		},
+		'samplesToSchema',
+		'options',
+	)
+	return readValue(
+		() =>
+			inferSamples(
+				samples,
+				safe.maxDepth,
+				safe.maxProperties,
+				safe.closed,
+				safe.format,
+				safe.enumOn,
+			),
+		'samplesToSchema',
+		'samples',
+	)
 }

@@ -27,6 +27,7 @@ import {
 	pickOf,
 	recordOf,
 	setOf,
+	stringShape,
 	stringOf,
 	transformOf,
 	tupleOf,
@@ -100,7 +101,7 @@ describe('literal and enum combinators', () => {
 		)
 		const error = captureContractError(() => enumOf(enumeration))
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('enumOf: value could not be read')
+		expect(error.message).toBe('enumOf: enumeration could not be read')
 	})
 
 	it('enumOf narrows an inline object literal argument to its literal value union (type-level)', () => {
@@ -173,6 +174,15 @@ describe('literal and enum combinators', () => {
 		expect(guard(vocabulary[vocabulary.length - 1])).toBe(true)
 		expect(guard('absent')).toBe(false)
 	})
+
+	it('refuses unreadable literal vocabularies with the shared coded boundary', () => {
+		const error = captureContractError(() =>
+			Reflect.apply(literalOf, undefined, [createRevokedArrayProxy()]),
+		)
+
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('literalOf: literals could not be read')
+	})
 })
 
 describe('recordOf, pickOf, omitOf', () => {
@@ -227,6 +237,19 @@ describe('recordOf, pickOf, omitOf', () => {
 		expect(recordOf(picked)({ id: 'x' })).toBe(false)
 		expect(recordOf(omitted)({ id: 'x', name: 'y' })).toBe(true)
 		expect(recordOf(omitted)({ id: 'x', name: 'y', age: 1 })).toBe(false)
+	})
+
+	it('refuses unreadable factory containers at every shape-derived sibling', () => {
+		const hostile = createHostileKeys()
+		for (const [reader, run] of [
+			['recordOf', () => Reflect.apply(recordOf, undefined, [hostile])],
+			['pickOf', () => Reflect.apply(pickOf, undefined, [hostile, ['id']])],
+			['omitOf', () => Reflect.apply(omitOf, undefined, [hostile, ['id']])],
+		] satisfies readonly (readonly [string, () => unknown])[]) {
+			const error = captureContractError(run)
+			expect(error.code).toBe('structure')
+			expect(error.message).toBe(`${reader}: shape could not be read`)
+		}
 	})
 
 	it('lock: recordOf with an inline literal shape and bare optional literal marks only the listed key optional', () => {
@@ -550,7 +573,7 @@ describe('stringOf', () => {
 		)
 		const error = captureContractError(() => stringOf(options))
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('stringOf: value could not be read')
+		expect(error.message).toBe('stringOf: options could not be read')
 	})
 
 	it('enforces length bounds via boundsOf on .length', () => {
@@ -729,6 +752,25 @@ describe('user-callback throw containment (AGENTS §14)', () => {
 })
 
 describe('combinator totality sweep', () => {
+	it('uses one pattern refusal vocabulary across the three sibling APIs', () => {
+		const hostile = new Proxy(/value/, {
+			get(target, property, receiver) {
+				if (property === 'source' || property === 'flags') throw new Error('hostile pattern')
+				return Reflect.get(target, property, receiver)
+			},
+		})
+
+		for (const [reader, run] of [
+			['matchOf', () => matchOf(hostile)],
+			['stringOf', () => stringOf({ pattern: hostile })],
+			['stringShape', () => stringShape({ pattern: hostile })],
+		] satisfies readonly (readonly [string, () => unknown])[]) {
+			const error = captureContractError(run)
+			expect(error.code).toBe('pattern')
+			expect(error.message).toBe(`${reader}: pattern could not be read`)
+		}
+	})
+
 	it('a guard from every combinator factory returns a boolean for every hostile fixture', () => {
 		let recursive: Guard<unknown> = isString
 		recursive = unionOf(isString, arrayOf(lazyOf(() => recursive)))

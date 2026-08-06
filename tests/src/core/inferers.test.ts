@@ -29,6 +29,7 @@ import {
 	captureContractError,
 	createClassInstance,
 	createHostileKeys,
+	createRevokedArrayProxy,
 	createThrowingGetter,
 	SOUNDNESS_SAMPLE,
 } from '../../setup.js'
@@ -141,6 +142,23 @@ describe('valueToSchema — objects', () => {
 		const error = captureContractError(() => valueToSchema(hostile))
 		expect(error.code).toBe('structure')
 		expect(error.message).toBe('valueToSchema: value could not be read')
+	})
+
+	it('names an unreadable options argument instead of blaming the value', () => {
+		const options = new Proxy(
+			{},
+			{
+				get() {
+					throw new Error('hostile options')
+				},
+			},
+		)
+		const error = captureContractError(() =>
+			Reflect.apply(valueToSchema, undefined, [{ id: 1 }, options]),
+		)
+
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('valueToSchema: options could not be read')
 	})
 
 	it('infers properties/required/additionalProperties, matching compileSchema round-trip parity', () => {
@@ -310,7 +328,7 @@ describe('samplesToSchema — records', () => {
 		)
 		const error = captureContractError(() => samplesToSchema([hostile]))
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('samplesToSchema: value could not be read')
+		expect(error.message).toBe('samplesToSchema: samples could not be read')
 	})
 
 	it('terminates on a cyclic sample row, bounded by depth alone', () => {
@@ -648,7 +666,7 @@ describe('samplesToSchema — hostile input with enum/format on', () => {
 			samplesToSchema([hostile], { enum: true, format: true }),
 		)
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('samplesToSchema: value could not be read')
+		expect(error.message).toBe('samplesToSchema: samples could not be read')
 	})
 
 	it('terminates on a cyclic sample row with enum/format enabled', () => {
@@ -725,7 +743,7 @@ describe('inferArray — hostile own-getter / Proxy-over-array refusal (C1)', ()
 		})
 		const error = captureContractError(() => samplesToSchema([hostile]))
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('samplesToSchema: value could not be read')
+		expect(error.message).toBe('samplesToSchema: samples could not be read')
 	})
 
 	it('refuses a Proxy-over-array whose `length` getter is hostile', () => {
@@ -898,6 +916,15 @@ describe('valueToSchema — sparse arrays (C7)', () => {
 })
 
 describe('unifySchemas — direct', () => {
+	it('refuses an unreadable schema list at its own public boundary', () => {
+		const error = captureContractError(() =>
+			Reflect.apply(unifySchemas, undefined, [createRevokedArrayProxy()]),
+		)
+
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('unifySchemas: schemas could not be read')
+	})
+
 	it('returns {} for an empty list', () => {
 		expect(unifySchemas([])).toEqual({})
 	})
@@ -995,6 +1022,13 @@ describe('canonicalStringify — encoding and read refusal', () => {
 })
 
 describe('canonicalizeValue — direct', () => {
+	it('refuses hostile traversal at the direct recursive export', () => {
+		const error = captureContractError(() => canonicalizeValue(createHostileKeys(), new WeakSet()))
+
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('canonicalizeValue: value could not be read')
+	})
+
 	it('sorts record keys, preserves array order, and encodes leaves as JSON', () => {
 		expect(canonicalizeValue({ b: 1, a: [3, 1] }, new WeakSet())).toBe('{"a":[3,1],"b":1}')
 		expect(canonicalizeValue(-0, new WeakSet())).toBe('0')
@@ -1169,7 +1203,7 @@ describe('samplesToSchema — nested containers and mixed sample shapes', () => 
 		expect(singleError.message).toBe('valueToSchema: value could not be read')
 		const sampleError = captureContractError(() => samplesToSchema([[hostile]]))
 		expect(sampleError.code).toBe('structure')
-		expect(sampleError.message).toBe('samplesToSchema: value could not be read')
+		expect(sampleError.message).toBe('samplesToSchema: samples could not be read')
 	})
 
 	it('includes an own "__proto__" key inside a heterogeneous array element via anyOf unification', () => {
@@ -1191,7 +1225,7 @@ describe('samplesToSchema — nested containers and mixed sample shapes', () => 
 		})
 		const error = captureContractError(() => samplesToSchema([good, hostile]))
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('samplesToSchema: value could not be read')
+		expect(error.message).toBe('samplesToSchema: samples could not be read')
 	})
 })
 
