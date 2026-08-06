@@ -11,7 +11,7 @@ paths:
 ## Test contract
 
 - Mirror source/application structure:
-  `tests/{src,app}/[environment]/[domain]/[Entity].test.ts`.
+  `tests/{src,app}/[environment]/[domain]/[source].test.ts`.
 - Prefer test filenames matching entrypoints: `index.test.ts` for `index.ts`, `main.test.ts` for `main.ts`.
 - Tests are deterministic: identical inputs produce identical results.
 - Keep default suites fast: timers normally use 10–50 ms and tests make no network calls.
@@ -20,6 +20,7 @@ paths:
 - Prefer inert customizable data/input stubs. A scripted boundary stub is allowed only when it implements the real interface/protocol minimally to drive the system under test; it never reimplements project-owned behavior or stands in for the integration being claimed.
 - Cover happy paths, error paths, empty input, boundary values, `NaN`, positive/negative zero, cycles, and Map/Set order where relevant.
 - Test observable behavior, not implementation details.
+- A regression test records the exact command and its failing count before the fix, and the same command's passing count after.
 - Use `it.todo()` only for explicitly out-of-scope roadmap work, never to complete the current request. Every `.skip` or conditional skip has a narrow verifiable applicability reason.
 - Do not create test files solely for `constants.ts`, barrels, error definitions, or `types.ts`.
 - Run the narrowest relevant Vitest project during development; do not run the entire suite casually.
@@ -109,6 +110,16 @@ Keep Vitest/provider configuration minimal:
 - For slow teardown, inspect test cleanup, open handles, file parallelism, and context churn before adding launch flags.
 - Remove exploratory settings after fixing the cause.
 - Config comments explain the current reason, not the history of failed experiments.
+
+## Untestable usually means missing seam
+
+Before accepting that a behavior cannot be tested, look for the seam that would make it testable.
+
+- A collaborator reached through a hard-coded global — a stream, a clock source, a spawn, a fetch — is a missing injection point, not an untestable truth. An injected collaborator with a real minimal implementation is a sanctioned boundary stub, not a mock of project-owned behavior.
+- Prefer adding the seam over shipping the gap whenever the seam is one the design would welcome anyway, and whenever a sibling collaborator is already injected.
+- When a gap is genuinely irreducible, record it where a reader meets it: what is unproven, why it cannot be driven, and what would change that. A silent untested guard reads exactly like a tested one.
+
+Coverage reporting is a discovery input, never evidence of proof. It answers one cheap mechanical question — which code no test even executed — and that question reliably finds forgotten branches and rules nothing calls. It cannot tell you whether an executed line is asserted, so a fully covered file can still be entirely unproven. Read a coverage report to find candidates for the adequacy audit; never cite it as the audit's result, and never let a percentage become the target.
 
 ## Discovery and adequacy audit
 

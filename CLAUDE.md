@@ -37,9 +37,12 @@ One workflow runs across both providers. Each engine has one job, and no engine 
 - **After implementation Opus 5 and Sol audit independently** — Opus on design fit, Sol on
   correctness and constraint satisfaction — and the orchestrator reconciles their evidence
   into one verdict.
-- **Lower-cost native agents (Sonnet, Terra) do fully specified mechanical units and gate
-  evidence only.** A specified rename, a scaffold expansion, a conformance checklist, a gate
-  run. They never substitute for Grok, Opus 5, or Sol.
+- **Lower-cost native agents (Sonnet, Terra) do fully specified units and read-only
+  evidence only.** A specified rename, an app-layer expansion, a conformance checklist, a
+  gate run, a bounded primary-source question, a reconnaissance sweep. They never
+  substitute for Grok, Opus 5, or Sol: `researcher` and `scout` are the native evidence
+  lanes for bounded questions and the fallback when the Grok bench is dark, never the
+  route for repository-scale absorption or judgment.
 
 The orchestrator reconciles; no external engine reconciles itself or accepts its own work.
 In Claude Code the orchestrator is the top-level Fable session. When Codex is primary, the
@@ -64,26 +67,35 @@ dispatch, even when the role file pins it.
 | Research, scouting, distillation         | `grok`                          | `grok`                        | Cursor Grok (bridge)          |
 | Creative design and alternatives         | `planner`                       | `planner`                     | Opus 5 (native / bridge)      |
 | Design-fit review and audit              | `reviewer`                      | `reviewer`                    | Opus 5 (native / bridge)      |
-| Objective analysis and correctness audit | `codex` route `analyst`         | `analyst`                     | GPT-5.6 Sol (bridge / native) |
+| Objective analysis and correctness audit | `analyst`                       | `analyst`                     | GPT-5.6 Sol (bridge / native) |
 | Nontrivial implementation (objective)    | `codex` route `implementer`     | `implementer`                 | GPT-5.6 Sol (bridge / native) |
 | Nontrivial implementation (subjective)   | `implementer`                   | `implementer` route `opus`    | Opus 5 (native / bridge)      |
 | Fully specified mechanical unit          | `builder`                       | `builder`                     | Sonnet / Terra                |
 | Fully specified app-layer unit           | `application`                   | `application`                 | Sonnet / Terra                |
+| Bounded primary-source research          | `researcher`                    | `researcher`                  | Sonnet / Terra                |
+| Repository reconnaissance                | `scout`                         | `scout`                       | Sonnet / Terra                |
 | Mechanical conformance evidence          | `checker`                       | `checker`                     | Sonnet / Terra                |
 | Gate evidence                            | `verifier`                      | `verifier`                    | Sonnet / Terra                |
 | Ecosystem evidence                       | `orkestrel`                     | `orkestrel`                   | Sonnet / Terra                |
 
 - A **bridge** role is a cheap driver whose only work is invoking another provider's CLI. It
   never implements, judges, or endorses the result.
-- Claude role frontmatter accepts Claude models only. Grok is reached through `grok`, Sol
-  through `codex`; never put an external model in `model:`.
+- Claude role frontmatter accepts Claude models only. Grok is reached through `grok`, Sol through
+  `analyst` and `codex`; never put an external model in `model:`.
+- **A role is reachable by its own name on both sides.** The role file is where engine, effort,
+  tools and permissions are pinned, and the tool allowlist is what makes the read-only floor real,
+  so a role with no file has nowhere to pin either — mirroring means mirrored files, not merely
+  mirrored jobs. A route that must be remembered is a route that will eventually be forgotten. One
+  gap remains and is recorded rather than improvised: the Sol implementer is still `codex` route
+  `implementer` while its Codex mirror has a named `opus` bridge, and closing it means deciding
+  where the shared Sol transport contract lives once two bridges follow it.
 - Use Claude aliases (`fable`, `opus`, `sonnet`), never fixed Claude IDs or `inherit`. Never
   set `CLAUDE_CODE_SUBAGENT_MODEL`; it flattens the engine split.
 - The main Claude session uses `fable` via `/model fable` or `"model": "fable"`; if configured
   otherwise its Orchestrator duties are unchanged.
 - Opus roles use high effort; Sonnet and Terra roles use low or medium; bridge drivers use the
   cheapest tier that can run a CLI.
-- Role files pin engine, effort, tools, permissions, turn budget, and charter. Claude Code
+- Role files pin engine, effort, tools, permissions, and charter. Claude Code
   hot-reloads edits to existing role files.
 
 ## Permission and safety floor
@@ -150,16 +162,21 @@ absorbed.
    AND engine. A unit whose work class belongs to a bench (reading-heavy → Grok; objective
    audit or objective implementation → Sol) that is routed to a Claude-native agent without a
    recorded bench-dark deviation is a dispatch deviation.
-3. **Implement.** Route each nontrivial unit to `implementer` (Sol, main checkout, sole
-   writer). Route a fully
-   specified, taste-free unit to `builder` or `application`. Never route implementation to an
-   engine the unit's judgment load exceeds.
+3. **Implement.** Route each nontrivial objective unit to the Sol `implementer` and each
+   nontrivial subjective unit to the Opus `implementer` — main checkout, one sole writer at a
+   time. Route a fully specified, taste-free unit to `builder`. Never route implementation to
+   an engine the unit's judgment load exceeds.
 4. **Integrate.** Evaluate each distillate against its acceptance criteria; apply shared-file
    patches serially; route cross-cutting findings.
 5. **Audit adversarially.** Every nontrivial implementation gets `reviewer` (Opus 5, design
    fit) and `analyst` (Sol, correctness and constraints) independently, plus `checker` for
-   mechanical conformance. Reconcile their evidence; a finding neither engine can substantiate
-   against source is dropped on the record.
+   mechanical conformance. An audit brief states its subject as numbered falsifiable claims
+   and requires per-claim verdicts with evidence, per the Falsification law in
+   `.claude/rules/quality.md` and the value set the dispatch-named skill fixes. In a fix round the unit's auditor is an engine that did not
+   write it. Multi-round audits run the `orkestrel-falsify` skill, which owns the brief
+   anatomy, the successor-brief rule, the fixed verdict shape and its single terminal line,
+   and the reconciliation discipline. Reconcile their evidence; a finding neither engine can
+   substantiate against the evidence is dropped on the record.
 6. **Verify.** One independent `verifier` runs the authoritative gates.
 7. **Accept.** The Orchestrator decides and reports concise outcomes, decisions, evidence, and
    remaining risk.
@@ -191,18 +208,46 @@ Workflow failures use the same ladder; do not absorb their raw logs into the mai
   writing nodes — never two concurrent writers in the tree.
 - Every node names a role and its engine.
 
+Every dispatch is a file before it is a launch:
+
+- The brief is written to a file under `tmp/`, named for its unit, before the unit is
+  launched, whatever engine executes it. A brief composed only inside a launch argument
+  cannot be corrected, resumed, or re-run once that call ends.
+- The unit's returned report is captured to a file beside its brief under the same unit name,
+  so a unit's instruction and its outcome are one pair on disk.
+- A re-run amends its brief instead of restating it: a mid-campaign correction produces a
+  successor file recording what changed and why, and the original stays. A fix round's brief
+  names the findings it carries and where each came from.
+- Brief and report files are unit evidence, not deliverables. They are never committed, and
+  they are swept when the campaign that produced them is accepted.
+- Anything in a brief or a report that must outlive the campaign is promoted into a durable
+  artifact — a commit message, a guide, a rule, a retrospective — before the sweep. What is
+  only in a swept file did not survive.
+
 Every dispatch contains:
 
 - **Role/engine** — named role and explicit engine.
 - **Objective** — one concrete outcome.
 - **Context** — the evidence slice, paths, decisions, `AGENTS.md`, applicable rules, the
   skill name and required references (or explicit none), and the guide/spec.
+- **Unknowns** — what the Orchestrator does not yet know that the unit needs, named as
+  unknown, with how the unit reports back on it. A brief that cannot be fully specified says
+  so instead of shipping a guess the executor would have to invent an answer around.
 - **Scope** — owned files, shared and off-limits files, allowed tools, permission limits.
+- **Execution** — the executor performs the assignment directly and spawns nothing. Every
+  brief states it; an executor deep in a task does not re-read this contract.
 - **Output** — the exact distilled return shape; no process diary.
 - **Deviation contract** — required stop/report behaviour for writers.
 - **Acceptance criteria** — independently checkable completion conditions.
-- **Review evidence** — for `reviewer` and `checker`, the actual diff and status output;
-  omitting either is a dispatch deviation.
+- **Review evidence** — the evidence the subject type requires, per the `orkestrel-falsify` table.
+  For a code change that is the actual diff and the actual status output, and omitting either is a
+  dispatch deviation. For any claim about a rendered or externally driven surface, the capture
+  portfolio is the review input and source is corroboration. A subject may occupy more than one
+  row — a ruling whose fixes already landed as edits is both a proposal and a code change — and it
+  is supplied the evidence of every row it occupies.
+
+After reconciling findings into briefs, walk the retained finding list once: every finding
+names the brief item that carries it. A finding with no carrier is a dropped finding.
 
 ## Bench mechanics
 
@@ -219,39 +264,64 @@ Four bench laws apply to every external engine:
   transport where one exists. Long-running work — audits, implementation units, anything
   multi-minute — uses the journaled CLI and never MCP: an interrupted MCP call loses its
   session invisibly, while a journal survives any client-side failure.
-- **Journal first.** Every bench invocation leaves a tailable on-disk record under
-  `tmp/<bench>/` (`tmp/codex/`, `tmp/cursor/`): the brief as a file, the event stream or
-  output log, and the final answer. Every long exec also carries exactly one Monitor on its
-  journal — a filtered tail that emits milestones (commands run, files changed, agent
-  messages, terminal states) and never the raw event firehose — so progress arrives in the
-  conversation while the journal stays tailable for depth. The filter exits on the exec's
-  terminal event, so the monitor's lifecycle matches the exec's and no watcher outlives its
-  subject. The journal's mtime is the liveness signal; the session id in the journal head is
-  the recovery handle. Briefs never travel as fragile shell arguments.
+- **Journal first.** Every bench invocation leaves a tailable on-disk record beside its brief
+  under `tmp/<bench>/` (`tmp/codex/`, `tmp/cursor/`): the event stream or output log and the
+  final answer. Every long exec also carries exactly one Monitor on its journal — a filtered
+  tail that emits milestones (commands run, files changed, agent messages, terminal states)
+  and never the raw event firehose — so progress arrives in the conversation while the
+  journal stays tailable for depth. The filter exits on the exec's terminal event, so the
+  monitor's lifecycle matches the exec's and no watcher outlives its subject. The journal's
+  mtime is the liveness signal; the session id in the journal head is the recovery handle.
+  **A Workflow journals identically and dies identically, so it carries the same watch** — with one
+  correction: a workflow journal writes only at agent start and result, so its mtime goes quiet for
+  minutes during healthy work and the liveness signal is the newest subagent transcript instead. A
+  watch that reports only new events cannot report a death, because silence and progress look the
+  same; the filter must fire on absence. Recovery is `resumeFromRunId`, which returns every completed
+  agent from cache and re-runs only what never finished.
 - **Tracked, never loose.** Every bench unit is registered in the session task registry at
   launch — subject, journal path, session id — and completed there at acceptance, so "what is
   running" always has a first-class answer instead of a recollection of a command.
-- **Ephemeral journals.** Everything under `tmp/` is unit evidence, never committed. Bridges
-  never delete journals; the Orchestrator sweeps `tmp/codex/` and `tmp/cursor/` once at
-  campaign acceptance, after the final gate evidence is recorded. A journal surviving past
-  its campaign is residue.
+- **Ephemeral streams, durable records.** A journal is a liveness instrument, not a record: it
+  exists to prove a bench is alive and to recover an interrupted session. Journals stay under
+  `tmp/`, are never committed, and the Orchestrator sweeps them at acceptance, after the final
+  gate evidence is recorded. A journal surviving past its campaign is residue.
+  The **brief**, the returned **distillate**, the **audit verdict**, and the **acceptance
+  evidence** are not streams. Each is committed as the unit is dispatched and as it returns,
+  because each encodes knowledge that costs real money to re-derive and none of it is
+  reproducible from the diff. A campaign whose working record lives only on ephemeral disk
+  loses it the first time the filesystem reverts, and the loss is silent.
+  Every campaign artifact lives in the **orchestrator's** repository under
+  `.orkestrel/<package>/` — for this repository, `.orkestrel/supervisor/` — never in the package it
+  is about: a published package's tree is its product, and orchestration residue does not belong in
+  it. The dot folder is the boundary: everything Orkestrel owns in a consumer's tree lives beneath
+  it, named for the package it belongs to, so a convention can be settled there without touching
+  anything outside it and without colliding with a convention that is not Orkestrel's. Nothing
+  outside `.orkestrel/` is claimed unless Orkestrel scaffold mandates it. The campaign narrative and
+  every ruling live in `ROADMAP.md`.
+  At acceptance the campaign folder is **pruned in a commit**, so the tree ends clean and the
+  record stays recoverable by hash forever. **Git history is the archive; the working tree is
+  the workspace.**
 
 Every long bench exec is launched by the Orchestrator as a harness-tracked background command
 under a hard time cap, never detached from inside a bridge agent: the harness owns the
 lifecycle, completion re-invokes the session, and the cap kills a wedged bench loudly instead
 of trusting the bridge to report its own failure. A wedged bridge is silent, and silence must
 never read as progress. A stalled journal or a cap-killed exec follows the deviation ladder,
-with the session id from the journal head as the recovery handle.
+with the session id from the journal head as the recovery handle. Size the cap from the
+observed high mark of comparable units plus an independently budgeted gate allowance plus
+explicit slack, never from the estimate alone. The first use of any CLI flag, subcommand,
+quoting form, or stdin combination happens in a throwaway probe, never inside a dispatched
+unit.
 
 ### Cursor Grok
 
 - Reached only through the `grok` role, in ask mode:
-  `<agent-cli> -p --trust --mode=ask --model "$CURSOR_GROK_MODEL" "<brief>" | tee tmp/cursor/<unit>.log`.
+  `<agent-cli> -p --trust --mode=ask --model "$CURSOR_GROK_MODEL" "<prompt>" | tee tmp/cursor/<unit>.log`.
   `<agent-cli>` resolves as bare `agent`, then `agent.cmd` (Windows installs ship only
   `.cmd`/`.ps1` shims, so bare `agent` does not resolve in Bash), then
-  `"$LOCALAPPDATA/cursor-agent/agent.cmd"` — verified with `--version` before first use. Long
-  briefs are written to `tmp/cursor/<unit>-brief.md` and the prompt points at the file. The
-  tee'd log is the bench's journal.
+  `"$LOCALAPPDATA/cursor-agent/agent.cmd"` — verified with `--version` before first use. The
+  prompt points at the unit's brief file, `tmp/cursor/<unit>-brief.md`. The tee'd log is the
+  bench's journal.
 - A long ask-mode run obeys the same launch, stream, and ledger discipline as a Codex exec:
   the Orchestrator starts it as a harness-tracked background command under a time cap,
   registers the unit in the task registry, and arms one Monitor on the tee'd log for
@@ -372,4 +442,7 @@ CODEX_IMPLEMENTER_EFFORT=high
   before both have returned.
 - Do not accept unreviewed implementation, unverified hypotheses, shared-tree writing races,
   implicit engines, fixed Claude IDs, or verbose completed-work residue.
+- A claim about a rendered or externally driven surface is evidenced by its capture or a real
+  foreign client driving it, never by source alone; where no such surface exists this law is
+  inert.
 - Final acceptance belongs only to the Orchestrator, after independent audit and gate evidence.
