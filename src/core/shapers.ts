@@ -312,6 +312,7 @@ export function objectShape<
  * @param values - The shape every value must match
  * @param options - Optional `description`
  * @returns An open object shape
+ * @throws {ContractError} When `values` is absent at runtime
  *
  * @example
  * ```ts
@@ -322,6 +323,12 @@ export function recordShape<S extends ContractShape>(
 	values: S,
 	options?: RecordShapeOptions,
 ): ObjectShape<Record<never, never>, S> {
+	if (values === undefined) {
+		throw new ContractError('recordShape: values must be a shape', {
+			code: 'structure',
+			context: { path: ['additionalProperties'], shape: 'object' },
+		})
+	}
 	return Object.freeze({
 		type: 'object',
 		properties: Object.freeze({}),

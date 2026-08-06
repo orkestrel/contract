@@ -18,6 +18,7 @@ import {
 	isJSONValue,
 	isNull,
 	isRecord,
+	isRegExp,
 	isString,
 	isUndefined,
 } from './validators.js'
@@ -63,144 +64,404 @@ import { parseBoolean, parseInteger, parseNumber, parseRecord, parseString } fro
  * @remarks
  * Walks the shape graph iteratively in linear time and stack space. Every
  * structural child slot must contain a shape node before it can enter the walk;
- * a missing child or unknown shape discriminant reports `placement`. This is a
- * structural-safety prerequisite rather than the full well-formedness pass in
- * {@link validateShape}: it does not diagnose bounds, empty vocabularies, or
- * optional-shape policy. Active ancestors are tracked so shared children remain
- * legal. Every standalone compiler calls this gate before its recursive branch
- * begins. The depth check runs before the child and active-ancestor checks, so a
- * malformed edge first reached beyond {@link COMPILE_DEPTH_LIMIT} reports
- * `depth`; a shallower cycle reports `cycle`.
+ * every scalar field must hold its declared runtime domain before a compiler
+ * can use it; and a missing child, corrupt container, inherited discriminant,
+ * or unrecognized node reports `structure`. This is a structural-safety
+ * prerequisite rather than the full well-formedness pass in
+ * {@link validateShape}: it does not diagnose bound policy, empty vocabularies,
+ * or optional-shape policy. Active
+ * ancestors are tracked so shared children remain legal. Every standalone
+ * compiler calls this gate before its recursive branch begins. Failures have
+ * deterministic precedence independent of traversal order: depth, then
+ * structure, then cycle.
  *
  * @param shape - The shape graph to gate
  * @returns Nothing; successful return means recursive compilation is structurally safe and depth-safe
- * @throws {ContractError} When a structural child is not a shape, the graph is cyclic, or it exceeds the compilation depth limit
+ * @throws {ContractError} When a node or structural slot is corrupt, the graph is cyclic, or it exceeds the compilation depth limit
  */
 export function validateShapeDepth(shape: ContractShape): void {
 	const active = new WeakSet<ContractShape>()
+	const path: string[] = []
+	let structurePath: readonly string[] | undefined
+	let structureMessage: string | undefined
+	let cyclePath: readonly string[] | undefined
 	const stack: (
 		| {
 				readonly operation: 'enter'
 				readonly shape: ContractShape | undefined
-				readonly path: readonly string[]
 				readonly depth: number
+				readonly first?: string
+				readonly second?: string
 		  }
-		| { readonly operation: 'exit'; readonly shape: ContractShape }
-	)[] = [{ operation: 'enter', shape, path: [], depth: 0 }]
+		| { readonly operation: 'exit'; readonly shape: ContractShape; readonly segments: number }
+	)[] = [{ operation: 'enter', shape, depth: 0 }]
 
 	while (stack.length > 0) {
 		const frame = stack.pop()
 		if (frame === undefined) continue
 		if (frame.operation === 'exit') {
 			active.delete(frame.shape)
+			path.length -= frame.segments
 			continue
+		}
+		let segments = 0
+		if (frame.first !== undefined) {
+			path.push(frame.first)
+			segments += 1
+		}
+		if (frame.second !== undefined) {
+			path.push(frame.second)
+			segments += 1
 		}
 
 		const current = frame.shape
 		if (frame.depth > COMPILE_DEPTH_LIMIT) {
 			throw new ContractError('validateShapeDepth: a shape exceeds the compilation depth limit', {
 				code: 'depth',
-				context: { path: frame.path, limit: COMPILE_DEPTH_LIMIT },
+				context: { path: [...path], limit: COMPILE_DEPTH_LIMIT },
 			})
 		}
-		if (typeof current !== 'object' || current === null) {
-			throw new ContractError('validateShapeDepth: every structural child must be a shape', {
-				code: 'placement',
-				context: { path: frame.path },
-			})
+		if (typeof current !== 'object' || current === null || !isRecord(current)) {
+			if (structurePath === undefined) {
+				structurePath = [...path]
+				structureMessage = 'validateShapeDepth: every structural child must be a shape'
+			}
+			path.length -= segments
+			continue
 		}
 		if (active.has(current)) {
-			throw new ContractError('validateShapeDepth: a shape graph may not contain a cycle', {
-				code: 'cycle',
-				context: { path: frame.path },
+			if (cyclePath === undefined) cyclePath = [...path]
+			path.length -= segments
+			continue
+		}
+
+		const children: {
+			readonly shape: ContractShape | undefined
+			readonly first: string
+			readonly second?: string
+		}[] = []
+		let nodeMessage = 'validateShapeDepth: every node must be a recognized shape'
+		let nodeFirst: string | undefined
+		let nodeSecond: string | undefined
+		const outcome = attempt((): boolean => {
+			const descriptor = Object.getOwnPropertyDescriptor(current, 'type')
+			if (descriptor === undefined || !Object.hasOwn(descriptor, 'value')) return false
+			const category = current.type
+			if (current.type !== category || descriptor.value !== category) return false
+
+			let fields: readonly string[]
+			switch (category) {
+				case 'string':
+					fields = ['min', 'max', 'pattern', 'description']
+					break
+				case 'number':
+					fields = ['integer', 'min', 'max', 'description']
+					break
+				case 'boolean':
+				case 'null':
+				case 'json':
+					fields = ['description']
+					break
+				case 'literal':
+					fields = ['values', 'description']
+					break
+				case 'array':
+					fields = ['items', 'min', 'max', 'description']
+					break
+				case 'object':
+					fields = ['properties', 'additionalProperties', 'description']
+					break
+				case 'union':
+					fields = ['variants', 'mode', 'description']
+					break
+				case 'optional':
+				case 'nullable':
+					fields = ['inner']
+					break
+				case 'raw':
+					fields = ['schema']
+					break
+				default:
+					return false
+			}
+
+			for (const field of fields) {
+				nodeFirst = field
+				const fieldDescriptor = Object.getOwnPropertyDescriptor(current, field)
+				const first: unknown = Reflect.get(current, field)
+				const second: unknown = Reflect.get(current, field)
+				if (fieldDescriptor === undefined) {
+					if (first !== undefined || second !== undefined) return false
+					continue
+				}
+				if (Object.hasOwn(fieldDescriptor, 'value')) {
+					const described: unknown = fieldDescriptor.value
+					if (!Object.is(first, described) || !Object.is(second, first)) return false
+					continue
+				}
+				if (
+					field !== 'pattern' ||
+					!isRegExp(first) ||
+					!isRegExp(second) ||
+					first.source !== second.source ||
+					first.flags !== second.flags ||
+					!Object.isFrozen(first) ||
+					!Object.isFrozen(second)
+				) {
+					return false
+				}
+			}
+			nodeFirst = undefined
+
+			if (
+				category !== 'optional' &&
+				category !== 'nullable' &&
+				category !== 'raw' &&
+				current.description !== undefined &&
+				typeof current.description !== 'string'
+			) {
+				nodeFirst = 'description'
+				nodeMessage = 'validateShapeDepth: description must be a string'
+				return false
+			}
+			if (category === 'string') {
+				if (current.min !== undefined && typeof current.min !== 'number') {
+					nodeFirst = 'min'
+					nodeMessage = 'validateShapeDepth: string min must be a number'
+					return false
+				}
+				if (current.max !== undefined && typeof current.max !== 'number') {
+					nodeFirst = 'max'
+					nodeMessage = 'validateShapeDepth: string max must be a number'
+					return false
+				}
+				if (current.pattern !== undefined) {
+					const pattern = current.pattern
+					if (!isRegExp(pattern)) {
+						nodeFirst = 'pattern'
+						nodeMessage = 'validateShapeDepth: string pattern must be a RegExp'
+						return false
+					}
+					const source = pattern.source
+					const flags = pattern.flags
+					if (
+						typeof source !== 'string' ||
+						typeof flags !== 'string' ||
+						pattern.source !== source ||
+						pattern.flags !== flags
+					) {
+						nodeFirst = 'pattern'
+						nodeMessage = 'validateShapeDepth: string pattern must be stable'
+						return false
+					}
+				}
+			}
+			if (category === 'number') {
+				if (current.min !== undefined && typeof current.min !== 'number') {
+					nodeFirst = 'min'
+					nodeMessage = 'validateShapeDepth: number min must be a number'
+					return false
+				}
+				if (current.max !== undefined && typeof current.max !== 'number') {
+					nodeFirst = 'max'
+					nodeMessage = 'validateShapeDepth: number max must be a number'
+					return false
+				}
+				if (current.integer !== undefined && typeof current.integer !== 'boolean') {
+					nodeFirst = 'integer'
+					nodeMessage = 'validateShapeDepth: number integer must be a boolean'
+					return false
+				}
+			}
+			if (category === 'array' && current.min !== undefined && typeof current.min !== 'number') {
+				nodeFirst = 'min'
+				nodeMessage = 'validateShapeDepth: array min must be a number'
+				return false
+			}
+			if (category === 'array' && current.max !== undefined && typeof current.max !== 'number') {
+				nodeFirst = 'max'
+				nodeMessage = 'validateShapeDepth: array max must be a number'
+				return false
+			}
+			if (
+				category === 'union' &&
+				current.mode !== undefined &&
+				current.mode !== 'anyOf' &&
+				current.mode !== 'oneOf'
+			) {
+				nodeFirst = 'mode'
+				nodeMessage = 'validateShapeDepth: union mode must be anyOf or oneOf'
+				return false
+			}
+			if (category === 'raw' && !isRecord(current.schema)) {
+				nodeFirst = 'schema'
+				nodeMessage = 'validateShapeDepth: raw schema must be a plain record'
+				return false
+			}
+
+			switch (category) {
+				case 'array':
+					children.push({ shape: current.items, first: 'items' })
+					break
+				case 'object': {
+					nodeFirst = 'properties'
+					const properties = current.properties
+					if (!isRecord(properties)) {
+						nodeMessage = 'validateShapeDepth: properties must be a plain property map'
+						return false
+					}
+					const keys = Object.keys(properties)
+					for (const key of keys) {
+						nodeSecond = key
+						const childDescriptor = Object.getOwnPropertyDescriptor(properties, key)
+						if (childDescriptor === undefined || !Object.hasOwn(childDescriptor, 'value')) {
+							children.push({ shape: undefined, first: 'properties', second: key })
+							continue
+						}
+						const child = current.properties[key]
+						if (
+							!Object.is(current.properties[key], child) ||
+							!Object.is(childDescriptor.value, child)
+						) {
+							children.push({ shape: undefined, first: 'properties', second: key })
+							continue
+						}
+						children.push({ shape: child, first: 'properties', second: key })
+					}
+					nodeSecond = undefined
+					const extra = current.additionalProperties
+					if (extra !== undefined && extra !== true && extra !== false) {
+						children.push({ shape: extra, first: 'additionalProperties' })
+					}
+					break
+				}
+				case 'union': {
+					nodeFirst = 'variants'
+					if (!Array.isArray(current.variants)) {
+						nodeMessage = 'validateShapeDepth: variants must be a finite array'
+						return false
+					}
+					const length = current.variants.length
+					if (!Number.isSafeInteger(length) || length < 0 || current.variants.length !== length) {
+						nodeMessage = 'validateShapeDepth: variants must be a finite array'
+						return false
+					}
+					for (let index = 0; index < length; index += 1) {
+						const key = String(index)
+						nodeSecond = key
+						const variantDescriptor = Object.getOwnPropertyDescriptor(current.variants, key)
+						if (variantDescriptor === undefined || !Object.hasOwn(variantDescriptor, 'value')) {
+							children.push({ shape: undefined, first: 'variants', second: key })
+							continue
+						}
+						const variant = current.variants[index]
+						if (
+							!Object.is(current.variants[index], variant) ||
+							!Object.is(variantDescriptor.value, variant)
+						) {
+							children.push({ shape: undefined, first: 'variants', second: key })
+							continue
+						}
+						children.push({ shape: variant, first: 'variants', second: key })
+					}
+					break
+				}
+				case 'literal': {
+					nodeFirst = 'values'
+					if (!Array.isArray(current.values)) {
+						nodeMessage = 'validateShapeDepth: values must be a finite literal array'
+						return false
+					}
+					const length = current.values.length
+					if (!Number.isSafeInteger(length) || length < 0 || current.values.length !== length) {
+						nodeMessage = 'validateShapeDepth: values must be a finite literal array'
+						return false
+					}
+					for (let index = 0; index < length; index += 1) {
+						const key = String(index)
+						nodeSecond = key
+						const valueDescriptor = Object.getOwnPropertyDescriptor(current.values, key)
+						if (valueDescriptor === undefined || !Object.hasOwn(valueDescriptor, 'value')) {
+							nodeMessage = 'validateShapeDepth: values must be a dense data array'
+							return false
+						}
+						const value = current.values[index]
+						if (
+							!Object.is(current.values[index], value) ||
+							!Object.is(valueDescriptor.value, value)
+						) {
+							nodeMessage = 'validateShapeDepth: values must be a stable data array'
+							return false
+						}
+						if (
+							typeof value !== 'string' &&
+							typeof value !== 'number' &&
+							typeof value !== 'boolean'
+						) {
+							nodeMessage =
+								'validateShapeDepth: every literal value must be a string, number, or boolean'
+							return false
+						}
+					}
+					break
+				}
+				case 'optional':
+				case 'nullable':
+					children.push({ shape: current.inner, first: 'inner' })
+					break
+				case 'string':
+				case 'number':
+				case 'boolean':
+				case 'null':
+				case 'json':
+				case 'raw':
+					break
+			}
+			return true
+		})
+
+		if (!outcome.success || !outcome.value) {
+			if (structurePath === undefined) {
+				structurePath = [
+					...path,
+					...(nodeFirst === undefined ? [] : [nodeFirst]),
+					...(nodeSecond === undefined ? [] : [nodeSecond]),
+				]
+				structureMessage = nodeMessage
+			}
+			path.length -= segments
+			continue
+		}
+
+		active.add(current)
+		stack.push({ operation: 'exit', shape: current, segments })
+		for (let index = children.length - 1; index >= 0; index -= 1) {
+			const child = children[index]
+			if (child === undefined) continue
+			stack.push({
+				operation: 'enter',
+				shape: child.shape,
+				depth: frame.depth + 1,
+				first: child.first,
+				...(child.second === undefined ? {} : { second: child.second }),
 			})
 		}
-		active.add(current)
-		stack.push({ operation: 'exit', shape: current })
+	}
 
-		switch (current.type) {
-			case 'array':
-				stack.push({
-					operation: 'enter',
-					shape: current.items,
-					path: [...frame.path, 'items'],
-					depth: frame.depth + 1,
-				})
-				break
-			case 'object': {
-				if (
-					typeof current.properties !== 'object' ||
-					current.properties === null ||
-					Array.isArray(current.properties)
-				) {
-					throw new ContractError('validateShapeDepth: every structural child must be a shape', {
-						code: 'placement',
-						context: { path: [...frame.path, 'properties'] },
-					})
-				}
-				const extra = current.additionalProperties
-				if (extra !== undefined && extra !== true && extra !== false) {
-					stack.push({
-						operation: 'enter',
-						shape: extra,
-						path: [...frame.path, 'additionalProperties'],
-						depth: frame.depth + 1,
-					})
-				}
-				const keys = Object.keys(current.properties)
-				for (let index = keys.length - 1; index >= 0; index -= 1) {
-					const key = keys[index]
-					if (key === undefined) continue
-					const child = current.properties[key]
-					stack.push({
-						operation: 'enter',
-						shape: child,
-						path: [...frame.path, 'properties', key],
-						depth: frame.depth + 1,
-					})
-				}
-				break
-			}
-			case 'union':
-				if (!Array.isArray(current.variants)) {
-					throw new ContractError('validateShapeDepth: every structural child must be a shape', {
-						code: 'placement',
-						context: { path: [...frame.path, 'variants'] },
-					})
-				}
-				for (let index = current.variants.length - 1; index >= 0; index -= 1) {
-					const variant = current.variants[index]
-					stack.push({
-						operation: 'enter',
-						shape: variant,
-						path: [...frame.path, 'variants', String(index)],
-						depth: frame.depth + 1,
-					})
-				}
-				break
-			case 'optional':
-			case 'nullable':
-				stack.push({
-					operation: 'enter',
-					shape: current.inner,
-					path: [...frame.path, 'inner'],
-					depth: frame.depth + 1,
-				})
-				break
-			case 'string':
-			case 'number':
-			case 'boolean':
-			case 'null':
-			case 'json':
-			case 'literal':
-			case 'raw':
-				break
-			default:
-				throw new ContractError('validateShapeDepth: every structural child must be a shape', {
-					code: 'placement',
-					context: { path: frame.path },
-				})
-		}
+	if (structurePath !== undefined) {
+		throw new ContractError(
+			structureMessage ?? 'validateShapeDepth: a shape structure is corrupt',
+			{
+				code: 'structure',
+				context: { path: structurePath },
+			},
+		)
+	}
+	if (cyclePath !== undefined) {
+		throw new ContractError('validateShapeDepth: a shape graph may not contain a cycle', {
+			code: 'cycle',
+			context: { path: cyclePath },
+		})
 	}
 }
 
@@ -212,8 +473,8 @@ export function validateShapeDepth(shape: ContractShape): void {
  * Fail-fast, per AGENTS §12: a malformed shape is a programmer error, so this
  * throws a coded {@link ContractError} immediately rather than surfacing as a
  * silently-wrong guard, parser, schema, or generator later. It first runs
- * {@link validateShapeDepth}, which rejects a structural child that is not a
- * shape before this well-formedness walk begins. The iterative walk tracks
+ * {@link validateShapeDepth}, which rejects corrupt nodes and structural slots
+ * before this well-formedness walk begins. The iterative walk tracks
  * active ancestors, so a structural cycle reports its precise path while a
  * shared child reached through separate paths remains legal. Checks:
  *
@@ -250,211 +511,246 @@ export function validateShapeDepth(shape: ContractShape): void {
  */
 export function validateShape(shape: ContractShape): void {
 	validateShapeDepth(shape)
-	const active = new WeakSet<ContractShape>()
-	const stack: (
-		| {
-				readonly operation: 'enter'
-				readonly shape: ContractShape
-				readonly path: readonly string[]
-				readonly optional: boolean
-				readonly depth: number
-		  }
-		| { readonly operation: 'exit'; readonly shape: ContractShape }
-	)[] = [{ operation: 'enter', shape, path: [], optional: false, depth: 0 }]
+	const outcome = attempt(() => {
+		const active = new WeakSet<ContractShape>()
+		const stack: (
+			| {
+					readonly operation: 'enter'
+					readonly shape: ContractShape
+					readonly path: readonly string[]
+					readonly optional: boolean
+					readonly depth: number
+			  }
+			| { readonly operation: 'exit'; readonly shape: ContractShape }
+		)[] = [{ operation: 'enter', shape, path: [], optional: false, depth: 0 }]
 
-	while (stack.length > 0) {
-		const frame = stack.pop()
-		if (frame === undefined) continue
-		if (frame.operation === 'exit') {
-			active.delete(frame.shape)
-			continue
-		}
-
-		const current = frame.shape
-		if (frame.depth > COMPILE_DEPTH_LIMIT) {
-			throw new ContractError('validateShape: a shape exceeds the compilation depth limit', {
-				code: 'depth',
-				context: { path: frame.path, shape: current.type, limit: COMPILE_DEPTH_LIMIT },
-			})
-		}
-		if (active.has(current)) {
-			throw new ContractError('validateShape: a shape graph may not contain a cycle', {
-				code: 'cycle',
-				context: { path: frame.path },
-			})
-		}
-		active.add(current)
-		stack.push({ operation: 'exit', shape: current })
-
-		switch (current.type) {
-			case 'string':
-				if (current.min !== undefined && current.max !== undefined && current.min > current.max) {
-					throw new ContractError('validateShape: a string shape has min greater than max', {
-						code: 'range',
-						context: { path: frame.path, shape: 'string' },
-					})
-				}
-				break
-			case 'number':
-				if (current.min !== undefined && !Number.isFinite(current.min)) {
-					throw new ContractError('validateShape: a number shape min must be finite', {
-						code: 'bound',
-						context: {
-							path: frame.path,
-							shape: current.integer === true ? 'integer' : 'number',
-							limit: 'finite number',
-							received: String(current.min),
-						},
-					})
-				}
-				if (current.max !== undefined && !Number.isFinite(current.max)) {
-					throw new ContractError('validateShape: a number shape max must be finite', {
-						code: 'bound',
-						context: {
-							path: frame.path,
-							shape: current.integer === true ? 'integer' : 'number',
-							limit: 'finite number',
-							received: String(current.max),
-						},
-					})
-				}
-				if (current.min !== undefined && current.max !== undefined && current.min > current.max) {
-					throw new ContractError('validateShape: a number shape has min greater than max', {
-						code: 'range',
-						context: {
-							path: frame.path,
-							shape: current.integer === true ? 'integer' : 'number',
-						},
-					})
-				}
-				if (current.integer === true) {
-					const lo = Math.ceil(current.min ?? Number.NEGATIVE_INFINITY)
-					const hi = Math.floor(current.max ?? Number.POSITIVE_INFINITY)
-					if (lo > hi) {
-						throw new ContractError(
-							'validateShape: an integer number shape has an empty integer range',
-							{
-								code: 'range',
-								context: { path: frame.path, shape: 'integer' },
-							},
-						)
-					}
-				}
-				break
-			case 'boolean':
-			case 'null':
-			case 'json':
-			case 'raw':
-				break
-			case 'literal':
-				if (current.values.length === 0) {
-					throw new ContractError('validateShape: a literal shape needs at least one value', {
-						code: 'empty',
-						context: { path: frame.path, shape: 'literal' },
-					})
-				}
-				for (const value of current.values) {
-					if (typeof value === 'number' && !Number.isFinite(value)) {
-						throw new ContractError(
-							'validateShape: a literal shape may not contain non-finite number values',
-							{
-								code: 'literal',
-								context: { path: frame.path, shape: 'literal', received: String(value) },
-							},
-						)
-					}
-				}
-				break
-			case 'array':
-				if (current.min !== undefined && current.max !== undefined && current.min > current.max) {
-					throw new ContractError('validateShape: an array shape has min greater than max', {
-						code: 'range',
-						context: { path: frame.path, shape: 'array' },
-					})
-				}
-				stack.push({
-					operation: 'enter',
-					shape: current.items,
-					path: [...frame.path, 'items'],
-					optional: false,
-					depth: frame.depth + 1,
-				})
-				break
-			case 'object': {
-				const extra = current.additionalProperties
-				if (extra !== undefined && extra !== true && extra !== false) {
-					stack.push({
-						operation: 'enter',
-						shape: extra,
-						path: [...frame.path, 'additionalProperties'],
-						optional: false,
-						depth: frame.depth + 1,
-					})
-				}
-				const keys = Object.keys(current.properties)
-				for (let index = keys.length - 1; index >= 0; index -= 1) {
-					const key = keys[index]
-					if (key === undefined) continue
-					const child = current.properties[key]
-					if (child === undefined) continue
-					stack.push({
-						operation: 'enter',
-						shape: child,
-						path: [...frame.path, 'properties', key],
-						optional: true,
-						depth: frame.depth + 1,
-					})
-				}
-				break
+		while (stack.length > 0) {
+			const frame = stack.pop()
+			if (frame === undefined) continue
+			if (frame.operation === 'exit') {
+				active.delete(frame.shape)
+				continue
 			}
-			case 'union':
-				if (current.variants.length === 0) {
-					throw new ContractError('validateShape: a union shape needs at least one variant', {
-						code: 'empty',
-						context: { path: frame.path, shape: 'union' },
-					})
+
+			const current = frame.shape
+			if (frame.depth > COMPILE_DEPTH_LIMIT) {
+				throw new ContractError('validateShape: a shape exceeds the compilation depth limit', {
+					code: 'depth',
+					context: { path: frame.path, shape: current.type, limit: COMPILE_DEPTH_LIMIT },
+				})
+			}
+			if (active.has(current)) {
+				throw new ContractError('validateShape: a shape graph may not contain a cycle', {
+					code: 'cycle',
+					context: { path: frame.path },
+				})
+			}
+			active.add(current)
+			stack.push({ operation: 'exit', shape: current })
+
+			if (current.type === 'string' || current.type === 'array') {
+				const bounds = [
+					{ boundary: 'min', value: current.min },
+					{ boundary: 'max', value: current.max },
+				]
+				for (const bound of bounds) {
+					if (
+						bound.value !== undefined &&
+						(!Number.isSafeInteger(bound.value) || bound.value < 0)
+					) {
+						throw new ContractError(
+							`validateShape: a ${current.type} shape ${bound.boundary} must be a non-negative safe integer`,
+							{
+								code: 'bound',
+								context: {
+									path: frame.path,
+									shape: current.type,
+									limit: 'non-negative safe integer',
+									received: String(bound.value),
+								},
+							},
+						)
+					}
 				}
-				for (let index = current.variants.length - 1; index >= 0; index -= 1) {
-					const variant = current.variants[index]
-					if (variant === undefined) continue
+			}
+
+			switch (current.type) {
+				case 'string':
+					if (current.min !== undefined && current.max !== undefined && current.min > current.max) {
+						throw new ContractError('validateShape: a string shape has min greater than max', {
+							code: 'range',
+							context: { path: frame.path, shape: 'string' },
+						})
+					}
+					break
+				case 'number':
+					if (current.min !== undefined && !Number.isFinite(current.min)) {
+						throw new ContractError('validateShape: a number shape min must be finite', {
+							code: 'bound',
+							context: {
+								path: frame.path,
+								shape: current.integer === true ? 'integer' : 'number',
+								limit: 'finite number',
+								received: String(current.min),
+							},
+						})
+					}
+					if (current.max !== undefined && !Number.isFinite(current.max)) {
+						throw new ContractError('validateShape: a number shape max must be finite', {
+							code: 'bound',
+							context: {
+								path: frame.path,
+								shape: current.integer === true ? 'integer' : 'number',
+								limit: 'finite number',
+								received: String(current.max),
+							},
+						})
+					}
+					if (current.min !== undefined && current.max !== undefined && current.min > current.max) {
+						throw new ContractError('validateShape: a number shape has min greater than max', {
+							code: 'range',
+							context: {
+								path: frame.path,
+								shape: current.integer === true ? 'integer' : 'number',
+							},
+						})
+					}
+					if (current.integer === true) {
+						const lo = Math.ceil(current.min ?? Number.NEGATIVE_INFINITY)
+						const hi = Math.floor(current.max ?? Number.POSITIVE_INFINITY)
+						if (lo > hi) {
+							throw new ContractError(
+								'validateShape: an integer number shape has an empty integer range',
+								{
+									code: 'range',
+									context: { path: frame.path, shape: 'integer' },
+								},
+							)
+						}
+					}
+					break
+				case 'boolean':
+				case 'null':
+				case 'json':
+				case 'raw':
+					break
+				case 'literal':
+					if (current.values.length === 0) {
+						throw new ContractError('validateShape: a literal shape needs at least one value', {
+							code: 'empty',
+							context: { path: frame.path, shape: 'literal' },
+						})
+					}
+					for (const value of current.values) {
+						if (typeof value === 'number' && !Number.isFinite(value)) {
+							throw new ContractError(
+								'validateShape: a literal shape may not contain non-finite number values',
+								{
+									code: 'literal',
+									context: { path: frame.path, shape: 'literal', received: String(value) },
+								},
+							)
+						}
+					}
+					break
+				case 'array':
+					if (current.min !== undefined && current.max !== undefined && current.min > current.max) {
+						throw new ContractError('validateShape: an array shape has min greater than max', {
+							code: 'range',
+							context: { path: frame.path, shape: 'array' },
+						})
+					}
 					stack.push({
 						operation: 'enter',
-						shape: variant,
-						path: [...frame.path, 'variants', String(index)],
+						shape: current.items,
+						path: [...frame.path, 'items'],
 						optional: false,
 						depth: frame.depth + 1,
 					})
+					break
+				case 'object': {
+					const extra = current.additionalProperties
+					if (extra !== undefined && extra !== true && extra !== false) {
+						stack.push({
+							operation: 'enter',
+							shape: extra,
+							path: [...frame.path, 'additionalProperties'],
+							optional: false,
+							depth: frame.depth + 1,
+						})
+					}
+					const keys = Object.keys(current.properties)
+					for (let index = keys.length - 1; index >= 0; index -= 1) {
+						const key = keys[index]
+						if (key === undefined) continue
+						const child = current.properties[key]
+						if (child === undefined) continue
+						stack.push({
+							operation: 'enter',
+							shape: child,
+							path: [...frame.path, 'properties', key],
+							optional: true,
+							depth: frame.depth + 1,
+						})
+					}
+					break
 				}
-				break
-			case 'optional':
-				if (!frame.optional) {
-					throw new ContractError(
-						'validateShape: an optional shape may only appear as a direct object-property value',
-						{
-							code: 'placement',
-							context: { path: frame.path, shape: 'optional' },
-						},
-					)
-				}
-				stack.push({
-					operation: 'enter',
-					shape: current.inner,
-					path: [...frame.path, 'inner'],
-					optional: false,
-					depth: frame.depth + 1,
-				})
-				break
-			case 'nullable':
-				stack.push({
-					operation: 'enter',
-					shape: current.inner,
-					path: [...frame.path, 'inner'],
-					optional: false,
-					depth: frame.depth + 1,
-				})
-				break
+				case 'union':
+					if (current.variants.length === 0) {
+						throw new ContractError('validateShape: a union shape needs at least one variant', {
+							code: 'empty',
+							context: { path: frame.path, shape: 'union' },
+						})
+					}
+					for (let index = current.variants.length - 1; index >= 0; index -= 1) {
+						const variant = current.variants[index]
+						if (variant === undefined) continue
+						stack.push({
+							operation: 'enter',
+							shape: variant,
+							path: [...frame.path, 'variants', String(index)],
+							optional: false,
+							depth: frame.depth + 1,
+						})
+					}
+					break
+				case 'optional':
+					if (!frame.optional) {
+						throw new ContractError(
+							'validateShape: an optional shape may only appear as a direct object-property value',
+							{
+								code: 'placement',
+								context: { path: frame.path, shape: 'optional' },
+							},
+						)
+					}
+					stack.push({
+						operation: 'enter',
+						shape: current.inner,
+						path: [...frame.path, 'inner'],
+						optional: false,
+						depth: frame.depth + 1,
+					})
+					break
+				case 'nullable':
+					stack.push({
+						operation: 'enter',
+						shape: current.inner,
+						path: [...frame.path, 'inner'],
+						optional: false,
+						depth: frame.depth + 1,
+					})
+					break
+			}
 		}
-	}
+	})
+	if (outcome.success) return
+	if (isContractError(outcome.error)) throw outcome.error
+	throw new ContractError('validateShape: shape reflection failed', {
+		code: 'structure',
+		context: { path: [] },
+		cause: outcome.error,
+	})
 }
 
 // === Schema
@@ -1658,7 +1954,10 @@ export function compileAuditor(
  * Runs {@link validateShape} first — a malformed shape throws immediately
  * rather than compiling into a silently-wrong contract (AGENTS §12). It always
  * takes its own {@link cloneShape} snapshot — never merely a frozen node's word
- * — and hands that same graph to every artifact compiler.
+ * — and hands that same graph to every artifact compiler. An already-frozen
+ * declaration first passes {@link validateShapeDepth} in its original form so
+ * cloning cannot normalize a malformed scalar field before the structural gate
+ * sees it; hostile frozen-state reflection remains contained.
  * Then it precompiles the deeply frozen owned schema, guard, and parser once;
  * `generate` walks the snapshot per call with the supplied random source;
  * `audit` and `explain` compile their diagnostic reports via
@@ -1679,6 +1978,8 @@ export function compileAuditor(
 export function createContract<S extends ContractShape>(shape: S): ContractInterface<Infer<S>>
 export function createContract(shape: ContractShape): ContractInterface<unknown>
 export function createContract(shape: ContractShape): ContractInterface<unknown> {
+	const frozen = attempt(() => Object.isFrozen(shape))
+	if (frozen.success && frozen.value) validateShapeDepth(shape)
 	const snapshot = cloneShape(shape)
 	validateShape(snapshot)
 	const schema = compileSchema(snapshot)

@@ -47,8 +47,10 @@ export type ContractCode =
 	| 'range'
 	/** Identifies an empty-value contract error. */
 	| 'empty'
-	/** Identifies a placement contract error. */
+	/** Identifies a valid optional shape used in a forbidden position. */
 	| 'placement'
+	/** Identifies a corrupt shape node or structural slot. */
+	| 'structure'
 	/** Identifies a literal contract error. */
 	| 'literal'
 	/** Identifies a cycle contract error. */
@@ -309,8 +311,9 @@ export interface ValueToSchemaOptions {
  *
  * @remarks
  * A discriminated union keyed on `type`. Shapes nest (an `ArrayShape` holds an
- * element shape, an `ObjectShape` a map of them). {@link validateShape}
- * enforces an acyclic graph within {@link COMPILE_DEPTH_LIMIT}.
+ * element shape, an `ObjectShape` a map of them). {@link validateShapeDepth}
+ * and {@link validateShape} enforce an acyclic graph within
+ * {@link COMPILE_DEPTH_LIMIT}.
  */
 export type ContractShape =
 	| StringShape
@@ -771,8 +774,10 @@ export type RandomFunction = () => number
  * whose traps change behavior mid-flight, can leave `audit` empty and still
  * fail `is`; no law spanning two calls can promise otherwise, and no artifact
  * re-reads a value to close the gap. This is a statement of scope, not a hedge:
- * for every value that reads the same twice — every primitive, every plain
- * record, every frozen structure — both laws hold exactly as written.
+ * for primitives and data-only structures whose entire observable read surface
+ * stays stable across both calls, both laws hold exactly as written.
+ * `Object.freeze` alone does not establish that condition because it is shallow
+ * and does not stabilize accessors.
  */
 export interface ContractInterface<T> {
 	readonly schema: JSONSchema

@@ -246,6 +246,14 @@ describe('shape builders', () => {
 		expect(shape.additionalProperties).toMatchObject({ type: 'number' })
 	})
 
+	it('rejects a missing record value shape instead of building a closed empty object', () => {
+		const source: { readonly value: ContractShape } = JSON.parse('{}')
+		const error = captureContractError(() => recordShape(source.value))
+
+		expect(error.code).toBe('structure')
+		expect(error.context?.path).toEqual(['additionalProperties'])
+	})
+
 	it('unionShape / oneOfShape collect variants; only oneOf sets the mode', () => {
 		expect(unionShape(stringShape(), integerShape()).variants).toHaveLength(2)
 		expect(unionShape(stringShape()).mode).toBeUndefined()

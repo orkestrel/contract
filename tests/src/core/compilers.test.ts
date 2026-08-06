@@ -41,6 +41,25 @@ import {
 import { describe, expect, it } from 'vitest'
 
 describe('validateShape', () => {
+	it('rejects every malformed string and array length bound before contract compilation', () => {
+		const shapes: readonly ContractShape[] = [
+			{ type: 'string', min: Number.NaN },
+			{ type: 'string', max: Number.POSITIVE_INFINITY },
+			{ type: 'string', min: -1 },
+			{ type: 'string', max: 1.5 },
+			{ type: 'array', items: stringShape(), min: Number.NaN },
+			{ type: 'array', items: stringShape(), max: Number.POSITIVE_INFINITY },
+			{ type: 'array', items: stringShape(), min: -1 },
+			{ type: 'array', items: stringShape(), max: 1.5 },
+		]
+
+		for (const shape of shapes) {
+			const error = captureContractError(() => createContract(shape))
+			expect(error.code).toBe('bound')
+			expect(error.context?.limit).toBe('non-negative safe integer')
+		}
+	})
+
 	it('throws coded ContractError categories for every malformed-shape policy', () => {
 		const malformedInteger: ContractShape = JSON.parse(
 			'{"type":"number","integer":true,"min":2.5,"max":2.6}',
@@ -74,6 +93,7 @@ describe('validateShape', () => {
 		const error = captureContractError(() => validateShape(shape))
 		expect(error).toBeInstanceOf(ContractError)
 		expect(error.code).toBe('cycle')
+		expect(error.message).toBe('validateShapeDepth: a shape graph may not contain a cycle')
 		expect(error.context?.path).toEqual(['items'])
 	})
 
@@ -204,6 +224,13 @@ describe('validateShape', () => {
 		expect(error.context?.limit).toBe(COMPILE_DEPTH_LIMIT)
 	})
 
+	it('reports depth from the structural gate before validateShape reaches its duplicate branch', () => {
+		const error = captureContractError(() => validateShape(buildDeepShape(COMPILE_DEPTH_LIMIT + 1)))
+
+		expect(error.code).toBe('depth')
+		expect(error.message).toBe('validateShapeDepth: a shape exceeds the compilation depth limit')
+	})
+
 	it('rejects excessive depth at every standalone compiler entry before recursion', () => {
 		const shape = buildDeepShape(5_000)
 		const schemaError = captureContractError(() => compileSchema(shape))
@@ -259,7 +286,309 @@ describe('validateShape', () => {
 })
 
 describe('malformed shape children', () => {
-	it('rejects every non-shape child with a placement ContractError at every entry point', () => {
+	it('rejects non-primitive scalar fields before any standalone compiler uses them', () => {
+		const trap = Object.freeze({
+			[Symbol.toPrimitive]() {
+				throw new Error('symbol trap')
+			},
+		})
+		const fields: readonly {
+			readonly shape: ContractShape
+			readonly field: string
+			readonly path: readonly string[]
+		}[] = [
+			{ shape: JSON.parse('{"type":"string"}'), field: 'min', path: ['min'] },
+			{ shape: JSON.parse('{"type":"string"}'), field: 'max', path: ['max'] },
+			{ shape: JSON.parse('{"type":"string"}'), field: 'pattern', path: ['pattern'] },
+			{ shape: JSON.parse('{"type":"number"}'), field: 'min', path: ['min'] },
+			{ shape: JSON.parse('{"type":"number"}'), field: 'max', path: ['max'] },
+			{ shape: JSON.parse('{"type":"number"}'), field: 'integer', path: ['integer'] },
+			{
+				shape: JSON.parse('{"type":"array","items":{"type":"string"}}'),
+				field: 'min',
+				path: ['min'],
+			},
+			{
+				shape: JSON.parse('{"type":"array","items":{"type":"string"}}'),
+				field: 'max',
+				path: ['max'],
+			},
+			{
+				shape: JSON.parse('{"type":"union","variants":[{"type":"string"}]}'),
+				field: 'mode',
+				path: ['mode'],
+			},
+			{ shape: JSON.parse('{"type":"string"}'), field: 'description', path: ['description'] },
+			{ shape: JSON.parse('{"type":"number"}'), field: 'description', path: ['description'] },
+			{ shape: JSON.parse('{"type":"boolean"}'), field: 'description', path: ['description'] },
+			{ shape: JSON.parse('{"type":"null"}'), field: 'description', path: ['description'] },
+			{
+				shape: JSON.parse('{"type":"literal","values":["ok"]}'),
+				field: 'description',
+				path: ['description'],
+			},
+			{
+				shape: JSON.parse('{"type":"array","items":{"type":"string"}}'),
+				field: 'description',
+				path: ['description'],
+			},
+			{
+				shape: JSON.parse('{"type":"object","properties":{}}'),
+				field: 'description',
+				path: ['description'],
+			},
+			{
+				shape: JSON.parse('{"type":"union","variants":[{"type":"string"}]}'),
+				field: 'description',
+				path: ['description'],
+			},
+			{ shape: JSON.parse('{"type":"json"}'), field: 'description', path: ['description'] },
+		]
+
+		for (const entry of fields) {
+			Object.defineProperty(entry.shape, entry.field, { value: trap, enumerable: true })
+			Object.freeze(entry.shape)
+			const errors = [
+				captureContractError(() => validateShapeDepth(entry.shape)),
+				captureContractError(() => validateShape(entry.shape)),
+				captureContractError(() => compileSchema(entry.shape)),
+				captureContractError(() => compileGuard(entry.shape)),
+				captureContractError(() => compileParser(entry.shape)),
+				captureContractError(() => compileGenerator(entry.shape, () => 0)),
+				captureContractError(() => compileReporter(entry.shape, '')),
+				captureContractError(() => compileAuditor(entry.shape, '')),
+				captureContractError(() => createContract(entry.shape)),
+			]
+			for (const error of errors) {
+				expect(error.code).toBe('structure')
+				expect(error.context?.path).toEqual(entry.path)
+			}
+		}
+
+		const literal: ContractShape = JSON.parse('{"type":"literal","values":[null]}')
+		if (literal.type !== 'literal') throw new Error('test setup: expected a literal shape')
+		Object.defineProperty(literal.values, '0', { value: trap, enumerable: true })
+		Object.freeze(literal.values)
+		Object.freeze(literal)
+		for (const error of [
+			captureContractError(() => validateShapeDepth(literal)),
+			captureContractError(() => validateShape(literal)),
+			captureContractError(() => compileSchema(literal)),
+			captureContractError(() => compileGuard(literal)),
+			captureContractError(() => compileParser(literal)),
+			captureContractError(() => compileGenerator(literal, () => 0)),
+			captureContractError(() => compileReporter(literal, '')),
+			captureContractError(() => compileAuditor(literal, '')),
+			captureContractError(() => createContract(literal)),
+		]) {
+			expect(error.code).toBe('structure')
+			expect(error.context?.path).toEqual(['values', '0'])
+		}
+	})
+
+	it('distinguishes corrupt nodes, structural children, property maps, and variant arrays', () => {
+		const missing: { readonly child: ContractShape } = JSON.parse('{}')
+		const cases: readonly {
+			readonly shape: ContractShape
+			readonly message: string
+		}[] = [
+			{
+				shape: JSON.parse('{}'),
+				message: 'validateShapeDepth: every node must be a recognized shape',
+			},
+			{
+				shape: arrayShape(missing.child),
+				message: 'validateShapeDepth: every structural child must be a shape',
+			},
+			{
+				shape: JSON.parse('{"type":"object"}'),
+				message: 'validateShapeDepth: properties must be a plain property map',
+			},
+			{
+				shape: JSON.parse('{"type":"union"}'),
+				message: 'validateShapeDepth: variants must be a finite array',
+			},
+		]
+
+		for (const entry of cases) {
+			const error = captureContractError(() => validateShapeDepth(entry.shape))
+			expect(error.code).toBe('structure')
+			expect(error.message).toBe(entry.message)
+		}
+	})
+
+	it('contains hostile structural reflection and rejects inherited discriminants', () => {
+		const revocable = Proxy.revocable({}, {})
+		revocable.revoke()
+		const revokedSource: { readonly child: ContractShape } = JSON.parse('{}')
+		Object.defineProperty(revokedSource, 'child', { value: revocable.proxy })
+
+		const throwing: ContractShape = JSON.parse('{"type":"string"}')
+		Object.defineProperty(throwing, 'type', {
+			get() {
+				throw new Error('boom from getter')
+			},
+		})
+
+		const inheritedSource: { readonly child: ContractShape } = JSON.parse('{}')
+		Object.setPrototypeOf(inheritedSource, {
+			child: Object.freeze(Object.create({ type: 'string' })),
+		})
+		const cases = [arrayShape(revokedSource.child), arrayShape(throwing), inheritedSource.child]
+
+		for (const shape of cases) {
+			const errors = [
+				captureContractError(() => validateShapeDepth(shape)),
+				captureContractError(() => validateShape(shape)),
+				captureContractError(() => compileSchema(shape)),
+				captureContractError(() => compileGuard(shape)),
+				captureContractError(() => compileParser(shape)),
+				captureContractError(() => compileGenerator(shape, () => 0)),
+				captureContractError(() => compileReporter(shape, undefined)),
+				captureContractError(() => compileAuditor(shape, undefined)),
+			]
+			for (const error of errors) {
+				expect(error.code).toBe('structure')
+				expect(error).not.toBeInstanceOf(TypeError)
+			}
+		}
+	})
+
+	it('contains hostile fields and revoked proxies in every structural slot at depth', () => {
+		let reads = 0
+		const secondRead: ContractShape = JSON.parse('{"type":"string"}')
+		Object.defineProperty(secondRead, 'description', {
+			enumerable: true,
+			get() {
+				reads += 1
+				if (reads % 2 === 0) throw new Error('second read')
+				return 'stable once'
+			},
+		})
+		Object.freeze(secondRead)
+
+		const pattern = /safe/
+		Object.defineProperty(pattern, 'source', {
+			get() {
+				throw new Error('pattern source')
+			},
+		})
+		Object.freeze(pattern)
+		const hostilePattern: ContractShape = Object.freeze({ type: 'string', pattern })
+
+		const hostileProperties = new Proxy<Record<string, ContractShape>>(
+			{},
+			{
+				ownKeys() {
+					throw new Error('property keys')
+				},
+			},
+		)
+		const propertiesShape: ContractShape = Object.freeze({
+			type: 'object',
+			properties: hostileProperties,
+		})
+
+		const pollutedSource: { readonly child: ContractShape } = JSON.parse('{}')
+		Object.defineProperty(pollutedSource, 'child', {
+			value: Object.freeze(Object.create({ type: 'string' })),
+		})
+
+		const items = Proxy.revocable<ContractShape>(JSON.parse('{"type":"string"}'), {})
+		const properties = Proxy.revocable<Record<string, ContractShape>>({}, {})
+		const additional = Proxy.revocable<ContractShape>(JSON.parse('{"type":"string"}'), {})
+		const variants = Proxy.revocable<ContractShape[]>([stringShape()], {})
+		const values = Proxy.revocable<(string | number | boolean)[]>(['ok'], {})
+		const optional = Proxy.revocable<ContractShape>(JSON.parse('{"type":"string"}'), {})
+		const nullable = Proxy.revocable<ContractShape>(JSON.parse('{"type":"string"}'), {})
+		const schema = Proxy.revocable<JSONSchema>({}, {})
+		items.revoke()
+		properties.revoke()
+		additional.revoke()
+		variants.revoke()
+		values.revoke()
+		optional.revoke()
+		nullable.revoke()
+		schema.revoke()
+
+		const revokedShapes: ContractShape[] = [
+			Object.freeze({ type: 'array', items: items.proxy }),
+			Object.freeze({ type: 'object', properties: properties.proxy }),
+			Object.freeze({
+				type: 'object',
+				properties: Object.freeze({}),
+				additionalProperties: additional.proxy,
+			}),
+			Object.freeze({ type: 'union', variants: variants.proxy }),
+			Object.freeze({ type: 'literal', values: values.proxy }),
+			Object.freeze({ type: 'optional', inner: optional.proxy }),
+			Object.freeze({ type: 'nullable', inner: nullable.proxy }),
+			Object.freeze({ type: 'raw', schema: schema.proxy }),
+		]
+		const nested = objectShape({
+			outer: arrayShape(objectShape({ inner: revokedShapes[0] ?? stringShape() })),
+		})
+		const cases = [
+			secondRead,
+			hostilePattern,
+			propertiesShape,
+			arrayShape(pollutedSource.child),
+			nested,
+			...revokedShapes,
+		]
+
+		for (const shape of cases) {
+			for (const error of [
+				captureContractError(() => validateShapeDepth(shape)),
+				captureContractError(() => validateShape(shape)),
+				captureContractError(() => compileSchema(shape)),
+				captureContractError(() => compileGuard(shape)),
+				captureContractError(() => compileParser(shape)),
+				captureContractError(() => compileGenerator(shape, () => 0)),
+				captureContractError(() => compileReporter(shape, undefined)),
+				captureContractError(() => compileAuditor(shape, undefined)),
+				captureContractError(() => createContract(shape)),
+			]) {
+				expect(error.code).toBe('structure')
+				expect(error).not.toBeInstanceOf(TypeError)
+				expect(error).not.toBeInstanceOf(RangeError)
+			}
+		}
+	})
+
+	it('rejects a structural array whose reported length is not finite', () => {
+		const shape: ContractShape = JSON.parse('{"type":"union","variants":[]}')
+		const variants = new Proxy([], {
+			get(target, key, receiver) {
+				return key === 'length' ? Number.POSITIVE_INFINITY : Reflect.get(target, key, receiver)
+			},
+		})
+		Object.defineProperty(shape, 'variants', { value: variants })
+
+		const error = captureContractError(() => validateShapeDepth(shape))
+		expect(error.code).toBe('structure')
+		expect(error.context?.path).toEqual(['variants'])
+	})
+
+	it('reports structural corruption before cycles regardless of property insertion order', () => {
+		const codes: string[] = []
+		for (const order of [
+			['cycle', 'bad'],
+			['bad', 'cycle'],
+		]) {
+			const cycle: ContractShape = JSON.parse('{"type":"array","items":{}}')
+			Object.defineProperty(cycle, 'items', { value: cycle })
+			const properties: Record<string, ContractShape> = Object.create(null)
+			const missing: { readonly child: ContractShape } = JSON.parse('{}')
+			for (const key of order) properties[key] = key === 'cycle' ? cycle : missing.child
+			const error = captureContractError(() => validateShapeDepth(objectShape(properties)))
+			codes.push(error.code)
+		}
+
+		expect(codes).toEqual(['structure', 'structure'])
+	})
+
+	it('rejects every non-shape child with a structure ContractError at every entry point', () => {
 		const source: { readonly child: ContractShape } = JSON.parse('{}')
 		const child = source.child
 		const cases: readonly {
@@ -297,7 +626,7 @@ describe('malformed shape children', () => {
 				reporter,
 				auditor,
 			]) {
-				expect(error.code).toBe('placement')
+				expect(error.code).toBe('structure')
 				expect(error.context?.path).toEqual(entry.path)
 				expect(error).not.toBeInstanceOf(TypeError)
 			}
@@ -328,23 +657,21 @@ describe('malformed shape children', () => {
 		)
 		const depth = captureContractError(() => compileReporter(deep, undefined))
 
-		expect(nested.code).toBe('placement')
+		expect(nested.code).toBe('structure')
 		expect(nested.context?.path).toEqual(['properties', 'values', 'items'])
-		expect(additional.code).toBe('placement')
+		expect(additional.code).toBe('structure')
 		expect(additional.context?.path).toEqual(['additionalProperties'])
-		expect(discriminant.code).toBe('placement')
+		expect(discriminant.code).toBe('structure')
 		expect(discriminant.context?.path).toEqual(['properties', 'value'])
-		expect(properties.code).toBe('placement')
+		expect(properties.code).toBe('structure')
 		expect(properties.context?.path).toEqual(['properties', 'value', 'properties'])
-		expect(variants.code).toBe('placement')
+		expect(variants.code).toBe('structure')
 		expect(variants.context?.path).toEqual(['properties', 'value', 'variants'])
-		expect(depth.code).toBe('placement')
+		expect(depth.code).toBe('structure')
 		expect(depth.context?.path).toEqual([...Array.from({ length: 64 }, () => 'items'), 'inner'])
-		const undefinedAdditional = recordShape(missing)
-		expect(compileGuard(undefinedAdditional)({ k: 'present' })).toBe(false)
-		expect(compileAuditor(undefinedAdditional, { k: 'present' })).toEqual([
-			{ reason: 'extra', path: ['k'] },
-		])
+		const undefinedAdditional = captureContractError(() => recordShape(missing))
+		expect(undefinedAdditional.code).toBe('structure')
+		expect(undefinedAdditional.context?.path).toEqual(['additionalProperties'])
 		expect(() => validateShape(objectShape({}))).not.toThrow()
 	})
 })
