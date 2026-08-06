@@ -80,31 +80,31 @@ comparable; a round that invents its own cannot be read against the last one.
 
 1. **Numbered verdicts**, one per claim, in the brief's order. Exactly one of four values:
 
-    | value           | meaning                                                                                | evidence                                                                                                                                                        |
-    | --------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | `CONFIRMED`     | attacked and it held                                                                   | as the Falsification law requires                                                                                                                               |
-    | `BROKEN`        | falsified                                                                              | as the Falsification law requires — note it says \*input, **state, or interleaving\***, so a concurrency claim is falsified by an interleaving, not by an input |
-    | `UNRESOLVED`    | cannot be decided from the evidence available                                          | what would settle it                                                                                                                                            |
-    | `NOT-EVIDENCED` | a claim about a rendered or externally driven surface the supplied capture cannot show | which capture is missing                                                                                                                                        |
+   | value           | meaning                                                                                | evidence                                                                                                                                                        |
+   | --------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | `CONFIRMED`     | attacked and it held                                                                   | as the Falsification law requires                                                                                                                               |
+   | `BROKEN`        | falsified                                                                              | as the Falsification law requires — note it says \*input, **state, or interleaving\***, so a concurrency claim is falsified by an interleaving, not by an input |
+   | `UNRESOLVED`    | cannot be decided from the evidence available                                          | what would settle it                                                                                                                                            |
+   | `NOT-EVIDENCED` | a claim about a rendered or externally driven surface the supplied capture cannot show | which capture is missing                                                                                                                                        |
 
-    The first two rows defer; only the last two are this skill's, because the law does not name them.
-    `BROKEN` and `UNRESOLVED` are **separate**: a claim nobody could decide has not been falsified,
-    and it cannot supply the fields falsification requires. `NOT-EVIDENCED` is the token the
-    `analyst` and `reviewer` charters already require; it is kept, not re-invented.
+   The first two rows defer; only the last two are this skill's, because the law does not name them.
+   `BROKEN` and `UNRESOLVED` are **separate**: a claim nobody could decide has not been falsified,
+   and it cannot supply the fields falsification requires. `NOT-EVIDENCED` is the token the
+   `analyst` and `reviewer` charters already require; it is kept, not re-invented.
 
 2. **Findings fitting no claim**, if any, each substantiated to the same standard as `BROKEN`.
 
 3. **One terminal line**, and only one:
 
-    ```text
-    VERDICT: PASS — <m> of <m> confirmed, no findings outside the claims
-    VERDICT: FAIL — <n> broken, <u> unresolved, <e> not-evidenced, <x> findings outside the claims
-    ```
+   ```text
+   VERDICT: PASS — <m> of <m> confirmed, no findings outside the claims
+   VERDICT: FAIL — <n> broken, <u> unresolved, <e> not-evidenced, <x> findings outside the claims
+   ```
 
-    **`PASS` requires all four to be true**: every claim `CONFIRMED`, nothing `UNRESOLVED`, nothing
-    `NOT-EVIDENCED`, and no substantiated finding outside the claims. A single substantiated finding
-    forces `FAIL` no matter how the numbered claims landed — otherwise a round can report a real
-    defect and still emit the word that authorises the release.
+   **`PASS` requires all four to be true**: every claim `CONFIRMED`, nothing `UNRESOLVED`, nothing
+   `NOT-EVIDENCED`, and no substantiated finding outside the claims. A single substantiated finding
+   forces `FAIL` no matter how the numbered claims landed — otherwise a round can report a real
+   defect and still emit the word that authorises the release.
 
 No process diary. No summary of what was read.
 
