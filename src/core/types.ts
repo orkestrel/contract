@@ -234,8 +234,8 @@ export type JSONSchemaType =
 	| 'string'
 
 /**
- * A JSON Schema fragment — the subset of keywords the contract compiler emits
- * and {@link RawShape} embeds.
+ * A JSON Schema fragment — the supported keyword vocabulary the contract
+ * compiler emits and {@link RawShape} validates before embedding.
  *
  * @remarks
  * Intentionally lean (not the full ~50-keyword vocabulary): it carries only the
@@ -444,10 +444,13 @@ export interface JSONShape {
 }
 
 /**
- * A raw JSON Schema passthrough — embeds a schema fragment directly.
+ * A validated raw JSON Schema passthrough — embeds a supported schema fragment directly.
  *
  * @remarks
- * For values the shape DSL can't express. The compiled guard accepts every
+ * For values the shape DSL can't express. The fragment is checked recursively
+ * against the lean {@link JSONSchema} vocabulary before it is accepted or
+ * emitted; unsupported keywords and malformed keyword values throw a coded
+ * {@link ContractError}. The compiled guard accepts every
  * top-level value except `undefined`, which is reserved as the parser failure
  * sentinel. Wrap the shape with {@link OptionalShape} to admit absence. Defined
  * values pass through unchanged, and the schema is emitted structurally

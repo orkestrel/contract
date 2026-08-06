@@ -467,7 +467,6 @@ export function cloneShape(shape: ContractShape): ContractShape {
 				})
 				throw diagnosis
 			}
-
 			let declaredFields: readonly string[]
 			switch (source.type) {
 				case 'string':
@@ -641,6 +640,20 @@ export function cloneShape(shape: ContractShape): ContractShape {
 							},
 						})
 						throw diagnosis
+					}
+					if (source.integer === true) {
+						const lo = Math.ceil(source.min ?? Number.NEGATIVE_INFINITY)
+						const hi = Math.floor(source.max ?? Number.POSITIVE_INFINITY)
+						if (lo > hi) {
+							diagnosis = new ContractError(
+								'cloneShape: an integer number shape has an empty integer range',
+								{
+									code: 'range',
+									context: { path, shape: 'integer' },
+								},
+							)
+							throw diagnosis
+						}
 					}
 					clone = {
 						type: 'number',
@@ -825,6 +838,16 @@ export function cloneShape(shape: ContractShape): ContractShape {
 						})
 						throw diagnosis
 					}
+					if (items.type === 'optional') {
+						diagnosis = new ContractError(
+							'cloneShape: an optional shape may only appear as a direct object-property value',
+							{
+								code: 'placement',
+								context: { path: [...path, 'items'], shape: 'optional' },
+							},
+						)
+						throw diagnosis
+					}
 					Reflect.set(clone, 'items', items)
 					break
 				}
@@ -860,6 +883,19 @@ export function cloneShape(shape: ContractShape): ContractShape {
 							})
 							throw diagnosis
 						}
+						if (clonedExtra.type === 'optional') {
+							diagnosis = new ContractError(
+								'cloneShape: an optional shape may only appear as a direct object-property value',
+								{
+									code: 'placement',
+									context: {
+										path: [...path, 'additionalProperties'],
+										shape: 'optional',
+									},
+								},
+							)
+							throw diagnosis
+						}
 						Reflect.set(clone, 'additionalProperties', clonedExtra)
 					}
 					break
@@ -883,6 +919,19 @@ export function cloneShape(shape: ContractShape): ContractShape {
 							})
 							throw diagnosis
 						}
+						if (clonedVariant.type === 'optional') {
+							diagnosis = new ContractError(
+								'cloneShape: an optional shape may only appear as a direct object-property value',
+								{
+									code: 'placement',
+									context: {
+										path: [...path, 'variants', String(index)],
+										shape: 'optional',
+									},
+								},
+							)
+							throw diagnosis
+						}
 						variants.push(clonedVariant)
 					}
 					Reflect.set(clone, 'variants', Object.freeze(variants))
@@ -898,11 +947,31 @@ export function cloneShape(shape: ContractShape): ContractShape {
 						})
 						throw diagnosis
 					}
+					if (inner.type === 'optional') {
+						diagnosis = new ContractError(
+							'cloneShape: an optional shape may only appear as a direct object-property value',
+							{
+								code: 'placement',
+								context: { path: [...path, 'inner'], shape: 'optional' },
+							},
+						)
+						throw diagnosis
+					}
 					Reflect.set(clone, 'inner', inner)
 					break
 				}
 				default:
 					break
+			}
+			if (source === shape && source.type === 'optional') {
+				diagnosis = new ContractError(
+					'cloneShape: an optional shape may only appear as a direct object-property value',
+					{
+						code: 'placement',
+						context: { path, shape: 'optional' },
+					},
+				)
+				throw diagnosis
 			}
 
 			Object.freeze(clone)

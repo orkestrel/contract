@@ -55,6 +55,63 @@ import {
 } from '../../setup.js'
 
 describe('shape builders', () => {
+	it('rejects the audit malformed-argument corpus with coded errors', () => {
+		const errors = [
+			captureContractError(() => Reflect.apply(stringShape, undefined, [null])),
+			captureContractError(() => Reflect.apply(stringShape, undefined, [{ description: 5 }])),
+			captureContractError(() => Reflect.apply(stringShape, undefined, [{ min: '1' }])),
+			captureContractError(() => Reflect.apply(stringShape, undefined, [{ pattern: 'x' }])),
+			captureContractError(() => Reflect.apply(numberShape, undefined, [null])),
+			captureContractError(() => Reflect.apply(numberShape, undefined, [{ description: 5 }])),
+			captureContractError(() => Reflect.apply(numberShape, undefined, [{ min: '1' }])),
+			captureContractError(() => Reflect.apply(numberShape, undefined, [{ integer: 'yes' }])),
+			captureContractError(() => Reflect.apply(integerShape, undefined, [{ description: 5 }])),
+			captureContractError(() => Reflect.apply(integerShape, undefined, [{ min: '1' }])),
+			captureContractError(() => Reflect.apply(booleanShape, undefined, [null])),
+			captureContractError(() => Reflect.apply(booleanShape, undefined, [{ description: 5 }])),
+			captureContractError(() => Reflect.apply(nullShape, undefined, [null])),
+			captureContractError(() => Reflect.apply(nullShape, undefined, [{ description: 5 }])),
+			captureContractError(() => Reflect.apply(literalShape, undefined, [undefined])),
+			captureContractError(() => Reflect.apply(literalShape, undefined, [{ 0: 'x', length: 1 }])),
+			captureContractError(() => Reflect.apply(literalShape, undefined, [[null]])),
+			captureContractError(() =>
+				Reflect.apply(literalShape, undefined, [['x'], { description: 5 }]),
+			),
+			captureContractError(() => Reflect.apply(arrayShape, undefined, [null])),
+			captureContractError(() =>
+				Reflect.apply(arrayShape, undefined, [stringShape(), { description: 5 }]),
+			),
+			captureContractError(() =>
+				Reflect.apply(arrayShape, undefined, [stringShape(), { min: '1' }]),
+			),
+			captureContractError(() => Reflect.apply(objectShape, undefined, [null])),
+			captureContractError(() => Reflect.apply(objectShape, undefined, [[]])),
+			captureContractError(() =>
+				Reflect.apply(objectShape, undefined, [{}, { additionalProperties: 1 }]),
+			),
+			captureContractError(() => Reflect.apply(objectShape, undefined, [{}, { description: 5 }])),
+			captureContractError(() => Reflect.apply(recordShape, undefined, [undefined])),
+			captureContractError(() => Reflect.apply(recordShape, undefined, [null])),
+			captureContractError(() =>
+				Reflect.apply(recordShape, undefined, [stringShape(), { description: 5 }]),
+			),
+			captureContractError(() => Reflect.apply(unionShape, undefined, [null])),
+			captureContractError(() => Reflect.apply(unionShape, undefined, [])),
+			captureContractError(() => Reflect.apply(oneOfShape, undefined, [null])),
+			captureContractError(() => Reflect.apply(oneOfShape, undefined, [])),
+			captureContractError(() => Reflect.apply(optionalShape, undefined, [null])),
+			captureContractError(() => Reflect.apply(nullableShape, undefined, [null])),
+			captureContractError(() => Reflect.apply(jsonShape, undefined, [null])),
+			captureContractError(() => Reflect.apply(jsonShape, undefined, [{ description: 5 }])),
+			captureContractError(() => Reflect.apply(rawShape, undefined, [[]])),
+			captureContractError(() => Reflect.apply(rawShape, undefined, [null])),
+			captureContractError(() => Reflect.apply(rawShape, undefined, [{ type: 'bogus' }])),
+		]
+
+		expect(errors).toHaveLength(39)
+		expect(errors.every((error) => typeof error.code === 'string')).toBe(true)
+	})
+
 	it('rejects invalid string, array, and number bounds plus stateful patterns at construction', () => {
 		expect(() => stringShape({ min: -1 })).toThrowError(ContractError)
 		expect(() => stringShape({ max: 1.5 })).toThrowError(ContractError)

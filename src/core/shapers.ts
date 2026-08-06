@@ -24,6 +24,7 @@ import type {
 	UnionShape,
 } from './types.js'
 import { cloneSchema, cloneShape } from './cloners.js'
+import { validateShapeDepth } from './compilers.js'
 import { INFER_BREADTH_LIMIT, INFER_DEPTH_LIMIT } from './constants.js'
 import { ContractError } from './errors.js'
 import { attempt } from './helpers.js'
@@ -67,6 +68,13 @@ import {
  * ```
  */
 export function stringShape(options?: StringShapeOptions): StringShape {
+	const input: unknown = options
+	if (input !== undefined && !isRecord(input)) {
+		throw new ContractError('stringShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'string' },
+		})
+	}
 	const pattern = options?.pattern
 	if (options?.min !== undefined && (!Number.isSafeInteger(options.min) || options.min < 0)) {
 		throw new ContractError('stringShape: min must be a non-negative safe integer', {
@@ -103,13 +111,15 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 			},
 		)
 	}
-	return cloneShape({
+	const shape: StringShape = {
 		type: 'string',
 		...(options?.min === undefined ? {} : { min: options.min }),
 		...(options?.max === undefined ? {} : { max: options.max }),
 		...(pattern === undefined ? {} : { pattern }),
 		...(options?.description === undefined ? {} : { description: options.description }),
-	})
+	}
+	validateShapeDepth(shape)
+	return cloneShape(shape)
 }
 
 /**
@@ -125,6 +135,13 @@ export function stringShape(options?: StringShapeOptions): StringShape {
  * ```
  */
 export function numberShape(options?: NumberShapeOptions): NumberShape {
+	const input: unknown = options
+	if (input !== undefined && !isRecord(input)) {
+		throw new ContractError('numberShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'number' },
+		})
+	}
 	const shape = options?.integer === true ? 'integer' : 'number'
 	if (options?.min !== undefined && !Number.isFinite(options.min)) {
 		throw new ContractError('numberShape: min must be finite', {
@@ -138,13 +155,15 @@ export function numberShape(options?: NumberShapeOptions): NumberShape {
 			context: { shape, limit: 'finite number', received: String(options.max) },
 		})
 	}
-	return Object.freeze({
+	const result: NumberShape = {
 		type: 'number',
 		...(options?.min === undefined ? {} : { min: options.min }),
 		...(options?.max === undefined ? {} : { max: options.max }),
 		...(options?.integer === undefined ? {} : { integer: options.integer }),
 		...(options?.description === undefined ? {} : { description: options.description }),
-	})
+	}
+	validateShapeDepth(result)
+	return Object.freeze(result)
 }
 
 /**
@@ -159,6 +178,13 @@ export function numberShape(options?: NumberShapeOptions): NumberShape {
  * @throws {ContractError} When a present bound is not finite
  */
 export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): NumberShape {
+	const input: unknown = options
+	if (input !== undefined && !isRecord(input)) {
+		throw new ContractError('integerShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'integer' },
+		})
+	}
 	return numberShape({ ...options, integer: true })
 }
 
@@ -174,10 +200,19 @@ export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): Num
  * ```
  */
 export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
-	return Object.freeze({
+	const input: unknown = options
+	if (input !== undefined && !isRecord(input)) {
+		throw new ContractError('booleanShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'boolean' },
+		})
+	}
+	const shape: BooleanShape = {
 		type: 'boolean',
 		...(options?.description === undefined ? {} : { description: options.description }),
-	})
+	}
+	validateShapeDepth(shape)
+	return Object.freeze(shape)
 }
 
 /**
@@ -192,10 +227,19 @@ export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
  * ```
  */
 export function nullShape(options?: NullShapeOptions): NullShape {
-	return Object.freeze({
+	const input: unknown = options
+	if (input !== undefined && !isRecord(input)) {
+		throw new ContractError('nullShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'null' },
+		})
+	}
+	const shape: NullShape = {
 		type: 'null',
 		...(options?.description === undefined ? {} : { description: options.description }),
-	})
+	}
+	validateShapeDepth(shape)
+	return Object.freeze(shape)
 }
 
 /**
@@ -221,6 +265,25 @@ export function literalShape(
 	values: readonly (string | number | boolean)[],
 	options?: LiteralShapeOptions,
 ): LiteralShape {
+	const input: unknown = values
+	if (!Array.isArray(input)) {
+		throw new ContractError('literalShape: values must be an array', {
+			code: 'structure',
+			context: { path: ['values'], shape: 'literal' },
+		})
+	}
+	const optionInput: unknown = options
+	if (optionInput !== undefined && !isRecord(optionInput)) {
+		throw new ContractError('literalShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'literal' },
+		})
+	}
+	validateShapeDepth({
+		type: 'literal',
+		values,
+		...(options?.description === undefined ? {} : { description: options.description }),
+	})
 	const snapshot = Object.freeze([...values])
 	return Object.freeze({
 		type: 'literal',
@@ -248,6 +311,13 @@ export function arrayShape<S extends ContractShape>(
 	items: S,
 	options?: ArrayShapeOptions,
 ): ArrayShape<S> {
+	const input: unknown = options
+	if (input !== undefined && !isRecord(input)) {
+		throw new ContractError('arrayShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'array' },
+		})
+	}
 	if (options?.min !== undefined && (!Number.isSafeInteger(options.min) || options.min < 0)) {
 		throw new ContractError('arrayShape: min must be a non-negative safe integer', {
 			code: 'bound',
@@ -268,13 +338,15 @@ export function arrayShape<S extends ContractShape>(
 			},
 		})
 	}
-	return Object.freeze({
+	const shape: ArrayShape<S> = {
 		type: 'array',
 		items,
 		...(options?.min === undefined ? {} : { min: options.min }),
 		...(options?.max === undefined ? {} : { max: options.max }),
 		...(options?.description === undefined ? {} : { description: options.description }),
-	})
+	}
+	validateShapeDepth(shape)
+	return Object.freeze(shape)
 }
 
 /**
@@ -302,6 +374,28 @@ export function objectShape<
 	P extends Readonly<Record<string, ContractShape>>,
 	const A extends boolean | ContractShape = false,
 >(properties: P, options?: ObjectShapeOptions<A>): ObjectShape<P, A> {
+	const input: unknown = properties
+	if (!isRecord(input)) {
+		throw new ContractError('objectShape: properties must be a plain record', {
+			code: 'structure',
+			context: { path: ['properties'], shape: 'object' },
+		})
+	}
+	const optionInput: unknown = options
+	if (optionInput !== undefined && !isRecord(optionInput)) {
+		throw new ContractError('objectShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'object' },
+		})
+	}
+	validateShapeDepth({
+		type: 'object',
+		properties,
+		...(options?.additionalProperties === undefined
+			? {}
+			: { additionalProperties: options.additionalProperties }),
+		...(options?.description === undefined ? {} : { description: options.description }),
+	})
 	const snapshot: { [K in keyof P]: P[K] } = Object.create(null)
 	for (const key in properties) {
 		if (Object.hasOwn(properties, key)) snapshot[key] = properties[key]
@@ -337,18 +431,27 @@ export function recordShape<S extends ContractShape>(
 	values: S,
 	options?: RecordShapeOptions,
 ): ObjectShape<Record<never, never>, S> {
-	if (values === undefined) {
+	if (values === undefined || values === null) {
 		throw new ContractError('recordShape: values must be a shape', {
 			code: 'structure',
 			context: { path: ['additionalProperties'], shape: 'object' },
 		})
 	}
-	return Object.freeze({
+	const input: unknown = options
+	if (input !== undefined && !isRecord(input)) {
+		throw new ContractError('recordShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'object' },
+		})
+	}
+	const shape: ObjectShape<Record<never, never>, S> = {
 		type: 'object',
 		properties: Object.freeze({}),
 		additionalProperties: values,
 		...(options?.description === undefined ? {} : { description: options.description }),
-	})
+	}
+	validateShapeDepth(shape)
+	return Object.freeze(shape)
 }
 
 // === Composition
@@ -368,6 +471,8 @@ export function recordShape<S extends ContractShape>(
 export function unionShape<V extends readonly ContractShape[]>(
 	...variants: V
 ): UnionShape<Readonly<V>> {
+	const shape: UnionShape<V> = { type: 'union', variants }
+	validateShapeDepth(shape)
 	return Object.freeze({ type: 'union', variants: Object.freeze(variants) })
 }
 
@@ -406,11 +511,13 @@ export function unionShape<V extends readonly ContractShape[]>(
 export function oneOfShape<V extends readonly ContractShape[]>(
 	...variants: V
 ): UnionShape<Readonly<V>> {
-	return Object.freeze({
+	const shape: UnionShape<V> = {
 		type: 'union',
-		variants: Object.freeze(variants),
+		variants,
 		mode: 'oneOf',
-	})
+	}
+	validateShapeDepth(shape)
+	return Object.freeze({ ...shape, variants: Object.freeze(variants) })
 }
 
 /**
@@ -424,7 +531,9 @@ export function oneOfShape<V extends readonly ContractShape[]>(
  * @returns An optional shape
  */
 export function optionalShape<S extends ContractShape>(inner: S): OptionalShape<S> {
-	return Object.freeze({ type: 'optional', inner })
+	const shape: OptionalShape<S> = { type: 'optional', inner }
+	validateShapeDepth({ type: 'object', properties: { value: shape } })
+	return Object.freeze(shape)
 }
 
 /**
@@ -440,7 +549,9 @@ export function optionalShape<S extends ContractShape>(inner: S): OptionalShape<
  * ```
  */
 export function nullableShape<S extends ContractShape>(inner: S): NullableShape<S> {
-	return Object.freeze({ type: 'nullable', inner })
+	const shape: NullableShape<S> = { type: 'nullable', inner }
+	validateShapeDepth(shape)
+	return Object.freeze(shape)
 }
 
 // === Escape hatch
@@ -465,17 +576,29 @@ export function nullableShape<S extends ContractShape>(inner: S): NullableShape<
  * ```
  */
 export function jsonShape(options?: JSONShapeOptions): JSONShape {
-	return Object.freeze({
+	const input: unknown = options
+	if (input !== undefined && !isRecord(input)) {
+		throw new ContractError('jsonShape: options must be a plain record', {
+			code: 'structure',
+			context: { shape: 'json' },
+		})
+	}
+	const shape: JSONShape = {
 		type: 'json',
 		...(options?.description === undefined ? {} : { description: options.description }),
-	})
+	}
+	validateShapeDepth(shape)
+	return Object.freeze(shape)
 }
 
 /**
- * Build a {@link RawShape} from a JSON Schema fragment.
+ * Build a {@link RawShape} from a supported JSON Schema fragment.
  *
  * @remarks
- * For values the shape DSL can't express. The compiled guard accepts every
+ * For values the shape DSL can't express. The fragment is recursively checked
+ * against the lean {@link JSONSchema} vocabulary before ownership is taken;
+ * malformed or unsupported keywords throw a coded {@link ContractError}. The
+ * compiled guard accepts every
  * DEFINED value — `undefined` alone fails, because it is the parser's failure
  * sentinel; wrap the shape in {@link optionalShape} to admit absence. The
  * parser passes a defined value through unchanged, and the fragment is
@@ -497,6 +620,7 @@ export function jsonShape(options?: JSONShapeOptions): JSONShape {
  * ```
  */
 export function rawShape(schema: JSONSchema): RawShape {
+	validateShapeDepth({ type: 'raw', schema })
 	return Object.freeze({ type: 'raw', schema: cloneSchema(schema) })
 }
 
@@ -682,7 +806,9 @@ export function buildObjectShape(
 			: isRecord(extra)
 				? schemaNodeToShape(extra, depth - 1, visited, memo)
 				: true
-	return objectShape(properties, {
+	return Object.freeze({
+		type: 'object',
+		properties: Object.freeze(properties),
 		additionalProperties,
 		...(description === undefined ? {} : { description }),
 	})
@@ -909,8 +1035,9 @@ export function schemaNodeToShape(
 
 /**
  * Convert a runtime `JSONSchema` value into a validating {@link ContractShape}
- * — the inverse of {@link compileSchema}, and the validating sibling of
- * {@link rawShape} (which embeds a schema fragment WITHOUT validating it).
+ * — the inverse of {@link compileSchema}. Unlike direct {@link rawShape}
+ * construction, which rejects malformed supported-vocabulary keywords, this
+ * conversion is total and widens an inexpressible input to a valid raw `{}`.
  *
  * @remarks
  * Total: NEVER throws, for any input — a malformed, cyclic, deeply-nested, or

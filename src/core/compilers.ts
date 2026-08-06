@@ -70,11 +70,12 @@ import { parseBoolean, parseInteger, parseNumber, parseRecord, parseString } fro
  * every scalar field must hold its declared runtime domain before a compiler
  * can use it; and a missing child, corrupt container, inherited discriminant,
  * or unrecognized node reports `structure`. This is a structural-safety
- * prerequisite rather than the full well-formedness pass in
+ * prerequisite and shared well-formedness pass used by
  * {@link validateShape}: it enforces every bound domain and range used by the
- * artifacts, including non-empty literal/union vocabularies and finite literal
- * numbers, but does not diagnose integer-range satisfiability or optional-shape
- * policy. Active ancestors are tracked so shared children remain legal. Every standalone
+ * artifacts, including non-empty literal/union vocabularies, finite literal
+ * numbers, integer-range satisfiability, optional-shape placement, and the
+ * recursively supported raw-schema vocabulary. Active ancestors are tracked
+ * so shared children remain legal. Every standalone
  * compiler calls this gate before its recursive branch begins. Failures have
  * deterministic precedence independent of traversal order: depth, then
  * structure, then cycle, then field and vocabulary policy.
@@ -89,7 +90,7 @@ export function validateShapeDepth(shape: ContractShape): void {
 	let structurePath: readonly string[] | undefined
 	let structureMessage: string | undefined
 	let cyclePath: readonly string[] | undefined
-	let domainCode: 'bound' | 'range' | 'empty' | 'literal' | undefined
+	let domainCode: 'bound' | 'range' | 'empty' | 'literal' | 'placement' | undefined
 	let domainMessage: string | undefined
 	let domainPath: readonly string[] | undefined
 	let domainShape: string | undefined
@@ -100,11 +101,12 @@ export function validateShapeDepth(shape: ContractShape): void {
 				readonly operation: 'enter'
 				readonly shape: ContractShape | undefined
 				readonly depth: number
+				readonly optional: boolean
 				readonly first?: string
 				readonly second?: string
 		  }
 		| { readonly operation: 'exit'; readonly shape: ContractShape; readonly segments: number }
-	)[] = [{ operation: 'enter', shape, depth: 0 }]
+	)[] = [{ operation: 'enter', shape, depth: 0, optional: false }]
 
 	while (stack.length > 0) {
 		const frame = stack.pop()
@@ -147,6 +149,7 @@ export function validateShapeDepth(shape: ContractShape): void {
 
 		const children: {
 			readonly shape: ContractShape | undefined
+			readonly optional: boolean
 			readonly first: string
 			readonly second?: string
 		}[] = []
@@ -354,6 +357,16 @@ export function validateShapeDepth(shape: ContractShape): void {
 					domainPath = [...path]
 					domainShape = current.integer === true ? 'integer' : 'number'
 				}
+				if (domainCode === undefined && current.integer === true) {
+					const lo = Math.ceil(current.min ?? Number.NEGATIVE_INFINITY)
+					const hi = Math.floor(current.max ?? Number.POSITIVE_INFINITY)
+					if (lo > hi) {
+						domainCode = 'range'
+						domainMessage = 'validateShapeDepth: an integer number shape has an empty integer range'
+						domainPath = [...path]
+						domainShape = 'integer'
+					}
+				}
 			}
 			if (category === 'array' && current.min !== undefined && typeof current.min !== 'number') {
 				nodeFirst = 'min'
@@ -413,15 +426,220 @@ export function validateShapeDepth(shape: ContractShape): void {
 				nodeMessage = 'validateShapeDepth: union mode must be anyOf or oneOf'
 				return false
 			}
-			if (category === 'raw' && !isRecord(current.schema)) {
+			if (category === 'optional' && !frame.optional && domainCode === undefined) {
+				domainCode = 'placement'
+				domainMessage =
+					'validateShapeDepth: an optional shape may only appear as a direct object-property value'
+				domainPath = [...path]
+				domainShape = 'optional'
+			}
+			if (category === 'raw') {
 				nodeFirst = 'schema'
-				nodeMessage = 'validateShapeDepth: raw schema must be a plain record'
-				return false
+				if (!isRecord(current.schema)) {
+					nodeMessage = 'validateShapeDepth: raw schema must be a plain record'
+					return false
+				}
+				const schemaActive = new WeakSet<object>()
+				const schemaStack: (
+					| {
+							readonly operation: 'enter'
+							readonly schema: unknown
+							readonly depth: number
+					  }
+					| { readonly operation: 'exit'; readonly schema: object }
+				)[] = [{ operation: 'enter', schema: current.schema, depth: frame.depth }]
+
+				while (schemaStack.length > 0) {
+					const schemaFrame = schemaStack.pop()
+					if (schemaFrame === undefined) continue
+					if (schemaFrame.operation === 'exit') {
+						schemaActive.delete(schemaFrame.schema)
+						continue
+					}
+					if (schemaFrame.depth > COMPILE_DEPTH_LIMIT) {
+						nodeMessage = 'validateShapeDepth: raw schema exceeds the compilation depth limit'
+						return false
+					}
+					const schema = schemaFrame.schema
+					if (!isRecord(schema)) {
+						nodeMessage = 'validateShapeDepth: every raw schema child must be a plain record'
+						return false
+					}
+					if (schemaActive.has(schema)) {
+						nodeMessage = 'validateShapeDepth: a raw schema may not contain a cycle'
+						return false
+					}
+					schemaActive.add(schema)
+					schemaStack.push({ operation: 'exit', schema })
+
+					for (const key of Object.keys(schema)) {
+						if (
+							key !== 'type' &&
+							key !== 'description' &&
+							key !== 'enum' &&
+							key !== 'minLength' &&
+							key !== 'maxLength' &&
+							key !== 'pattern' &&
+							key !== 'format' &&
+							key !== 'minimum' &&
+							key !== 'maximum' &&
+							key !== 'minItems' &&
+							key !== 'maxItems' &&
+							key !== 'items' &&
+							key !== 'properties' &&
+							key !== 'required' &&
+							key !== 'additionalProperties' &&
+							key !== 'anyOf' &&
+							key !== 'oneOf'
+						) {
+							nodeMessage = 'validateShapeDepth: raw schema contains an unsupported keyword'
+							return false
+						}
+					}
+
+					const schemaType = schema.type
+					if (
+						schemaType !== undefined &&
+						schemaType !== 'null' &&
+						schemaType !== 'boolean' &&
+						schemaType !== 'object' &&
+						schemaType !== 'array' &&
+						schemaType !== 'number' &&
+						schemaType !== 'integer' &&
+						schemaType !== 'string'
+					) {
+						nodeMessage = 'validateShapeDepth: raw schema type is outside the supported vocabulary'
+						return false
+					}
+					if (schema.description !== undefined && typeof schema.description !== 'string') {
+						nodeMessage = 'validateShapeDepth: raw schema description must be a string'
+						return false
+					}
+					if (schema.format !== undefined && typeof schema.format !== 'string') {
+						nodeMessage = 'validateShapeDepth: raw schema format must be a string'
+						return false
+					}
+					if (schema.pattern !== undefined) {
+						if (typeof schema.pattern !== 'string') {
+							nodeMessage = 'validateShapeDepth: raw schema pattern must be a string'
+							return false
+						}
+						nodeMessage = 'validateShapeDepth: raw schema pattern must be valid'
+						RegExp(schema.pattern)
+					}
+
+					for (const key of ['minLength', 'maxLength', 'minItems', 'maxItems']) {
+						const value = schema[key]
+						if (value !== undefined && (!Number.isSafeInteger(value) || Number(value) < 0)) {
+							nodeMessage =
+								'validateShapeDepth: raw schema length bounds must be non-negative safe integers'
+							return false
+						}
+					}
+					for (const key of ['minimum', 'maximum']) {
+						const value = schema[key]
+						if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value))) {
+							nodeMessage = 'validateShapeDepth: raw schema numeric bounds must be finite numbers'
+							return false
+						}
+					}
+					if (schema.enum !== undefined) {
+						if (!Array.isArray(schema.enum) || schema.enum.length === 0) {
+							nodeMessage = 'validateShapeDepth: raw schema enum must be a non-empty array'
+							return false
+						}
+						const values = new Set<string | number | boolean>()
+						for (let index = 0; index < schema.enum.length; index += 1) {
+							if (!Object.hasOwn(schema.enum, index)) {
+								nodeMessage = 'validateShapeDepth: raw schema enum must be dense'
+								return false
+							}
+							const value = schema.enum[index]
+							if (
+								(typeof value !== 'string' &&
+									typeof value !== 'number' &&
+									typeof value !== 'boolean') ||
+								(typeof value === 'number' && !Number.isFinite(value)) ||
+								values.has(value)
+							) {
+								nodeMessage =
+									'validateShapeDepth: raw schema enum values must be finite unique primitives'
+								return false
+							}
+							values.add(value)
+						}
+					}
+
+					if (schema.required !== undefined) {
+						if (!Array.isArray(schema.required)) {
+							nodeMessage = 'validateShapeDepth: raw schema required must be an array'
+							return false
+						}
+						const required = new Set<string>()
+						for (let index = 0; index < schema.required.length; index += 1) {
+							if (!Object.hasOwn(schema.required, index)) {
+								nodeMessage = 'validateShapeDepth: raw schema required must be dense'
+								return false
+							}
+							const value = schema.required[index]
+							if (typeof value !== 'string' || required.has(value)) {
+								nodeMessage =
+									'validateShapeDepth: raw schema required values must be unique strings'
+								return false
+							}
+							required.add(value)
+						}
+					}
+
+					const nested: unknown[] = []
+					if (schema.items !== undefined) nested.push(schema.items)
+					if (schema.properties !== undefined) {
+						if (!isRecord(schema.properties)) {
+							nodeMessage = 'validateShapeDepth: raw schema properties must be a plain record'
+							return false
+						}
+						for (const key of Object.keys(schema.properties)) {
+							nested.push(schema.properties[key])
+						}
+					}
+					if (
+						schema.additionalProperties !== undefined &&
+						schema.additionalProperties !== true &&
+						schema.additionalProperties !== false
+					) {
+						nested.push(schema.additionalProperties)
+					}
+					for (const key of ['anyOf', 'oneOf']) {
+						const variants = schema[key]
+						if (variants === undefined) continue
+						if (!Array.isArray(variants) || variants.length === 0) {
+							nodeMessage = 'validateShapeDepth: raw schema unions must be non-empty arrays'
+							return false
+						}
+						for (let index = 0; index < variants.length; index += 1) {
+							if (!Object.hasOwn(variants, index)) {
+								nodeMessage = 'validateShapeDepth: raw schema unions must be dense arrays'
+								return false
+							}
+							nested.push(variants[index])
+						}
+					}
+					for (let index = nested.length - 1; index >= 0; index -= 1) {
+						const child = nested[index]
+						if (child === undefined) continue
+						schemaStack.push({
+							operation: 'enter',
+							schema: child,
+							depth: schemaFrame.depth + 1,
+						})
+					}
+				}
+				nodeFirst = undefined
 			}
 
 			switch (category) {
 				case 'array':
-					children.push({ shape: current.items, first: 'items' })
+					children.push({ shape: current.items, first: 'items', optional: false })
 					break
 				case 'object': {
 					nodeFirst = 'properties'
@@ -435,7 +653,12 @@ export function validateShapeDepth(shape: ContractShape): void {
 						nodeSecond = key
 						const childDescriptor = Object.getOwnPropertyDescriptor(properties, key)
 						if (childDescriptor === undefined || !Object.hasOwn(childDescriptor, 'value')) {
-							children.push({ shape: undefined, first: 'properties', second: key })
+							children.push({
+								shape: undefined,
+								first: 'properties',
+								second: key,
+								optional: true,
+							})
 							continue
 						}
 						const child = current.properties[key]
@@ -443,15 +666,29 @@ export function validateShapeDepth(shape: ContractShape): void {
 							!Object.is(current.properties[key], child) ||
 							!Object.is(childDescriptor.value, child)
 						) {
-							children.push({ shape: undefined, first: 'properties', second: key })
+							children.push({
+								shape: undefined,
+								first: 'properties',
+								second: key,
+								optional: true,
+							})
 							continue
 						}
-						children.push({ shape: child, first: 'properties', second: key })
+						children.push({
+							shape: child,
+							first: 'properties',
+							second: key,
+							optional: true,
+						})
 					}
 					nodeSecond = undefined
 					const extra = current.additionalProperties
 					if (extra !== undefined && extra !== true && extra !== false) {
-						children.push({ shape: extra, first: 'additionalProperties' })
+						children.push({
+							shape: extra,
+							first: 'additionalProperties',
+							optional: false,
+						})
 					}
 					break
 				}
@@ -477,7 +714,12 @@ export function validateShapeDepth(shape: ContractShape): void {
 						nodeSecond = key
 						const variantDescriptor = Object.getOwnPropertyDescriptor(current.variants, key)
 						if (variantDescriptor === undefined || !Object.hasOwn(variantDescriptor, 'value')) {
-							children.push({ shape: undefined, first: 'variants', second: key })
+							children.push({
+								shape: undefined,
+								first: 'variants',
+								second: key,
+								optional: false,
+							})
 							continue
 						}
 						const variant = current.variants[index]
@@ -485,10 +727,20 @@ export function validateShapeDepth(shape: ContractShape): void {
 							!Object.is(current.variants[index], variant) ||
 							!Object.is(variantDescriptor.value, variant)
 						) {
-							children.push({ shape: undefined, first: 'variants', second: key })
+							children.push({
+								shape: undefined,
+								first: 'variants',
+								second: key,
+								optional: false,
+							})
 							continue
 						}
-						children.push({ shape: variant, first: 'variants', second: key })
+						children.push({
+							shape: variant,
+							first: 'variants',
+							second: key,
+							optional: false,
+						})
 					}
 					break
 				}
@@ -547,7 +799,7 @@ export function validateShapeDepth(shape: ContractShape): void {
 				}
 				case 'optional':
 				case 'nullable':
-					children.push({ shape: current.inner, first: 'inner' })
+					children.push({ shape: current.inner, first: 'inner', optional: false })
 					break
 				case 'string':
 				case 'number':
@@ -582,6 +834,7 @@ export function validateShapeDepth(shape: ContractShape): void {
 				operation: 'enter',
 				shape: child.shape,
 				depth: frame.depth + 1,
+				optional: child.optional,
 				first: child.first,
 				...(child.second === undefined ? {} : { second: child.second }),
 			})
@@ -626,9 +879,10 @@ export function validateShapeDepth(shape: ContractShape): void {
  * @remarks
  * Fail-fast, per AGENTS §12: a malformed shape is a programmer error, so this
  * throws a coded {@link ContractError} immediately rather than surfacing as a
- * silently-wrong guard, parser, schema, or generator later. It first runs
- * {@link validateShapeDepth}, which rejects corrupt nodes and structural slots
- * before this well-formedness walk begins. The iterative walk tracks
+ * silently-wrong guard, parser, schema, or generator later. It first runs the
+ * complete shared {@link validateShapeDepth} gate, which rejects corrupt nodes,
+ * structural slots, scalar/vocabulary violations, integer-empty ranges, and
+ * misplaced optional nodes before this retained policy recheck begins. The iterative walk tracks
  * active ancestors, so a structural cycle reports its precise path while a
  * shared child reached through separate paths remains legal. Checks:
  *
@@ -638,8 +892,9 @@ export function validateShapeDepth(shape: ContractShape): void {
  *   shape all throw. An object property IS the one legal placement: its value
  *   is unwrapped to `.inner` before recursing, so `.inner` itself is validated
  *   as a normal (non-optional-wrapping) shape.
- * - The structural pass has already required non-empty union/literal
- *   vocabularies, finite literal numbers, valid bound domains and `min <= max`.
+ * - The shared pass has already required non-empty union/literal vocabularies,
+ *   finite literal numbers, valid bound domains, `min <= max`, satisfiable
+ *   integer ranges, legal optional placement, and valid raw-schema vocabulary.
  * - An integer {@link NumberShape} (`integer: true`) needs a non-empty integer
  *   range: `Math.ceil(min ?? -Infinity) <= Math.floor(max ?? Infinity)`.
  * - Shape nesting may not exceed {@link COMPILE_DEPTH_LIMIT}; excessive depth
@@ -884,7 +1139,7 @@ export function compileSchema(shape: ContractShape): JSONSchema {
 			for (const key of Object.keys(owned.properties)) {
 				const child = owned.properties[key]
 				if (child === undefined) continue
-				properties[key] = compileSchema(child)
+				properties[key] = compileSchema(child.type === 'optional' ? child.inner : child)
 				if (child.type !== 'optional') required.push(key)
 			}
 			const extra = owned.additionalProperties
@@ -1406,7 +1661,7 @@ export function compileGenerator(
 				if (child === undefined) continue
 				if (child.type === 'optional' && drawRandom(random, 'object') < 0.3) continue
 				Object.defineProperty(result, key, {
-					value: compileGenerator(child, random),
+					value: compileGenerator(child.type === 'optional' ? child.inner : child, random),
 					enumerable: true,
 					configurable: true,
 					writable: true,
