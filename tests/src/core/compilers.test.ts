@@ -76,7 +76,7 @@ describe('validateShape', () => {
 			readonly shape: ContractShape
 			readonly code: 'range' | 'empty' | 'placement' | 'literal'
 		}[] = [
-			{ shape: stringShape({ min: 5, max: 1 }), code: 'range' },
+			{ shape: { type: 'string', min: 5, max: 1 }, code: 'range' },
 			{ shape: malformedInteger, code: 'range' },
 			{ shape: literalShape([]), code: 'empty' },
 			{ shape: unionShape(), code: 'empty' },
@@ -197,14 +197,14 @@ describe('validateShape', () => {
 	})
 
 	it('throws on a string shape with min greater than max', () => {
-		expect(() => validateShape(stringShape({ min: 5, max: 1 }))).toThrow(
-			'validateShape: a string shape has min greater than max',
+		expect(() => validateShape({ type: 'string', min: 5, max: 1 })).toThrow(
+			'validateShapeDepth: a string shape has min greater than max',
 		)
 	})
 
 	it('throws on a number shape with min greater than max', () => {
 		expect(() => validateShape(numberShape({ min: 5, max: 1 }))).toThrow(
-			'validateShape: a number shape has min greater than max',
+			'validateShapeDepth: a number shape has min greater than max',
 		)
 	})
 
@@ -256,7 +256,7 @@ describe('validateShape', () => {
 
 	it('throws on an array shape with min greater than max', () => {
 		expect(() => validateShape(arrayShape(stringShape(), { min: 5, max: 1 }))).toThrow(
-			'validateShape: an array shape has min greater than max',
+			'validateShapeDepth: an array shape has min greater than max',
 		)
 	})
 
@@ -320,7 +320,7 @@ describe('malformed shape children', () => {
 					: outcome.error.name,
 		)
 
-		expect(errors).toEqual(Array.from({ length: outcomes.length }, () => 'clone'))
+		expect(errors).toEqual(['clone', 'clone', 'clone', 'clone', 'clone', 'clone', 'structure'])
 	})
 
 	it('contains hostile roots across ownership, validation, compilation, and contracts', () => {
@@ -385,7 +385,7 @@ describe('malformed shape children', () => {
 			'clone',
 			'clone',
 			'clone',
-			'clone',
+			'structure',
 		])
 
 		const primitive: ContractShape = JSON.parse('{"type":"string"}')
@@ -820,6 +820,162 @@ describe('malformed shape children', () => {
 		}
 	})
 
+	it('rejects every structural slot before ownership can erase an unfrozen malformed child', () => {
+		const missing: ContractShape = JSON.parse('{"type":"object","properties":{}}')
+		if (missing.type !== 'object') throw new Error('test setup: expected an object shape')
+		Object.defineProperty(missing.properties, 'missing', {
+			value: undefined,
+			enumerable: true,
+		})
+		const cases: readonly {
+			readonly shape: ContractShape
+			readonly path: readonly string[]
+		}[] = [
+			{
+				shape: JSON.parse('{"type":"array","items":42}'),
+				path: ['items'],
+			},
+			{
+				shape: JSON.parse('{"type":"object","properties":{"value":42}}'),
+				path: ['properties', 'value'],
+			},
+			{
+				shape: missing,
+				path: ['properties', 'missing'],
+			},
+			{
+				shape: JSON.parse('{"type":"object","properties":{},"additionalProperties":42}'),
+				path: ['additionalProperties'],
+			},
+			{
+				shape: JSON.parse('{"type":"union","variants":[{"type":"string"},42]}'),
+				path: ['variants', '1'],
+			},
+			{
+				shape: JSON.parse('{"type":"optional","inner":42}'),
+				path: ['inner'],
+			},
+			{
+				shape: JSON.parse('{"type":"nullable","inner":42}'),
+				path: ['inner'],
+			},
+		]
+
+		for (const entry of cases) {
+			const errors = [
+				captureContractError(() => cloneShape(entry.shape)),
+				captureContractError(() => ownShape(entry.shape)),
+				captureContractError(() => validateShapeDepth(entry.shape)),
+				captureContractError(() => validateShape(entry.shape)),
+				captureContractError(() => compileSchema(entry.shape)),
+				captureContractError(() => compileGuard(entry.shape)),
+				captureContractError(() => compileParser(entry.shape)),
+				captureContractError(() => compileGenerator(entry.shape, () => 0)),
+				captureContractError(() => compileReporter(entry.shape, undefined)),
+				captureContractError(() => compileAuditor(entry.shape, undefined)),
+				captureContractError(() => createContract(entry.shape)),
+			]
+
+			for (const error of errors) {
+				expect(error.code).toBe('structure')
+				expect(error.context?.path).toEqual(entry.path)
+			}
+			const frozen = captureContractError(() => ownShape(Object.freeze(entry.shape)))
+			expect(frozen.code).toBe('structure')
+			expect(frozen.context?.path).toEqual(entry.path)
+		}
+	})
+
+	it('rejects every declared bound domain at all eleven shape entry points', () => {
+		const integral = [
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+			Number.NEGATIVE_INFINITY,
+			-1,
+			1.5,
+			Number.MAX_SAFE_INTEGER + 1,
+		]
+		const finite = [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]
+		const cases: { readonly shape: ContractShape; readonly code: 'bound' | 'range' }[] = []
+
+		for (const boundary of ['min', 'max']) {
+			for (const value of integral) {
+				const string: ContractShape = { type: 'string', [boundary]: value }
+				const array: ContractShape = {
+					type: 'array',
+					items: { type: 'string' },
+					[boundary]: value,
+				}
+				cases.push({ shape: string, code: 'bound' }, { shape: array, code: 'bound' })
+			}
+			for (const value of finite) {
+				const number: ContractShape = { type: 'number', [boundary]: value }
+				cases.push({ shape: number, code: 'bound' })
+			}
+		}
+		cases.push(
+			{ shape: { type: 'string', min: 2, max: 1 }, code: 'range' },
+			{
+				shape: { type: 'array', items: { type: 'string' }, min: 2, max: 1 },
+				code: 'range',
+			},
+			{ shape: { type: 'number', min: 2, max: 1 }, code: 'range' },
+		)
+
+		for (const entry of cases) {
+			const errors = [
+				captureContractError(() => cloneShape(entry.shape)),
+				captureContractError(() => ownShape(entry.shape)),
+				captureContractError(() => validateShapeDepth(entry.shape)),
+				captureContractError(() => validateShape(entry.shape)),
+				captureContractError(() => compileSchema(entry.shape)),
+				captureContractError(() => compileGuard(entry.shape)),
+				captureContractError(() => compileParser(entry.shape)),
+				captureContractError(() => compileGenerator(entry.shape, () => 0)),
+				captureContractError(() => compileReporter(entry.shape, undefined)),
+				captureContractError(() => compileAuditor(entry.shape, undefined)),
+				captureContractError(() => createContract(entry.shape)),
+			]
+
+			for (const error of errors) expect(error.code).toBe(entry.code)
+			expect(captureContractError(() => ownShape(Object.freeze(entry.shape))).code).toBe(entry.code)
+		}
+	})
+
+	it('rejects malformed scalar snapshots instead of normalizing them', () => {
+		const cases: readonly {
+			readonly shape: ContractShape
+			readonly path: readonly string[]
+		}[] = [
+			{ shape: JSON.parse('{"type":"string","pattern":"x"}'), path: ['pattern'] },
+			{ shape: JSON.parse('{"type":"raw","schema":[]}'), path: ['schema'] },
+		]
+
+		for (const entry of cases) {
+			const errors = [
+				captureContractError(() => cloneShape(entry.shape)),
+				captureContractError(() => ownShape(entry.shape)),
+				captureContractError(() => validateShapeDepth(entry.shape)),
+				captureContractError(() => validateShape(entry.shape)),
+				captureContractError(() => compileSchema(entry.shape)),
+				captureContractError(() => compileGuard(entry.shape)),
+				captureContractError(() => compileParser(entry.shape)),
+				captureContractError(() => compileGenerator(entry.shape, () => 0)),
+				captureContractError(() => compileReporter(entry.shape, undefined)),
+				captureContractError(() => compileAuditor(entry.shape, undefined)),
+				captureContractError(() => createContract(entry.shape)),
+			]
+
+			for (const error of errors) {
+				expect(error.code).toBe('structure')
+				expect(error.context?.path).toEqual(entry.path)
+			}
+			const frozen = captureContractError(() => ownShape(Object.freeze(entry.shape)))
+			expect(frozen.code).toBe('structure')
+			expect(frozen.context?.path).toEqual(entry.path)
+		}
+	})
+
 	it('rejects malformed children nested under legal parents and additional properties', () => {
 		const source: { readonly child: ContractShape } = JSON.parse('{}')
 		const missing = source.child
@@ -865,8 +1021,8 @@ describe('malformed shape children', () => {
 
 describe('createContract fail-fast', () => {
 	it('throws at creation time for a degenerate shape, not at use', () => {
-		expect(() => createContract(stringShape({ min: 5, max: 1 }))).toThrow(
-			'validateShape: a string shape has min greater than max',
+		expect(() => createContract({ type: 'string', min: 5, max: 1 })).toThrow(
+			'validateShapeDepth: a string shape has min greater than max',
 		)
 		expect(() => createContract(unionShape())).toThrow(
 			'validateShape: a union shape needs at least one variant',

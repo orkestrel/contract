@@ -1,7 +1,7 @@
 import type { ContractShape, JSONRecord, JSONSchema, JSONValue, StringShape } from './types.js'
 import { ContractError, isContractError } from './errors.js'
 import { attempt, enumerableKeys, holds } from './helpers.js'
-import { isRecord } from './validators.js'
+import { isRecord, isRegExp } from './validators.js'
 
 /**
  * Deep-clone exact JSON data into an owned frozen snapshot.
@@ -416,13 +416,14 @@ export function cloneSchema(schema: JSONSchema): JSONSchema {
  * then their structural edges are wired and their copied collections frozen.
  * String patterns are captured by source and flags behind an enumerable
  * accessor that returns a fresh frozen zero-state `RegExp` on every read.
- * A raw schema delegates to {@link cloneSchema}; every shape-graph read is
- * contained, so hostile traversal throws only a clone-coded
- * {@link ContractError}.
+ * A raw schema delegates to {@link cloneSchema}. Ownership never erases a
+ * structural edge or normalizes an invalid scalar/bound into a plausible
+ * declaration: those inputs throw their coded structure/bound error. Hostile
+ * traversal remains distinct and throws a clone-coded {@link ContractError}.
  *
  * @param shape - The contract shape graph to snapshot
  * @returns A deeply cloned and frozen shape graph
- * @throws {ContractError} When hostile shape or raw-schema traversal prevents ownership
+ * @throws {ContractError} When the declaration cannot be copied faithfully or hostile shape or raw-schema traversal prevents ownership
  *
  * @example
  * ```ts
@@ -434,8 +435,10 @@ export function cloneSchema(schema: JSONSchema): JSONSchema {
 export function cloneShape(shape: StringShape): StringShape
 export function cloneShape(shape: ContractShape): ContractShape
 export function cloneShape(shape: ContractShape): ContractShape {
+	let diagnosis: ContractError | undefined
 	try {
 		const memo = new Map<ContractShape, ContractShape>()
+		const paths = new Map<ContractShape, readonly string[]>([[shape, []]])
 		const pending: ContractShape[] = [shape]
 		const sources: ContractShape[] = []
 		let root = shape
@@ -443,11 +446,56 @@ export function cloneShape(shape: ContractShape): ContractShape {
 		while (pending.length > 0) {
 			const source = pending.pop()
 			if (source === undefined || memo.has(source)) continue
+			const path = paths.get(source) ?? []
 
 			let clone: ContractShape
 			switch (source.type) {
 				case 'string': {
 					const pattern = source.pattern
+					if (source.min !== undefined && (!Number.isSafeInteger(source.min) || source.min < 0)) {
+						diagnosis = new ContractError(
+							'cloneShape: a string shape min must be a non-negative safe integer',
+							{
+								code: 'bound',
+								context: {
+									path,
+									shape: 'string',
+									limit: 'non-negative safe integer',
+									received: String(source.min),
+								},
+							},
+						)
+						throw diagnosis
+					}
+					if (source.max !== undefined && (!Number.isSafeInteger(source.max) || source.max < 0)) {
+						diagnosis = new ContractError(
+							'cloneShape: a string shape max must be a non-negative safe integer',
+							{
+								code: 'bound',
+								context: {
+									path,
+									shape: 'string',
+									limit: 'non-negative safe integer',
+									received: String(source.max),
+								},
+							},
+						)
+						throw diagnosis
+					}
+					if (source.min !== undefined && source.max !== undefined && source.min > source.max) {
+						diagnosis = new ContractError('cloneShape: a string shape has min greater than max', {
+							code: 'range',
+							context: { path, shape: 'string' },
+						})
+						throw diagnosis
+					}
+					if (pattern !== undefined && !isRegExp(pattern)) {
+						diagnosis = new ContractError('cloneShape: string pattern must be a RegExp', {
+							code: 'structure',
+							context: { path: [...path, 'pattern'] },
+						})
+						throw diagnosis
+					}
 					const fields: StringShape = {
 						type: 'string',
 						...(source.min === undefined ? {} : { min: source.min }),
@@ -469,6 +517,40 @@ export function cloneShape(shape: ContractShape): ContractShape {
 					break
 				}
 				case 'number':
+					if (source.min !== undefined && !Number.isFinite(source.min)) {
+						diagnosis = new ContractError('cloneShape: a number shape min must be finite', {
+							code: 'bound',
+							context: {
+								path,
+								shape: source.integer === true ? 'integer' : 'number',
+								limit: 'finite number',
+								received: String(source.min),
+							},
+						})
+						throw diagnosis
+					}
+					if (source.max !== undefined && !Number.isFinite(source.max)) {
+						diagnosis = new ContractError('cloneShape: a number shape max must be finite', {
+							code: 'bound',
+							context: {
+								path,
+								shape: source.integer === true ? 'integer' : 'number',
+								limit: 'finite number',
+								received: String(source.max),
+							},
+						})
+						throw diagnosis
+					}
+					if (source.min !== undefined && source.max !== undefined && source.min > source.max) {
+						diagnosis = new ContractError('cloneShape: a number shape has min greater than max', {
+							code: 'range',
+							context: {
+								path,
+								shape: source.integer === true ? 'integer' : 'number',
+							},
+						})
+						throw diagnosis
+					}
 					clone = {
 						type: 'number',
 						...(source.min === undefined ? {} : { min: source.min }),
@@ -497,6 +579,43 @@ export function cloneShape(shape: ContractShape): ContractShape {
 					}
 					break
 				case 'array':
+					if (source.min !== undefined && (!Number.isSafeInteger(source.min) || source.min < 0)) {
+						diagnosis = new ContractError(
+							'cloneShape: an array shape min must be a non-negative safe integer',
+							{
+								code: 'bound',
+								context: {
+									path,
+									shape: 'array',
+									limit: 'non-negative safe integer',
+									received: String(source.min),
+								},
+							},
+						)
+						throw diagnosis
+					}
+					if (source.max !== undefined && (!Number.isSafeInteger(source.max) || source.max < 0)) {
+						diagnosis = new ContractError(
+							'cloneShape: an array shape max must be a non-negative safe integer',
+							{
+								code: 'bound',
+								context: {
+									path,
+									shape: 'array',
+									limit: 'non-negative safe integer',
+									received: String(source.max),
+								},
+							},
+						)
+						throw diagnosis
+					}
+					if (source.min !== undefined && source.max !== undefined && source.min > source.max) {
+						diagnosis = new ContractError('cloneShape: an array shape has min greater than max', {
+							code: 'range',
+							context: { path, shape: 'array' },
+						})
+						throw diagnosis
+					}
 					clone = {
 						type: 'array',
 						items: source.items,
@@ -504,6 +623,7 @@ export function cloneShape(shape: ContractShape): ContractShape {
 						...(source.max === undefined ? {} : { max: source.max }),
 						...(source.description === undefined ? {} : { description: source.description }),
 					}
+					paths.set(source.items, [...path, 'items'])
 					pending.push(source.items)
 					break
 				case 'object': {
@@ -518,9 +638,15 @@ export function cloneShape(shape: ContractShape): ContractShape {
 					}
 					for (const key of Object.keys(source.properties)) {
 						const child = source.properties[key]
-						if (child !== undefined) pending.push(child)
+						if (child !== undefined) {
+							paths.set(child, [...path, 'properties', key])
+							pending.push(child)
+						}
 					}
-					if (extra !== undefined && extra !== true && extra !== false) pending.push(extra)
+					if (extra !== undefined && extra !== true && extra !== false) {
+						paths.set(extra, [...path, 'additionalProperties'])
+						pending.push(extra)
+					}
 					break
 				}
 				case 'union':
@@ -530,14 +656,21 @@ export function cloneShape(shape: ContractShape): ContractShape {
 						...(source.mode === undefined ? {} : { mode: source.mode }),
 						...(source.description === undefined ? {} : { description: source.description }),
 					}
-					for (const variant of source.variants) pending.push(variant)
+					for (let index = 0; index < source.variants.length; index += 1) {
+						const variant = source.variants[index]
+						if (variant === undefined) continue
+						paths.set(variant, [...path, 'variants', String(index)])
+						pending.push(variant)
+					}
 					break
 				case 'optional':
 					clone = { type: 'optional', inner: source.inner }
+					paths.set(source.inner, [...path, 'inner'])
 					pending.push(source.inner)
 					break
 				case 'nullable':
 					clone = { type: 'nullable', inner: source.inner }
+					paths.set(source.inner, [...path, 'inner'])
 					pending.push(source.inner)
 					break
 				case 'json':
@@ -555,6 +688,13 @@ export function cloneShape(shape: ContractShape): ContractShape {
 							cause: outcome.error,
 						})
 					}
+					if (!isRecord(outcome.value)) {
+						diagnosis = new ContractError('cloneShape: raw schema must be a plain record', {
+							code: 'structure',
+							context: { path: [...path, 'schema'] },
+						})
+						throw diagnosis
+					}
 					clone = { type: 'raw', schema: cloneSchema(outcome.value) }
 					break
 				}
@@ -568,36 +708,77 @@ export function cloneShape(shape: ContractShape): ContractShape {
 		for (const source of sources) {
 			const clone = memo.get(source)
 			if (clone === undefined) continue
+			const path = paths.get(source) ?? []
 
 			switch (source.type) {
 				case 'array': {
 					const items = memo.get(source.items)
-					if (items !== undefined) Reflect.set(clone, 'items', items)
+					if (items === undefined) {
+						diagnosis = new ContractError('cloneShape: every structural child must be a shape', {
+							code: 'structure',
+							context: { path: [...path, 'items'] },
+						})
+						throw diagnosis
+					}
+					Reflect.set(clone, 'items', items)
 					break
 				}
 				case 'object': {
 					const properties: Record<string, ContractShape> = Object.create(null)
 					for (const key of Object.keys(source.properties)) {
 						const child = source.properties[key]
-						if (child === undefined) continue
+						if (child === undefined) {
+							diagnosis = new ContractError('cloneShape: every structural child must be a shape', {
+								code: 'structure',
+								context: { path: [...path, 'properties', key] },
+							})
+							throw diagnosis
+						}
 						const clonedChild = memo.get(child)
-						if (clonedChild !== undefined) properties[key] = clonedChild
+						if (clonedChild === undefined) {
+							diagnosis = new ContractError('cloneShape: every structural child must be a shape', {
+								code: 'structure',
+								context: { path: [...path, 'properties', key] },
+							})
+							throw diagnosis
+						}
+						properties[key] = clonedChild
 					}
 					Reflect.set(clone, 'properties', Object.freeze(properties))
 					const extra = source.additionalProperties
 					if (extra !== undefined && extra !== true && extra !== false) {
 						const clonedExtra = memo.get(extra)
-						if (clonedExtra !== undefined) {
-							Reflect.set(clone, 'additionalProperties', clonedExtra)
+						if (clonedExtra === undefined) {
+							diagnosis = new ContractError('cloneShape: every structural child must be a shape', {
+								code: 'structure',
+								context: { path: [...path, 'additionalProperties'] },
+							})
+							throw diagnosis
 						}
+						Reflect.set(clone, 'additionalProperties', clonedExtra)
 					}
 					break
 				}
 				case 'union': {
 					const variants: ContractShape[] = []
-					for (const variant of source.variants) {
+					for (let index = 0; index < source.variants.length; index += 1) {
+						const variant = source.variants[index]
+						if (variant === undefined) {
+							diagnosis = new ContractError('cloneShape: every structural child must be a shape', {
+								code: 'structure',
+								context: { path: [...path, 'variants', String(index)] },
+							})
+							throw diagnosis
+						}
 						const clonedVariant = memo.get(variant)
-						if (clonedVariant !== undefined) variants.push(clonedVariant)
+						if (clonedVariant === undefined) {
+							diagnosis = new ContractError('cloneShape: every structural child must be a shape', {
+								code: 'structure',
+								context: { path: [...path, 'variants', String(index)] },
+							})
+							throw diagnosis
+						}
+						variants.push(clonedVariant)
 					}
 					Reflect.set(clone, 'variants', Object.freeze(variants))
 					break
@@ -605,7 +786,14 @@ export function cloneShape(shape: ContractShape): ContractShape {
 				case 'optional':
 				case 'nullable': {
 					const inner = memo.get(source.inner)
-					if (inner !== undefined) Reflect.set(clone, 'inner', inner)
+					if (inner === undefined) {
+						diagnosis = new ContractError('cloneShape: every structural child must be a shape', {
+							code: 'structure',
+							context: { path: [...path, 'inner'] },
+						})
+						throw diagnosis
+					}
+					Reflect.set(clone, 'inner', inner)
 					break
 				}
 				default:
@@ -617,7 +805,7 @@ export function cloneShape(shape: ContractShape): ContractShape {
 
 		return root
 	} catch (reason) {
-		if (isContractError(reason) && reason.code === 'clone') throw reason
+		if (reason === diagnosis || (isContractError(reason) && reason.code === 'clone')) throw reason
 		throw new ContractError('cloneShape: failed to create an owned shape snapshot', {
 			code: 'clone',
 			context: { shape: 'shape' },
@@ -638,6 +826,12 @@ export function cloneShape(shape: ContractShape): ContractShape {
  * hand-authored pattern shape is not an ownership marker because it cannot
  * protect `RegExp` internal slots; leave that shape unfrozen for this function
  * to snapshot, or pass it through {@link cloneShape} first.
+ *
+ * A frozen node is still cloned once as a fidelity check before its identity is
+ * returned, so hand-freezing cannot make malformed structural slots, scalars,
+ * or bounds bypass the ownership boundary. Clone-coded hostile traversal stays
+ * deferred to the compiler's total structural gate, preserving its structure
+ * diagnosis for already-frozen hostile nodes.
  *
  * Frozen-state inspection is itself contained through {@link holds}: when a
  * hostile root prevents that check, this function falls through to
@@ -663,5 +857,10 @@ export function cloneShape(shape: ContractShape): ContractShape {
  * ```
  */
 export function ownShape(shape: ContractShape): ContractShape {
-	return holds(() => Object.isFrozen(shape)) ? shape : cloneShape(shape)
+	if (!holds(() => Object.isFrozen(shape))) return cloneShape(shape)
+	const fidelity = attempt(() => cloneShape(shape))
+	if (!fidelity.success && isContractError(fidelity.error) && fidelity.error.code !== 'clone') {
+		throw fidelity.error
+	}
+	return shape
 }

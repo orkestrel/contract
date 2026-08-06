@@ -68,16 +68,16 @@ import { parseBoolean, parseInteger, parseNumber, parseRecord, parseString } fro
  * can use it; and a missing child, corrupt container, inherited discriminant,
  * or unrecognized node reports `structure`. This is a structural-safety
  * prerequisite rather than the full well-formedness pass in
- * {@link validateShape}: it does not diagnose bound policy, empty vocabularies,
- * or optional-shape policy. Active
+ * {@link validateShape}: it enforces every bound domain and range used by the
+ * artifacts, but does not diagnose empty vocabularies or optional-shape policy. Active
  * ancestors are tracked so shared children remain legal. Every standalone
  * compiler calls this gate before its recursive branch begins. Failures have
  * deterministic precedence independent of traversal order: depth, then
- * structure, then cycle.
+ * structure, then cycle, then bound policy.
  *
  * @param shape - The shape graph to gate
  * @returns Nothing; successful return means recursive compilation is structurally safe and depth-safe
- * @throws {ContractError} When a node or structural slot is corrupt, the graph is cyclic, or it exceeds the compilation depth limit
+ * @throws {ContractError} When a node or structural slot is corrupt, a bound is outside its declared domain, the graph is cyclic, or it exceeds the compilation depth limit
  */
 export function validateShapeDepth(shape: ContractShape): void {
 	const active = new WeakSet<ContractShape>()
@@ -85,6 +85,12 @@ export function validateShapeDepth(shape: ContractShape): void {
 	let structurePath: readonly string[] | undefined
 	let structureMessage: string | undefined
 	let cyclePath: readonly string[] | undefined
+	let domainCode: 'bound' | 'range' | undefined
+	let domainMessage: string | undefined
+	let domainPath: readonly string[] | undefined
+	let domainShape: string | undefined
+	let domainLimit: string | undefined
+	let domainReceived: string | undefined
 	const stack: (
 		| {
 				readonly operation: 'enter'
@@ -255,6 +261,43 @@ export function validateShapeDepth(shape: ContractShape): void {
 						return false
 					}
 				}
+				if (
+					domainCode === undefined &&
+					current.min !== undefined &&
+					(!Number.isSafeInteger(current.min) || current.min < 0)
+				) {
+					domainCode = 'bound'
+					domainMessage =
+						'validateShapeDepth: a string shape min must be a non-negative safe integer'
+					domainPath = [...path]
+					domainShape = 'string'
+					domainLimit = 'non-negative safe integer'
+					domainReceived = String(current.min)
+				}
+				if (
+					domainCode === undefined &&
+					current.max !== undefined &&
+					(!Number.isSafeInteger(current.max) || current.max < 0)
+				) {
+					domainCode = 'bound'
+					domainMessage =
+						'validateShapeDepth: a string shape max must be a non-negative safe integer'
+					domainPath = [...path]
+					domainShape = 'string'
+					domainLimit = 'non-negative safe integer'
+					domainReceived = String(current.max)
+				}
+				if (
+					domainCode === undefined &&
+					current.min !== undefined &&
+					current.max !== undefined &&
+					current.min > current.max
+				) {
+					domainCode = 'range'
+					domainMessage = 'validateShapeDepth: a string shape has min greater than max'
+					domainPath = [...path]
+					domainShape = 'string'
+				}
 			}
 			if (category === 'number') {
 				if (current.min !== undefined && typeof current.min !== 'number') {
@@ -272,6 +315,41 @@ export function validateShapeDepth(shape: ContractShape): void {
 					nodeMessage = 'validateShapeDepth: number integer must be a boolean'
 					return false
 				}
+				if (
+					domainCode === undefined &&
+					current.min !== undefined &&
+					!Number.isFinite(current.min)
+				) {
+					domainCode = 'bound'
+					domainMessage = 'validateShapeDepth: a number shape min must be finite'
+					domainPath = [...path]
+					domainShape = current.integer === true ? 'integer' : 'number'
+					domainLimit = 'finite number'
+					domainReceived = String(current.min)
+				}
+				if (
+					domainCode === undefined &&
+					current.max !== undefined &&
+					!Number.isFinite(current.max)
+				) {
+					domainCode = 'bound'
+					domainMessage = 'validateShapeDepth: a number shape max must be finite'
+					domainPath = [...path]
+					domainShape = current.integer === true ? 'integer' : 'number'
+					domainLimit = 'finite number'
+					domainReceived = String(current.max)
+				}
+				if (
+					domainCode === undefined &&
+					current.min !== undefined &&
+					current.max !== undefined &&
+					current.min > current.max
+				) {
+					domainCode = 'range'
+					domainMessage = 'validateShapeDepth: a number shape has min greater than max'
+					domainPath = [...path]
+					domainShape = current.integer === true ? 'integer' : 'number'
+				}
 			}
 			if (category === 'array' && current.min !== undefined && typeof current.min !== 'number') {
 				nodeFirst = 'min'
@@ -282,6 +360,44 @@ export function validateShapeDepth(shape: ContractShape): void {
 				nodeFirst = 'max'
 				nodeMessage = 'validateShapeDepth: array max must be a number'
 				return false
+			}
+			if (
+				category === 'array' &&
+				domainCode === undefined &&
+				current.min !== undefined &&
+				(!Number.isSafeInteger(current.min) || current.min < 0)
+			) {
+				domainCode = 'bound'
+				domainMessage = 'validateShapeDepth: an array shape min must be a non-negative safe integer'
+				domainPath = [...path]
+				domainShape = 'array'
+				domainLimit = 'non-negative safe integer'
+				domainReceived = String(current.min)
+			}
+			if (
+				category === 'array' &&
+				domainCode === undefined &&
+				current.max !== undefined &&
+				(!Number.isSafeInteger(current.max) || current.max < 0)
+			) {
+				domainCode = 'bound'
+				domainMessage = 'validateShapeDepth: an array shape max must be a non-negative safe integer'
+				domainPath = [...path]
+				domainShape = 'array'
+				domainLimit = 'non-negative safe integer'
+				domainReceived = String(current.max)
+			}
+			if (
+				category === 'array' &&
+				domainCode === undefined &&
+				current.min !== undefined &&
+				current.max !== undefined &&
+				current.min > current.max
+			) {
+				domainCode = 'range'
+				domainMessage = 'validateShapeDepth: an array shape has min greater than max'
+				domainPath = [...path]
+				domainShape = 'array'
 			}
 			if (
 				category === 'union' &&
@@ -463,6 +579,20 @@ export function validateShapeDepth(shape: ContractShape): void {
 			context: { path: cyclePath },
 		})
 	}
+	if (domainCode !== undefined) {
+		throw new ContractError(
+			domainMessage ?? 'validateShapeDepth: a shape bound is outside its declared domain',
+			{
+				code: domainCode,
+				context: {
+					path: domainPath ?? [],
+					...(domainShape === undefined ? {} : { shape: domainShape }),
+					...(domainLimit === undefined ? {} : { limit: domainLimit }),
+					...(domainReceived === undefined ? {} : { received: domainReceived }),
+				},
+			},
+		)
+	}
 }
 
 /**
@@ -548,73 +678,10 @@ export function validateShape(shape: ContractShape): void {
 			active.add(current)
 			stack.push({ operation: 'exit', shape: current })
 
-			if (current.type === 'string' || current.type === 'array') {
-				const bounds = [
-					{ boundary: 'min', value: current.min },
-					{ boundary: 'max', value: current.max },
-				]
-				for (const bound of bounds) {
-					if (
-						bound.value !== undefined &&
-						(!Number.isSafeInteger(bound.value) || bound.value < 0)
-					) {
-						throw new ContractError(
-							`validateShape: a ${current.type} shape ${bound.boundary} must be a non-negative safe integer`,
-							{
-								code: 'bound',
-								context: {
-									path: frame.path,
-									shape: current.type,
-									limit: 'non-negative safe integer',
-									received: String(bound.value),
-								},
-							},
-						)
-					}
-				}
-			}
-
 			switch (current.type) {
 				case 'string':
-					if (current.min !== undefined && current.max !== undefined && current.min > current.max) {
-						throw new ContractError('validateShape: a string shape has min greater than max', {
-							code: 'range',
-							context: { path: frame.path, shape: 'string' },
-						})
-					}
 					break
 				case 'number':
-					if (current.min !== undefined && !Number.isFinite(current.min)) {
-						throw new ContractError('validateShape: a number shape min must be finite', {
-							code: 'bound',
-							context: {
-								path: frame.path,
-								shape: current.integer === true ? 'integer' : 'number',
-								limit: 'finite number',
-								received: String(current.min),
-							},
-						})
-					}
-					if (current.max !== undefined && !Number.isFinite(current.max)) {
-						throw new ContractError('validateShape: a number shape max must be finite', {
-							code: 'bound',
-							context: {
-								path: frame.path,
-								shape: current.integer === true ? 'integer' : 'number',
-								limit: 'finite number',
-								received: String(current.max),
-							},
-						})
-					}
-					if (current.min !== undefined && current.max !== undefined && current.min > current.max) {
-						throw new ContractError('validateShape: a number shape has min greater than max', {
-							code: 'range',
-							context: {
-								path: frame.path,
-								shape: current.integer === true ? 'integer' : 'number',
-							},
-						})
-					}
 					if (current.integer === true) {
 						const lo = Math.ceil(current.min ?? Number.NEGATIVE_INFINITY)
 						const hi = Math.floor(current.max ?? Number.POSITIVE_INFINITY)
@@ -654,12 +721,6 @@ export function validateShape(shape: ContractShape): void {
 					}
 					break
 				case 'array':
-					if (current.min !== undefined && current.max !== undefined && current.min > current.max) {
-						throw new ContractError('validateShape: an array shape has min greater than max', {
-							code: 'range',
-							context: { path: frame.path, shape: 'array' },
-						})
-					}
 					stack.push({
 						operation: 'enter',
 						shape: current.items,
@@ -1702,9 +1763,9 @@ export function compileReporter(
  * acceptance is decided from each variant's strict audit emptiness, so the
  * soundness invariant
  * `compileAuditor(shape, v).length === 0 ⟺ compileGuard(shape)(v)` holds
- * structurally. {@link validateShapeDepth} rejects a missing or unrecognized
- * child before either artifact recurses, so a malformed declaration cannot
- * create an empty audit beside a rejecting guard. The invariant relates two
+ * structurally. {@link validateShapeDepth} rejects structural and bound-domain
+ * malformations before either artifact recurses, so the invariant is only
+ * evaluated for a valid declaration. The invariant relates two
  * separate calls, so it holds for a value whose reads are stable across calls;
  * see the read-stability precondition on {@link ContractInterface}. Every
  * recursive call returns at most {@link FAULT_LIMIT} entries. Hostile property
@@ -1951,13 +2012,13 @@ export function compileAuditor(
  * owned snapshot rather than accepting the same values.
  *
  * @remarks
- * Runs {@link validateShape} first — a malformed shape throws immediately
- * rather than compiling into a silently-wrong contract (AGENTS §12). It always
- * takes its own {@link cloneShape} snapshot — never merely a frozen node's word
- * — and hands that same graph to every artifact compiler. An already-frozen
- * declaration first passes {@link validateShapeDepth} in its original form so
- * cloning cannot normalize a malformed scalar field before the structural gate
- * sees it; hostile frozen-state reflection remains contained.
+ * Runs {@link validateShapeDepth} on every original declaration before
+ * ownership, then runs {@link validateShape} on the snapshot — a malformed
+ * shape throws immediately rather than compiling into a silently-wrong
+ * contract (AGENTS §12). It always takes its own {@link cloneShape} snapshot —
+ * never merely a frozen node's word — and hands that same graph to every
+ * artifact compiler. Pre-ownership gating prevents cloning from normalizing a
+ * malformed scalar field; hostile reflection remains contained.
  * Then it precompiles the deeply frozen owned schema, guard, and parser once;
  * `generate` walks the snapshot per call with the supplied random source;
  * `audit` and `explain` compile their diagnostic reports via
@@ -1978,8 +2039,7 @@ export function compileAuditor(
 export function createContract<S extends ContractShape>(shape: S): ContractInterface<Infer<S>>
 export function createContract(shape: ContractShape): ContractInterface<unknown>
 export function createContract(shape: ContractShape): ContractInterface<unknown> {
-	const frozen = attempt(() => Object.isFrozen(shape))
-	if (frozen.success && frozen.value) validateShapeDepth(shape)
+	validateShapeDepth(shape)
 	const snapshot = cloneShape(shape)
 	validateShape(snapshot)
 	const schema = compileSchema(snapshot)

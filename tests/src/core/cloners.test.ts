@@ -551,7 +551,7 @@ describe('cloneShape', () => {
 			const cloneError = captureContractError(() => cloneShape(shape))
 			const contractError = captureContractError(() => createContract(shape))
 			expect(cloneError.code).toBe('clone')
-			expect(contractError.code).toBe('clone')
+			expect(contractError.code).toBe('structure')
 		}
 	})
 })
