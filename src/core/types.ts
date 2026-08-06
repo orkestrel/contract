@@ -450,7 +450,10 @@ export interface JSONShape {
  * For values the shape DSL can't express. The fragment is checked recursively
  * against the lean {@link JSONSchema} vocabulary before it is accepted or
  * emitted; unsupported keywords and malformed keyword values throw a coded
- * {@link ContractError}. The compiled guard accepts every
+ * {@link ContractError}. This is structural and keyword-domain validation,
+ * not a full JSON Schema solver: it does not resolve cross-keyword
+ * contradictions, `required`/`properties` membership, keyword/type coherence,
+ * `enum`/`type` compatibility, or a closed `format` vocabulary. The compiled guard accepts every
  * top-level value except `undefined`, which is reserved as the parser failure
  * sentinel. Wrap the shape with {@link OptionalShape} to admit absence. Defined
  * values pass through unchanged, and the schema is emitted structurally

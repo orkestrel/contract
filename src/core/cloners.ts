@@ -2,6 +2,7 @@ import type { ContractShape, JSONRecord, JSONSchema, JSONValue, StringShape } fr
 import { ContractError, isContractError } from './errors.js'
 import { attempt, enumerableKeys, holds } from './helpers.js'
 import { isRecord, isRegExp } from './validators.js'
+import { validateShapeDepth } from './compilers.js'
 
 /**
  * Deep-clone exact JSON data into an owned frozen snapshot.
@@ -411,9 +412,12 @@ export function cloneSchema(schema: JSONSchema): JSONSchema {
  * Deep-clone a contract shape graph into an owned frozen snapshot.
  *
  * @remarks
- * Uses an explicit memo to preserve shared-child identity and close cyclic
- * edges onto their cloned nodes. Shape-node shells are created iteratively,
- * then their structural edges are wired and their copied collections frozen.
+ * Uses an explicit memo to preserve shared-child identity while building the
+ * candidate snapshot. Shape-node shells are created iteratively, then their
+ * structural edges are wired and their copied collections frozen. Before the
+ * snapshot returns, the original declaration is re-checked by
+ * {@link validateShapeDepth}, so a cyclic or otherwise malformed shape is
+ * refused rather than normalized by the copy.
  * String patterns are captured by source and flags behind an enumerable
  * accessor that returns a fresh frozen zero-state `RegExp` on every read.
  * A raw schema delegates to {@link cloneSchema}. Ownership never erases a
@@ -499,6 +503,15 @@ export function cloneShape(shape: ContractShape): ContractShape {
 				case 'raw':
 					declaredFields = ['schema']
 					break
+				default:
+					diagnosis = new ContractError(
+						'validateShapeDepth: every node must be a recognized shape',
+						{
+							code: 'structure',
+							context: { path },
+						},
+					)
+					throw diagnosis
 			}
 			for (const field of declaredFields) {
 				const descriptor = Object.getOwnPropertyDescriptor(source, field)
@@ -676,6 +689,16 @@ export function cloneShape(shape: ContractShape): ContractShape {
 					}
 					break
 				case 'literal':
+					if (!Array.isArray(source.values)) {
+						diagnosis = new ContractError(
+							'validateShapeDepth: values must be a finite literal array',
+							{
+								code: 'structure',
+								context: { path: [...path, 'values'] },
+							},
+						)
+						throw diagnosis
+					}
 					clone = {
 						type: 'literal',
 						values: Object.freeze([...source.values]),
@@ -813,7 +836,12 @@ export function cloneShape(shape: ContractShape): ContractShape {
 						})
 						throw diagnosis
 					}
-					clone = { type: 'raw', schema: cloneSchema(outcome.value) }
+					try {
+						clone = { type: 'raw', schema: cloneSchema(outcome.value) }
+					} catch (reason) {
+						if (isContractError(reason) && reason.code === 'structure') diagnosis = reason
+						throw reason
+					}
 					break
 				}
 			}
@@ -977,6 +1005,12 @@ export function cloneShape(shape: ContractShape): ContractShape {
 			Object.freeze(clone)
 		}
 
+		try {
+			validateShapeDepth(shape)
+		} catch (reason) {
+			if (isContractError(reason)) diagnosis = reason
+			throw reason
+		}
 		return root
 	} catch (reason) {
 		if (reason === diagnosis || (isContractError(reason) && reason.code === 'clone')) throw reason

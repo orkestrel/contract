@@ -6,11 +6,13 @@ import type {
 	JSONSchema,
 	JSONValue,
 	ObjectShape,
+	Result,
 	StringShapeOptions,
 	StringShape,
 } from '@src/core'
 import {
 	arrayShape,
+	attempt,
 	booleanShape,
 	compileGenerator,
 	compileGuard,
@@ -22,6 +24,7 @@ import {
 	INFER_BREADTH_LIMIT,
 	INFER_DEPTH_LIMIT,
 	integerShape,
+	isContractError,
 	jsonShape,
 	literalShape,
 	nullableShape,
@@ -46,6 +49,8 @@ import {
 	buildSparseArray,
 	captureContractError,
 	createClassInstance,
+	createRevokedArrayProxy,
+	createRevokedProxy,
 	createHostileKeys,
 	createNonEnumerableRecord,
 	createStatefulGetter,
@@ -54,7 +59,303 @@ import {
 	SOUNDNESS_SAMPLE,
 } from '../../setup.js'
 
+type BuilderRole = 'options' | 'shape' | 'properties' | 'values' | 'schema'
+
+interface BuilderCase {
+	readonly name: string
+	readonly valid: readonly (readonly unknown[])[]
+	readonly positions: Readonly<Record<number, BuilderRole>>
+	run(args: readonly unknown[]): unknown
+}
+
+const BUILDER_CASES: readonly BuilderCase[] = [
+	{
+		name: 'stringShape',
+		valid: [
+			[],
+			[{}],
+			[{ description: 'value' }],
+			[{ min: 0 }],
+			[{ max: 4 }],
+			[{ min: 1, max: 4 }],
+			[{ pattern: /^x$/ }],
+			[{ min: 1, pattern: /^x$/ }],
+			[{ max: 4, description: 'value' }],
+		],
+		positions: { 0: 'options' },
+		run: (args) => Reflect.apply(stringShape, undefined, [...args]),
+	},
+	{
+		name: 'numberShape',
+		valid: [
+			[],
+			[{}],
+			[{ description: 'value' }],
+			[{ min: -1 }],
+			[{ max: 1 }],
+			[{ min: -1, max: 1 }],
+			[{ integer: false }],
+			[{ integer: true, min: 0, max: 1 }],
+		],
+		positions: { 0: 'options' },
+		run: (args) => Reflect.apply(numberShape, undefined, [...args]),
+	},
+	{
+		name: 'integerShape',
+		valid: [
+			[],
+			[{}],
+			[{ description: 'value' }],
+			[{ min: -1 }],
+			[{ max: 1 }],
+			[{ min: 0, max: 1 }],
+		],
+		positions: { 0: 'options' },
+		run: (args) => Reflect.apply(integerShape, undefined, [...args]),
+	},
+	{
+		name: 'booleanShape',
+		valid: [[], [{ description: 'value' }]],
+		positions: { 0: 'options' },
+		run: (args) => Reflect.apply(booleanShape, undefined, [...args]),
+	},
+	{
+		name: 'nullShape',
+		valid: [[], [{ description: 'value' }]],
+		positions: { 0: 'options' },
+		run: (args) => Reflect.apply(nullShape, undefined, [...args]),
+	},
+	{
+		name: 'literalShape',
+		valid: [[['x']], [[1]], [[true]], [['x', 1, true], { description: 'value' }]],
+		positions: { 0: 'values', 1: 'options' },
+		run: (args) => Reflect.apply(literalShape, undefined, [...args]),
+	},
+	{
+		name: 'arrayShape',
+		valid: [
+			[stringShape()],
+			[stringShape(), {}],
+			[stringShape(), { description: 'value' }],
+			[stringShape(), { min: 0 }],
+			[stringShape(), { max: 2 }],
+			[stringShape(), { min: 0, max: 2 }],
+			[nullableShape(stringShape()), { max: 1 }],
+		],
+		positions: { 0: 'shape', 1: 'options' },
+		run: (args) => Reflect.apply(arrayShape, undefined, [...args]),
+	},
+	{
+		name: 'objectShape',
+		valid: [
+			[{}],
+			[{ value: stringShape() }],
+			[{ value: optionalShape(stringShape()) }],
+			[{}, { description: 'value' }],
+			[{}, { additionalProperties: true }],
+			[{}, { additionalProperties: false }],
+			[{}, { additionalProperties: stringShape(), description: 'value' }],
+		],
+		positions: { 0: 'properties', 1: 'options' },
+		run: (args) => Reflect.apply(objectShape, undefined, [...args]),
+	},
+	{
+		name: 'recordShape',
+		valid: [[stringShape()], [numberShape(), {}], [booleanShape(), { description: 'value' }]],
+		positions: { 0: 'shape', 1: 'options' },
+		run: (args) => Reflect.apply(recordShape, undefined, [...args]),
+	},
+	{
+		name: 'unionShape',
+		valid: [
+			[stringShape()],
+			[stringShape(), numberShape()],
+			[stringShape(), numberShape(), nullShape()],
+		],
+		positions: { 0: 'shape', 1: 'shape' },
+		run: (args) => Reflect.apply(unionShape, undefined, [...args]),
+	},
+	{
+		name: 'oneOfShape',
+		valid: [[stringShape()], [stringShape(), numberShape()]],
+		positions: { 0: 'shape', 1: 'shape' },
+		run: (args) => Reflect.apply(oneOfShape, undefined, [...args]),
+	},
+	{
+		name: 'optionalShape',
+		valid: [[stringShape()], [nullableShape(stringShape())]],
+		positions: { 0: 'shape' },
+		run: (args) => Reflect.apply(optionalShape, undefined, [...args]),
+	},
+	{
+		name: 'nullableShape',
+		valid: [[stringShape()], [arrayShape(stringShape())]],
+		positions: { 0: 'shape' },
+		run: (args) => Reflect.apply(nullableShape, undefined, [...args]),
+	},
+	{
+		name: 'jsonShape',
+		valid: [[], [{ description: 'value' }]],
+		positions: { 0: 'options' },
+		run: (args) => Reflect.apply(jsonShape, undefined, [...args]),
+	},
+	{
+		name: 'rawShape',
+		valid: [[{}], [{ type: 'string' }], [{ anyOf: [{ type: 'string' }] }]],
+		positions: { 0: 'schema' },
+		run: (args) => Reflect.apply(rawShape, undefined, [...args]),
+	},
+]
+
 describe('shape builders', () => {
+	it('generates the builder argument matrix with hostile and legitimate controls', () => {
+		const throwingGet = new Proxy(
+			{ value: 1 },
+			{
+				get() {
+					throw new Error('hostile get')
+				},
+			},
+		)
+		const throwingKeys = new Proxy(
+			{},
+			{
+				ownKeys() {
+					throw new Error('hostile keys')
+				},
+			},
+		)
+		const throwingDescriptor = new Proxy(
+			{ value: 1 },
+			{
+				getOwnPropertyDescriptor() {
+					throw new Error('hostile descriptor')
+				},
+			},
+		)
+		const sparse = ['x', 'y']
+		Reflect.deleteProperty(sparse, '1')
+		const malformed = {
+			options: [
+				null,
+				false,
+				true,
+				0,
+				'x',
+				[],
+				new Date(),
+				new Map(),
+				throwingGet,
+				throwingKeys,
+				throwingDescriptor,
+				createRevokedProxy(),
+			],
+			shape: [
+				undefined,
+				null,
+				false,
+				true,
+				0,
+				'x',
+				[],
+				{},
+				new Date(),
+				new Map(),
+				createRevokedProxy(),
+			],
+			properties: [
+				undefined,
+				null,
+				false,
+				0,
+				'x',
+				[],
+				new Date(),
+				new Map(),
+				{ value: null },
+				throwingGet,
+				throwingKeys,
+				throwingDescriptor,
+				createRevokedProxy(),
+			],
+			values: [
+				undefined,
+				null,
+				false,
+				0,
+				'x',
+				new String('x'),
+				new Uint8Array([1]),
+				{},
+				new Date(),
+				createRevokedArrayProxy(),
+				['x', 'x'],
+				[null],
+				sparse,
+			],
+			schema: [
+				undefined,
+				null,
+				false,
+				true,
+				0,
+				'x',
+				[],
+				new Date(),
+				new Map(),
+				createRevokedProxy(),
+				{ const: 'x' },
+				{ properties: new Date() },
+			],
+		} satisfies Readonly<Record<BuilderRole, readonly unknown[]>>
+
+		const legitimate = BUILDER_CASES.flatMap((builder) =>
+			builder.valid.map((args) => ({
+				builder: builder.name,
+				outcome: attempt(() => builder.run(args)),
+			})),
+		)
+		expect(legitimate).toHaveLength(62)
+		for (const result of legitimate) {
+			expect(result.outcome.success, `${result.builder} rejected a legitimate call`).toBe(true)
+		}
+
+		const hostile: {
+			readonly builder: string
+			readonly position: number
+			readonly outcome: Result<unknown>
+		}[] = []
+		for (const builder of BUILDER_CASES) {
+			const base = builder.valid[0] ?? []
+			for (const [positionText, role] of Object.entries(builder.positions)) {
+				const position = Number(positionText)
+				for (const value of malformed[role]) {
+					const args = [...base]
+					args[position] = value
+					hostile.push({
+						builder: builder.name,
+						position,
+						outcome: attempt(() => builder.run(args)),
+					})
+				}
+			}
+		}
+		expect(hostile).toHaveLength(246)
+		for (const result of hostile) {
+			expect(
+				result.outcome.success,
+				`${result.builder} accepted malformed argument ${result.position}`,
+			).toBe(false)
+			if (result.outcome.success) continue
+			expect(isContractError(result.outcome.error)).toBe(true)
+		}
+
+		const control = attempt(() => stringShape())
+		const negative = attempt(() => Reflect.apply(stringShape, undefined, [null]))
+		expect(control.success).toBe(true)
+		expect(negative.success).toBe(false)
+	})
+
 	it('rejects the audit malformed-argument corpus with coded errors', () => {
 		const errors = [
 			captureContractError(() => Reflect.apply(stringShape, undefined, [null])),

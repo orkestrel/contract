@@ -1,4 +1,6 @@
 import type { ContractShape, JSONSchema, RawShape } from '@src/core'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import {
 	arrayShape,
 	attempt,
@@ -44,7 +46,441 @@ import {
 } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
 
+const compilerSource = readFileSync(
+	fileURLToPath(new URL('../../../src/core/compilers.ts', import.meta.url)),
+	'utf8',
+)
+
+type ShapeByType<T extends ContractShape['type']> = Extract<ContractShape, { readonly type: T }>
+
+type CompleteShape<T extends ContractShape['type']> = {
+	readonly [K in keyof ShapeByType<T>]-?: ShapeByType<T>[K]
+}
+
+const COMPLETE_RAW_SCHEMA: JSONSchema = {
+	type: 'object',
+	description: 'complete',
+	enum: ['x', 1, true],
+	minLength: 0,
+	maxLength: 1,
+	pattern: '^x$',
+	format: 'custom',
+	minimum: 0,
+	maximum: 1,
+	minItems: 0,
+	maxItems: 1,
+	items: { type: 'string' },
+	properties: { value: { type: 'string' } },
+	required: ['value'],
+	additionalProperties: { type: 'string' },
+	anyOf: [{ type: 'string' }],
+	oneOf: [{ type: 'number' }],
+}
+
+const COMPLETE_SHAPES = {
+	string: {
+		type: 'string',
+		min: 0,
+		max: 1,
+		pattern: /^x$/,
+		description: 'complete',
+	},
+	number: { type: 'number', min: 0, max: 1, integer: true, description: 'complete' },
+	boolean: { type: 'boolean', description: 'complete' },
+	null: { type: 'null', description: 'complete' },
+	literal: { type: 'literal', values: ['x', 1, true], description: 'complete' },
+	array: {
+		type: 'array',
+		items: { type: 'string' },
+		min: 0,
+		max: 1,
+		description: 'complete',
+	},
+	object: {
+		type: 'object',
+		properties: { value: { type: 'string' } },
+		additionalProperties: { type: 'string' },
+		description: 'complete',
+	},
+	union: {
+		type: 'union',
+		variants: [{ type: 'string' }, { type: 'number' }],
+		mode: 'anyOf',
+		description: 'complete',
+	},
+	optional: { type: 'optional', inner: { type: 'string' } },
+	nullable: { type: 'nullable', inner: { type: 'string' } },
+	json: { type: 'json', description: 'complete' },
+	raw: { type: 'raw', schema: COMPLETE_RAW_SCHEMA },
+} satisfies { readonly [T in ContractShape['type']]: CompleteShape<T> }
+
 describe('validateShape', () => {
+	it('generates every gate-rule and interface-field probe across all eleven entries', () => {
+		const gateStart = compilerSource.indexOf('export function validateShapeDepth')
+		const gateEnd = compilerSource.indexOf(
+			'/**\n * Validate that a {@link ContractShape}',
+			gateStart,
+		)
+		expect(gateStart).toBeGreaterThanOrEqual(0)
+		expect(gateEnd).toBeGreaterThan(gateStart)
+		const gate = compilerSource.slice(gateStart, gateEnd)
+		const rules = new Set<string>()
+		const assignments = gate.matchAll(
+			/(?:nodeMessage|structureMessage|domainMessage)\s*=\s*'(validateShapeDepth: [^']+)'/g,
+		)
+		for (const match of assignments) {
+			const message = match[1]
+			if (message !== undefined) rules.add(message)
+		}
+		const direct = gate.matchAll(/throw new ContractError\(\s*'(validateShapeDepth: [^']+)'/g)
+		for (const match of direct) {
+			const message = match[1]
+			if (message !== undefined) rules.add(message)
+		}
+
+		const malformed: readonly unknown[] = [
+			undefined,
+			null,
+			false,
+			true,
+			-1,
+			1.5,
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+			'x',
+			'[',
+			new String('x'),
+			[],
+			{},
+			new Date(),
+			new Map(),
+			new Uint8Array([1]),
+			createRevokedProxy(),
+		]
+		const candidates: ContractShape[] = []
+		const fieldProbes: { readonly name: string; readonly shape: ContractShape }[] = []
+
+		for (const source of Object.values(COMPLETE_SHAPES)) {
+			const category = source.type
+			for (const field of Object.keys(source)) {
+				let root: ContractShape = structuredClone(source)
+				let node = root
+				if (category === 'optional') {
+					root = { type: 'object', properties: { value: root } }
+					if (root.type === 'object') {
+						const child = root.properties.value
+						if (child !== undefined) node = child
+					}
+				}
+				Object.defineProperty(node, field, {
+					enumerable: true,
+					configurable: true,
+					get() {
+						return null
+					},
+				})
+				fieldProbes.push({ name: `${category}.${field}`, shape: root })
+
+				for (const value of malformed) {
+					let candidate: ContractShape = structuredClone(source)
+					let target = candidate
+					if (category === 'optional') {
+						candidate = { type: 'object', properties: { value: candidate } }
+						if (candidate.type === 'object') {
+							const child = candidate.properties.value
+							if (child !== undefined) target = child
+						}
+					}
+					Reflect.set(target, field, value)
+					candidates.push(candidate)
+				}
+			}
+		}
+
+		for (const field of Object.keys(COMPLETE_RAW_SCHEMA)) {
+			for (const value of malformed) {
+				const candidate: ContractShape = structuredClone(COMPLETE_SHAPES.raw)
+				if (candidate.type === 'raw') Reflect.set(candidate.schema, field, value)
+				candidates.push(candidate)
+			}
+		}
+
+		const sparseLiteral = structuredClone(COMPLETE_SHAPES.literal)
+		if (sparseLiteral.type === 'literal') Reflect.deleteProperty(sparseLiteral.values, '1')
+		candidates.push(sparseLiteral)
+		const accessedLiteral = structuredClone(COMPLETE_SHAPES.literal)
+		if (accessedLiteral.type === 'literal') {
+			Object.defineProperty(accessedLiteral.values, '1', { enumerable: true, get: () => 1 })
+		}
+		candidates.push(accessedLiteral)
+		const duplicateLiteral = structuredClone(COMPLETE_SHAPES.literal)
+		if (duplicateLiteral.type === 'literal') Reflect.set(duplicateLiteral.values, '1', 'x')
+		candidates.push(duplicateLiteral)
+		candidates.push({ type: 'literal', values: [Number.NaN] })
+		const nonPrimitiveLiteral = structuredClone(COMPLETE_SHAPES.literal)
+		if (nonPrimitiveLiteral.type === 'literal') Reflect.set(nonPrimitiveLiteral.values, '0', null)
+		candidates.push(nonPrimitiveLiteral)
+		const unstableValues = new Proxy(['x'], {
+			get(target, field, receiver) {
+				if (field !== '0') return Reflect.get(target, field, receiver)
+				return Reflect.get(target, field, receiver) === 'x' ? 'drift' : 'x'
+			},
+		})
+		candidates.push({ type: 'literal', values: unstableValues })
+		const unstablePattern = /x/
+		let patternReads = 0
+		Object.defineProperty(unstablePattern, 'source', {
+			get() {
+				patternReads += 1
+				return patternReads % 2 === 1 ? 'x' : 'drift'
+			},
+		})
+		candidates.push({ type: 'string', pattern: unstablePattern })
+
+		for (const field of ['enum', 'required', 'anyOf', 'oneOf']) {
+			const empty: ContractShape = structuredClone(COMPLETE_SHAPES.raw)
+			if (empty.type === 'raw') Reflect.set(empty.schema, field, [])
+			candidates.push(empty)
+			const sparse: ContractShape = structuredClone(COMPLETE_SHAPES.raw)
+			if (sparse.type === 'raw') {
+				const values =
+					field === 'required' ? ['value', 'extra'] : field === 'enum' ? ['x', 'extra'] : [{}, {}]
+				Reflect.deleteProperty(values, '1')
+				Reflect.set(sparse.schema, field, values)
+			}
+			candidates.push(sparse)
+		}
+		const duplicateEnum: ContractShape = structuredClone(COMPLETE_SHAPES.raw)
+		if (duplicateEnum.type === 'raw') Reflect.set(duplicateEnum.schema, 'enum', ['x', 'x'])
+		candidates.push(duplicateEnum)
+		const duplicateRequired: ContractShape = structuredClone(COMPLETE_SHAPES.raw)
+		if (duplicateRequired.type === 'raw') {
+			Reflect.set(duplicateRequired.schema, 'required', ['value', 'value'])
+		}
+		candidates.push(duplicateRequired)
+		const unsupported: ContractShape = structuredClone(COMPLETE_SHAPES.raw)
+		if (unsupported.type === 'raw') Reflect.set(unsupported.schema, 'const', 'x')
+		candidates.push(unsupported)
+
+		for (const field of ['properties', 'items', 'additionalProperties']) {
+			for (const value of [new Date(), new Map(), new Set(), /x/]) {
+				const candidate: ContractShape = structuredClone(COMPLETE_SHAPES.raw)
+				if (candidate.type === 'raw') Reflect.set(candidate.schema, field, value)
+				candidates.push(candidate)
+			}
+		}
+
+		const shapeCycle = structuredClone(COMPLETE_SHAPES.array)
+		Reflect.set(shapeCycle, 'items', shapeCycle)
+		candidates.push(shapeCycle)
+		let deepShape: ContractShape = { type: 'string' }
+		for (let depth = 0; depth <= COMPILE_DEPTH_LIMIT; depth += 1) {
+			deepShape = { type: 'array', items: deepShape }
+		}
+		candidates.push(deepShape)
+		const rawCycle: ContractShape = structuredClone(COMPLETE_SHAPES.raw)
+		if (rawCycle.type === 'raw') Reflect.set(rawCycle.schema, 'items', rawCycle.schema)
+		candidates.push(rawCycle)
+		let deepSchema: JSONSchema = { type: 'string' }
+		for (let depth = 0; depth <= COMPILE_DEPTH_LIMIT; depth += 1) {
+			deepSchema = { items: deepSchema }
+		}
+		candidates.push({ type: 'raw', schema: deepSchema })
+
+		for (const shape of [
+			{ type: 'string', min: 2, max: 1 },
+			{ type: 'number', min: 2, max: 1 },
+			{ type: 'number', integer: true, min: 1.2, max: 1.8 },
+			{ type: 'array', items: { type: 'string' }, min: 2, max: 1 },
+		] satisfies readonly ContractShape[]) {
+			candidates.push(shape)
+		}
+		const optional = { type: 'optional', inner: { type: 'string' } } satisfies ContractShape
+		for (const parent of [
+			optional,
+			{ type: 'array', items: optional },
+			{ type: 'object', properties: {}, additionalProperties: optional },
+			{ type: 'union', variants: [optional] },
+			{ type: 'nullable', inner: optional },
+		] satisfies readonly ContractShape[]) {
+			candidates.push(parent)
+		}
+
+		const probes = new Map<string, ContractShape>()
+		for (const candidate of candidates) {
+			const outcome = attempt(() => validateShapeDepth(candidate))
+			if (outcome.success) continue
+			expect(isContractError(outcome.error)).toBe(true)
+			if (!isContractError(outcome.error)) continue
+			if (!probes.has(outcome.error.message)) probes.set(outcome.error.message, candidate)
+		}
+		expect(fieldProbes).toHaveLength(38)
+		expect(rules.size).toBe(57)
+		expect([...probes.keys()].sort()).toEqual([...rules].sort())
+
+		const missing = new Set(probes.keys())
+		const first = missing.values().next().value
+		if (first !== undefined) missing.delete(first)
+		expect([...missing].sort()).not.toEqual([...rules].sort())
+
+		for (const entry of [
+			...fieldProbes,
+			...[...probes].map(([name, shape]) => ({ name, shape })),
+		]) {
+			const outcomes = [
+				{ name: 'ownShape', outcome: attempt(() => ownShape(entry.shape)) },
+				{ name: 'cloneShape', outcome: attempt(() => cloneShape(entry.shape)) },
+				{ name: 'validateShape', outcome: attempt(() => validateShape(entry.shape)) },
+				{
+					name: 'validateShapeDepth',
+					outcome: attempt(() => validateShapeDepth(entry.shape)),
+				},
+				{ name: 'compileSchema', outcome: attempt(() => compileSchema(entry.shape)) },
+				{ name: 'compileGuard', outcome: attempt(() => compileGuard(entry.shape)) },
+				{ name: 'compileParser', outcome: attempt(() => compileParser(entry.shape)) },
+				{
+					name: 'compileGenerator',
+					outcome: attempt(() => compileGenerator(entry.shape, () => 0)),
+				},
+				{
+					name: 'compileReporter',
+					outcome: attempt(() => compileReporter(entry.shape, undefined)),
+				},
+				{
+					name: 'compileAuditor',
+					outcome: attempt(() => compileAuditor(entry.shape, undefined)),
+				},
+				{ name: 'createContract', outcome: attempt(() => createContract(entry.shape)) },
+			]
+			for (const result of outcomes) {
+				expect(result.outcome.success, `${entry.name} at ${result.name}`).toBe(false)
+				if (result.outcome.success) continue
+				expect(isContractError(result.outcome.error), `${entry.name} at ${result.name}`).toBe(true)
+			}
+		}
+	})
+
+	it('reports an unrecognized shape identically at the root and every structural slot', () => {
+		const unknown: ContractShape = structuredClone(COMPLETE_SHAPES.string)
+		Reflect.set(unknown, 'type', 'nope')
+		const shapes = [
+			unknown,
+			{ type: 'array', items: unknown },
+			{ type: 'object', properties: { value: unknown } },
+			{ type: 'object', properties: {}, additionalProperties: unknown },
+			{ type: 'union', variants: [unknown] },
+			{ type: 'optional', inner: unknown },
+			{ type: 'nullable', inner: unknown },
+		] satisfies readonly ContractShape[]
+		for (const shape of shapes) {
+			const outcomes = [
+				attempt(() => ownShape(shape)),
+				attempt(() => cloneShape(shape)),
+				attempt(() => validateShape(shape)),
+				attempt(() => validateShapeDepth(shape)),
+				attempt(() => compileSchema(shape)),
+				attempt(() => compileGuard(shape)),
+				attempt(() => compileParser(shape)),
+				attempt(() => compileGenerator(shape, () => 0)),
+				attempt(() => compileReporter(shape, undefined)),
+				attempt(() => compileAuditor(shape, undefined)),
+				attempt(() => createContract(shape)),
+			]
+			expect(outcomes).toHaveLength(11)
+			for (const outcome of outcomes) {
+				expect(outcome.success).toBe(false)
+				if (outcome.success) continue
+				expect(isContractError(outcome.error)).toBe(true)
+				if (!isContractError(outcome.error)) continue
+				expect(outcome.error.code).toBe('structure')
+				expect(outcome.error.message).toBe(
+					'validateShapeDepth: every node must be a recognized shape',
+				)
+			}
+		}
+	})
+
+	it('rejects the six measured laundering inputs while accepting their controls', () => {
+		const literalString = structuredClone(COMPLETE_SHAPES.literal)
+		Reflect.set(literalString, 'values', 'abc')
+		const literalObject = structuredClone(COMPLETE_SHAPES.literal)
+		Reflect.set(literalObject, 'values', new String('ab'))
+		const literalTyped = structuredClone(COMPLETE_SHAPES.literal)
+		Reflect.set(literalTyped, 'values', new Uint8Array([1, 2]))
+		const rawProperties = structuredClone(COMPLETE_SHAPES.raw)
+		Reflect.set(rawProperties.schema, 'properties', new Date())
+		const rawItems = structuredClone(COMPLETE_SHAPES.raw)
+		Reflect.set(rawItems.schema, 'items', new Date())
+		const rawAdditional = structuredClone(COMPLETE_SHAPES.raw)
+		Reflect.set(rawAdditional.schema, 'additionalProperties', new Map())
+		const cases: readonly { readonly malformed: ContractShape; readonly control: ContractShape }[] =
+			[
+				{
+					malformed: literalString,
+					control: { type: 'literal', values: ['a', 'b', 'c'] },
+				},
+				{
+					malformed: literalObject,
+					control: { type: 'literal', values: ['a', 'b'] },
+				},
+				{
+					malformed: literalTyped,
+					control: { type: 'literal', values: [1, 2] },
+				},
+				{
+					malformed: rawProperties,
+					control: {
+						type: 'union',
+						variants: [{ type: 'raw', schema: { properties: {} } }, { type: 'string' }],
+					},
+				},
+				{
+					malformed: rawItems,
+					control: {
+						type: 'union',
+						variants: [{ type: 'raw', schema: { items: {} } }, { type: 'string' }],
+					},
+				},
+				{
+					malformed: rawAdditional,
+					control: {
+						type: 'union',
+						variants: [{ type: 'raw', schema: { additionalProperties: {} } }, { type: 'string' }],
+					},
+				},
+			]
+		for (const entry of cases) {
+			const malformed = [
+				attempt(() => ownShape(entry.malformed)),
+				attempt(() => cloneShape(entry.malformed)),
+				attempt(() => validateShape(entry.malformed)),
+				attempt(() => validateShapeDepth(entry.malformed)),
+				attempt(() => compileSchema(entry.malformed)),
+				attempt(() => compileGuard(entry.malformed)),
+				attempt(() => compileParser(entry.malformed)),
+				attempt(() => compileGenerator(entry.malformed, () => 0)),
+				attempt(() => compileReporter(entry.malformed, undefined)),
+				attempt(() => compileAuditor(entry.malformed, undefined)),
+				attempt(() => createContract(entry.malformed)),
+			]
+			const controls = [
+				attempt(() => ownShape(entry.control)),
+				attempt(() => cloneShape(entry.control)),
+				attempt(() => validateShape(entry.control)),
+				attempt(() => validateShapeDepth(entry.control)),
+				attempt(() => compileSchema(entry.control)),
+				attempt(() => compileGuard(entry.control)),
+				attempt(() => compileParser(entry.control)),
+				attempt(() => compileGenerator(entry.control, () => 0)),
+				attempt(() => compileReporter(entry.control, undefined)),
+				attempt(() => compileAuditor(entry.control, undefined)),
+				attempt(() => createContract(entry.control)),
+			]
+			expect(malformed.every((outcome) => !outcome.success)).toBe(true)
+			expect(controls.every((outcome) => outcome.success)).toBe(true)
+		}
+	})
+
 	it('rejects integer-empty ranges and misplaced optionals at all eleven shape entries', () => {
 		const malformed: readonly {
 			readonly shape: ContractShape

@@ -489,17 +489,15 @@ describe('cloneShape', () => {
 		expect(clone.properties.first).not.toBe(child)
 	})
 
-	it('tolerates cycles and closes the cloned edge onto the clone', () => {
+	it('rejects a cyclic shape with the shared gate diagnosis', () => {
 		const raw = JSON.parse('{"type":"array","items":{"type":"string"}}')
 		raw.items = raw
 		const source: ContractShape = raw
-		const clone = cloneShape(source)
+		const error = captureContractError(() => cloneShape(source))
 
-		expect(clone.type).toBe('array')
-		if (clone.type !== 'array') return
-		expect(clone.items).toBe(clone)
-		expect(clone).not.toBe(source)
-		expect(Object.isFrozen(clone)).toBe(true)
+		expect(error.code).toBe('cycle')
+		expect(error.message).toBe('validateShapeDepth: a shape graph may not contain a cycle')
+		expect(error.context?.path).toEqual(['items'])
 	})
 
 	it('preserves sharing across union variants', () => {

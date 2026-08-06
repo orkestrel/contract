@@ -75,24 +75,33 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 			context: { shape: 'string' },
 		})
 	}
-	const pattern = options?.pattern
-	if (options?.min !== undefined && (!Number.isSafeInteger(options.min) || options.min < 0)) {
+	const snapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	if (!snapshot.success) {
+		throw new ContractError('stringShape: options could not be read', {
+			code: 'structure',
+			context: { shape: 'string' },
+			cause: snapshot.error,
+		})
+	}
+	const safe = snapshot.value
+	const pattern = safe?.pattern
+	if (safe?.min !== undefined && (!Number.isSafeInteger(safe.min) || safe.min < 0)) {
 		throw new ContractError('stringShape: min must be a non-negative safe integer', {
 			code: 'bound',
 			context: {
 				shape: 'string',
 				limit: 'non-negative safe integer',
-				received: String(options.min),
+				received: String(safe.min),
 			},
 		})
 	}
-	if (options?.max !== undefined && (!Number.isSafeInteger(options.max) || options.max < 0)) {
+	if (safe?.max !== undefined && (!Number.isSafeInteger(safe.max) || safe.max < 0)) {
 		throw new ContractError('stringShape: max must be a non-negative safe integer', {
 			code: 'bound',
 			context: {
 				shape: 'string',
 				limit: 'non-negative safe integer',
-				received: String(options.max),
+				received: String(safe.max),
 			},
 		})
 	}
@@ -102,21 +111,35 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 			context: { shape: 'string', received: typeof pattern },
 		})
 	}
-	if (pattern !== undefined && pattern.flags.length > 0) {
+	const patternSnapshot = attempt(() =>
+		pattern === undefined
+			? undefined
+			: { source: pattern.source, flags: pattern.flags, text: pattern.toString() },
+	)
+	if (!patternSnapshot.success) {
+		throw new ContractError('stringShape: pattern could not be read', {
+			code: 'pattern',
+			context: { shape: 'string' },
+			cause: patternSnapshot.error,
+		})
+	}
+	if (patternSnapshot.value !== undefined && patternSnapshot.value.flags.length > 0) {
 		throw new ContractError(
 			'stringShape: pattern must not use flags; use inline pattern constructs instead',
 			{
 				code: 'pattern',
-				context: { shape: 'string', received: pattern.toString() },
+				context: { shape: 'string', received: patternSnapshot.value.text },
 			},
 		)
 	}
 	const shape: StringShape = {
 		type: 'string',
-		...(options?.min === undefined ? {} : { min: options.min }),
-		...(options?.max === undefined ? {} : { max: options.max }),
-		...(pattern === undefined ? {} : { pattern }),
-		...(options?.description === undefined ? {} : { description: options.description }),
+		...(safe?.min === undefined ? {} : { min: safe.min }),
+		...(safe?.max === undefined ? {} : { max: safe.max }),
+		...(patternSnapshot.value === undefined
+			? {}
+			: { pattern: new RegExp(patternSnapshot.value.source) }),
+		...(safe?.description === undefined ? {} : { description: safe.description }),
 	}
 	validateShapeDepth(shape)
 	return cloneShape(shape)
@@ -142,25 +165,34 @@ export function numberShape(options?: NumberShapeOptions): NumberShape {
 			context: { shape: 'number' },
 		})
 	}
-	const shape = options?.integer === true ? 'integer' : 'number'
-	if (options?.min !== undefined && !Number.isFinite(options.min)) {
-		throw new ContractError('numberShape: min must be finite', {
-			code: 'bound',
-			context: { shape, limit: 'finite number', received: String(options.min) },
+	const snapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	if (!snapshot.success) {
+		throw new ContractError('numberShape: options could not be read', {
+			code: 'structure',
+			context: { shape: 'number' },
+			cause: snapshot.error,
 		})
 	}
-	if (options?.max !== undefined && !Number.isFinite(options.max)) {
+	const safe = snapshot.value
+	const shape = safe?.integer === true ? 'integer' : 'number'
+	if (safe?.min !== undefined && !Number.isFinite(safe.min)) {
+		throw new ContractError('numberShape: min must be finite', {
+			code: 'bound',
+			context: { shape, limit: 'finite number', received: String(safe.min) },
+		})
+	}
+	if (safe?.max !== undefined && !Number.isFinite(safe.max)) {
 		throw new ContractError('numberShape: max must be finite', {
 			code: 'bound',
-			context: { shape, limit: 'finite number', received: String(options.max) },
+			context: { shape, limit: 'finite number', received: String(safe.max) },
 		})
 	}
 	const result: NumberShape = {
 		type: 'number',
-		...(options?.min === undefined ? {} : { min: options.min }),
-		...(options?.max === undefined ? {} : { max: options.max }),
-		...(options?.integer === undefined ? {} : { integer: options.integer }),
-		...(options?.description === undefined ? {} : { description: options.description }),
+		...(safe?.min === undefined ? {} : { min: safe.min }),
+		...(safe?.max === undefined ? {} : { max: safe.max }),
+		...(safe?.integer === undefined ? {} : { integer: safe.integer }),
+		...(safe?.description === undefined ? {} : { description: safe.description }),
 	}
 	validateShapeDepth(result)
 	return Object.freeze(result)
@@ -185,7 +217,15 @@ export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): Num
 			context: { shape: 'integer' },
 		})
 	}
-	return numberShape({ ...options, integer: true })
+	const snapshot = attempt(() => (options === undefined ? {} : { ...options }))
+	if (!snapshot.success) {
+		throw new ContractError('integerShape: options could not be read', {
+			code: 'structure',
+			context: { shape: 'integer' },
+			cause: snapshot.error,
+		})
+	}
+	return numberShape({ ...snapshot.value, integer: true })
 }
 
 /**
@@ -207,9 +247,18 @@ export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
 			context: { shape: 'boolean' },
 		})
 	}
+	const snapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	if (!snapshot.success) {
+		throw new ContractError('booleanShape: options could not be read', {
+			code: 'structure',
+			context: { shape: 'boolean' },
+			cause: snapshot.error,
+		})
+	}
+	const safe = snapshot.value
 	const shape: BooleanShape = {
 		type: 'boolean',
-		...(options?.description === undefined ? {} : { description: options.description }),
+		...(safe?.description === undefined ? {} : { description: safe.description }),
 	}
 	validateShapeDepth(shape)
 	return Object.freeze(shape)
@@ -234,9 +283,18 @@ export function nullShape(options?: NullShapeOptions): NullShape {
 			context: { shape: 'null' },
 		})
 	}
+	const snapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	if (!snapshot.success) {
+		throw new ContractError('nullShape: options could not be read', {
+			code: 'structure',
+			context: { shape: 'null' },
+			cause: snapshot.error,
+		})
+	}
+	const safe = snapshot.value
 	const shape: NullShape = {
 		type: 'null',
-		...(options?.description === undefined ? {} : { description: options.description }),
+		...(safe?.description === undefined ? {} : { description: safe.description }),
 	}
 	validateShapeDepth(shape)
 	return Object.freeze(shape)
@@ -266,10 +324,12 @@ export function literalShape(
 	options?: LiteralShapeOptions,
 ): LiteralShape {
 	const input: unknown = values
-	if (!Array.isArray(input)) {
+	const array = attempt(() => Array.isArray(input))
+	if (!array.success || !array.value) {
 		throw new ContractError('literalShape: values must be an array', {
 			code: 'structure',
 			context: { path: ['values'], shape: 'literal' },
+			...(!array.success ? { cause: array.error } : {}),
 		})
 	}
 	const optionInput: unknown = options
@@ -279,16 +339,32 @@ export function literalShape(
 			context: { shape: 'literal' },
 		})
 	}
+	const optionSnapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	if (!optionSnapshot.success) {
+		throw new ContractError('literalShape: options could not be read', {
+			code: 'structure',
+			context: { shape: 'literal' },
+			cause: optionSnapshot.error,
+		})
+	}
+	const safe = optionSnapshot.value
 	validateShapeDepth({
 		type: 'literal',
 		values,
-		...(options?.description === undefined ? {} : { description: options.description }),
+		...(safe?.description === undefined ? {} : { description: safe.description }),
 	})
-	const snapshot = Object.freeze([...values])
+	const copied = attempt(() => Object.freeze([...values]))
+	if (!copied.success) {
+		throw new ContractError('literalShape: values could not be copied', {
+			code: 'structure',
+			context: { path: ['values'], shape: 'literal' },
+			cause: copied.error,
+		})
+	}
 	return Object.freeze({
 		type: 'literal',
-		values: snapshot,
-		...(options?.description === undefined ? {} : { description: options.description }),
+		values: copied.value,
+		...(safe?.description === undefined ? {} : { description: safe.description }),
 	})
 }
 
@@ -318,32 +394,41 @@ export function arrayShape<S extends ContractShape>(
 			context: { shape: 'array' },
 		})
 	}
-	if (options?.min !== undefined && (!Number.isSafeInteger(options.min) || options.min < 0)) {
+	const snapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	if (!snapshot.success) {
+		throw new ContractError('arrayShape: options could not be read', {
+			code: 'structure',
+			context: { shape: 'array' },
+			cause: snapshot.error,
+		})
+	}
+	const safe = snapshot.value
+	if (safe?.min !== undefined && (!Number.isSafeInteger(safe.min) || safe.min < 0)) {
 		throw new ContractError('arrayShape: min must be a non-negative safe integer', {
 			code: 'bound',
 			context: {
 				shape: 'array',
 				limit: 'non-negative safe integer',
-				received: String(options.min),
+				received: String(safe.min),
 			},
 		})
 	}
-	if (options?.max !== undefined && (!Number.isSafeInteger(options.max) || options.max < 0)) {
+	if (safe?.max !== undefined && (!Number.isSafeInteger(safe.max) || safe.max < 0)) {
 		throw new ContractError('arrayShape: max must be a non-negative safe integer', {
 			code: 'bound',
 			context: {
 				shape: 'array',
 				limit: 'non-negative safe integer',
-				received: String(options.max),
+				received: String(safe.max),
 			},
 		})
 	}
 	const shape: ArrayShape<S> = {
 		type: 'array',
 		items,
-		...(options?.min === undefined ? {} : { min: options.min }),
-		...(options?.max === undefined ? {} : { max: options.max }),
-		...(options?.description === undefined ? {} : { description: options.description }),
+		...(safe?.min === undefined ? {} : { min: safe.min }),
+		...(safe?.max === undefined ? {} : { max: safe.max }),
+		...(safe?.description === undefined ? {} : { description: safe.description }),
 	}
 	validateShapeDepth(shape)
 	return Object.freeze(shape)
@@ -388,25 +473,44 @@ export function objectShape<
 			context: { shape: 'object' },
 		})
 	}
+	const optionSnapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	if (!optionSnapshot.success) {
+		throw new ContractError('objectShape: options could not be read', {
+			code: 'structure',
+			context: { shape: 'object' },
+			cause: optionSnapshot.error,
+		})
+	}
+	const safe = optionSnapshot.value
 	validateShapeDepth({
 		type: 'object',
 		properties,
-		...(options?.additionalProperties === undefined
+		...(safe?.additionalProperties === undefined
 			? {}
-			: { additionalProperties: options.additionalProperties }),
-		...(options?.description === undefined ? {} : { description: options.description }),
+			: { additionalProperties: safe.additionalProperties }),
+		...(safe?.description === undefined ? {} : { description: safe.description }),
 	})
-	const snapshot: { [K in keyof P]: P[K] } = Object.create(null)
-	for (const key in properties) {
-		if (Object.hasOwn(properties, key)) snapshot[key] = properties[key]
+	const copied = attempt(() => {
+		const snapshot: { [K in keyof P]: P[K] } = Object.create(null)
+		for (const key in properties) {
+			if (Object.hasOwn(properties, key)) snapshot[key] = properties[key]
+		}
+		return Object.freeze(snapshot)
+	})
+	if (!copied.success) {
+		throw new ContractError('objectShape: properties could not be copied', {
+			code: 'structure',
+			context: { path: ['properties'], shape: 'object' },
+			cause: copied.error,
+		})
 	}
 	return Object.freeze({
 		type: 'object',
-		properties: Object.freeze(snapshot),
-		...(options?.additionalProperties === undefined
+		properties: copied.value,
+		...(safe?.additionalProperties === undefined
 			? {}
-			: { additionalProperties: options.additionalProperties }),
-		...(options?.description === undefined ? {} : { description: options.description }),
+			: { additionalProperties: safe.additionalProperties }),
+		...(safe?.description === undefined ? {} : { description: safe.description }),
 	})
 }
 
@@ -431,12 +535,22 @@ export function recordShape<S extends ContractShape>(
 	values: S,
 	options?: RecordShapeOptions,
 ): ObjectShape<Record<never, never>, S> {
-	if (values === undefined || values === null) {
+	const value: unknown = values
+	if (value === undefined || value === null || value === true || value === false) {
 		throw new ContractError('recordShape: values must be a shape', {
 			code: 'structure',
 			context: { path: ['additionalProperties'], shape: 'object' },
 		})
 	}
+	const snapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	if (!snapshot.success) {
+		throw new ContractError('recordShape: options could not be read', {
+			code: 'structure',
+			context: { shape: 'object' },
+			cause: snapshot.error,
+		})
+	}
+	const safe = snapshot.value
 	const input: unknown = options
 	if (input !== undefined && !isRecord(input)) {
 		throw new ContractError('recordShape: options must be a plain record', {
@@ -448,7 +562,7 @@ export function recordShape<S extends ContractShape>(
 		type: 'object',
 		properties: Object.freeze({}),
 		additionalProperties: values,
-		...(options?.description === undefined ? {} : { description: options.description }),
+		...(safe?.description === undefined ? {} : { description: safe.description }),
 	}
 	validateShapeDepth(shape)
 	return Object.freeze(shape)
@@ -583,9 +697,18 @@ export function jsonShape(options?: JSONShapeOptions): JSONShape {
 			context: { shape: 'json' },
 		})
 	}
+	const snapshot = attempt(() => (options === undefined ? undefined : { ...options }))
+	if (!snapshot.success) {
+		throw new ContractError('jsonShape: options could not be read', {
+			code: 'structure',
+			context: { shape: 'json' },
+			cause: snapshot.error,
+		})
+	}
+	const safe = snapshot.value
 	const shape: JSONShape = {
 		type: 'json',
-		...(options?.description === undefined ? {} : { description: options.description }),
+		...(safe?.description === undefined ? {} : { description: safe.description }),
 	}
 	validateShapeDepth(shape)
 	return Object.freeze(shape)

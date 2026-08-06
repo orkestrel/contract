@@ -761,6 +761,7 @@ export function validateShapeDepth(shape: ContractShape): void {
 						domainPath = [...path]
 						domainShape = 'literal'
 					}
+					const values = new Set<string | number | boolean>()
 					for (let index = 0; index < length; index += 1) {
 						const key = String(index)
 						nodeSecond = key
@@ -777,6 +778,11 @@ export function validateShapeDepth(shape: ContractShape): void {
 							nodeMessage = 'validateShapeDepth: values must be a stable data array'
 							return false
 						}
+						if (values.has(value)) {
+							nodeMessage = 'validateShapeDepth: literal values must be unique'
+							return false
+						}
+						values.add(value)
 						if (
 							typeof value !== 'string' &&
 							typeof value !== 'number' &&
