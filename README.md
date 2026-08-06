@@ -1,8 +1,9 @@
 # @orkestrel/contract
 
 The zero-dependency contract toolkit — runtime type guards, guard combinators, coerce-and-extract
-parsers, and a shape DSL that compiles once into a guard, parser, fault report, JSON Schema, and
-generator that can never drift. The foundation package of the `@orkestrel` line.
+parsers, and a shape DSL that compiles once into a JSON Schema, a guard, a parser, a strict audit, a
+parse report, and a generator, every one of them derived from a single owned snapshot of the
+declaration. The foundation package of the `@orkestrel` line.
 
 ## Install
 
@@ -36,6 +37,7 @@ const user = createContract(
 user.is({ name: 'Ada', age: 36 }) // true
 user.parse({ name: 'Ada', age: '36' }) // { name: 'Ada', age: 36 } — coerces, or undefined
 user.explain({ name: '', age: 36 }) // [{ reason: 'constraint', path: ['name'], constraint: 'min', limit: 1, … }]
+user.audit({ name: 'Ada', age: 36, extra: true }) // [{ reason: 'extra', path: ['extra'] }] — parse drops it, audit names it
 user.schema // the owned, deeply frozen compiled JSON Schema
 user.generate(seededRandom(42)) // reproducible seed data; omit the arg for a wall-clock-seeded source
 ```

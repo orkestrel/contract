@@ -511,8 +511,10 @@ export function compileSchema(shape: ContractShape): JSONSchema {
  * @remarks
  * Reuses the combinators for structural and refined shapes, including
  * {@link literalOf} for SameValueZero literal matching. Compiled object shapes
- * observe own enumerable string keys through {@link enumerableKeys}, matching
- * their parser, reporter, and inference view for both open and closed objects.
+ * observe own enumerable string keys through {@link enumerableKeys}, the same
+ * key view their parser, reporter, auditor, and inference use for both open and
+ * closed objects — the view is shared, the verdict on an undeclared key is not
+ * (this guard rejects the object; the parser drops the key).
  * Like every guard it is total — it never throws (AGENTS §14). The shape is
  * taken through {@link ownShape} first, so an unfrozen caller-owned graph
  * compiles from a snapshot. {@link validateShapeDepth} iteratively rejects
@@ -651,11 +653,15 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
  * for literal membership — so a value that coerces but violates a bound parses
  * to `undefined`. The result is full parse↔guard soundness (AGENTS §14): a
  * non-`undefined` parse always satisfies the contract's `is`, refinements
- * included. Object presence and extra-key processing use the same
- * own-enumerable-string snapshot as the guard, reporter, and inference. The
- * shape is taken through {@link ownShape} first, so an unfrozen caller-owned
- * graph compiles from a snapshot. {@link validateShapeDepth} iteratively
- * rejects excessive nesting or cycles before recursive parser compilation.
+ * included — a statement about the OUTPUT, never about the input, which may be
+ * a value `is` rejects. Object presence and extra-key processing read the same
+ * own-enumerable-string key view as the guard, reporter, auditor, and inference
+ * — one key set, deliberately different verdicts: this parser drops an
+ * undeclared key that {@link compileGuard} rejects and {@link compileAuditor}
+ * faults. The shape is taken through {@link ownShape} first, so an unfrozen
+ * caller-owned graph compiles from a snapshot. {@link validateShapeDepth}
+ * iteratively rejects excessive nesting or cycles before recursive parser
+ * compilation.
  *
  * @param shape - The shape to compile
  * @returns A parser yielding the shape's inferred type or `undefined`
@@ -741,8 +747,13 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 		}
 		// A closed object (no `additionalProperties`) silently drops unknown keys
 		// present on the input rather than failing the parse — an intended
-		// coercion leniency (the compiled guard still rejects them; this only
-		// matters for guard-invalid inputs handed to `parse`).
+		// coercion leniency, and an observable one. The compiled guard rejects
+		// such an input, so `parse` returning a value never implies `is` accepted
+		// what it was handed: `parse({ id: 'a', debug: true })` answers
+		// `{ id: 'a' }` for a shape whose `is` says false. `compileReporter`
+		// mirrors this parser and reports nothing for a dropped key;
+		// `compileAuditor` is the artifact that reports it, one `'extra'` fault
+		// per undeclared key.
 		case 'object': {
 			const entries: { key: string; parse: Parser<unknown>; optional: boolean }[] = []
 			for (const key of Object.keys(owned.properties)) {
@@ -1052,6 +1063,9 @@ export function compileGenerator(
  * holds structurally — `explain` mirrors `parse`, not the stricter `is` (a
  * coercible value like `'42'` against a `numberShape` reports no fault, the
  * same leniency `parse` grants, even though the strict guard would reject it).
+ * {@link compileAuditor} is the counterpart report for the strict domain,
+ * mirroring {@link compileGuard} the way this one mirrors
+ * {@link compileParser}.
  *
  * Faults are collected in stable pre-order (declared key/index order); every
  * call — object, array, and union alike, including a union's `oneOf` "no
@@ -1060,12 +1074,13 @@ export function compileGenerator(
  * bound holds at every level of nesting, not just the outermost container, on
  * adversarial input (a huge array, a wide record, a wide union of wide
  * records). A closed object's extra keys never
- * fault — `parse` silently drops them, so `explain` mirrors that leniency; an
- * open object with a constraining `additionalProperties` shape recurses extras
- * against it instead. A hostile getter or throwing `Proxy` trap is contained
- * via {@link attempt} and surfaces as a single top-level type fault, never a
- * throw (AGENTS §14). {@link validateShapeDepth} iteratively rejects excessive
- * shape nesting or cycles before recursive reporting begins.
+ * fault — `parse` silently drops them, so `explain` mirrors that leniency, and
+ * {@link compileAuditor} is where they do fault; an open object with a
+ * constraining `additionalProperties` shape recurses extras against it instead.
+ * A hostile getter or throwing `Proxy` trap is contained via {@link attempt}
+ * and surfaces as a single top-level type fault, never a throw (AGENTS §14).
+ * {@link validateShapeDepth} iteratively rejects excessive shape nesting or
+ * cycles before recursive reporting begins.
  *
  * @param shape - The shape to report against
  * @param value - The value to check
@@ -1315,12 +1330,14 @@ export function compileReporter(
  * Audit a value against the strict acceptance domain of a {@link ContractShape}.
  *
  * @remarks
- * Unlike {@link compileReporter}, this walk mirrors {@link compileGuard}: leaf
- * coercions are faults, closed-object extras are faults, and union acceptance
- * is decided from each variant's strict audit emptiness. Every recursive call
- * returns at most {@link FAULT_LIMIT} entries. Hostile property access is
- * contained through {@link attempt} and collapses to one fault at the current
- * container path.
+ * The diagnostic for the domain {@link compileGuard} and {@link compileSchema}
+ * describe, where {@link compileReporter} diagnoses the wider preimage
+ * {@link compileParser} maps into it. This walk therefore mirrors the guard:
+ * leaf coercions are faults, closed-object extras are faults, and union
+ * acceptance is decided from each variant's strict audit emptiness. Every
+ * recursive call returns at most {@link FAULT_LIMIT} entries. Hostile property
+ * access is contained through {@link attempt} and collapses to one fault at the
+ * current container path.
  *
  * @param shape - The shape to audit against
  * @param value - The value to check
@@ -1558,7 +1575,8 @@ export function compileAuditor(
 
 /**
  * Compile a {@link ContractShape} into a {@link ContractInterface} — the six
- * lockstep outputs from one declaration.
+ * lockstep outputs from one declaration, lockstep meaning derived from one
+ * owned snapshot rather than accepting the same values.
  *
  * @remarks
  * Runs {@link validateShape} first — a malformed shape throws immediately

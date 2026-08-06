@@ -380,9 +380,13 @@ export interface ArrayShape<S extends ContractShape = ContractShape> {
  *
  * @remarks
  * A property whose shape is an {@link OptionalShape} may be absent; all others
- * are required. `additionalProperties` controls unknown keys: `undefined` /
- * `false` rejects them (closed), `true` accepts them as-is, a `ContractShape`
- * validates them.
+ * are required. `additionalProperties` controls unknown keys, and each compiled
+ * artifact acts on that setting in its own way. Closed (`undefined` / `false`):
+ * the compiled guard rejects the object, the compiled auditor reports one
+ * `'extra'` fault at the offending key, and the emitted schema sets
+ * `additionalProperties: false` — while the compiled parser drops the key and
+ * the compiled reporter stays silent, mirroring that parser. `true` accepts
+ * unknown keys as-is, and a `ContractShape` validates them, in every artifact.
  */
 export interface ObjectShape<
 	P extends Readonly<Record<string, ContractShape>> = Readonly<Record<string, ContractShape>>,
@@ -752,6 +756,12 @@ export type RandomFunction = () => number
  * faults behind a failed `parse`, and `generate` produces deterministic seed
  * data from a {@link RandomFunction} (defaulting to a wall-clock-seeded source
  * when none is supplied).
+ *
+ * LOCKSTEP means derived from one owned snapshot of the shape, not agreeing on
+ * which values to accept: `is` and `schema` describe the contract's canonical
+ * domain, while `parse` is a map into that domain whose preimage is
+ * deliberately larger (it coerces leaves and drops a closed object's undeclared
+ * keys). `audit` diagnoses the domain; `explain` diagnoses the map.
  */
 export interface ContractInterface<T> {
 	readonly schema: JSONSchema
@@ -762,7 +772,9 @@ export interface ContractInterface<T> {
 	 *
 	 * @remarks
 	 * An empty report means the value is strictly valid. Soundness invariant:
-	 * `audit(v).length === 0` if and only if `is(v)`.
+	 * `audit(v).length === 0` if and only if `is(v)`. It is the report for the
+	 * stricter of the two domains, so a coercible leaf and a closed object's
+	 * undeclared key both fault here and neither faults in `explain`.
 	 *
 	 * @param value - The value to check
 	 * @returns The faults found, empty when the value is strictly valid
@@ -774,8 +786,9 @@ export interface ContractInterface<T> {
 	 * @remarks
 	 * An empty report means the value is valid. Soundness invariant:
 	 * `explain(v).length === 0` if and only if `parse(v) !== undefined` — explain
-	 * mirrors `parse`'s coercion, not the stricter `is`. Faults are listed in
-	 * stable pre-order (declared key/index order).
+	 * mirrors `parse`'s coercion, not the stricter `is`, and `audit` is the
+	 * report that mirrors `is`. Faults are listed in stable pre-order (declared
+	 * key/index order).
 	 *
 	 * @param value - The value to check
 	 * @returns The faults found, empty when the value parses successfully

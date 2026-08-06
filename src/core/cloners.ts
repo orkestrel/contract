@@ -637,8 +637,9 @@ export function cloneShape(shape: ContractShape): ContractShape {
  * to snapshot, or pass it through {@link cloneShape} first.
  *
  * Every compiler entry point (`compileSchema` / `compileGuard` /
- * `compileParser` / `compileGenerator` / `compileReporter`) opens with this
- * call, and the check applies per node as the recursion descends: a frozen
+ * `compileParser` / `compileGenerator` / `compileReporter` / `compileAuditor`)
+ * opens with this call, and the check applies per node as the recursion
+ * descends: a frozen
  * parent is trusted for its own fields while each child is owned again at its
  * own level, so a hand-assembled graph that froze only part of itself is still
  * compiled from owned data.

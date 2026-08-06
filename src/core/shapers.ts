@@ -430,7 +430,10 @@ export function nullableShape<S extends ContractShape>(inner: S): NullableShape<
  * @remarks
  * The sound counterpart of {@link rawShape}: `rawShape` embeds an arbitrary
  * schema fragment and accepts every defined value at runtime, while `jsonShape`
- * validates that a value is real JSON (via {@link isJSONValue}).
+ * validates that a value is real JSON (via {@link isJSONValue}). Its emitted
+ * schema is the empty accept-anything `{}`, so here the schema claims MORE than
+ * the compiled guard accepts — `NaN`, a `Map`, and a class instance all satisfy
+ * `{}` and all fail `isJSONValue`.
  *
  * @param options - Optional `description`
  * @returns A JSON passthrough shape
@@ -458,8 +461,11 @@ export function jsonShape(options?: JSONShapeOptions): JSONShape {
  * deep-cloned into an owned frozen snapshot ({@link cloneSchema}), so
  * `rawShape(fragment).schema !== fragment` and later edits to the caller's
  * fragment cannot reach the shape. `compileSchema` re-emits that snapshot
- * structurally verbatim; `compileGenerator` throws, since an arbitrary embedded
- * schema has no auto-generatable sample.
+ * structurally verbatim, so here the schema claims LESS than the compiled guard
+ * accepts — `rawShape({ type: 'string' })` emits `{ type: 'string' }` and its
+ * guard still accepts `42`, the mirror of {@link jsonShape}'s looseness.
+ * `compileGenerator` throws, since an arbitrary embedded schema has no
+ * auto-generatable sample.
  *
  * @param schema - The JSON Schema fragment to embed
  * @returns A raw shape owning a frozen copy of the fragment
