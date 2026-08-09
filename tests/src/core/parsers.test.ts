@@ -41,6 +41,7 @@ import {
 	captureContractError,
 	createRevokedArrayProxy,
 	createThrowingGetter,
+	replaceIntrinsic,
 	soundnessViolations,
 	throwHostileAccess,
 } from '../../setup.js'
@@ -156,6 +157,20 @@ describe('structural parsers', () => {
 		expect(parseArray(buildSparseArray(), isString)).toBeUndefined()
 	})
 
+	it('parseArray refuses split index membership and accepts the dense control', () => {
+		const split = new Proxy([1, 2], {
+			ownKeys() {
+				return ['0', 'length']
+			},
+			getOwnPropertyDescriptor(target, property) {
+				return property === '0' ? undefined : Reflect.getOwnPropertyDescriptor(target, property)
+			},
+		})
+
+		expect(parseArray(split, isNumber)).toBeUndefined()
+		expect(parseArray([1, 2], isNumber)).toEqual([1, 2])
+	})
+
 	it('parseArray reads dense indices rather than caller-defined iteration', () => {
 		const value = [1, 2]
 		Object.defineProperty(value, Symbol.iterator, {
@@ -206,6 +221,32 @@ describe('structural parsers', () => {
 
 		expect(() => parseEnum('value', allowed)).not.toThrow()
 		expect(parseEnum('value', allowed)).toBeUndefined()
+	})
+
+	it('parseEnum and parseEnumField ignore caller-defined vocabulary iteration', () => {
+		const allowed = ['indexed']
+		const iterated = ['iterated']
+		Object.defineProperty(allowed, Symbol.iterator, {
+			value: iterated[Symbol.iterator].bind(iterated),
+		})
+
+		expect(parseEnum('indexed', allowed)).toBe('indexed')
+		expect(parseEnum('iterated', allowed)).toBeUndefined()
+		expect(parseEnumField({ value: 'indexed' }, 'value', allowed)).toBe('indexed')
+		expect(parseEnumField({ value: 'iterated' }, 'value', allowed)).toBeUndefined()
+	})
+
+	it('parseEnum refuses an impossible reported length without caller iteration', () => {
+		const iterated = ['iterated']
+		const allowed = new Proxy(['indexed'], {
+			get(target, key, receiver) {
+				if (key === 'length') return 2 ** 32
+				if (key === Symbol.iterator) return iterated[Symbol.iterator].bind(iterated)
+				return Reflect.get(target, key, receiver)
+			},
+		})
+
+		expect(parseEnum('iterated', allowed)).toBeUndefined()
 	})
 
 	it('parseJSONValue narrows a cycle-safe JSON tree by reference', () => {
@@ -434,5 +475,50 @@ describe('JSON parsers', () => {
 		const isSchemaType = literalOf(...JSON_SCHEMA_TYPES)
 		expect(isSchemaType('string')).toBe(true)
 		expect(isSchemaType('Date')).toBe(false)
+	})
+})
+
+describe('coercion answered through an unredirectable vocabulary', () => {
+	// A coercer that returns a value outside its own allowed list is the guard
+	// defect in parser form, and `parseEnum` is the door it arrived through:
+	// `Set.prototype.has = () => true` made `parseEnum('zzz', ['a', 'b'])` answer
+	// `'zzz'`.
+	const answerTrue = (): boolean => true
+	const answerFalse = (): boolean => false
+
+	it('parseEnum answers undefined for a non-member while Set.prototype.has answers true', () => {
+		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+			member: parseEnum('a', ['a', 'b']),
+			stranger: parseEnum('zzz', ['a', 'b']),
+			crossType: parseEnum('1', [1]),
+		}))
+
+		expect(answers).toEqual({ member: 'a', stranger: undefined, crossType: undefined })
+	})
+
+	it('parseEnum answers the member while Set.prototype.has answers false', () => {
+		const answers = replaceIntrinsic(Set.prototype, 'has', answerFalse, () =>
+			parseEnum('a', ['a', 'b']),
+		)
+
+		expect(answers).toBe('a')
+	})
+
+	it('parseEnumField inherits the same answer through its field reader', () => {
+		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+			member: parseEnumField({ role: 'a' }, 'role', ['a', 'b']),
+			stranger: parseEnumField({ role: 'zzz' }, 'role', ['a', 'b']),
+		}))
+
+		expect(answers).toEqual({ member: 'a', stranger: undefined })
+	})
+
+	it('stays sound with its paired guard under the same lie', () => {
+		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => {
+			const parsed = parseEnum('zzz', ['a', 'b'])
+			return { parsed, guarded: literalOf('a', 'b')('zzz') }
+		})
+
+		expect(answers).toEqual({ parsed: undefined, guarded: false })
 	})
 })

@@ -41,7 +41,7 @@ Load [hardening.md](references/hardening.md) for the hardening lane and for any 
 
 1. **Bound the campaign.** Record requested outcomes, in-scope environments/domains, explicit exclusions, supported hosts, dirty files, and evidence needed for acceptance.
 2. **Map before editing.** Trace public types, implementations, callers, tests, guides, exports, runtime boundaries, installed Orkestrel dependencies, and applicable legacy/upstream references.
-3. **Establish the intended contract.** Build a capability/defect matrix. Separate verified fact from inference. Mark each row implement, repair, retain, or exclude with a reason.
+3. **Establish the intended contract.** Build a capability/defect matrix. Separate verified fact from inference. Mark each row implement, repair, retain, or exclude with a reason. The matrix is fixed at this step and is the campaign's definition of done: every later step serves a row, and work that serves no row belongs to the next campaign.
 4. **Design types first.** Update guide/spec intent and `*/types.ts` before implementation, under the root design laws. A contract that needs a compatibility shim is the wrong contract.
 5. **Implement completely.** Finish every in-scope branch and reuse the exact installed Orkestrel primitives whose semantics match. The root completion law decides what may not be left behind.
 6. **Prove each defect before repairing it.** A repair begins with a test that fails for that defect: record the exact command and its failing count before the fix and the same command's passing count after. A repair with no red-then-green record is unproven.
@@ -62,5 +62,7 @@ Do not accept “mostly complete,” “tests pass” without adequacy review, o
 - public contract, implementation, tests, guides, and generated outputs aligned;
 - no unresolved centralization, wrapper, dependency-reuse, test-discovery, lifecycle, security, or text-integrity finding;
 - exact command evidence for every final gate.
+
+Completion is those conditions met, not the absence of anything further to find. When every row is closed and the gates are green, stopping is the correct action and the next campaign is the deliverable; a further pass over the same surface is a new instruction from the user, not a finding.
 
 Report what changed, what evidence proves it, exact test/gate results, and any genuine residual risk. Do not call an in-scope omission “future work.”

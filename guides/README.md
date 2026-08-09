@@ -1,6 +1,6 @@
 # Guides
 
-A dual-axis index into this repository's guides — by concept, and by directory (AGENTS §22).
+A dual-axis index into this repository's guides — by concept, and by directory (`AGENTS.md`, Documentation contract).
 
 ## By concept
 

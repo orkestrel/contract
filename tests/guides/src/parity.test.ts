@@ -17,6 +17,16 @@ import {
 	resolveLink,
 	symbolKey,
 } from '@orkestrel/guide'
+import * as barrel from '@src/core'
+import {
+	ContractCompiler,
+	ContractError,
+	JSONCloner,
+	SchemaCloner,
+	ShapeCloner,
+	ShapeValidator,
+} from '@src/core'
+import { DriftedMethods, SMUGGLED_KEY, SmuggledMember } from '../../setup.js'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const WALK_DIRS = ['src', 'guides', 'tests']
@@ -140,3 +150,98 @@ for (const entry of manifest) {
 		})
 	})
 }
+
+// The RUNTIME half of the documentation contract. Everything above reflects
+// source TEXT: `createSource` reads declarations, so a guide can agree with
+// every declaration in the tree and still disagree with the object the package
+// actually ships. These read the real prototypes instead, and the two halves
+// answer different questions — which is why both are here.
+const CORE_GUIDE = 'guides/src/contract.md'
+const RUNTIME_CLASSES = [
+	{ name: 'ContractCompiler', value: ContractCompiler },
+	{ name: 'ContractError', value: ContractError },
+	{ name: 'JSONCloner', value: JSONCloner },
+	{ name: 'SchemaCloner', value: SchemaCloner },
+	{ name: 'ShapeCloner', value: ShapeCloner },
+	{ name: 'ShapeValidator', value: ShapeValidator },
+]
+
+/**
+ * Partition a prototype's own NAME-keyed members into call-signature members,
+ * accessors, and plain data — the population `## Methods` and `## Surface`
+ * split between them.
+ */
+function readMembers(prototype: object): {
+	readonly methods: readonly string[]
+	readonly accessors: readonly string[]
+	readonly data: readonly string[]
+} {
+	const methods: string[] = []
+	const accessors: string[] = []
+	const data: string[] = []
+	for (const key of Object.getOwnPropertyNames(prototype)) {
+		if (key === 'constructor') continue
+		const descriptor = Object.getOwnPropertyDescriptor(prototype, key)
+		if (descriptor === undefined) continue
+		if (typeof descriptor.value === 'function') methods.push(key)
+		else if (typeof descriptor.get === 'function') accessors.push(key)
+		else data.push(key)
+	}
+	return { methods, accessors, data }
+}
+
+describe('runtime parity', () => {
+	const guideText = readText(CORE_GUIDE)
+	const contractGuide = createGuide(guideText)
+	const documented = new Map<string, readonly string[]>()
+	for (const group of contractGuide.methods()) documented.set(group.interface, group.methods)
+
+	it('enumerates every class the barrel publishes', () => {
+		// The per-class checks below are worth exactly as much as this list is
+		// complete: a new class nobody added here would be silently unchecked.
+		const published: string[] = []
+		for (const [name, value] of Object.entries(barrel)) {
+			if (typeof value === 'function' && /^[A-Z]/.test(name)) published.push(name)
+		}
+		expect(published.sort()).toEqual(RUNTIME_CLASSES.map((entry) => entry.name).sort())
+	})
+
+	for (const entry of RUNTIME_CLASSES) {
+		describe(`${entry.name}`, () => {
+			it('carries exactly the methods its interface documents', () => {
+				expect(readMembers(entry.value.prototype).methods).toEqual(
+					documented.get(`${entry.name}Interface`) ?? [],
+				)
+			})
+
+			it('documents every accessor and puts no data on its prototype', () => {
+				const members = readMembers(entry.value.prototype)
+				expect(members.data).toEqual([])
+				for (const accessor of members.accessors) {
+					expect(guideText).toContain(`\`${accessor}\``)
+				}
+			})
+
+			it('hides no prototype member behind a symbol key', () => {
+				expect(Object.getOwnPropertySymbols(entry.value.prototype)).toEqual([])
+			})
+		})
+	}
+
+	it('reports a class that grew an undocumented method', () => {
+		// The controlled opposite, drawn from INSIDE the name-keyed population:
+		// without it, a reader that found nothing at all would pass every check
+		// above and look exactly like a package in perfect parity.
+		expect(readMembers(DriftedMethods.prototype).methods).toEqual(['validate', 'undocumented'])
+		expect(documented.get('ShapeValidatorInterface')).toEqual(['validate'])
+	})
+
+	it('cannot see a symbol-keyed method by name, which is what the symbol check is for', () => {
+		// The control drawn from OUTSIDE that population. It establishes the
+		// membership rule's blind spot and that the separate own-symbol assertion
+		// is the thing that closes it — it establishes nothing about whether the
+		// name walk partitions name-keyed members correctly.
+		expect(readMembers(SmuggledMember.prototype).methods).toEqual([])
+		expect(Object.getOwnPropertySymbols(SmuggledMember.prototype)).toEqual([SMUGGLED_KEY])
+	})
+})

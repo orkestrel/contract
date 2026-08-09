@@ -9,6 +9,7 @@ import type {
 	JSONShapeOptions,
 	LiteralShape,
 	LiteralShapeOptions,
+	LiteralValue,
 	NullableShape,
 	NullShape,
 	NullShapeOptions,
@@ -24,15 +25,33 @@ import type {
 	UnionShape,
 } from './types.js'
 import { cloneSchema, cloneShape } from './cloners.js'
-import { validateShapeDepth } from './compilers.js'
-import { INFER_BREADTH_LIMIT, INFER_DEPTH_LIMIT } from './constants.js'
+import { ShapeValidator } from './ShapeValidator.js'
+import { INFER_BREADTH_LIMIT, INFER_DEPTH_LIMIT, INTRINSICS } from './constants.js'
 import { ContractError } from './errors.js'
-import { attempt, preview, readOptions, readValue } from './helpers.js'
+import {
+	admitMember,
+	admitVisited,
+	attempt,
+	collectMembers,
+	contain,
+	limitEntries,
+	matchesMember,
+	matchesRecordBrand,
+	matchesVisited,
+	omitVisited,
+	preview,
+	readArrayEntries,
+	readOptions,
+	readPatternFlags,
+	readPatternSource,
+	readValue,
+	retainDepth,
+} from './helpers.js'
 import {
 	isArray,
-	isBoolean,
 	isFiniteNumber,
 	isInteger,
+	isLiteralValue,
 	isObject,
 	isRecord,
 	isRegExp,
@@ -69,65 +88,81 @@ import {
  * ```
  */
 export function stringShape(options?: StringShapeOptions): StringShape {
-	const safe = readOptions(
-		options,
-		['min', 'max', 'pattern', 'description'],
-		'stringShape',
-		'string',
-	)
-	const pattern = safe?.pattern
-	if (safe?.min !== undefined && (!Number.isSafeInteger(safe.min) || safe.min < 0)) {
-		throw new ContractError('stringShape: min must be a non-negative safe integer', {
-			code: 'bound',
-			context: {
-				shape: 'string',
-				limit: 'non-negative safe integer',
-				received: preview(safe.min),
-			},
-		})
-	}
-	if (safe?.max !== undefined && (!Number.isSafeInteger(safe.max) || safe.max < 0)) {
-		throw new ContractError('stringShape: max must be a non-negative safe integer', {
-			code: 'bound',
-			context: {
-				shape: 'string',
-				limit: 'non-negative safe integer',
-				received: preview(safe.max),
-			},
-		})
-	}
-	if (pattern !== undefined && !isRegExp(pattern)) {
-		throw new ContractError('stringShape: pattern must be a RegExp', {
-			code: 'pattern',
-			context: { shape: 'string', received: typeof pattern },
-		})
-	}
-	const patternSnapshot =
-		pattern === undefined
-			? undefined
-			: readValue(
-					() => ({ source: pattern.source, flags: pattern.flags, text: pattern.toString() }),
-					'stringShape',
-					{ subject: 'pattern', code: 'pattern', context: { shape: 'string' } },
-				)
-	if (patternSnapshot !== undefined && patternSnapshot.flags.length > 0) {
-		throw new ContractError(
-			'stringShape: pattern must not use flags; use inline pattern constructs instead',
-			{
-				code: 'pattern',
-				context: { shape: 'string', received: patternSnapshot.text },
-			},
+	return contain(() => {
+		const safe = readOptions(
+			options,
+			['min', 'max', 'pattern', 'description'],
+			'stringShape',
+			'string',
 		)
-	}
-	const shape: StringShape = {
-		type: 'string',
-		...(safe?.min === undefined ? {} : { min: safe.min }),
-		...(safe?.max === undefined ? {} : { max: safe.max }),
-		...(patternSnapshot === undefined ? {} : { pattern: new RegExp(patternSnapshot.source) }),
-		...(safe?.description === undefined ? {} : { description: safe.description }),
-	}
-	validateShapeDepth(shape)
-	return cloneShape(shape)
+		const pattern = safe?.pattern
+		if (safe?.min !== undefined && (!INTRINSICS.safe(safe.min) || safe.min < 0)) {
+			throw new ContractError('stringShape: min must be a non-negative safe integer', {
+				code: 'bound',
+				context: {
+					shape: 'string',
+					limit: 'non-negative safe integer',
+					received: preview(safe.min),
+				},
+			})
+		}
+		if (safe?.max !== undefined && (!INTRINSICS.safe(safe.max) || safe.max < 0)) {
+			throw new ContractError('stringShape: max must be a non-negative safe integer', {
+				code: 'bound',
+				context: {
+					shape: 'string',
+					limit: 'non-negative safe integer',
+					received: preview(safe.max),
+				},
+			})
+		}
+		if (pattern !== undefined && !isRegExp(pattern)) {
+			throw new ContractError('stringShape: pattern must be a RegExp', {
+				code: 'pattern',
+				context: { shape: 'string', received: typeof pattern },
+			})
+		}
+		const patternSnapshot =
+			pattern === undefined
+				? undefined
+				: readValue(
+						() => {
+							// Source and flags through the CAPTURED accessors, and the
+							// rendered text built from them rather than through
+							// `RegExp.prototype.toString`: all three are caller-writable
+							// members, and this snapshot decides both the pattern a published
+							// shape carries and the text a refusal quotes back.
+							const source = readPatternSource(pattern)
+							const flags = readPatternFlags(pattern)
+							if (source === undefined || flags === undefined) {
+								throw new INTRINSICS.error('Pattern source and flags could not be read')
+							}
+							return { source, flags, text: `/${source}/${flags}` }
+						},
+						'stringShape',
+						{ subject: 'pattern', code: 'pattern', context: { shape: 'string' } },
+					)
+		if (patternSnapshot !== undefined && patternSnapshot.flags.length > 0) {
+			throw new ContractError(
+				'stringShape: pattern must not use flags; use inline pattern constructs instead',
+				{
+					code: 'pattern',
+					context: { shape: 'string', received: patternSnapshot.text },
+				},
+			)
+		}
+		const shape: StringShape = {
+			type: 'string',
+			...(safe?.min === undefined ? {} : { min: safe.min }),
+			...(safe?.max === undefined ? {} : { max: safe.max }),
+			...(patternSnapshot === undefined
+				? {}
+				: { pattern: new INTRINSICS.pattern(patternSnapshot.source) }),
+			...(safe?.description === undefined ? {} : { description: safe.description }),
+		}
+		new ShapeValidator(shape).validate()
+		return cloneShape(shape)
+	}, 'stringShape')
 }
 
 /**
@@ -143,34 +178,36 @@ export function stringShape(options?: StringShapeOptions): StringShape {
  * ```
  */
 export function numberShape(options?: NumberShapeOptions): NumberShape {
-	const safe = readOptions(
-		options,
-		['min', 'max', 'integer', 'description'],
-		'numberShape',
-		'number',
-	)
-	const shape = safe?.integer === true ? 'integer' : 'number'
-	if (safe?.min !== undefined && !Number.isFinite(safe.min)) {
-		throw new ContractError('numberShape: min must be finite', {
-			code: 'bound',
-			context: { shape, limit: 'finite number', received: preview(safe.min) },
-		})
-	}
-	if (safe?.max !== undefined && !Number.isFinite(safe.max)) {
-		throw new ContractError('numberShape: max must be finite', {
-			code: 'bound',
-			context: { shape, limit: 'finite number', received: preview(safe.max) },
-		})
-	}
-	const result: NumberShape = {
-		type: 'number',
-		...(safe?.min === undefined ? {} : { min: safe.min }),
-		...(safe?.max === undefined ? {} : { max: safe.max }),
-		...(safe?.integer === undefined ? {} : { integer: safe.integer }),
-		...(safe?.description === undefined ? {} : { description: safe.description }),
-	}
-	validateShapeDepth(result)
-	return Object.freeze(result)
+	return contain(() => {
+		const safe = readOptions(
+			options,
+			['min', 'max', 'integer', 'description'],
+			'numberShape',
+			'number',
+		)
+		const shape = safe?.integer === true ? 'integer' : 'number'
+		if (safe?.min !== undefined && !INTRINSICS.finite(safe.min)) {
+			throw new ContractError('numberShape: min must be finite', {
+				code: 'bound',
+				context: { shape, limit: 'finite number', received: preview(safe.min) },
+			})
+		}
+		if (safe?.max !== undefined && !INTRINSICS.finite(safe.max)) {
+			throw new ContractError('numberShape: max must be finite', {
+				code: 'bound',
+				context: { shape, limit: 'finite number', received: preview(safe.max) },
+			})
+		}
+		const result: NumberShape = {
+			type: 'number',
+			...(safe?.min === undefined ? {} : { min: safe.min }),
+			...(safe?.max === undefined ? {} : { max: safe.max }),
+			...(safe?.integer === undefined ? {} : { integer: safe.integer }),
+			...(safe?.description === undefined ? {} : { description: safe.description }),
+		}
+		new ShapeValidator(result).validate()
+		return INTRINSICS.freeze(result)
+	}, 'numberShape')
 }
 
 /**
@@ -185,8 +222,10 @@ export function numberShape(options?: NumberShapeOptions): NumberShape {
  * @throws {ContractError} When a present bound is not finite
  */
 export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): NumberShape {
-	const safe = readOptions(options, ['min', 'max', 'description'], 'integerShape', 'integer')
-	return numberShape({ ...safe, integer: true })
+	return contain(() => {
+		const safe = readOptions(options, ['min', 'max', 'description'], 'integerShape', 'integer')
+		return numberShape({ ...safe, integer: true })
+	}, 'integerShape')
 }
 
 /**
@@ -201,13 +240,15 @@ export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): Num
  * ```
  */
 export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
-	const safe = readOptions(options, ['description'], 'booleanShape', 'boolean')
-	const shape: BooleanShape = {
-		type: 'boolean',
-		...(safe?.description === undefined ? {} : { description: safe.description }),
-	}
-	validateShapeDepth(shape)
-	return Object.freeze(shape)
+	return contain(() => {
+		const safe = readOptions(options, ['description'], 'booleanShape', 'boolean')
+		const shape: BooleanShape = {
+			type: 'boolean',
+			...(safe?.description === undefined ? {} : { description: safe.description }),
+		}
+		new ShapeValidator(shape).validate()
+		return INTRINSICS.freeze(shape)
+	}, 'booleanShape')
 }
 
 /**
@@ -222,13 +263,15 @@ export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
  * ```
  */
 export function nullShape(options?: NullShapeOptions): NullShape {
-	const safe = readOptions(options, ['description'], 'nullShape', 'null')
-	const shape: NullShape = {
-		type: 'null',
-		...(safe?.description === undefined ? {} : { description: safe.description }),
-	}
-	validateShapeDepth(shape)
-	return Object.freeze(shape)
+	return contain(() => {
+		const safe = readOptions(options, ['description'], 'nullShape', 'null')
+		const shape: NullShape = {
+			type: 'null',
+			...(safe?.description === undefined ? {} : { description: safe.description }),
+		}
+		new ShapeValidator(shape).validate()
+		return INTRINSICS.freeze(shape)
+	}, 'nullShape')
 }
 
 /**
@@ -246,42 +289,62 @@ export function nullShape(options?: NullShapeOptions): NullShape {
  * const via = literalShape(['function', 'tool', 'agent'], { description: 'How to run the step.' })
  * ```
  */
-export function literalShape<const T extends readonly (string | number | boolean)[]>(
+export function literalShape<const T extends readonly LiteralValue[]>(
 	values: T,
 	options?: LiteralShapeOptions,
 ): LiteralShape<Readonly<T>>
 export function literalShape(
-	values: readonly (string | number | boolean)[],
+	values: readonly LiteralValue[],
 	options?: LiteralShapeOptions,
 ): LiteralShape {
-	const input: unknown = values
-	const array = attempt(() => Array.isArray(input))
-	if (!array.success || !array.value) {
-		throw new ContractError('literalShape: values must be an array', {
-			code: 'structure',
-			context: { path: ['values'], shape: 'literal' },
-			...(!array.success ? { cause: array.error } : {}),
-		})
-	}
-	const safe = readOptions(options, ['description'], 'literalShape', 'literal')
-	validateShapeDepth({
-		type: 'literal',
-		values,
-		...(safe?.description === undefined ? {} : { description: safe.description }),
-	})
-	const copied = attempt(() => Object.freeze([...values]))
-	if (!copied.success) {
-		throw new ContractError('literalShape: values could not be copied', {
-			code: 'structure',
-			context: { path: ['values'], shape: 'literal' },
-			cause: copied.error,
-		})
-	}
-	return Object.freeze({
-		type: 'literal',
-		values: copied.value,
-		...(safe?.description === undefined ? {} : { description: safe.description }),
-	})
+	return contain(() => {
+		const input: unknown = values
+		const array = attempt(() => INTRINSICS.array(input))
+		if (!array.success || !array.value) {
+			throw new ContractError('literalShape: values must be an array', {
+				code: 'structure',
+				context: { path: ['values'], shape: 'literal' },
+				...(!array.success ? { cause: array.error } : {}),
+			})
+		}
+		const safe = readOptions(options, ['description'], 'literalShape', 'literal')
+		const snapshot = readArrayEntries(values)
+		if (!snapshot.success) {
+			throw new ContractError('literalShape: values could not be copied', {
+				code: 'structure',
+				context: { path: ['values'], shape: 'literal' },
+				cause: snapshot.error,
+			})
+		}
+		if (!snapshot.value.dense) {
+			throw new ContractError('validateShapeDepth: values must be a dense data array', {
+				code: 'structure',
+				context: { path: ['values'], shape: 'literal' },
+			})
+		}
+		const literals: LiteralValue[] = []
+		for (let index = 0; index < snapshot.value.entries.length; index += 1) {
+			const value = snapshot.value.entries[index]
+			if (!isLiteralValue(value)) {
+				throw new ContractError(
+					'validateShapeDepth: every literal value must be a string, number, or boolean',
+					{
+						code: 'structure',
+						context: { path: ['values', INTRINSICS.text(index)], shape: 'literal' },
+					},
+				)
+			}
+			literals[literals.length] = value
+		}
+		const owned = INTRINSICS.freeze(literals)
+		const shape: LiteralShape = {
+			type: 'literal',
+			values: owned,
+			...(safe?.description === undefined ? {} : { description: safe.description }),
+		}
+		new ShapeValidator(shape).validate()
+		return INTRINSICS.freeze(shape)
+	}, 'literalShape')
 }
 
 // === Collections
@@ -303,36 +366,38 @@ export function arrayShape<S extends ContractShape>(
 	items: S,
 	options?: ArrayShapeOptions,
 ): ArrayShape<S> {
-	const safe = readOptions(options, ['min', 'max', 'description'], 'arrayShape', 'array')
-	if (safe?.min !== undefined && (!Number.isSafeInteger(safe.min) || safe.min < 0)) {
-		throw new ContractError('arrayShape: min must be a non-negative safe integer', {
-			code: 'bound',
-			context: {
-				shape: 'array',
-				limit: 'non-negative safe integer',
-				received: preview(safe.min),
-			},
-		})
-	}
-	if (safe?.max !== undefined && (!Number.isSafeInteger(safe.max) || safe.max < 0)) {
-		throw new ContractError('arrayShape: max must be a non-negative safe integer', {
-			code: 'bound',
-			context: {
-				shape: 'array',
-				limit: 'non-negative safe integer',
-				received: preview(safe.max),
-			},
-		})
-	}
-	const shape: ArrayShape<S> = {
-		type: 'array',
-		items,
-		...(safe?.min === undefined ? {} : { min: safe.min }),
-		...(safe?.max === undefined ? {} : { max: safe.max }),
-		...(safe?.description === undefined ? {} : { description: safe.description }),
-	}
-	validateShapeDepth(shape)
-	return Object.freeze(shape)
+	return contain(() => {
+		const safe = readOptions(options, ['min', 'max', 'description'], 'arrayShape', 'array')
+		if (safe?.min !== undefined && (!INTRINSICS.safe(safe.min) || safe.min < 0)) {
+			throw new ContractError('arrayShape: min must be a non-negative safe integer', {
+				code: 'bound',
+				context: {
+					shape: 'array',
+					limit: 'non-negative safe integer',
+					received: preview(safe.min),
+				},
+			})
+		}
+		if (safe?.max !== undefined && (!INTRINSICS.safe(safe.max) || safe.max < 0)) {
+			throw new ContractError('arrayShape: max must be a non-negative safe integer', {
+				code: 'bound',
+				context: {
+					shape: 'array',
+					limit: 'non-negative safe integer',
+					received: preview(safe.max),
+				},
+			})
+		}
+		const shape: ArrayShape<S> = {
+			type: 'array',
+			items,
+			...(safe?.min === undefined ? {} : { min: safe.min }),
+			...(safe?.max === undefined ? {} : { max: safe.max }),
+			...(safe?.description === undefined ? {} : { description: safe.description }),
+		}
+		new ShapeValidator(shape).validate()
+		return INTRINSICS.freeze(shape)
+	}, 'arrayShape')
 }
 
 /**
@@ -360,54 +425,57 @@ export function objectShape<
 	P extends Readonly<Record<string, ContractShape>>,
 	const A extends boolean | ContractShape = false,
 >(properties: P, options?: ObjectShapeOptions<A>): ObjectShape<P, A> {
-	const input: unknown = properties
-	if (!isObject(input)) {
-		throw new ContractError('objectShape: properties must be a plain record', {
-			code: 'structure',
-			context: { path: ['properties'], shape: 'object' },
-		})
-	}
-	const safe = readOptions(
-		options,
-		['additionalProperties', 'description'],
-		'objectShape',
-		'object',
-	)
-	const copied = readValue(
-		() => {
-			const array = Array.isArray(input)
-			const prototype = Reflect.getPrototypeOf(input)
-			const record = !array && (prototype === null || Reflect.getPrototypeOf(prototype) === null)
-			const snapshot: { [K in keyof P]: P[K] } = Object.create(null)
-			for (const key of Object.keys(input)) {
-				Reflect.defineProperty(snapshot, key, {
-					value: Reflect.get(input, key),
-					enumerable: true,
-					configurable: true,
-					writable: true,
-				})
-			}
-			return { record, snapshot: Object.freeze(snapshot) }
-		},
-		'objectShape',
-		{ subject: 'properties', context: { path: ['properties'], shape: 'object' } },
-	)
-	if (!copied.record) {
-		throw new ContractError('objectShape: properties must be a plain record', {
-			code: 'structure',
-			context: { path: ['properties'], shape: 'object' },
-		})
-	}
-	const shape: ObjectShape<P, A> = {
-		type: 'object',
-		properties: copied.snapshot,
-		...(safe?.additionalProperties === undefined
-			? {}
-			: { additionalProperties: safe.additionalProperties }),
-		...(safe?.description === undefined ? {} : { description: safe.description }),
-	}
-	validateShapeDepth(shape)
-	return Object.freeze(shape)
+	return contain(() => {
+		const input: unknown = properties
+		if (!isObject(input)) {
+			throw new ContractError('objectShape: properties must be a plain record', {
+				code: 'structure',
+				context: { path: ['properties'], shape: 'object' },
+			})
+		}
+		const safe = readOptions(
+			options,
+			['additionalProperties', 'description'],
+			'objectShape',
+			'object',
+		)
+		const copied = readValue(
+			() => {
+				const record = matchesRecordBrand(input)
+				const snapshot: { [K in keyof P]: P[K] } = INTRINSICS.create(null)
+				const keyList = INTRINSICS.keys(input)
+				for (let keyIndex = 0; keyIndex < keyList.length; keyIndex += 1) {
+					const key = keyList[keyIndex]
+					if (key === undefined) continue
+					INTRINSICS.declare(snapshot, key, {
+						value: INTRINSICS.read(input, key),
+						enumerable: true,
+						configurable: true,
+						writable: true,
+					})
+				}
+				return { record, snapshot: INTRINSICS.freeze(snapshot) }
+			},
+			'objectShape',
+			{ subject: 'properties', context: { path: ['properties'], shape: 'object' } },
+		)
+		if (!copied.record) {
+			throw new ContractError('objectShape: properties must be a plain record', {
+				code: 'structure',
+				context: { path: ['properties'], shape: 'object' },
+			})
+		}
+		const shape: ObjectShape<P, A> = {
+			type: 'object',
+			properties: copied.snapshot,
+			...(safe?.additionalProperties === undefined
+				? {}
+				: { additionalProperties: safe.additionalProperties }),
+			...(safe?.description === undefined ? {} : { description: safe.description }),
+		}
+		new ShapeValidator(shape).validate()
+		return INTRINSICS.freeze(shape)
+	}, 'objectShape')
 }
 
 /**
@@ -431,22 +499,24 @@ export function recordShape<S extends ContractShape>(
 	values: S,
 	options?: RecordShapeOptions,
 ): ObjectShape<Record<never, never>, S> {
-	const value: unknown = values
-	if (value === undefined || value === null || value === true || value === false) {
-		throw new ContractError('recordShape: values must be a shape', {
-			code: 'structure',
-			context: { path: ['additionalProperties'], shape: 'object' },
-		})
-	}
-	const safe = readOptions(options, ['description'], 'recordShape', 'object')
-	const shape: ObjectShape<Record<never, never>, S> = {
-		type: 'object',
-		properties: Object.freeze({}),
-		additionalProperties: values,
-		...(safe?.description === undefined ? {} : { description: safe.description }),
-	}
-	validateShapeDepth(shape)
-	return Object.freeze(shape)
+	return contain(() => {
+		const value: unknown = values
+		if (value === undefined || value === null || value === true || value === false) {
+			throw new ContractError('recordShape: values must be a shape', {
+				code: 'structure',
+				context: { path: ['additionalProperties'], shape: 'object' },
+			})
+		}
+		const safe = readOptions(options, ['description'], 'recordShape', 'object')
+		const shape: ObjectShape<Record<never, never>, S> = {
+			type: 'object',
+			properties: INTRINSICS.freeze({}),
+			additionalProperties: values,
+			...(safe?.description === undefined ? {} : { description: safe.description }),
+		}
+		new ShapeValidator(shape).validate()
+		return INTRINSICS.freeze(shape)
+	}, 'recordShape')
 }
 
 // === Composition
@@ -466,9 +536,11 @@ export function recordShape<S extends ContractShape>(
 export function unionShape<V extends readonly ContractShape[]>(
 	...variants: V
 ): UnionShape<Readonly<V>> {
-	const shape: UnionShape<V> = { type: 'union', variants }
-	validateShapeDepth(shape)
-	return Object.freeze({ type: 'union', variants: Object.freeze(variants) })
+	return contain(() => {
+		const shape: UnionShape<V> = { type: 'union', variants }
+		new ShapeValidator(shape).validate()
+		return INTRINSICS.freeze({ type: 'union', variants: INTRINSICS.freeze(variants) })
+	}, 'unionShape')
 }
 
 /**
@@ -506,13 +578,15 @@ export function unionShape<V extends readonly ContractShape[]>(
 export function oneOfShape<V extends readonly ContractShape[]>(
 	...variants: V
 ): UnionShape<Readonly<V>> {
-	const shape: UnionShape<V> = {
-		type: 'union',
-		variants,
-		mode: 'oneOf',
-	}
-	validateShapeDepth(shape)
-	return Object.freeze({ ...shape, variants: Object.freeze(variants) })
+	return contain(() => {
+		const shape: UnionShape<V> = {
+			type: 'union',
+			variants,
+			mode: 'oneOf',
+		}
+		new ShapeValidator(shape).validate()
+		return INTRINSICS.freeze({ ...shape, variants: INTRINSICS.freeze(variants) })
+	}, 'oneOfShape')
 }
 
 /**
@@ -526,9 +600,11 @@ export function oneOfShape<V extends readonly ContractShape[]>(
  * @returns An optional shape
  */
 export function optionalShape<S extends ContractShape>(inner: S): OptionalShape<S> {
-	const shape: OptionalShape<S> = { type: 'optional', inner }
-	validateShapeDepth({ type: 'object', properties: { value: shape } })
-	return Object.freeze(shape)
+	return contain(() => {
+		const shape: OptionalShape<S> = { type: 'optional', inner }
+		new ShapeValidator({ type: 'object', properties: { value: shape } }).validate()
+		return INTRINSICS.freeze(shape)
+	}, 'optionalShape')
 }
 
 /**
@@ -544,9 +620,11 @@ export function optionalShape<S extends ContractShape>(inner: S): OptionalShape<
  * ```
  */
 export function nullableShape<S extends ContractShape>(inner: S): NullableShape<S> {
-	const shape: NullableShape<S> = { type: 'nullable', inner }
-	validateShapeDepth(shape)
-	return Object.freeze(shape)
+	return contain(() => {
+		const shape: NullableShape<S> = { type: 'nullable', inner }
+		new ShapeValidator(shape).validate()
+		return INTRINSICS.freeze(shape)
+	}, 'nullableShape')
 }
 
 // === Escape hatch
@@ -571,13 +649,15 @@ export function nullableShape<S extends ContractShape>(inner: S): NullableShape<
  * ```
  */
 export function jsonShape(options?: JSONShapeOptions): JSONShape {
-	const safe = readOptions(options, ['description'], 'jsonShape', 'json')
-	const shape: JSONShape = {
-		type: 'json',
-		...(safe?.description === undefined ? {} : { description: safe.description }),
-	}
-	validateShapeDepth(shape)
-	return Object.freeze(shape)
+	return contain(() => {
+		const safe = readOptions(options, ['description'], 'jsonShape', 'json')
+		const shape: JSONShape = {
+			type: 'json',
+			...(safe?.description === undefined ? {} : { description: safe.description }),
+		}
+		new ShapeValidator(shape).validate()
+		return INTRINSICS.freeze(shape)
+	}, 'jsonShape')
 }
 
 /**
@@ -609,8 +689,12 @@ export function jsonShape(options?: JSONShapeOptions): JSONShape {
  * ```
  */
 export function rawShape(schema: JSONSchema): RawShape {
-	validateShapeDepth({ type: 'raw', schema })
-	return Object.freeze({ type: 'raw', schema: cloneSchema(schema) })
+	return contain(() => {
+		new ShapeValidator({ type: 'raw', schema }).validate()
+		const owned = cloneSchema(schema)
+		new ShapeValidator({ type: 'raw', schema: owned }).validate()
+		return INTRINSICS.freeze({ type: 'raw', schema: owned })
+	}, 'rawShape')
 }
 
 // === Schema inversion
@@ -628,10 +712,15 @@ export function rawShape(schema: JSONSchema): RawShape {
 // through to the next rule, never thrown. `format` and `pattern` are NEVER
 // asserted — `format` is annotation-only, and compiling an attacker-supplied
 // `pattern` into a `RegExp` is a ReDoS vector — so neither keyword narrows the
-// compiled guard; the returned shape is always one `validateShape` accepts.
+// compiled guard; the returned shape is always one `validateShapeDepth` accepts.
 //
-// Every widening — an empty/unrecognized node, an exhausted budget, a cycle, a
-// hostile throw — lands on `rawShape`, NOT `jsonShape`. `{}` is JSON Schema's
+// Every widening — an empty/unrecognized node, an exhausted budget, a cycle —
+// lands on `rawShape`, NOT `jsonShape`. A hostile throw is NOT a widening: a
+// keyword access, enumeration, or recursive traversal that throws is not
+// malformed schema vocabulary, so `schemaNodeToShape` wraps its whole body in
+// `readValue` and refuses it as `ContractError { code: 'structure', context: {
+// shape: 'schema' } }` instead of inventing an accept-anything node for a
+// schema nobody could read. `{}` is JSON Schema's
 // accept-anything schema, and `rawShape` is its exact inverse: its compiled
 // guard accepts every defined value, and it re-emits `{}` verbatim. `jsonShape`
 // also emits `{}` but its guard is the strictly narrower `isJSONValue`, so
@@ -667,13 +756,15 @@ export function deriveLengthBounds(
 	min: unknown,
 	max: unknown,
 ): { readonly min?: number; readonly max?: number } {
-	const lo = isInteger(min) && Number.isSafeInteger(min) && min >= 0 ? min : undefined
-	const hi = isInteger(max) && Number.isSafeInteger(max) && max >= 0 ? max : undefined
-	if (lo !== undefined && hi !== undefined && lo > hi) return {}
-	return {
-		...(lo === undefined ? {} : { min: lo }),
-		...(hi === undefined ? {} : { max: hi }),
-	}
+	return contain(() => {
+		const lo = isInteger(min) && INTRINSICS.safe(min) && min >= 0 ? min : undefined
+		const hi = isInteger(max) && INTRINSICS.safe(max) && max >= 0 ? max : undefined
+		if (lo !== undefined && hi !== undefined && lo > hi) return {}
+		return {
+			...(lo === undefined ? {} : { min: lo }),
+			...(hi === undefined ? {} : { max: hi }),
+		}
+	}, 'deriveLengthBounds')
 }
 
 /**
@@ -700,13 +791,15 @@ export function deriveRangeBounds(
 	min: unknown,
 	max: unknown,
 ): { readonly min?: number; readonly max?: number } {
-	const lo = isFiniteNumber(min) ? min : undefined
-	const hi = isFiniteNumber(max) ? max : undefined
-	if (lo !== undefined && hi !== undefined && lo > hi) return {}
-	return {
-		...(lo === undefined ? {} : { min: lo }),
-		...(hi === undefined ? {} : { max: hi }),
-	}
+	return contain(() => {
+		const lo = isFiniteNumber(min) ? min : undefined
+		const hi = isFiniteNumber(max) ? max : undefined
+		if (lo !== undefined && hi !== undefined && lo > hi) return {}
+		return {
+			...(lo === undefined ? {} : { min: lo }),
+			...(hi === undefined ? {} : { max: hi }),
+		}
+	}, 'deriveRangeBounds')
 }
 
 /**
@@ -766,47 +859,60 @@ export function buildObjectShape(
 	memo: WeakMap<object, Map<number, ContractShape>>,
 	description: string | undefined,
 ): ContractShape {
-	return readValue(
-		() => {
-			const propertiesSource = isRecord(schema.properties) ? schema.properties : undefined
-			const requiredSource = isArray(schema.required)
-				? schema.required.filter((entry): entry is string => isString(entry))
-				: []
-			// Honest typing: a null-prototype accumulator so a property literally
-			// named '__proto__' becomes an own data key instead of mutating the
-			// prototype — the same pattern inferObject uses (inferers.ts).
-			const properties: Record<string, ContractShape> = Object.create(null)
-			let truncated = false
-			if (propertiesSource) {
-				const allKeys = Object.keys(propertiesSource)
-				truncated = allKeys.length > INFER_BREADTH_LIMIT
-				const keys = allKeys.slice(0, INFER_BREADTH_LIMIT)
-				for (const key of keys) {
-					const child = propertiesSource[key]
-					const childShape = isRecord(child)
-						? schemaNodeToShape(child, depth - 1, visited, memo)
-						: rawShape({})
-					properties[key] = requiredSource.includes(key) ? childShape : optionalShape(childShape)
+	return contain(() => {
+		return readValue(
+			() => {
+				const propertiesSource = isRecord(schema.properties) ? schema.properties : undefined
+				// Indexed rather than `filter` / `includes`: this list decides which
+				// properties the published shape marks required, and both are
+				// caller-writable members.
+				const requiredSource = collectMembers([])
+				if (isArray(schema.required)) {
+					for (let index = 0; index < schema.required.length; index += 1) {
+						const entry = schema.required[index]
+						if (isString(entry)) admitMember(requiredSource, entry)
+					}
 				}
-			}
-			const extra = schema.additionalProperties
-			const additionalProperties: boolean | ContractShape = truncated
-				? true
-				: extra === false
-					? false
-					: isRecord(extra)
-						? schemaNodeToShape(extra, depth - 1, visited, memo)
-						: true
-			return Object.freeze({
-				type: 'object',
-				properties: Object.freeze(properties),
-				additionalProperties,
-				...(description === undefined ? {} : { description }),
-			})
-		},
-		'buildObjectShape',
-		{ subject: 'schema', context: { shape: 'schema' } },
-	)
+				// Honest typing: a null-prototype accumulator so a property literally
+				// named '__proto__' becomes an own data key instead of mutating the
+				// prototype — the same pattern inferObject uses (inferers.ts).
+				const properties: Record<string, ContractShape> = INTRINSICS.create(null)
+				let truncated = false
+				if (propertiesSource) {
+					const allKeys = INTRINSICS.keys(propertiesSource)
+					truncated = allKeys.length > INFER_BREADTH_LIMIT
+					const keys = limitEntries(allKeys, INFER_BREADTH_LIMIT)
+					for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+						const key = keys[keyIndex]
+						if (key === undefined) continue
+						const child = propertiesSource[key]
+						const childShape = isRecord(child)
+							? schemaNodeToShape(child, depth - 1, visited, memo)
+							: rawShape({})
+						properties[key] = matchesMember(requiredSource, key)
+							? childShape
+							: optionalShape(childShape)
+					}
+				}
+				const extra = schema.additionalProperties
+				const additionalProperties: boolean | ContractShape = truncated
+					? true
+					: extra === false
+						? false
+						: isRecord(extra)
+							? schemaNodeToShape(extra, depth - 1, visited, memo)
+							: true
+				return INTRINSICS.freeze({
+					type: 'object',
+					properties: INTRINSICS.freeze(properties),
+					additionalProperties,
+					...(description === undefined ? {} : { description }),
+				})
+			},
+			'buildObjectShape',
+			{ subject: 'schema', context: { shape: 'schema' } },
+		)
+	}, 'buildObjectShape')
 }
 
 /**
@@ -836,7 +942,7 @@ export function buildObjectShape(
  *    the matching primitive shape, with length/range bounds derived via
  *    {@link deriveLengthBounds} / {@link deriveRangeBounds}. An integer node
  *    additionally drops its bounds when they describe an EMPTY integer range
- *    (e.g. `minimum: 1.5, maximum: 1.6`) — the same emptiness `validateShape`
+ *    (e.g. `minimum: 1.5, maximum: 1.6`) — the same emptiness `validateShapeDepth`
  *    rejects — so the result is always a valid shape.
  * 5. `type: 'array'` — an {@link arrayShape} whose element shape recurses into
  *    a record-valued `items` (widening to {@link rawShape} otherwise), with
@@ -881,97 +987,134 @@ export function buildShapeFromNode(
 	visited: WeakSet<object>,
 	memo: WeakMap<object, Map<number, ContractShape>>,
 ): ContractShape {
-	return readValue(
-		() => {
-			const description = isString(schema.description) ? schema.description : undefined
+	return contain(() => {
+		return readValue(
+			() => {
+				const description = isString(schema.description) ? schema.description : undefined
 
-			if (isArray(schema.enum)) {
-				const literals = schema.enum.filter(
-					(entry): entry is string | number | boolean =>
-						isString(entry) || isFiniteNumber(entry) || isBoolean(entry),
-				)
-				if (literals.length > 0) {
-					return literalShape(literals, description === undefined ? undefined : { description })
+				if (isArray(schema.enum)) {
+					const literals: LiteralValue[] = []
+					// De-duplicated in the same pass that already drops non-literal and
+					// non-finite entries, by the package's own SameValueZero membership.
+					// `literalShape` refuses a repeated vocabulary, and that refusal was
+					// republished as `schema could not be read` — a data defect reported as
+					// unreadability, for a schema every keyword of which was read. JSON
+					// Schema requires `enum` members to be unique, so a repeat is malformed
+					// vocabulary, and this conversion's stated rule for malformed vocabulary
+					// is to ignore it and widen, never to throw. First occurrence wins, so
+					// the emitted order still follows the source.
+					const seen = collectMembers([])
+					for (let index = 0; index < schema.enum.length; index += 1) {
+						const entry = schema.enum[index]
+						if (isLiteralValue(entry) && (typeof entry !== 'number' || isFiniteNumber(entry))) {
+							if (matchesMember(seen, entry)) continue
+							admitMember(seen, entry)
+							literals[literals.length] = entry
+						}
+					}
+					if (literals.length > 0) {
+						return literalShape(literals, description === undefined ? undefined : { description })
+					}
 				}
-			}
 
-			if (isArray(schema.oneOf)) {
-				const records = schema.oneOf.filter((entry): entry is JSONSchema => isRecord(entry))
-				if (records.length > INFER_BREADTH_LIMIT) {
-					return rawShape(description === undefined ? {} : { description })
+				if (isArray(schema.oneOf)) {
+					const records: JSONSchema[] = []
+					for (let index = 0; index < schema.oneOf.length; index += 1) {
+						const entry = schema.oneOf[index]
+						if (isRecord(entry)) records[records.length] = entry
+					}
+					if (records.length > INFER_BREADTH_LIMIT) {
+						return rawShape(description === undefined ? {} : { description })
+					}
+					const variants: ContractShape[] = []
+					for (let index = 0; index < records.length; index += 1) {
+						const entry = records[index]
+						if (entry === undefined) continue
+						variants[variants.length] = schemaNodeToShape(entry, depth - 1, visited, memo)
+					}
+					// `Reflect.apply` reads its argument list by index, where a spread call
+					// would dispatch through the caller-writable array iterator.
+					if (variants.length > 0) return INTRINSICS.apply(oneOfShape, undefined, variants)
 				}
-				const variants = records.map((entry) => schemaNodeToShape(entry, depth - 1, visited, memo))
-				if (variants.length > 0) return oneOfShape(...variants)
-			}
 
-			if (isArray(schema.anyOf)) {
-				const records = schema.anyOf.filter((entry): entry is JSONSchema => isRecord(entry))
-				if (records.length > INFER_BREADTH_LIMIT) {
-					return rawShape(description === undefined ? {} : { description })
+				if (isArray(schema.anyOf)) {
+					const records: JSONSchema[] = []
+					for (let index = 0; index < schema.anyOf.length; index += 1) {
+						const entry = schema.anyOf[index]
+						if (isRecord(entry)) records[records.length] = entry
+					}
+					if (records.length > INFER_BREADTH_LIMIT) {
+						return rawShape(description === undefined ? {} : { description })
+					}
+					const variants: ContractShape[] = []
+					for (let index = 0; index < records.length; index += 1) {
+						const entry = records[index]
+						if (entry === undefined) continue
+						variants[variants.length] = schemaNodeToShape(entry, depth - 1, visited, memo)
+					}
+					if (variants.length > 0) return INTRINSICS.apply(unionShape, undefined, variants)
 				}
-				const variants = records.map((entry) => schemaNodeToShape(entry, depth - 1, visited, memo))
-				if (variants.length > 0) return unionShape(...variants)
-			}
 
-			const type = isString(schema.type) ? schema.type : undefined
+				const type = isString(schema.type) ? schema.type : undefined
 
-			if (type === 'string') {
-				const bounds = deriveLengthBounds(schema.minLength, schema.maxLength)
-				return stringShape({
-					...bounds,
-					...(description === undefined ? {} : { description }),
-				})
-			}
-			if (type === 'number') {
-				const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
-				return numberShape({
-					...bounds,
-					...(description === undefined ? {} : { description }),
-				})
-			}
-			if (type === 'integer') {
-				const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
-				const emptyRange =
-					Math.ceil(bounds.min ?? Number.NEGATIVE_INFINITY) >
-					Math.floor(bounds.max ?? Number.POSITIVE_INFINITY)
-				return integerShape(
-					emptyRange
-						? description === undefined
-							? undefined
-							: { description }
-						: {
-								...bounds,
-								...(description === undefined ? {} : { description }),
-							},
-				)
-			}
-			if (type === 'boolean') {
-				return booleanShape(description === undefined ? undefined : { description })
-			}
-			if (type === 'null') {
-				return nullShape(description === undefined ? undefined : { description })
-			}
+				if (type === 'string') {
+					const bounds = deriveLengthBounds(schema.minLength, schema.maxLength)
+					return stringShape({
+						...bounds,
+						...(description === undefined ? {} : { description }),
+					})
+				}
+				if (type === 'number') {
+					const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
+					return numberShape({
+						...bounds,
+						...(description === undefined ? {} : { description }),
+					})
+				}
+				if (type === 'integer') {
+					const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
+					const emptyRange =
+						INTRINSICS.ceil(bounds.min ?? Number.NEGATIVE_INFINITY) >
+						INTRINSICS.floor(bounds.max ?? Number.POSITIVE_INFINITY)
+					return integerShape(
+						emptyRange
+							? description === undefined
+								? undefined
+								: { description }
+							: {
+									...bounds,
+									...(description === undefined ? {} : { description }),
+								},
+					)
+				}
+				if (type === 'boolean') {
+					return booleanShape(description === undefined ? undefined : { description })
+				}
+				if (type === 'null') {
+					return nullShape(description === undefined ? undefined : { description })
+				}
 
-			if (type === 'array') {
-				const items = isRecord(schema.items)
-					? schemaNodeToShape(schema.items, depth - 1, visited, memo)
-					: rawShape({})
-				const bounds = deriveLengthBounds(schema.minItems, schema.maxItems)
-				return arrayShape(items, {
-					...bounds,
-					...(description === undefined ? {} : { description }),
-				})
-			}
+				if (type === 'array') {
+					const items = isRecord(schema.items)
+						? schemaNodeToShape(schema.items, depth - 1, visited, memo)
+						: rawShape({})
+					const bounds = deriveLengthBounds(schema.minItems, schema.maxItems)
+					return arrayShape(items, {
+						...bounds,
+						...(description === undefined ? {} : { description }),
+					})
+				}
 
-			if (type === 'object' || (type === undefined && isRecord(schema.properties))) {
-				return buildObjectShape(schema, depth, visited, memo, description)
-			}
+				if (type === 'object' || (type === undefined && isRecord(schema.properties))) {
+					return buildObjectShape(schema, depth, visited, memo, description)
+				}
 
-			return rawShape(description === undefined ? {} : { description })
-		},
-		'buildShapeFromNode',
-		{ subject: 'schema', context: { shape: 'schema' } },
-	)
+				return rawShape(description === undefined ? {} : { description })
+			},
+			'buildShapeFromNode',
+			{ subject: 'schema', context: { shape: 'schema' } },
+		)
+	}, 'buildShapeFromNode')
 }
 
 /**
@@ -1019,34 +1162,34 @@ export function schemaNodeToShape(
 	visited: WeakSet<object>,
 	memo: WeakMap<object, Map<number, ContractShape>>,
 ): ContractShape {
-	return readValue(
-		() => {
-			if (!(depth > 0)) return rawShape({})
-			const input: unknown = schema
-			if (!isObject(input)) return rawShape({})
-			if (Array.isArray(input)) return rawShape({})
-			const prototype = Reflect.getPrototypeOf(input)
-			if (prototype !== null && Reflect.getPrototypeOf(prototype) !== null) return rawShape({})
-			if (visited.has(input)) return rawShape({})
-			const cached = memo.get(schema)?.get(depth)
-			if (cached) return cached
-			visited.add(schema)
-			try {
-				const shape = buildShapeFromNode(schema, depth, visited, memo)
-				let depths = memo.get(schema)
-				if (!depths) {
-					depths = new Map()
-					memo.set(schema, depths)
+	return contain(() => {
+		return readValue(
+			() => {
+				if (!(depth > 0)) return rawShape({})
+				if (!matchesRecordBrand(schema)) return rawShape({})
+				if (matchesVisited(visited, schema)) return rawShape({})
+				// The memo read is dispatched through the captured `Map.prototype.get`
+				// too: a substitute answering a decoy would put a shape this package
+				// never built into one it publishes as its own.
+				const depthMemo = INTRINSICS.apply(INTRINSICS.recall, memo, [schema])
+				const cached =
+					depthMemo === undefined
+						? undefined
+						: INTRINSICS.apply(INTRINSICS.fetch, depthMemo, [depth])
+				if (cached) return cached
+				admitVisited(visited, schema)
+				try {
+					const shape = buildShapeFromNode(schema, depth, visited, memo)
+					retainDepth(memo, schema, depth, shape)
+					return shape
+				} finally {
+					omitVisited(visited, schema)
 				}
-				depths.set(depth, shape)
-				return shape
-			} finally {
-				visited.delete(schema)
-			}
-		},
-		'schemaNodeToShape',
-		{ subject: 'schema', context: { shape: 'schema' } },
-	)
+			},
+			'schemaNodeToShape',
+			{ subject: 'schema', context: { shape: 'schema' } },
+		)
+	}, 'schemaNodeToShape')
 }
 
 /**
@@ -1116,5 +1259,22 @@ export function schemaNodeToShape(
  * ```
  */
 export function schemaToShape(schema: JSONSchema): ContractShape {
-	return schemaNodeToShape(schema, INFER_DEPTH_LIMIT, new WeakSet(), new WeakMap())
+	return contain(() => {
+		// The traversal state is built INSIDE the shared read boundary. A module
+		// function cannot capture an intrinsic at evaluation the way an engine class
+		// can, so containment is the equivalent: a caller who replaces
+		// `globalThis.WeakSet` or `globalThis.WeakMap` before this call would
+		// otherwise have the constructor throw the caller's raw value out of a door
+		// documented to refuse with a `ContractError`, before any traversal exists to
+		// contain it.
+		const traversal = readValue(
+			() => ({
+				visited: new INTRINSICS.weakSet<object>(),
+				memo: new INTRINSICS.weakMap<object, Map<number, ContractShape>>(),
+			}),
+			'schemaToShape',
+			{ subject: 'schema' },
+		)
+		return schemaNodeToShape(schema, INFER_DEPTH_LIMIT, traversal.visited, traversal.memo)
+	}, 'schemaToShape')
 }

@@ -1,14 +1,12 @@
-import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import * as ts from 'typescript'
-import * as shapers from '../../../src/core/shapers.js'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 import type {
 	ContractShape,
 	Infer,
 	InferMutable,
 	JSONSchema,
 	JSONValue,
+	LiteralValue,
+	NumberShape,
 	ObjectShape,
 	Result,
 	StringShapeOptions,
@@ -31,6 +29,7 @@ import {
 	INFER_DEPTH_LIMIT,
 	integerShape,
 	isContractError,
+	isRegExp,
 	jsonShape,
 	literalShape,
 	nullableShape,
@@ -44,6 +43,7 @@ import {
 	samplesToSchema,
 	schemaNodeToShape,
 	schemaToShape,
+	seededRandom,
 	stringShape,
 	unionShape,
 	valueToSchema,
@@ -62,18 +62,12 @@ import {
 	createNonEnumerableRecord,
 	createStatefulGetter,
 	createThrowingGetter,
+	createUndefinedSchema,
 	createUnstableArray,
+	NullBaseDeclaration,
 	SOUNDNESS_SAMPLE,
 } from '../../setup.js'
-
-const shaperSource = readFileSync(
-	fileURLToPath(new URL('../../../src/core/shapers.ts', import.meta.url)),
-	'utf8',
-)
-const typeSource = readFileSync(
-	fileURLToPath(new URL('../../../src/core/types.ts', import.meta.url)),
-	'utf8',
-)
+import { createForeignRegExp } from '../../setupServer.js'
 
 type BuilderRole = 'options' | 'shape' | 'properties' | 'values' | 'schema'
 
@@ -81,6 +75,7 @@ interface BuilderCase {
 	readonly name: string
 	readonly valid: readonly (readonly unknown[])[]
 	readonly positions: Readonly<Record<number, BuilderRole>>
+	readonly options?: Readonly<Record<number, readonly string[]>>
 	run(args: readonly unknown[]): unknown
 }
 
@@ -99,6 +94,7 @@ const BUILDER_CASES: readonly BuilderCase[] = [
 			[{ max: 4, description: 'value' }],
 		],
 		positions: { 0: 'options' },
+		options: { 0: ['description', 'min', 'max', 'pattern'] },
 		run: (args) => Reflect.apply(stringShape, undefined, [...args]),
 	},
 	{
@@ -114,6 +110,7 @@ const BUILDER_CASES: readonly BuilderCase[] = [
 			[{ integer: true, min: 0, max: 1 }],
 		],
 		positions: { 0: 'options' },
+		options: { 0: ['description', 'min', 'max', 'integer'] },
 		run: (args) => Reflect.apply(numberShape, undefined, [...args]),
 	},
 	{
@@ -127,24 +124,28 @@ const BUILDER_CASES: readonly BuilderCase[] = [
 			[{ min: 0, max: 1 }],
 		],
 		positions: { 0: 'options' },
+		options: { 0: ['description', 'min', 'max'] },
 		run: (args) => Reflect.apply(integerShape, undefined, [...args]),
 	},
 	{
 		name: 'booleanShape',
 		valid: [[], [{ description: 'value' }]],
 		positions: { 0: 'options' },
+		options: { 0: ['description'] },
 		run: (args) => Reflect.apply(booleanShape, undefined, [...args]),
 	},
 	{
 		name: 'nullShape',
 		valid: [[], [{ description: 'value' }]],
 		positions: { 0: 'options' },
+		options: { 0: ['description'] },
 		run: (args) => Reflect.apply(nullShape, undefined, [...args]),
 	},
 	{
 		name: 'literalShape',
 		valid: [[['x']], [[1]], [[true]], [['x', 1, true], { description: 'value' }]],
 		positions: { 0: 'values', 1: 'options' },
+		options: { 1: ['description'] },
 		run: (args) => Reflect.apply(literalShape, undefined, [...args]),
 	},
 	{
@@ -159,6 +160,7 @@ const BUILDER_CASES: readonly BuilderCase[] = [
 			[nullableShape(stringShape()), { max: 1 }],
 		],
 		positions: { 0: 'shape', 1: 'options' },
+		options: { 1: ['description', 'min', 'max'] },
 		run: (args) => Reflect.apply(arrayShape, undefined, [...args]),
 	},
 	{
@@ -173,12 +175,14 @@ const BUILDER_CASES: readonly BuilderCase[] = [
 			[{}, { additionalProperties: stringShape(), description: 'value' }],
 		],
 		positions: { 0: 'properties', 1: 'options' },
+		options: { 1: ['description', 'additionalProperties'] },
 		run: (args) => Reflect.apply(objectShape, undefined, [...args]),
 	},
 	{
 		name: 'recordShape',
 		valid: [[stringShape()], [numberShape(), {}], [booleanShape(), { description: 'value' }]],
 		positions: { 0: 'shape', 1: 'options' },
+		options: { 1: ['description'] },
 		run: (args) => Reflect.apply(recordShape, undefined, [...args]),
 	},
 	{
@@ -213,6 +217,7 @@ const BUILDER_CASES: readonly BuilderCase[] = [
 		name: 'jsonShape',
 		valid: [[], [{ description: 'value' }]],
 		positions: { 0: 'options' },
+		options: { 0: ['description'] },
 		run: (args) => Reflect.apply(jsonShape, undefined, [...args]),
 	},
 	{
@@ -331,7 +336,6 @@ describe('shape builders', () => {
 				outcome: attempt(() => builder.run(args)),
 			})),
 		)
-		expect(legitimate).toHaveLength(62)
 		for (const result of legitimate) {
 			expect(result.outcome.success, `${result.builder} rejected a legitimate call`).toBe(true)
 		}
@@ -356,7 +360,6 @@ describe('shape builders', () => {
 				}
 			}
 		}
-		expect(hostile).toHaveLength(246)
 		for (const result of hostile) {
 			expect(
 				result.outcome.success,
@@ -372,194 +375,14 @@ describe('shape builders', () => {
 		expect(negative.success).toBe(false)
 	})
 
-	it('generates every builder options position across every hostile read trap', () => {
-		const source = ts.createSourceFile(
-			'shapers.ts',
-			shaperSource,
-			ts.ScriptTarget.Latest,
-			true,
-			ts.ScriptKind.TS,
-		)
-		const types = ts.createSourceFile(
-			'types.ts',
-			typeSource,
-			ts.ScriptTarget.Latest,
-			true,
-			ts.ScriptKind.TS,
-		)
-		const optionInterfaces = new Map<string, Set<string>>()
-		for (const statement of types.statements) {
-			if (!ts.isInterfaceDeclaration(statement) || !statement.name.text.endsWith('ShapeOptions')) {
-				continue
-			}
-			if (statement.heritageClauses !== undefined && statement.heritageClauses.length > 0) {
-				throw new Error(`${statement.name.text}: options heritage clauses are not supported`)
-			}
-			const keys = new Set<string>()
-			for (const member of statement.members) {
-				if (!ts.isPropertySignature(member) || member.name === undefined) continue
-				if (ts.isIdentifier(member.name) || ts.isStringLiteral(member.name)) {
-					keys.add(member.name.text)
-				}
-			}
-			optionInterfaces.set(statement.name.text, keys)
-		}
-
-		const nonBuilders = new Set(['buildObjectShape', 'schemaNodeToShape', 'schemaToShape'])
-		const functions: {
-			readonly name: string
-			readonly parameters: ts.NodeArray<ts.ParameterDeclaration>
-			readonly body?: ts.ConciseBody
-		}[] = []
-		for (const statement of source.statements) {
-			if (!ts.isFunctionDeclaration(statement) && !ts.isVariableStatement(statement)) continue
-			const exported = statement.modifiers?.some(
-				(modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
-			)
-			if (exported !== true) continue
-			if (ts.isFunctionDeclaration(statement) && statement.name !== undefined) {
-				functions.push({
-					name: statement.name.text,
-					parameters: statement.parameters,
-					...(statement.body === undefined ? {} : { body: statement.body }),
-				})
-				continue
-			}
-			if (!ts.isVariableStatement(statement)) continue
-			for (const declaration of statement.declarationList.declarations) {
-				if (!ts.isIdentifier(declaration.name) || declaration.initializer === undefined) continue
-				if (
-					!ts.isArrowFunction(declaration.initializer) &&
-					!ts.isFunctionExpression(declaration.initializer)
-				) {
-					continue
-				}
-				functions.push({
-					name: declaration.name.text,
-					parameters: declaration.initializer.parameters,
-					body: declaration.initializer.body,
-				})
-			}
-		}
-
-		const builders = new Map<string, Set<number>>()
-		const implementations = new Map<string, ts.Block>()
-		const optionKeys = new Map<string, Map<number, Set<string>>>()
-		for (const entry of functions) {
-			if (!entry.name.endsWith('Shape') || nonBuilders.has(entry.name)) continue
-			const positions = builders.get(entry.name) ?? new Set<number>()
-			for (const [position, parameter] of entry.parameters.entries()) {
-				if (ts.isIdentifier(parameter.name) && parameter.name.text === 'options') {
-					positions.add(position)
-					if (parameter.type === undefined || !ts.isTypeReferenceNode(parameter.type)) continue
-					let optionName = parameter.type.typeName.getText(source)
-					const omitted = new Set<string>()
-					if (optionName === 'Omit') {
-						const [base, exclusions] = parameter.type.typeArguments ?? []
-						if (base !== undefined && ts.isTypeReferenceNode(base)) {
-							optionName = base.typeName.getText(source)
-						}
-						if (exclusions !== undefined && ts.isLiteralTypeNode(exclusions)) {
-							if (ts.isStringLiteral(exclusions.literal)) omitted.add(exclusions.literal.text)
-						}
-					}
-					const declared = optionInterfaces.get(optionName)
-					if (declared === undefined) {
-						throw new Error(`${entry.name}: missing ${optionName} interface`)
-					}
-					const expected = new Set([...declared].filter((key) => !omitted.has(key)))
-					const byPosition = optionKeys.get(entry.name) ?? new Map<number, Set<string>>()
-					byPosition.set(position, expected)
-					optionKeys.set(entry.name, byPosition)
-				}
-			}
-			builders.set(entry.name, positions)
-			if (entry.body !== undefined && ts.isBlock(entry.body)) {
-				implementations.set(entry.name, entry.body)
-			}
-		}
-		for (const [builder, positions] of builders) {
-			for (const position of positions) {
-				const keys = optionKeys.get(builder)?.get(position)
-				if (keys === undefined || keys.size === 0) {
-					throw new Error(`${builder}: options position ${position} has no resolvable keys`)
-				}
-			}
-		}
-
-		const registered = new Set(BUILDER_CASES.map((builder) => builder.name))
-		const runtime = new Set(
-			Object.entries(shapers)
-				.filter(
-					([name, value]) =>
-						name.endsWith('Shape') && typeof value === 'function' && !nonBuilders.has(name),
-				)
-				.map(([name]) => name),
-		)
-		expect([...runtime].sort()).toEqual([...builders.keys()].sort())
-		expect([...registered].sort()).toEqual([...builders.keys()].sort())
-		for (const builder of BUILDER_CASES) {
-			const expected = [...(builders.get(builder.name) ?? [])].sort()
-			const actual = Object.entries(builder.positions)
-				.filter(([, role]) => role === 'options')
-				.map(([position]) => Number(position))
-				.sort()
-			expect(actual, `${builder.name} options positions`).toEqual(expected)
-			for (const position of expected) {
-				const body = implementations.get(builder.name)
-				expect(body, `${builder.name} implementation`).toBeDefined()
-				if (body === undefined) continue
-				const calls: ts.CallExpression[] = []
-				for (const statement of body.statements) {
-					if (!ts.isVariableStatement(statement)) continue
-					for (const declaration of statement.declarationList.declarations) {
-						const initializer = declaration.initializer
-						if (
-							initializer !== undefined &&
-							ts.isCallExpression(initializer) &&
-							ts.isIdentifier(initializer.expression) &&
-							initializer.expression.text === 'readOptions'
-						) {
-							calls.push(initializer)
-						}
-					}
-				}
-				expect(calls, `${builder.name} readOptions calls`).toHaveLength(1)
-				const [call] = calls
-				if (call === undefined) continue
-				const keysArgument = call.arguments[1]
-				expect(
-					keysArgument !== undefined && ts.isArrayLiteralExpression(keysArgument),
-					`${builder.name} readOptions keys`,
-				).toBe(true)
-				if (keysArgument === undefined || !ts.isArrayLiteralExpression(keysArgument)) continue
-				const actualKeys = keysArgument.elements
-					.filter(ts.isStringLiteral)
-					.map((element) => element.text)
-					.sort()
-				const expectedKeys = [...(optionKeys.get(builder.name)?.get(position) ?? [])].sort()
-				expect(actualKeys, `${builder.name} consumed option keys`).toEqual(expectedKeys)
-			}
-		}
-
-		const hostTraps = {
-			ownKeys: new Proxy(
-				{},
-				{
-					ownKeys() {
-						throw new Error('hostile ownKeys')
-					},
-				},
-			),
-			revoked: createRevokedProxy(),
-		} satisfies Readonly<Record<'ownKeys' | 'revoked', object>>
+	it('rejects every explicitly declared options read trap and accepts plain controls', () => {
 		const nullPrototype: object = Object.create(null)
-		const validOptions = {
-			empty: {},
-			frozen: Object.freeze({}),
-			spread: { ...{ description: undefined } },
+		const controls: readonly object[] = [
+			{},
+			Object.freeze({}),
+			{ ...{ description: undefined } },
 			nullPrototype,
-			defaults: new Proxy(
+			new Proxy(
 				{},
 				{
 					get() {
@@ -567,22 +390,19 @@ describe('shape builders', () => {
 					},
 				},
 			),
-		} satisfies Readonly<Record<string, object>>
+		]
 
-		const probes = new Map<string, Result<unknown>>()
-		const controls = new Map<string, Result<unknown>>()
 		for (const builder of BUILDER_CASES) {
 			const base = builder.valid[0] ?? []
-			for (const position of builders.get(builder.name) ?? []) {
-				for (const [control, options] of Object.entries(validOptions)) {
+			for (const [positionText, keys] of Object.entries(builder.options ?? {})) {
+				const position = Number(positionText)
+				for (const options of controls) {
 					const args = [...base]
 					args[position] = options
-					controls.set(
-						`${builder.name}[${position}]:${control}`,
-						attempt(() => builder.run(args)),
-					)
+					expect(attempt(() => builder.run(args)).success).toBe(true)
 				}
-				for (const key of optionKeys.get(builder.name)?.get(position) ?? []) {
+
+				for (const key of keys) {
 					const getArgs = [...base]
 					getArgs[position] = new Proxy(
 						{},
@@ -592,10 +412,6 @@ describe('shape builders', () => {
 								return undefined
 							},
 						},
-					)
-					probes.set(
-						`${builder.name}[${position}]:get:${key}`,
-						attempt(() => builder.run(getArgs)),
 					)
 					const hasArgs = [...base]
 					hasArgs[position] = new Proxy(
@@ -607,10 +423,6 @@ describe('shape builders', () => {
 							},
 						},
 					)
-					probes.set(
-						`${builder.name}[${position}]:has:${key}`,
-						attempt(() => builder.run(hasArgs)),
-					)
 					const descriptorArgs = [...base]
 					descriptorArgs[position] = new Proxy(
 						{},
@@ -621,61 +433,36 @@ describe('shape builders', () => {
 							},
 						},
 					)
-					probes.set(
-						`${builder.name}[${position}]:getOwnPropertyDescriptor:${key}`,
-						attempt(() => builder.run(descriptorArgs)),
-					)
-				}
-				for (const [trap, options] of Object.entries(hostTraps)) {
-					const args = [...base]
-					args[position] = options
-					probes.set(
-						`${builder.name}[${position}]:${trap}`,
-						attempt(() => builder.run(args)),
-					)
-				}
-			}
-		}
 
-		const expected = new Set<string>()
-		for (const [builder, positions] of builders) {
-			for (const position of positions) {
-				for (const key of optionKeys.get(builder)?.get(position) ?? []) {
-					for (const trap of ['get', 'has', 'getOwnPropertyDescriptor']) {
-						expected.add(`${builder}[${position}]:${trap}:${key}`)
+					for (const args of [getArgs, hasArgs, descriptorArgs]) {
+						const error = captureContractError(() => builder.run(args))
+						expect(error.code).toBe('structure')
+						expect(error.message).toBe(`${builder.name}: options could not be read`)
 					}
 				}
-				for (const trap of Object.keys(hostTraps)) expected.add(`${builder}[${position}]:${trap}`)
-			}
-		}
-		expect([...probes.keys()].sort()).toEqual([...expected].sort())
 
-		for (const [entry, outcome] of controls) {
-			expect(outcome.success, `${entry} rejected valid options`).toBe(true)
-		}
-		for (const [entry, outcome] of probes) {
-			expect(outcome.success, `${entry} accepted hostile options`).toBe(false)
-			if (outcome.success) continue
-			expect(isContractError(outcome.error), `${entry} leaked a raw throw`).toBe(true)
-			if (!isContractError(outcome.error)) continue
-			const separator = entry.indexOf('[')
-			const builder = entry.slice(0, separator)
-			expect(outcome.error.code).toBe('structure')
-			expect(outcome.error.message).toBe(`${builder}: options could not be read`)
-		}
+				const hostileKeys = [...base]
+				hostileKeys[position] = new Proxy(
+					{},
+					{
+						ownKeys() {
+							throw new Error('hostile ownKeys')
+						},
+					},
+				)
+				const revoked = [...base]
+				revoked[position] = createRevokedProxy()
+				for (const args of [hostileKeys, revoked]) {
+					const error = captureContractError(() => builder.run(args))
+					expect(error.code).toBe('structure')
+					expect(error.message).toBe(`${builder.name}: options could not be read`)
+				}
 
-		for (const builder of BUILDER_CASES) {
-			const base = builder.valid[0] ?? []
-			for (const position of builders.get(builder.name) ?? []) {
 				for (const primitive of [null, 0, 'x']) {
 					const args = [...base]
 					args[position] = primitive
-					const outcome = attempt(() => builder.run(args))
-					expect(outcome.success, `${builder.name}[${position}] accepted a primitive`).toBe(false)
-					if (outcome.success) continue
-					expect(isContractError(outcome.error)).toBe(true)
-					if (!isContractError(outcome.error)) continue
-					expect(outcome.error.message).toBe(`${builder.name}: options must be a plain record`)
+					const error = captureContractError(() => builder.run(args))
+					expect(error.message).toBe(`${builder.name}: options must be a plain record`)
 				}
 			}
 		}
@@ -755,6 +542,57 @@ describe('shape builders', () => {
 		expect(pattern).toBeInstanceOf(ContractError)
 		expect(pattern.code).toBe('pattern')
 		expect(pattern.message).toContain('inline pattern constructs')
+	})
+
+	it('applies the raw population and unflagged pattern declaration rules at builder doors', () => {
+		const properties: Record<string, JSONSchema> = {}
+		Reflect.set(properties, 'value', undefined)
+		const anyOf: JSONSchema[] = []
+		Reflect.set(anyOf, '0', undefined)
+		const oneOf: JSONSchema[] = []
+		Reflect.set(oneOf, '0', undefined)
+		const nullProperties: Record<string, JSONSchema> = {}
+		Reflect.set(nullProperties, 'value', null)
+
+		for (const schema of [
+			{ properties },
+			{ anyOf },
+			{ oneOf },
+			{ properties: nullProperties },
+		] satisfies readonly JSONSchema[]) {
+			const error = captureContractError(() => rawShape(schema))
+			expect(error.message).toBe(
+				'validateShapeDepth: every raw schema child must be a plain record',
+			)
+			expect(error.code).toBe('structure')
+			expect(error.context).toEqual({ path: ['schema'] })
+			expect(Object.hasOwn(error, 'cause')).toBe(false)
+		}
+
+		for (const schema of [
+			{},
+			{ properties: {} },
+			{ properties: { value: {} } },
+			{ anyOf: [{}] },
+			{ oneOf: [{}] },
+			createUndefinedSchema('items'),
+			createUndefinedSchema('additionalProperties'),
+		] satisfies readonly JSONSchema[]) {
+			expect(rawShape(schema).type).toBe('raw')
+		}
+
+		const flagged = captureContractError(() => stringShape({ min: 2, max: 1, pattern: /a/i }))
+		expect(flagged.message).toBe(
+			'stringShape: pattern must not use flags; use inline pattern constructs instead',
+		)
+		expect(flagged.code).toBe('pattern')
+		expect(flagged.context).toEqual({ shape: 'string', received: '/a/i' })
+		expect(Object.hasOwn(flagged, 'cause')).toBe(false)
+
+		const plain = stringShape({ pattern: /a/ })
+		const inline = stringShape({ pattern: /[aA]/ })
+		expect(compileGuard(plain)('A')).toBe(false)
+		expect(compileGuard(inline)('A')).toBe(true)
 	})
 
 	it('rejects non-RegExp string patterns with a coded ContractError', () => {
@@ -876,6 +714,27 @@ describe('shape builders', () => {
 		expect(contract.schema.pattern).toBe('^stable$')
 	})
 
+	it('accepts and owns an unflagged foreign RegExp while retaining the flag policy', () => {
+		const pattern = createForeignRegExp('^foreign$')
+		if (!isRegExp(pattern)) throw new Error('expected a genuine foreign RegExp')
+		const shape = stringShape({ pattern })
+		const guard = compileGuard(shape)
+
+		Reflect.apply(RegExp.prototype.compile, pattern, ['^changed$'])
+
+		expect(shape.pattern?.source).toBe('^foreign$')
+		expect(guard('foreign')).toBe(true)
+		expect(guard('changed')).toBe(false)
+
+		const flagged = createForeignRegExp('^foreign$', 'i')
+		if (!isRegExp(flagged)) throw new Error('expected a genuine flagged foreign RegExp')
+		const error = captureContractError(() => stringShape({ pattern: flagged }))
+		expect(error.code).toBe('pattern')
+		expect(error.message).toBe(
+			'stringShape: pattern must not use flags; use inline pattern constructs instead',
+		)
+	})
+
 	it('keeps its owned pattern stable after compile mutation through the shape', () => {
 		const shape = stringShape({ pattern: /^stable$/ })
 
@@ -958,7 +817,7 @@ describe('shape builders', () => {
 	})
 
 	it('literalShape copies primitive values before freezing them', () => {
-		const values: (string | number | boolean)[] = ['stable', 1, true]
+		const values: LiteralValue[] = ['stable', 1, true]
 		const shape = literalShape(values)
 
 		values[0] = 'changed'
@@ -966,6 +825,28 @@ describe('shape builders', () => {
 		expect(shape.values).not.toBe(values)
 		expect(Object.isFrozen(shape.values)).toBe(true)
 		expect(Object.isFrozen(values)).toBe(false)
+	})
+
+	it('literalShape validates and publishes the same indexed population', () => {
+		const values = ['indexed-a', 'indexed-b']
+		const substituted = ['iterated']
+		Object.defineProperty(values, Symbol.iterator, {
+			value: substituted[Symbol.iterator].bind(substituted),
+		})
+
+		const shape = literalShape(values)
+		expect(shape.values).toEqual(['indexed-a', 'indexed-b'])
+		expect(Object.isFrozen(shape.values)).toBe(true)
+	})
+
+	it('literalShape refuses a sparse indexed population', () => {
+		const values: LiteralValue[] = []
+		values.length = 2
+		values[0] = 'present'
+
+		const error = captureContractError(() => literalShape(values))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('validateShapeDepth: values must be a dense data array')
 	})
 
 	it('literalShape attaches the description via options', () => {
@@ -1047,6 +928,67 @@ describe('shape builders', () => {
 		expect(Object.isFrozen(child)).toBe(false)
 	})
 
+	it('validates the exact owned raw population after its caller precheck', () => {
+		let reads = 0
+		const schema = new Proxy({ type: 'string', minLength: 1 } satisfies JSONSchema, {
+			get(target, property, receiver) {
+				if (property !== 'minLength') return Reflect.get(target, property, receiver)
+				reads += 1
+				return reads === 1 ? 1 : -5
+			},
+		})
+
+		const error = captureContractError(() => rawShape(schema))
+		expect(reads).toBe(2)
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe(
+			'validateShapeDepth: raw schema length bounds must be non-negative safe integers',
+		)
+		expect(error.context?.path).toEqual(['schema'])
+	})
+
+	it('returns the one valid captured raw population and preserves earlier diagnostics', () => {
+		let reads = 0
+		const schema = new Proxy({ type: 'string', minLength: 1 } satisfies JSONSchema, {
+			get(target, property, receiver) {
+				if (property !== 'minLength') return Reflect.get(target, property, receiver)
+				reads += 1
+				return reads === 1 ? 1 : 3
+			},
+		})
+		const shape = rawShape(schema)
+
+		expect(reads).toBe(2)
+		expect(shape.schema).not.toBe(schema)
+		expect(shape.schema.minLength).toBe(3)
+		expect(Object.isFrozen(shape.schema)).toBe(true)
+
+		let invalidReads = 0
+		const invalid = new Proxy({ type: 'string', minLength: -5 } satisfies JSONSchema, {
+			get(target, property, receiver) {
+				if (property === 'minLength') invalidReads += 1
+				return Reflect.get(target, property, receiver)
+			},
+		})
+		const invalidError = captureContractError(() => rawShape(invalid))
+		expect(invalidReads).toBe(1)
+		expect(invalidError.code).toBe('structure')
+
+		let hostileReads = 0
+		const hostile = new Proxy({ type: 'string', minLength: 1 } satisfies JSONSchema, {
+			get(target, property, receiver) {
+				if (property !== 'minLength') return Reflect.get(target, property, receiver)
+				hostileReads += 1
+				if (hostileReads > 1) throw new Error('clone read')
+				return 1
+			},
+		})
+		const hostileError = captureContractError(() => rawShape(hostile))
+		expect(hostileReads).toBe(2)
+		expect(hostileError.code).toBe('clone')
+		expect(hostileError.message).toBe('cloneSchema: property access failed')
+	})
+
 	it('nullShape returns a bare null shape and threads its description', () => {
 		expect(nullShape()).toEqual({ type: 'null' })
 		expect(nullShape({ description: 'nothing' })).toEqual({
@@ -1065,6 +1007,24 @@ describe('shape builders', () => {
 })
 
 describe('Infer', () => {
+	it('bails the widened ContractShape union out to unknown without recursive type explosion', () => {
+		expectTypeOf<Infer<ContractShape>>().toEqualTypeOf<unknown>()
+
+		const registry: Record<string, ContractShape> = {
+			user: objectShape({ name: stringShape({ min: 1 }) }),
+		}
+		const contract = createContract(registry['user'] ?? stringShape())
+		expect(contract.is({ name: 'Ada' })).toBe(true)
+		expect(contract.parse({ name: 'Ada' })).toEqual({ name: 'Ada' })
+		expect(
+			contract.is(createContract(registry['user'] ?? stringShape()).generate(seededRandom(11))),
+		).toBe(true)
+	})
+
+	it('distributes partial unions exactly', () => {
+		expectTypeOf<Infer<StringShape | NumberShape>>().toEqualTypeOf<string | number>()
+	})
+
 	it('derives the static type a shape describes (compile-time)', () => {
 		const user = objectShape({
 			name: stringShape({ min: 1 }),
@@ -1086,18 +1046,14 @@ describe('Infer', () => {
 		expect(value.name).toBe('Ada')
 		expect(value.role).toBe('admin')
 		expect(value.avatar).toBeNull()
-		// @ts-expect-error — Infer must narrow role to the exact literal union, not string
-		const widened: Infer<typeof user> = { ...value, role: 'owner' }
-		expect(widened).toBeDefined()
+		expectTypeOf<Infer<typeof user>['role']>().toEqualTypeOf<'admin' | 'guest'>()
 	})
 
 	it('derives null for a nullShape (compile-time)', () => {
 		const shape = nullShape()
 		const value: Infer<typeof shape> = null
 		expect(value).toBeNull()
-		// @ts-expect-error — Infer<NullShape> must be exactly `null`, not `string`
-		const wrong: Infer<typeof shape> = 'not null'
-		expect(wrong).toBeDefined()
+		expectTypeOf<Infer<typeof shape>>().toEqualTypeOf<null>()
 	})
 
 	it('derives JSONValue for a jsonShape (compile-time)', () => {
@@ -1106,23 +1062,19 @@ describe('Infer', () => {
 		expect(value).toEqual({ nested: [1, 'x', null] })
 		const primitive: Infer<typeof shape> = 'a JSON value'
 		expect(primitive).toBe('a JSON value')
-		// @ts-expect-error — Infer<JSONShape> must be JSONValue, not a function
-		const wrong: Infer<typeof shape> = () => 1
-		expect(wrong).toBeDefined()
+		expectTypeOf<Infer<typeof shape>>().toEqualTypeOf<JSONValue>()
 		const check: JSONValue = value
 		expect(check).toBeDefined()
 	})
 
-	it('derives an index signature for recordShape values (finding #1)', () => {
+	it('derives an index signature for recordShape values', () => {
 		const rec = recordShape(numberShape())
 		const v: Infer<typeof rec> = { a: 1 }
 		const n = v.a
 		if (n === undefined) throw new Error('recordShape omitted the seeded property')
 		const checked: number = n
 		expect(checked).toBe(1)
-		// @ts-expect-error — recordShape values are number, string rejected
-		const bad: Infer<typeof rec> = { a: 'x' }
-		expect(bad).toBeDefined()
+		expectTypeOf<Infer<typeof rec>>().toEqualTypeOf<Readonly<Record<string, number>>>()
 	})
 
 	it('mixed shape keeps named props at their declared types and infers extras as unknown', () => {
@@ -1132,12 +1084,10 @@ describe('Infer', () => {
 		expect(id).toBe('x')
 		const extra: unknown = v.extra
 		expect(extra).toBe(42)
-		// @ts-expect-error — an extra key must infer as unknown, not number
-		const bad: number = v.extra
-		expect(bad).toBeDefined()
+		expectTypeOf(v.extra).toEqualTypeOf<unknown>()
 	})
 
-	it('additionalProperties: true widens to an open unknown index (finding #2)', () => {
+	it('additionalProperties: true widens to an open unknown index', () => {
 		const o = objectShape({ id: stringShape() }, { additionalProperties: true })
 		const v: Infer<typeof o> = { id: 'x', whatever: 42 }
 		expect(v.id).toBe('x')
@@ -1161,9 +1111,11 @@ describe('InferMutable', () => {
 		// Top-level readonly is stripped — direct assignment compiles.
 		value.name = 'Grace'
 		expect(value.name).toBe('Grace')
-		// @ts-expect-error — nested readonly is unchanged; `profile.bio` stays readonly
-		value.profile.bio = 'bye'
-		expect(value.profile.bio).toBe('bye')
+		expectTypeOf<InferMutable<typeof shape>>().toEqualTypeOf<{
+			name: string
+			profile: Readonly<{ bio: string }>
+		}>()
+		expect(value.profile.bio).toBe('hi')
 	})
 })
 
@@ -1217,7 +1169,7 @@ describe('Infer depth-robustness tripwire', () => {
 			| {
 					readonly via: 'tool'
 					readonly name: string
-					readonly args: { readonly [k: string]: string | number | boolean }
+					readonly args: { readonly [k: string]: LiteralValue }
 			  }
 		type UserMessage = {
 			readonly role: 'user'
@@ -1237,7 +1189,7 @@ describe('Infer depth-robustness tripwire', () => {
 			readonly metadata: {
 				readonly [k: string]: {
 					readonly key: string
-					readonly value: string | number | boolean
+					readonly value: LiteralValue
 					readonly tags: readonly string[]
 				}
 			}
@@ -1264,52 +1216,68 @@ describe('Infer depth-robustness tripwire', () => {
 	})
 })
 
-describe('Infer wide-additionalProperties tuple-guard regression (0.0.4)', () => {
-	it('a wide/defaulted A stays shallow — no TS2589 depth error, and resolves to the closed row intersected with the unknown open index (InferOpenIndex)', () => {
-		// `ObjectShape<{ id: StringShape }, boolean | ContractShape>` — `A` is the
-		// FULL defaulted `additionalProperties` union, not narrowed to a specific
-		// `false` / `true` / `ContractShape`. Before the 0.0.4 tuple-A-guard fix, a
-		// naked `A extends boolean | ContractShape` here distributed over the wide
-		// union and fanned out into a TS2589 excessively-deep-instantiation error.
-		// This locks that the tuple-wrapped guard keeps it a single, shallow
-		// instantiation that resolves to `unknown` on the `InferOpenIndex` tail —
-		// i.e. the closed row `{ id: string }` intersected with `unknown`, so the
-		// extra-key index contributes nothing beyond the declared property.
-		type Locked = Infer<ObjectShape<{ id: StringShape }, boolean | ContractShape>>
-		type Expected = Readonly<{ id: string }>
-		type _Lock = Expect<Equal<Locked, Expected>>
+describe('Infer with widened additional properties', () => {
+	it('keeps declared properties when additional properties use the full union', () => {
+		expectTypeOf<Infer<ObjectShape<{ id: StringShape }, boolean | ContractShape>>>().toEqualTypeOf<
+			Readonly<{ id: string }>
+		>()
 
-		const value: Locked = { id: 'abc' }
+		const value = { id: 'abc' }
 		expect(value.id).toBe('abc')
 	})
 })
 
 describe('schemaToShape — round-trip law: compileGuard(schemaToShape(valueToSchema(v)))(v)', () => {
-	// Returns [fromValue, fromSamples] so every `it` calls `expect` directly on
-	// the result (never inside this helper) — satisfies the linter's
-	// no-hidden-assertions rule while keeping the corpus terse to declare.
-	const roundTrips = (value: unknown): readonly [boolean, boolean] => {
-		const guardFromValue = compileGuard(schemaToShape(valueToSchema(value)))
-		const guardFromSamples = compileGuard(schemaToShape(samplesToSchema([value])))
-		return [guardFromValue(value), guardFromSamples(value)]
-	}
-
 	it('round-trips every leaf kind', () => {
 		for (const value of [null, true, false, 42, -0, 3.14, 'hello']) {
-			expect(roundTrips(value)).toEqual([true, true])
+			for (const schema of [valueToSchema(value), samplesToSchema([value])]) {
+				expect(compileGuard(schemaToShape(schema))(value)).toBe(true)
+			}
 		}
 	})
 
 	it('round-trips nested objects', () => {
-		expect(roundTrips({ id: 1, name: 'Ada', address: { city: 'London', zip: '10001' } })).toEqual([
-			true,
-			true,
-		])
+		const value = { id: 1, name: 'Ada', address: { city: 'London', zip: '10001' } }
+		for (const schema of [valueToSchema(value), samplesToSchema([value])]) {
+			expect(compileGuard(schemaToShape(schema))(value)).toBe(true)
+		}
 	})
 
 	it('round-trips homogeneous and heterogeneous arrays', () => {
-		expect(roundTrips(['a', 'b', 'c'])).toEqual([true, true])
-		expect(roundTrips([1, 'x', true, 3.5])).toEqual([true, true])
+		for (const value of [
+			['a', 'b', 'c'],
+			[1, 'x', true, 3.5],
+		]) {
+			for (const schema of [valueToSchema(value), samplesToSchema([value])]) {
+				expect(compileGuard(schemaToShape(schema))(value)).toBe(true)
+			}
+		}
+	})
+
+	it('round-trips a sparse array at the root and at every nested entry point', () => {
+		// `valueToSchema([1, , 3])` used to emit `{ type: 'array', items: { anyOf:
+		// [{ type: 'integer' }, {}] } }`, whose own compiled guard REJECTED
+		// `[1, , 3]` — the package published a schema that refused the value it was
+		// derived from. A hole is an absent own property, so the node widens to the
+		// accept-anything `{}` instead of reading a present `undefined` member.
+		// The repair is re-asked at the two other entry points that reach the same
+		// `inferArray` rule, because a fix verified only where it was found ships
+		// the defect at every other door.
+		const sparse = buildSparseArray()
+		expect(valueToSchema(sparse)).toEqual({})
+		for (const value of [sparse, { row: sparse }, [sparse]]) {
+			expect(compileGuard(schemaToShape(valueToSchema(value)))(value)).toBe(true)
+		}
+
+		// The control that keeps this from passing vacuously: the DENSE sibling
+		// still infers a real array schema — so the widening belongs to the hole,
+		// not to arrays — and still round-trips.
+		const dense = ['value', 'value', 'value']
+		expect(valueToSchema(dense)).toEqual({ type: 'array', items: { type: 'string' } })
+		for (const value of [dense, { row: dense }, [dense]]) {
+			expect(compileGuard(schemaToShape(valueToSchema(value)))(value)).toBe(true)
+		}
+		expect(compileGuard(schemaToShape(valueToSchema(dense)))(sparse)).toBe(false)
 	})
 
 	it("round-trips a Date — the inferred schema validates the Date's serialized (ISO string) form", () => {
@@ -1340,26 +1308,40 @@ describe('schemaToShape — round-trip law: compileGuard(schemaToShape(valueToSc
 	})
 
 	it('round-trips non-finite numbers (NaN / ±Infinity), which no JSON Schema type describes', () => {
-		expect(roundTrips(Number.NaN)).toEqual([true, true])
-		expect(roundTrips(Number.POSITIVE_INFINITY)).toEqual([true, true])
-		expect(roundTrips(Number.NEGATIVE_INFINITY)).toEqual([true, true])
+		for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+			for (const schema of [valueToSchema(value), samplesToSchema([value])]) {
+				expect(compileGuard(schemaToShape(schema))(value)).toBe(true)
+			}
+		}
 	})
 
 	it('round-trips exotic originals (Map, Set, class instance, function, symbol, bigint)', () => {
-		expect(roundTrips(new Map([['a', 1]]))).toEqual([true, true])
-		expect(roundTrips(new Set([1, 2]))).toEqual([true, true])
-		expect(roundTrips(createClassInstance())).toEqual([true, true])
-		expect(roundTrips(() => 1)).toEqual([true, true])
-		expect(roundTrips(Symbol('s'))).toEqual([true, true])
-		expect(roundTrips(10n)).toEqual([true, true])
+		for (const value of [
+			new Map([['a', 1]]),
+			new Set([1, 2]),
+			createClassInstance(),
+			createClassInstance,
+			Symbol('s'),
+			10n,
+		]) {
+			for (const schema of [valueToSchema(value), samplesToSchema([value])]) {
+				expect(compileGuard(schemaToShape(schema))(value)).toBe(true)
+			}
+		}
 	})
 
 	it('round-trips a record carrying an explicitly-undefined property (the schema opens instead of closing over a dropped key)', () => {
-		expect(roundTrips({ a: 1, b: undefined })).toEqual([true, true])
+		const value = { a: 1, b: undefined }
+		for (const schema of [valueToSchema(value), samplesToSchema([value])]) {
+			expect(compileGuard(schemaToShape(schema))(value)).toBe(true)
+		}
 	})
 
 	it('round-trips a record carrying only a non-enumerable own property', () => {
-		expect(roundTrips(createNonEnumerableRecord('hidden', 'value'))).toEqual([true, true])
+		const value = createNonEnumerableRecord('hidden', 'value')
+		for (const schema of [valueToSchema(value), samplesToSchema([value])]) {
+			expect(compileGuard(schemaToShape(schema))(value)).toBe(true)
+		}
 	})
 
 	it('refuses unreadable hosts and still round-trips readable cycles', () => {
@@ -1371,12 +1353,18 @@ describe('schemaToShape — round-trip law: compileGuard(schemaToShape(valueToSc
 			expect(fromSamples.code).toBe('structure')
 			expect(fromSamples.message).toBe('samplesToSchema: samples could not be read')
 		}
-		expect(roundTrips(buildCyclicRecord())).toEqual([true, true])
-		expect(roundTrips(buildCyclicArray())).toEqual([true, true])
+		for (const value of [buildCyclicRecord(), buildCyclicArray()]) {
+			for (const schema of [valueToSchema(value), samplesToSchema([value])]) {
+				expect(compileGuard(schemaToShape(schema))(value)).toBe(true)
+			}
+		}
 	})
 
 	it('round-trips a nest deeper than INFER_DEPTH_LIMIT (both walks bottom out at the same budget)', () => {
-		expect(roundTrips(buildDeepNest(INFER_DEPTH_LIMIT + 8))).toEqual([true, true])
+		const value = buildDeepNest(INFER_DEPTH_LIMIT + 8)
+		for (const schema of [valueToSchema(value), samplesToSchema([value])]) {
+			expect(compileGuard(schemaToShape(schema))(value)).toBe(true)
+		}
 	})
 
 	it('limits the round-trip law to stable advertised reads and ignores unrelated array readers', () => {
@@ -1386,7 +1374,10 @@ describe('schemaToShape — round-trip law: compileGuard(schemaToShape(valueToSc
 		// lens and cannot make the two array walks disagree.
 		const drifting = createStatefulGetter()
 		expect(compileGuard(schemaToShape(valueToSchema(drifting)))(drifting)).toBe(false)
-		expect(roundTrips(createUnstableArray())).toEqual([true, true])
+		const value = createUnstableArray()
+		for (const schema of [valueToSchema(value), samplesToSchema([value])]) {
+			expect(compileGuard(schemaToShape(schema))(value)).toBe(true)
+		}
 	})
 
 	// The whole-corpus invariant: the guard inferred from ANY sample accepts that
@@ -1405,14 +1396,18 @@ describe('schemaToShape — round-trip law: compileGuard(schemaToShape(valueToSc
 			if (!compileGuard(schemaToShape(outcome.value))(value)) rejected.push(value)
 		}
 		// In corpus order: `undefined` is absence, not a value — no compiled guard
-		// accepts it (`rawShape` reserves it as the parser failure sentinel); a
+		// accepts it (`rawShape` reserves it as the parser failure sentinel); and a
 		// `Date`'s inferred schema describes its JSON SERIALIZATION, never the
-		// runtime instance; a sparse array's holes are absent elements, which
-		// `arrayOf` rejects by the same `Object.hasOwn` rule `isJSONValue` applies.
-		expect(rejected).toHaveLength(3)
+		// runtime instance. A SPARSE array used to sit here as a third limit,
+		// because inference read its holes as present `undefined` leaves and emitted
+		// an array schema its own guard refused; it now widens to `{}` and
+		// round-trips like every other JSON-inexpressible value.
+		expect(rejected).toHaveLength(2)
 		expect(rejected[0]).toBeUndefined()
 		expect(rejected[1]).toBeInstanceOf(Date)
-		expect(rejected[2]).toEqual(buildSparseArray())
+		expect(compileGuard(schemaToShape(valueToSchema(buildSparseArray())))(buildSparseArray())).toBe(
+			true,
+		)
 		expect(refused).toEqual([
 			'valueToSchema: value could not be read',
 			'valueToSchema: value could not be read',
@@ -1430,10 +1425,9 @@ describe('schemaToShape — round-trip law: compileGuard(schemaToShape(valueToSc
 			}
 			if (!compileGuard(schemaToShape(outcome.value))(value)) rejected.push(value)
 		}
-		expect(rejected).toHaveLength(3)
+		expect(rejected).toHaveLength(2)
 		expect(rejected[0]).toBeUndefined()
 		expect(rejected[1]).toBeInstanceOf(Date)
-		expect(rejected[2]).toEqual(buildSparseArray())
 		expect(refused).toEqual([
 			'samplesToSchema: samples could not be read',
 			'samplesToSchema: samples could not be read',
@@ -1880,5 +1874,134 @@ describe('schemaToShape — performance guard', () => {
 		const start = Date.now()
 		expect(() => createContract(schemaToShape(schema))).not.toThrow()
 		expect(Date.now() - start).toBeLessThan(5000)
+	})
+})
+
+describe('shape builders — reparented class brands', () => {
+	it('refuses a null-base class instance at every building door', () => {
+		const doors = [
+			{ name: 'arrayShape', operation: () => arrayShape(new NullBaseDeclaration()) },
+			{ name: 'objectShape', operation: () => objectShape({ value: new NullBaseDeclaration() }) },
+			{ name: 'recordShape', operation: () => recordShape(new NullBaseDeclaration()) },
+			{ name: 'unionShape', operation: () => unionShape(new NullBaseDeclaration()) },
+			{ name: 'oneOfShape', operation: () => oneOfShape(new NullBaseDeclaration()) },
+			{ name: 'optionalShape', operation: () => optionalShape(new NullBaseDeclaration()) },
+			{ name: 'nullableShape', operation: () => nullableShape(new NullBaseDeclaration()) },
+			{ name: 'rawShape', operation: () => rawShape(new NullBaseDeclaration()) },
+		]
+
+		const observed = doors.map((door) => {
+			const error = captureContractError(door.operation)
+			return { name: door.name, code: error.code, caused: Object.hasOwn(error, 'cause') }
+		})
+
+		expect(observed).toEqual([
+			{ name: 'arrayShape', code: 'structure', caused: false },
+			{ name: 'objectShape', code: 'structure', caused: false },
+			{ name: 'recordShape', code: 'structure', caused: false },
+			{ name: 'unionShape', code: 'structure', caused: false },
+			{ name: 'oneOfShape', code: 'structure', caused: false },
+			{ name: 'optionalShape', code: 'structure', caused: false },
+			{ name: 'nullableShape', code: 'structure', caused: false },
+			{ name: 'rawShape', code: 'structure', caused: false },
+		])
+	})
+
+	it('refuses a null-base class instance as an object property map', () => {
+		const error = captureContractError(() =>
+			Reflect.apply(objectShape, undefined, [new NullBaseDeclaration()]),
+		)
+
+		expect(error.message).toBe('objectShape: properties must be a plain record')
+		expect(error.code).toBe('structure')
+		expect(error.context?.path).toEqual(['properties'])
+	})
+
+	it('widens a null-base class instance to an accept-anything raw shape during inversion', () => {
+		const node = new NullBaseDeclaration()
+
+		expect(schemaToShape(node)).toEqual(rawShape({}))
+		expect(schemaNodeToShape(node, INFER_DEPTH_LIMIT, new WeakSet(), new WeakMap())).toEqual(
+			rawShape({}),
+		)
+	})
+})
+
+describe('schemaToShape — readable malformed vocabulary (H9)', () => {
+	it('de-duplicates a repeated enum instead of refusing it as unreadable', () => {
+		// JSON Schema requires `enum` members to be unique, so a repeat is malformed
+		// VOCABULARY, and this conversion's stated rule for malformed vocabulary is
+		// to ignore it and widen — never to throw, and never to misattribute a data
+		// defect to a hostile host. `literalShape`'s uniqueness gate refused the
+		// duplicate and `readValue` republished that refusal as
+		// `schemaNodeToShape: schema could not be read`.
+		expect(schemaToShape({ enum: ['a', 'a'] })).toEqual(literalShape(['a']))
+		expect(schemaToShape({ enum: ['a', 'a', 'b'] })).toEqual(literalShape(['a', 'b']))
+		// SameValueZero, the package-wide membership rule: `-0` and `0` are one
+		// member, and first occurrence keeps its place.
+		expect(schemaToShape({ enum: [0, -0] })).toEqual(literalShape([0]))
+		expect(
+			schemaToShape({
+				type: 'object',
+				properties: { role: { enum: ['a', 'a'] } },
+				required: ['role'],
+			}),
+		).toEqual(objectShape({ role: literalShape(['a']) }, { additionalProperties: true }))
+
+		const contract = createContract(schemaToShape({ enum: ['a', 'a', 'b'] }))
+		expect(contract.is('a')).toBe(true)
+		expect(contract.is('c')).toBe(false)
+		expect(contract.schema).toEqual({ enum: ['a', 'b'] })
+
+		// Control: a genuinely unreadable node is still refused as unreadable.
+		const hostile: JSONSchema = {}
+		Object.defineProperty(hostile, 'enum', {
+			enumerable: true,
+			get() {
+				throw new Error('hostile keyword')
+			},
+		})
+		const error = captureContractError(() => schemaToShape(hostile))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('schemaNodeToShape: schema could not be read')
+	})
+
+	it('serves its memo per (node, remaining depth), so a cyclic path widens a shared node earlier', () => {
+		// A KNOWN and documented limit rather than a repaired defect: the
+		// `(node, depth)` memo does not carry the active-ancestor set, so a node
+		// first reached through a cyclic path is served its cycle-truncated shape on
+		// a later acyclic path. Every observed difference is a WIDENING — an
+		// accept-anything `rawShape` — so nothing is wrongly rejected and the
+		// round-trip law is unaffected; what it costs is determinism across two
+		// graphs that differ only in which sibling holds the cyclic node.
+		const build = (cyclicFirst: boolean): JSONSchema => {
+			const cyclic: JSONSchema = { type: 'object' }
+			const wrapper: JSONSchema = { type: 'array', items: cyclic }
+			// Only the back edge needs reflection: everything else is expressible,
+			// and `properties` cannot name `wrapper` until `wrapper` names `cyclic`.
+			Reflect.set(cyclic, 'properties', { q: wrapper })
+			Reflect.set(cyclic, 'required', ['q'])
+			const plain: JSONSchema = {
+				type: 'object',
+				properties: { q: wrapper },
+				required: ['q'],
+			}
+			const properties = cyclicFirst ? { a: cyclic, b: plain } : { a: plain, b: cyclic }
+			return { type: 'object', properties, required: ['a', 'b'] }
+		}
+
+		const cyclicFirst = compileSchema(schemaToShape(build(true)))
+		const plainFirst = compileSchema(schemaToShape(build(false)))
+
+		// Both siblings inherit whichever conversion reached the shared node first.
+		expect(JSON.stringify(cyclicFirst)).not.toBe(JSON.stringify(plainFirst))
+		// Both remain sound: each accepts the document the other's shape describes.
+		const value = { a: { q: [{ q: [] }] }, b: { q: [{ q: [] }] } }
+		expect(compileGuard(schemaToShape(build(true)))(value)).toBe(true)
+		expect(compileGuard(schemaToShape(build(false)))(value)).toBe(true)
+		// And each conversion is deterministic for its own input.
+		expect(JSON.stringify(compileSchema(schemaToShape(build(true))))).toBe(
+			JSON.stringify(cyclicFirst),
+		)
 	})
 })

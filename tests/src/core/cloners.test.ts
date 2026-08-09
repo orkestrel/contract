@@ -1,28 +1,25 @@
-import type { ContractShape, JSONRecord, JSONSchema } from '@src/core'
+import type { ContractShape, JSONRecord, JSONSchema, StringShape } from '@src/core'
 import {
-	arrayShape,
+	attempt,
 	cloneJSONRecord,
 	cloneJSONValue,
 	cloneSchema,
 	cloneShape,
-	compileGuard,
-	compileSchema,
 	ContractError,
-	createContract,
 	isRecord,
 	objectShape,
 	ownShape,
+	SchemaCloner,
+	ShapeCloner,
 	stringShape,
 	unionShape,
 } from '@src/core'
-import { captureContractError } from '../../setup.js'
+import { captureContractError, ForgedBrandDeclaration, NullBaseDeclaration } from '../../setup.js'
+import { createForeignRecord } from '../../setupServer.js'
 import { describe, expect, it } from 'vitest'
 
 describe('cloneJSONValue', () => {
 	it('keeps finite primitives, exposes one-argument functions, and narrows record roots', () => {
-		expect(cloneJSONValue.length).toBe(1)
-		expect(cloneJSONRecord.length).toBe(1)
-
 		for (const value of [
 			null,
 			'',
@@ -95,6 +92,27 @@ describe('cloneJSONValue', () => {
 		expect(Object.isFrozen(child)).toBe(true)
 	})
 
+	it('creates a fresh composite snapshot for every eager call', () => {
+		let observations = 0
+		const source = new Proxy(
+			{ nested: [1] },
+			{
+				ownKeys(target) {
+					observations += 1
+					return Reflect.ownKeys(target)
+				},
+			},
+		)
+
+		const first = cloneJSONValue(source)
+		const afterFirst = observations
+		const second = cloneJSONValue(source)
+
+		expect(second).not.toBe(first)
+		expect(second).toEqual(first)
+		expect(observations).toBeGreaterThan(afterFirst)
+	})
+
 	it('preserves __proto__ as own data in deterministic key order', () => {
 		const special: Record<string, unknown> = Object.create(null)
 		special.first = 1
@@ -142,9 +160,7 @@ describe('cloneJSONValue', () => {
 	})
 
 	it('accepts realm-agnostic record and array brands but rejects custom records', () => {
-		const foreignPrototype = Object.create(null)
-		const foreignRecord: Record<string, unknown> = Object.create(foreignPrototype)
-		foreignRecord.value = 1
+		const foreignRecord = createForeignRecord()
 		const foreignArray: unknown[] = [foreignRecord]
 		Object.setPrototypeOf(foreignArray, null)
 
@@ -174,7 +190,8 @@ describe('cloneJSONValue', () => {
 			readonly value = 1
 		}
 		const custom = Object.create({})
-		for (const value of [new Value(), custom]) {
+		const simulated = Object.create(Object.create(null))
+		for (const value of [new Value(), custom, simulated, new NullBaseDeclaration()]) {
 			expect(isRecord(value)).toBe(false)
 			const error = captureContractError(() => cloneJSONValue(value))
 			expect(error.code).toBe('clone')
@@ -368,282 +385,275 @@ describe('cloneJSONValue', () => {
 })
 
 describe('cloneSchema', () => {
-	it('deep-clones and freezes a nested schema without touching the source', () => {
-		const leaf: JSONSchema = { type: 'string', description: 'source' }
-		const items: JSONSchema = { type: 'array', items: leaf }
-		const properties: Record<string, JSONSchema> = { values: items }
-		const source: JSONSchema = { type: 'object', properties }
-		const clone = cloneSchema(source)
-
-		expect(clone).toEqual(source)
-		expect(clone).not.toBe(source)
-		expect(clone.properties).not.toBe(properties)
-		expect(clone.properties?.values).not.toBe(items)
-		expect(clone.properties?.values?.items).not.toBe(leaf)
-		expect(Object.isFrozen(clone)).toBe(true)
-		expect(Object.isFrozen(clone.properties)).toBe(true)
-		expect(Object.isFrozen(clone.properties?.values)).toBe(true)
-		expect(Object.isFrozen(clone.properties?.values?.items)).toBe(true)
-		expect(Object.isFrozen(source)).toBe(false)
-		expect(Object.isFrozen(properties)).toBe(false)
-		expect(Object.isFrozen(items)).toBe(false)
-		expect(Object.isFrozen(leaf)).toBe(false)
-	})
-
-	it('preserves shared child identity in the owned schema graph', () => {
-		const child: JSONSchema = { type: 'integer' }
-		const source: JSONSchema = { anyOf: [child, child] }
-		const clone = cloneSchema(source)
-
-		expect(clone.anyOf?.[0]).toBe(clone.anyOf?.[1])
-		expect(clone.anyOf?.[0]).not.toBe(child)
-		expect(Object.isFrozen(clone.anyOf)).toBe(true)
-	})
-
-	it('tolerates a cycle and closes it onto the cloned schema', () => {
-		const raw = JSON.parse('{"type":"object","properties":{}}')
-		raw.properties.self = raw
-		const source: JSONSchema = raw
-		const clone = cloneSchema(source)
-
-		expect(clone.properties?.self).toBe(clone)
-		expect(clone).not.toBe(source)
-		expect(Object.isFrozen(clone)).toBe(true)
-		expect(Object.isFrozen(clone.properties)).toBe(true)
-		expect(Object.isFrozen(source)).toBe(false)
-	})
-
-	it('severs caller prototypes and excludes inherited behavior from the clone', () => {
-		const prototype = { marker: 'source' }
-		Object.defineProperty(prototype, 'danger', {
-			get() {
-				throw new Error('inherited getter')
+	it('creates fresh eager successes and rereads the source', () => {
+		let observations = 0
+		const source = new Proxy<JSONSchema>(
+			{ type: 'string' },
+			{
+				ownKeys(target) {
+					observations += 1
+					return Reflect.ownKeys(target)
+				},
 			},
-		})
-		const source: JSONSchema = Object.create(prototype)
-		const clone = cloneSchema(source)
+		)
 
-		prototype.marker = 'mutated'
-		expect(Object.getPrototypeOf(clone)).toBeNull()
-		expect(Reflect.get(clone, 'marker')).toBeUndefined()
-		expect(() => Reflect.get(clone, 'danger')).not.toThrow()
+		const first = cloneSchema(source)
+		const afterFirst = observations
+		const second = cloneSchema(source)
+
+		expect(second).not.toBe(first)
+		expect(second).toEqual(first)
+		expect(observations).toBeGreaterThan(afterFirst)
 	})
 
-	it('contains a throwing own getter as a clone ContractError', () => {
+	it('creates fresh eager failures while retaining the exact property cause', () => {
+		const cause = new Error('property failure')
 		const source: JSONSchema = {}
 		Object.defineProperty(source, 'type', {
 			enumerable: true,
 			get() {
-				throw new Error('own getter')
+				throw cause
 			},
 		})
 
-		expect(() => cloneSchema(source)).toThrowError(ContractError)
+		const first = captureContractError(() => cloneSchema(source))
+		const second = captureContractError(() => cloneSchema(source))
+
+		expect(second).not.toBe(first)
+		expect(first.message).toBe(second.message)
+		expect(first.context).toEqual(second.context)
+		expect(first.cause).toBe(cause)
+		expect(second.cause).toBe(cause)
+	})
+
+	it('matches the class for shared cycles and hostile property reads', () => {
+		const child: JSONSchema = { type: 'integer' }
+		const source: JSONSchema = { anyOf: [child, child] }
+		Reflect.set(source, 'self', source)
+		const direct = new SchemaCloner(source).clone()
+		const eager = cloneSchema(source)
+
+		expect(direct).toEqual(eager)
+		expect(direct.anyOf?.[0]).toBe(direct.anyOf?.[1])
+		expect(eager.anyOf?.[0]).toBe(eager.anyOf?.[1])
+		expect(Reflect.get(direct, 'self')).toBe(direct)
+		expect(Reflect.get(eager, 'self')).toBe(eager)
+
+		const cause = { reason: 'hostile' }
+		const hostile: JSONSchema = {}
+		Object.defineProperty(hostile, 'type', {
+			enumerable: true,
+			get() {
+				throw cause
+			},
+		})
+		const directError = captureContractError(() => new SchemaCloner(hostile).clone())
+		const eagerError = captureContractError(() => cloneSchema(hostile))
+
+		expect(directError).not.toBe(eagerError)
+		expect(directError.message).toBe(eagerError.message)
+		expect(directError.context).toEqual(eagerError.context)
+		expect(directError.cause).toBe(cause)
+		expect(eagerError.cause).toBe(cause)
 	})
 })
 
 describe('cloneShape', () => {
-	it('deep-clones a shape into a frozen, deeply-equal snapshot', () => {
-		const source = objectShape({
-			name: stringShape({ min: 1 }),
-			tags: arrayShape(stringShape()),
-		})
-		const clone = cloneShape(source)
+	it('preserves the string overload while returning a frozen runtime snapshot', () => {
+		const source = stringShape({ min: 1 })
+		const clone: StringShape = cloneShape(source)
 
 		expect(clone).toEqual(source)
 		expect(clone).not.toBe(source)
 		expect(Object.isFrozen(clone)).toBe(true)
-		expect(clone.type).toBe('object')
-		if (clone.type !== 'object') return
-		expect(clone.properties).not.toBe(source.properties)
-		expect(Object.isFrozen(clone.properties)).toBe(true)
-		expect(Object.isFrozen(clone.properties.name)).toBe(true)
-		expect(Object.isFrozen(clone.properties.tags)).toBe(true)
 	})
 
-	it('keeps a cloned pattern stable after compile mutation through the clone', () => {
-		const clone = cloneShape(stringShape({ pattern: /^stable$/ }))
+	it('creates fresh roots and re-observes the source on every eager call', () => {
+		const child: { type: 'string'; min?: number } = { type: 'string', min: 1 }
+		const source: ContractShape = { type: 'object', properties: { child } }
 
-		expect(clone.type).toBe('string')
-		if (clone.type !== 'string') return
-		expect(clone.pattern).not.toBe(clone.pattern)
-		expect(Object.isFrozen(clone.pattern)).toBe(true)
-		expect(() => clone.pattern?.compile('^owned-drift$')).toThrowError(TypeError)
-		expect(clone.pattern?.source).toBe('^stable$')
-		expect(clone.pattern?.lastIndex).toBe(0)
-		expect(compileSchema(clone).pattern).toBe('^stable$')
+		const first = cloneShape(source)
+		child.min = 2
+		const second = cloneShape(source)
 
-		const guard = compileGuard(clone)
-		expect(guard('stable')).toBe(true)
-		expect(guard('owned-drift')).toBe(false)
-	})
-
-	it('preserves shared-child identity in a cloned DAG', () => {
-		const child = arrayShape(stringShape())
-		const source = objectShape({ first: child, second: child })
-		const clone = cloneShape(source)
-
-		expect(clone.type).toBe('object')
-		if (clone.type !== 'object') return
-		expect(clone.properties.first).toBe(clone.properties.second)
-		expect(clone.properties.first).not.toBe(child)
-	})
-
-	it('refuses a property declaration whose repeated enumeration disagrees', () => {
-		let reads = 0
-		const properties = new Proxy(
-			{ a: stringShape(), b: stringShape() },
-			{
-				ownKeys(target) {
-					reads += 1
-					return reads === 1 ? Reflect.ownKeys(target) : ['a']
-				},
-			},
-		)
-		const source: ContractShape = { type: 'object', properties }
-		const error = captureContractError(() => cloneShape(source))
-
-		expect(reads).toBe(2)
-		expect(error.code).toBe('structure')
-		expect(error.message).toBe('cloneShape: property keys must be stable data')
-		expect(error.context?.path).toEqual(['properties'])
-	})
-
-	it('rejects a cyclic shape with the shared gate diagnosis', () => {
-		const raw = JSON.parse('{"type":"array","items":{"type":"string"}}')
-		raw.items = raw
-		const source: ContractShape = raw
-		const error = captureContractError(() => cloneShape(source))
-
-		expect(error.code).toBe('cycle')
-		expect(error.message).toBe('validateShapeDepth: a shape graph may not contain a cycle')
-		expect(error.context?.path).toEqual(['items'])
-	})
-
-	it('preserves sharing across union variants', () => {
-		const child = objectShape({ value: stringShape() })
-		const source = unionShape(child, child)
-		const clone = cloneShape(source)
-
-		expect(clone.type).toBe('union')
-		if (clone.type !== 'union') return
-		expect(clone.variants[0]).toBe(clone.variants[1])
-		expect(Object.isFrozen(clone.variants)).toBe(true)
-	})
-
-	it('contains hostile raw-schema edges as a clone ContractError', () => {
-		const raw = JSON.parse('{"type":"raw","schema":{"type":"string"}}')
-		Object.defineProperty(raw, 'schema', {
-			enumerable: true,
-			get() {
-				throw new Error('raw schema getter')
-			},
-		})
-		const shape: ContractShape = raw
-
-		expect(() => cloneShape(shape)).toThrowError(ContractError)
-	})
-
-	it('contains every hostile shape-graph read as a clone-coded ContractError', () => {
-		const revokedSource: ContractShape = JSON.parse('{"type":"string"}')
-		const revoked = Proxy.revocable(revokedSource, {})
-		revoked.revoke()
-
-		const getterSource = JSON.parse('{"type":"number"}')
-		Object.defineProperty(getterSource, 'min', {
-			enumerable: true,
-			get() {
-				throw new ContractError('hostile getter', { code: 'bound' })
-			},
-		})
-		const getterShape: ContractShape = getterSource
-
-		const properties = Proxy.revocable<Record<string, ContractShape>>({ value: stringShape() }, {})
-		const propertiesShape: ContractShape = {
-			type: 'object',
-			properties: properties.proxy,
+		expect(first).not.toBe(second)
+		if (first.type !== 'object' || second.type !== 'object') {
+			throw new Error('expected object snapshots')
 		}
-		properties.revoke()
+		expect(first.properties.child).not.toBe(second.properties.child)
+		expect(first.properties.child).toEqual({ type: 'string', min: 1 })
+		expect(second.properties.child).toEqual({ type: 'string', min: 2 })
+	})
 
-		for (const [shape, code] of [
-			[revoked.proxy, 'clone'],
-			[getterShape, 'clone'],
-			[propertiesShape, 'structure'],
-		] satisfies readonly (readonly [ContractShape, 'clone' | 'structure'])[]) {
-			const cloneError = captureContractError(() => cloneShape(shape))
-			const contractError = captureContractError(() => createContract(shape))
-			expect(cloneError.code).toBe(code)
-			expect(contractError.code).toBe('structure')
+	it('creates a fresh contained failure on every eager call', () => {
+		const cause = new Error('hostile minimum')
+		const target: ContractShape = { type: 'number' }
+		const source = new Proxy(target, {
+			getOwnPropertyDescriptor() {
+				throw cause
+			},
+		})
+
+		const first = captureContractError(() => cloneShape(source))
+		const second = captureContractError(() => cloneShape(source))
+
+		expect(first).not.toBe(second)
+		expect(first.code).toBe('clone')
+		expect(first.message).toBe('cloneShape: failed to create an owned shape snapshot')
+		expect(first.cause).toBe(cause)
+		expect(second.cause).toBe(cause)
+	})
+
+	it('matches fresh direct-class snapshots across a compact shape corpus', () => {
+		const shared = stringShape({ min: 1 })
+		const shapes: readonly ContractShape[] = [
+			stringShape({ pattern: /^stable$/ }),
+			objectShape({ first: shared, second: shared }),
+			unionShape(stringShape(), { type: 'raw', schema: { type: 'number' } }),
+		]
+
+		for (const shape of shapes) {
+			const eager = cloneShape(shape)
+			const direct = new ShapeCloner(shape).clone()
+
+			expect(eager).toEqual(direct)
+			expect(eager).not.toBe(direct)
 		}
 	})
 })
 
 describe('ownShape', () => {
-	it('returns a builder-produced shape unchanged — frozen means owned', () => {
-		const shape = objectShape({ name: stringShape({ min: 1 }) })
-
-		expect(ownShape(shape)).toBe(shape)
-	})
-
-	it('snapshots an unfrozen caller-owned shape so later edits cannot reach it', () => {
-		const values: (string | number | boolean)[] = ['stable']
-		const shape: ContractShape = { type: 'literal', values }
-		const owned = ownShape(shape)
-
-		values[0] = 'drift'
-		expect(owned).not.toBe(shape)
-		expect(Object.isFrozen(owned)).toBe(true)
-		expect(owned.type).toBe('literal')
-		if (owned.type !== 'literal') return
-		expect(owned.values).toEqual(['stable'])
-	})
-
-	it('owns an unfrozen graph deeply, including a shared child', () => {
-		const child: ContractShape = { type: 'string' }
-		const shape: ContractShape = { type: 'object', properties: { first: child, second: child } }
-		const owned = ownShape(shape)
-
-		expect(owned.type).toBe('object')
-		if (owned.type !== 'object') return
-		expect(owned.properties.first).not.toBe(child)
-		expect(owned.properties.first).toBe(owned.properties.second)
-		expect(Object.isFrozen(owned.properties)).toBe(true)
-	})
-
-	it('leaves an unfrozen child of a frozen node to be owned at its own level', () => {
-		const child: ContractShape = { type: 'string' }
-		const shape = Object.freeze({ type: 'array', items: child }) satisfies ContractShape
-		const owned = ownShape(shape)
-
-		expect(owned).toBe(shape)
-		expect(owned.type).toBe('array')
-		if (owned.type !== 'array') return
-		expect(ownShape(owned.items)).not.toBe(child)
-		expect(Object.isFrozen(ownShape(owned.items))).toBe(true)
-	})
-
-	it('refuses null in every structural slot for unfrozen and frozen roots', () => {
-		const cases: readonly { readonly shape: ContractShape; readonly path: readonly string[] }[] = [
-			{ shape: JSON.parse('{"type":"array","items":null}'), path: ['items'] },
-			{
-				shape: JSON.parse('{"type":"object","properties":{"value":null}}'),
-				path: ['properties', 'value'],
+	it('prefers a frozen source validation ContractError over the original clone failure', () => {
+		const cause = new Error('first minimum read')
+		let reads = 0
+		const target: ContractShape = { type: 'number' }
+		Object.defineProperty(target, 'min', {
+			enumerable: true,
+			get() {
+				return 'invalid'
 			},
-			{
-				shape: JSON.parse('{"type":"object","properties":{},"additionalProperties":null}'),
-				path: ['additionalProperties'],
+		})
+		Object.freeze(target)
+		const source = new Proxy(target, {
+			getOwnPropertyDescriptor(sourceTarget, property) {
+				if (property === 'min') {
+					reads += 1
+					if (reads === 2) throw cause
+				}
+				return Reflect.getOwnPropertyDescriptor(sourceTarget, property)
 			},
-			{ shape: JSON.parse('{"type":"union","variants":[null]}'), path: ['variants', '0'] },
-			{ shape: JSON.parse('{"type":"optional","inner":null}'), path: ['inner'] },
-			{ shape: JSON.parse('{"type":"nullable","inner":null}'), path: ['inner'] },
+		})
+
+		const error = captureContractError(() => ownShape(source))
+
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('validateShapeDepth: every node must be a recognized shape')
+		expect(Object.hasOwn(error, 'cause')).toBe(false)
+	})
+
+	it('keeps an unfrozen eager clone failure unchanged', () => {
+		const cause = new Error('hostile minimum')
+		const target: ContractShape = { type: 'number' }
+		const source = new Proxy(target, {
+			getOwnPropertyDescriptor() {
+				throw cause
+			},
+		})
+
+		const error = captureContractError(() => ownShape(source))
+
+		expect(error.code).toBe('clone')
+		expect(error.cause).toBe(cause)
+	})
+
+	it('returns independent successful snapshots for frozen and unfrozen sources', () => {
+		const child: ContractShape = { type: 'string' }
+		const unfrozen: ContractShape = {
+			type: 'object',
+			properties: { first: child, second: child },
+		}
+		const frozen = Object.freeze({
+			type: 'object',
+			properties: { first: child, second: child },
+		}) satisfies ContractShape
+
+		for (const source of [unfrozen, frozen]) {
+			const first = ownShape(source)
+			const second = ownShape(source)
+
+			expect(first).not.toBe(source)
+			expect(first).not.toBe(second)
+			if (first.type !== 'object' || second.type !== 'object') {
+				throw new Error('expected object snapshots')
+			}
+			expect(first.properties.first).toBe(first.properties.second)
+			expect(first.properties.first).not.toBe(child)
+			expect(first.properties.first).not.toBe(second.properties.first)
+		}
+	})
+})
+
+describe('eager ownership boundaries — reparented class brands', () => {
+	it('refuses a null-base class instance at every eager shape and JSON door', () => {
+		const doors = [
+			{ name: 'cloneShape', operation: () => cloneShape(new NullBaseDeclaration()) },
+			{ name: 'ownShape', operation: () => ownShape(new NullBaseDeclaration()) },
+			{ name: 'cloneJSONValue', operation: () => cloneJSONValue(new NullBaseDeclaration()) },
+			{ name: 'cloneJSONRecord', operation: () => cloneJSONRecord(new NullBaseDeclaration()) },
 		]
 
-		for (const entry of cases) {
-			for (const shape of [entry.shape, Object.freeze(entry.shape)]) {
-				const error = captureContractError(() => ownShape(shape))
-				expect(error.code).toBe('structure')
-				expect(error.context?.path).toEqual(entry.path)
+		const observed = doors.map((door) => {
+			const error = captureContractError(door.operation)
+			return { name: door.name, code: error.code, caused: Object.hasOwn(error, 'cause') }
+		})
+
+		expect(observed).toEqual([
+			{ name: 'cloneShape', code: 'structure', caused: false },
+			{ name: 'ownShape', code: 'structure', caused: false },
+			{ name: 'cloneJSONValue', code: 'clone', caused: false },
+			{ name: 'cloneJSONRecord', code: 'clone', caused: false },
+		])
+	})
+
+	it('accepts a forged record brand at every eager shape and JSON door, owning only plain data', () => {
+		// The counterpart of the refusal above, and the exact limit of it: a
+		// reparented class prototype is refused, and the SAME prototype stamped
+		// with the mandated realm members is not, because nothing observable from
+		// outside a realm separates the two. The forgery buys acceptance, and the
+		// snapshots published are still owned plain data.
+		const doors: readonly { readonly name: string; readonly operation: () => unknown }[] = [
+			{ name: 'cloneShape', operation: () => cloneShape(new ForgedBrandDeclaration()) },
+			{ name: 'ownShape', operation: () => ownShape(new ForgedBrandDeclaration()) },
+			{ name: 'cloneJSONValue', operation: () => cloneJSONValue(new ForgedBrandDeclaration()) },
+			{ name: 'cloneJSONRecord', operation: () => cloneJSONRecord(new ForgedBrandDeclaration()) },
+		]
+
+		const observed = doors.map((door) => {
+			const outcome = attempt(door.operation)
+			return {
+				name: door.name,
+				accepted: outcome.success,
+				value: outcome.success ? outcome.value : undefined,
 			}
-		}
+		})
+
+		expect(observed).toEqual([
+			{ name: 'cloneShape', accepted: true, value: { type: 'string', min: 1 } },
+			{ name: 'ownShape', accepted: true, value: { type: 'string', min: 1 } },
+			{ name: 'cloneJSONValue', accepted: true, value: { type: 'string', min: 1 } },
+			{ name: 'cloneJSONRecord', accepted: true, value: { type: 'string', min: 1 } },
+		])
+	})
+
+	it('owns a reparented class instance as schema data because no brand rule governs a schema graph', () => {
+		// cloneSchema is the one ownership door that never consults the record
+		// brand: it snapshots an arbitrary readable graph, and its output is
+		// already an owned null-prototype record, so nothing class-branded
+		// survives the call.
+		const owned = cloneSchema(new NullBaseDeclaration())
+
+		expect(owned).toEqual({ type: 'string', min: 1 })
+		expect(Object.getPrototypeOf(owned)).toBeNull()
+		expect(Object.isFrozen(owned)).toBe(true)
 	})
 })

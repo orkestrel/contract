@@ -69,7 +69,10 @@ confirmed finding in scope and rebuilding the harness gaps the verdicts expose.
    re-review returns the author's own blind spot.
 7. **Recapture,** repairing every harness gap the verdicts exposed, and re-verdict against
    the new portfolio, not the old one.
-8. **Iterate to the terminal line.** Repeat rounds until every lane returns converged.
+8. **Iterate to the terminal line.** Repeat rounds until every lane returns converged. The item
+   inventory is fixed at the first judged portfolio; later rounds add only regressions of an item
+   already in it and gaps an earlier portfolio could not show. A fresh preference about an item
+   already converged is recorded for the next campaign, not made this one's blocker.
 9. **Verify independently.** An independent runner executes the repository-prescribed
    gates; a fixer's own report never establishes green.
 

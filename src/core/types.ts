@@ -22,8 +22,14 @@ export interface Failure<E> {
 	readonly error: E
 }
 
-/** Discriminated union for operations that can succeed or fail without throwing. */
-export type Result<T, E = Error> = Success<T> | Failure<E>
+/**
+ * Discriminated union for operations that can succeed or fail without throwing.
+ *
+ * @remarks
+ * The failure channel defaults to `unknown`. Operations with a guaranteed
+ * domain error name that error type explicitly.
+ */
+export type Result<T, E = unknown> = Success<T> | Failure<E>
 
 // === Record access
 
@@ -65,6 +71,8 @@ export type ContractCode =
 	| 'clone'
 	/** Identifies a compilation-depth contract error. */
 	| 'depth'
+	/** Identifies a shape whose compiled expansion exceeds the emitted-node limit. */
+	| 'expansion'
 
 /** Optional structured details carried by a {@link ContractError}. */
 export interface ContractErrorContext {
@@ -98,11 +106,34 @@ export interface ReadValueOptions {
 	readonly context?: ContractErrorContext
 }
 
-/** Owned result of reading one array through its own-index lens. */
-export interface ArrayRead {
-	/** Frozen entries in index order; a sparse position carries `undefined`. */
-	readonly entries: readonly unknown[]
-	/** Whether every index from zero through length minus one was present. */
+/**
+ * Optional diagnostic metadata for a public door's containment boundary.
+ *
+ * @remarks
+ * Deliberately narrower than {@link ReadValueOptions}: a contained door's
+ * subject IS the door, so there is no `subject` to name. The two options types
+ * are separate because a signature that accepts a key it silently ignores tells
+ * the caller a lie the type checker will not catch.
+ */
+export interface ContainOptions {
+	/** Machine-readable refusal category. */
+	readonly code?: ContractCode
+	/** Structured location and domain details retained by the refusal. */
+	readonly context?: ContractErrorContext
+}
+
+/**
+ * Owned result of reading one array through its reflected own-index lens.
+ *
+ * @remarks
+ * {@link entries} is a frozen native array with actual holes: reading a hole
+ * yields `undefined`, while own membership remains absent. A length-driven
+ * consumer must first require {@link dense} or carry an independent work bound.
+ */
+export interface ArrayRead<T = unknown> {
+	/** Frozen native entries in index order, retaining sparse positions as holes. */
+	readonly entries: readonly (T | undefined)[]
+	/** Whether every index from zero through length minus one was reflected. */
 	readonly dense: boolean
 }
 
@@ -197,6 +228,11 @@ export type ZeroArgFunction = () => unknown
 /** An async function accepting zero arguments and returning a `Promise`. */
 export type ZeroArgAsyncFunction = () => Promise<unknown>
 
+// === Literal values
+
+/** A string, number, or boolean literal value. */
+export type LiteralValue = string | number | boolean
+
 // === JSON
 
 /**
@@ -241,6 +277,85 @@ export type JSONRecord = { readonly [key: string]: JSONValue }
  */
 export type JSONValue = JSONPrimitive | readonly JSONValue[] | JSONRecord
 
+/**
+ * Stateful owner of one exact JSON snapshot operation.
+ *
+ * @remarks
+ * Construction retains the source without observing it. The first
+ * {@link clone} call settles once; later calls replay the exact same frozen
+ * value or exact same owned {@link ContractError}. Terminal failure releases
+ * partial traversal working state while retaining the source and exact error.
+ */
+export interface JSONClonerInterface {
+	/**
+	 * Clone the retained source into exact, deeply frozen JSON data.
+	 *
+	 * @returns The settled JSON snapshot
+	 * @throws {ContractError} When the source is inexact, cyclic, unreadable, or cloning is reentered
+	 */
+	clone(): JSONValue
+}
+
+/**
+ * Stateful owner of one JSON Schema snapshot operation.
+ *
+ * @remarks
+ * Construction retains the schema without observing it. The first
+ * {@link clone} call settles once; later calls replay the exact same frozen
+ * schema or exact same owned {@link ContractError}. Nonredirectable terminal
+ * settlement releases populated traversal state before publishing that exact
+ * result, while retaining the source and result afterward.
+ */
+export interface SchemaClonerInterface {
+	/**
+	 * Clone the retained schema into a deeply frozen identity-preserving graph.
+	 *
+	 * @returns The settled JSON Schema snapshot
+	 * @throws {ContractError} When traversal is unreadable or cloning is reentered
+	 */
+	clone(): JSONSchema
+}
+
+/**
+ * Stateful owner of one contract-shape snapshot operation.
+ *
+ * @remarks
+ * Construction retains the shape without observing it. The first
+ * {@link clone} call settles once; later calls replay the exact same frozen
+ * shape or exact same owned {@link ContractError}. Nonredirectable terminal
+ * settlement releases populated traversal state before publishing that exact
+ * result, while retaining the source and result afterward.
+ * Reentry permanently poisons the active operation with one shared error.
+ */
+/**
+ * One captured property of an object shape, held as an ordered entry rather
+ * than as a `Map` pair.
+ *
+ * @remarks
+ * The published property population of a cloned object shape is decided by
+ * walking these entries. A `Map` would be the natural carrier and the wrong
+ * one: iterating it dispatches through `Map.prototype[Symbol.iterator]` and
+ * destructuring each pair through `Array.prototype[Symbol.iterator]`, both
+ * caller-writable, and an arity-preserving substitution there renames a
+ * property inside a snapshot the package publishes as exact.
+ */
+export interface ShapeProperty {
+	/** The own enumerable key the property was captured under. */
+	readonly key: string
+	/** The captured child shape, absent when the declaration held no shape. */
+	readonly child: ContractShape | undefined
+}
+
+export interface ShapeClonerInterface {
+	/**
+	 * Clone the retained shape into a deeply frozen identity-preserving graph.
+	 *
+	 * @returns The settled contract-shape snapshot
+	 * @throws {ContractError} When the declaration is malformed, unreadable, cyclic, too deep, or cloning is reentered
+	 */
+	clone(): ContractShape
+}
+
 /** The seven standard JSON Schema `type` names. */
 export type JSONSchemaType =
 	| 'null'
@@ -268,7 +383,7 @@ export type JSONSchemaType =
 export interface JSONSchema {
 	readonly type?: JSONSchemaType
 	readonly description?: string
-	readonly enum?: readonly (string | number | boolean)[]
+	readonly enum?: readonly LiteralValue[]
 	readonly minLength?: number
 	readonly maxLength?: number
 	readonly pattern?: string
@@ -321,6 +436,35 @@ export interface ValueToSchemaOptions {
 	readonly enum?: boolean
 }
 
+/**
+ * The per-walk memo {@link inferSamples} and {@link inferRecordSamples} share,
+ * keyed by the ORDERED identities of the rows a slot collected.
+ *
+ * @remarks
+ * `rows` is one step of a prefix chain: following the slot's rows in order
+ * lands on the node that owns that exact row list, so two slots collecting the
+ * same rows in the same order share one entry and two slots collecting
+ * different rows never do. `schemas` holds that row list's already-inferred
+ * results, keyed by EVERY budget and flag the emitted schema depends on
+ * (remaining depth, breadth, `closed`, `format`, `enum`) — so the memo can
+ * only ever return the schema a fresh call would have produced, and two
+ * ordinary calls that differ in one flag cannot be served each other's answer.
+ *
+ * Build one with {@link buildSampleMemo} and give it to ONE walk. It is
+ * traversal state, not a cache to keep: nothing is invalidated when a sample
+ * row is later mutated.
+ *
+ * @example
+ * ```ts
+ * const memo = buildSampleMemo()
+ * inferSamples([{ id: 1 }], 32, 256, true, false, false, memo)
+ * ```
+ */
+export interface SampleMemo {
+	readonly rows: WeakMap<object, SampleMemo>
+	readonly schemas: Map<string, JSONSchema>
+}
+
 // === Contract shapes
 
 /**
@@ -330,8 +474,7 @@ export interface ValueToSchemaOptions {
  * @remarks
  * A discriminated union keyed on `type`. Shapes nest (an `ArrayShape` holds an
  * element shape, an `ObjectShape` a map of them). {@link validateShapeDepth}
- * and {@link validateShape} enforce an acyclic graph within
- * {@link COMPILE_DEPTH_LIMIT}.
+ * enforces an acyclic graph within {@link COMPILE_DEPTH_LIMIT}.
  */
 export type ContractShape =
 	| StringShape
@@ -352,7 +495,10 @@ export interface StringShape {
 	readonly type: 'string'
 	readonly min?: number
 	readonly max?: number
-	/** A pattern constraint; builders and cloners expose an owned fresh frozen zero-state copy per read. */
+	/**
+	 * An unflagged pattern constraint; use inline pattern constructs for flag-like behavior.
+	 * Builders and cloners expose an owned fresh frozen zero-state copy per read.
+	 */
 	readonly pattern?: RegExp
 	readonly description?: string
 }
@@ -379,9 +525,7 @@ export interface NullShape {
 }
 
 /** A literal shape — accepts exactly one of a fixed set of primitive values. */
-export interface LiteralShape<
-	T extends readonly (string | number | boolean)[] = readonly (string | number | boolean)[],
-> {
+export interface LiteralShape<T extends readonly LiteralValue[] = readonly LiteralValue[]> {
 	readonly type: 'literal'
 	readonly values: T
 	readonly description?: string
@@ -774,6 +918,76 @@ export type AuditFault = Fault | ExtraFault
 export type RandomFunction = () => number
 
 /**
+ * A compiled strict-domain diagnostic — the shape of `compileAuditor` bound to
+ * one shape.
+ *
+ * @remarks
+ * The optional `path` is the prefix every fault this call reports is rooted at,
+ * so a nested walk can name where it started. A contract's
+ * {@link ContractInterface.audit} takes only the value, because no contract
+ * consumer injects a root path; a function of this type is assignable to that
+ * property, so one compiled function can serve both surfaces.
+ */
+export type AuditorFunction = (value: unknown, path?: readonly string[]) => readonly AuditFault[]
+
+/**
+ * A compiled coercive-domain diagnostic — the shape of `compileReporter` bound
+ * to one shape.
+ *
+ * @remarks
+ * The counterpart of {@link AuditorFunction} for the wider preimage `parse`
+ * maps into the domain, with the same optional root-path prefix and the same
+ * assignability to {@link ContractInterface.explain}.
+ */
+export type ReporterFunction = (value: unknown, path?: readonly string[]) => readonly Fault[]
+
+/**
+ * A compiled seed-data source — the shape of `compileGenerator` bound to one
+ * shape.
+ *
+ * @remarks
+ * An absent `random` selects the invocation's own wall-clock-seeded source, so
+ * a generator retains no randomness between calls.
+ *
+ * @remarks
+ * Named for the SEED DATA it produces rather than for the `generator` getter it
+ * serves, which is the one place this package's three compiled-diagnostic types
+ * break their own symmetry with {@link AuditorFunction} and
+ * {@link ReporterFunction}. `GeneratorFunction` is already taken twice over: it
+ * is a realm global (the constructor every `function*` reports), and it is the
+ * exact string {@link isGeneratorFunction} compares against. Publishing a type
+ * of that name beside that guard would put two contradictory meanings of one
+ * word in one barrel, where `isGeneratorFunction(contract.generate)` answers
+ * `false` for a value the types call a `GeneratorFunction`.
+ */
+export type SeederFunction<T> = (random?: RandomFunction) => T
+
+/**
+ * Validates one retained contract-shape source on demand.
+ *
+ * @remarks
+ * Construction does not observe the source. Every {@link validate} call is an
+ * independent live validation pass over its current state.
+ */
+export interface ShapeValidatorInterface {
+	/**
+	 * The number of nodes the last successful {@link validate} found the retained
+	 * declaration expands into, counting one per node per incoming edge — the
+	 * size of the TREE every compiled artifact would build from this DAG. `0`
+	 * before the first successful pass and after a failed one.
+	 */
+	readonly expansion: number
+
+	/**
+	 * Validate the retained shape declaration.
+	 *
+	 * @returns Nothing when the declaration is valid
+	 * @throws {ContractError} When the declaration is malformed, cyclic, or too deep
+	 */
+	validate(): void
+}
+
+/**
  * A compiled contract — the six lockstep outputs derived from one shape.
  *
  * @remarks
@@ -838,4 +1052,50 @@ export interface ContractInterface<T> {
 	 */
 	explain(value: unknown): readonly Fault[]
 	generate(random?: RandomFunction): T
+}
+
+/**
+ * Lazy owner of one contract shape's six compiled artifacts plus their bundle.
+ *
+ * @remarks
+ * Construction observes nothing. The FIRST getter read owns the declaration
+ * once, validates that owned graph once, and indexes each unique node and
+ * structural edge once into children-before-parent order; every artifact family
+ * is then one postorder pass over that index, so a shared child costs its
+ * authored nodes rather than its paths. A getter builds its own family and no
+ * other, except where an artifact genuinely consumes the compiled guard —
+ * `parser`, `reporter` and `generator` resolve union membership through it, so
+ * they build it too. `contract` requests all six roots in getter order.
+ *
+ * Every getter REPLAYS its exact artifact: reading one twice returns the same
+ * function or graph by identity, and {@link contract}'s six members are those
+ * exact values. One terminal lifecycle covers preparation and every family, so
+ * a failure anywhere settles the compiler permanently — later getters rethrow
+ * that exact error while an artifact already handed out stays usable, because
+ * each one is self-contained. Cross-getter reentry (only reachable through a
+ * caller accessor the declaration exposes) poisons the nested read, the
+ * interrupted outer read, and every later read with one shared cause-free
+ * error.
+ *
+ * @example
+ * ```ts
+ * const compiler = new ContractCompiler(stringShape({ min: 1 }))
+ * compiler.guard('Ada') // true
+ * ```
+ */
+export interface ContractCompilerInterface<S extends ContractShape> {
+	/** The emitted JSON Schema, deeply frozen and shared-identity preserving. */
+	readonly schema: JSONSchema
+	/** The compiled strict guard. */
+	readonly guard: Guard<Infer<S>>
+	/** The compiled coercive parser. */
+	readonly parser: Parser<Infer<S>>
+	/** The compiled strict-domain diagnostic. */
+	readonly auditor: AuditorFunction
+	/** The compiled coercive-domain diagnostic. */
+	readonly reporter: ReporterFunction
+	/** The compiled seed-data source. */
+	readonly generator: SeederFunction<Infer<S>>
+	/** The frozen six-member bundle whose values are the six artifacts above. */
+	readonly contract: ContractInterface<Infer<S>>
 }

@@ -2,6 +2,7 @@ import type { Guard, GuardsShape } from '@src/core'
 import {
 	andOf,
 	arrayOf,
+	attempt,
 	boundsOf,
 	complementOf,
 	enumOf,
@@ -11,8 +12,10 @@ import {
 	isBoolean,
 	isEmptyString,
 	isFunction,
+	isInstance,
 	isNull,
 	isNumber,
+	isRegExp,
 	isString,
 	keyOf,
 	lazyOf,
@@ -45,8 +48,10 @@ import {
 	createRevokedArrayProxy,
 	createRevokedProxy,
 	createThrowingGetter,
+	replaceIntrinsic,
 	throwHostileAccess,
 } from '../../setup.js'
+import { createForeignPrototype, createForeignRegExp } from '../../setupServer.js'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 
 describe('element combinators', () => {
@@ -66,6 +71,31 @@ describe('element combinators', () => {
 		const sparse = buildSparseArray()
 		expect(arrayOf(optionalOf(isString))(sparse)).toBe(false)
 		expect(tupleOf(optionalOf(isString), isString, optionalOf(isString))(sparse)).toBe(false)
+	})
+
+	it('arrayOf refuses split index membership and accepts the dense control', () => {
+		const split = new Proxy([1, 2], {
+			ownKeys() {
+				return ['0', 'length']
+			},
+			getOwnPropertyDescriptor(target, property) {
+				return property === '0' ? undefined : Reflect.getOwnPropertyDescriptor(target, property)
+			},
+		})
+		const guard = arrayOf(isNumber)
+
+		expect(guard(split)).toBe(false)
+		expect(guard([1, 2])).toBe(true)
+	})
+
+	it('tupleOf derives hostile arity and entries from one dense own-index view', () => {
+		const value = new Proxy(['a', 1, true], {
+			get(target, key, receiver) {
+				return key === 'length' ? 1 : Reflect.get(target, key, receiver)
+			},
+		})
+
+		expect(tupleOf(isString)(value)).toBe(false)
 	})
 
 	it('validates maps and sets', () => {
@@ -143,7 +173,7 @@ describe('literal and enum combinators', () => {
 	})
 
 	it('literalOf accepts one array of literals as the same guard the listed form builds', () => {
-		const vocabulary = ['a', 'b', 1, true] as const
+		const vocabulary: readonly ['a', 'b', 1, true] = ['a', 'b', 1, true]
 		const listed = literalOf(...vocabulary)
 		const collected = literalOf(vocabulary)
 
@@ -158,6 +188,33 @@ describe('literal and enum combinators', () => {
 		expect(literalOf([Number.NaN])(Number.NaN)).toBe(true)
 		expect(literalOf([0])(-0)).toBe(true)
 		expect(literalOf([-0])(0)).toBe(true)
+	})
+
+	it('literalOf array vocabularies ignore caller-defined iteration', () => {
+		const vocabulary = ['indexed']
+		const iterated = ['iterated']
+		Object.defineProperty(vocabulary, Symbol.iterator, {
+			value: iterated[Symbol.iterator].bind(iterated),
+		})
+		const guard = literalOf(vocabulary)
+
+		expect(guard('indexed')).toBe(true)
+		expect(guard('iterated')).toBe(false)
+	})
+
+	it('literalOf refuses an impossible reported vocabulary length without caller iteration', () => {
+		const iterated = ['iterated']
+		const vocabulary = new Proxy(['indexed'], {
+			get(target, key, receiver) {
+				if (key === 'length') return 2 ** 32
+				if (key === Symbol.iterator) return iterated[Symbol.iterator].bind(iterated)
+				return Reflect.get(target, key, receiver)
+			},
+		})
+
+		const error = captureContractError(() => literalOf(vocabulary))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('literalOf: literals could not be read')
 	})
 
 	it('literalOf narrows the array form to the same literal union as the listed form (type-level)', () => {
@@ -264,6 +321,119 @@ describe('recordOf, pickOf, omitOf', () => {
 		}
 	})
 
+	it('recordOf owns every consumed guard once at construction', () => {
+		let reads = 0
+		const source: { a: Guard<unknown> } = { a: isString }
+		const shape = new Proxy(source, {
+			get(target, key, receiver) {
+				if (key === 'a') reads += 1
+				return Reflect.get(target, key, receiver)
+			},
+		})
+		const guard = recordOf(shape)
+
+		expect(reads).toBe(1)
+		expect(guard({ a: 'value' })).toBe(true)
+		expect(guard({ a: 1 })).toBe(false)
+		expect(reads).toBe(1)
+	})
+
+	it('recordOf guard meaning cannot drift after construction', () => {
+		const shape: { a: Guard<unknown> } = { a: isString }
+		const guard = recordOf(shape)
+		shape.a = isNumber
+
+		expect(guard({ a: 'value' })).toBe(true)
+		expect(guard({ a: 1 })).toBe(false)
+	})
+
+	it('recordOf requires own non-enumerable string declarations only', () => {
+		const symbol = Symbol('guard')
+		const shape: GuardsShape = {}
+		Object.setPrototypeOf(shape, { inherited: isNumber })
+		Object.defineProperty(shape, symbol, { value: isBoolean })
+		Object.defineProperty(shape, 'hidden', {
+			value: isString,
+			enumerable: false,
+		})
+		const guard = recordOf(shape)
+
+		expect(guard({})).toBe(false)
+		expect(guard({ hidden: 'value' })).toBe(true)
+		expect(guard({ hidden: 1 })).toBe(false)
+		expect(guard({ hidden: 'value', inherited: 1 })).toBe(false)
+		expect(guard({ hidden: 'value', [symbol]: true })).toBe(true)
+	})
+
+	it('recordOf owns optional membership before caller-list mutation', () => {
+		const optional: 'note'[] = ['note']
+		const guard = recordOf({ id: isString, note: isString }, optional)
+		optional.length = 0
+
+		expect(guard({ id: 'u1' })).toBe(true)
+		expect(guard({ note: 'hello' })).toBe(false)
+		expect(guard({ id: 'u1', note: 'hello' })).toBe(true)
+		expect(guard({ id: 'u1', note: 1 })).toBe(false)
+	})
+
+	it('recordOf refuses an unreadable optional-key list at construction', () => {
+		const error = captureContractError(() =>
+			recordOf({ a: isString }, createRevokedArrayProxy<'a'>()),
+		)
+
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('recordOf: optional could not be read')
+	})
+
+	it('pickOf and omitOf both require the complete own-key population', () => {
+		const shape = new Proxy(
+			{ a: isString },
+			{
+				ownKeys() {
+					throw new Error('hostile own keys')
+				},
+			},
+		)
+
+		for (const [reader, run] of [
+			['pickOf', () => pickOf(shape, ['a'])],
+			['omitOf', () => omitOf(shape, [])],
+		] satisfies readonly (readonly [string, () => unknown])[]) {
+			const error = captureContractError(run)
+			expect(error.code).toBe('structure')
+			expect(error.message).toBe(`${reader}: shape could not be read`)
+		}
+	})
+
+	it('pickOf and omitOf do not read an unrelated prototype', () => {
+		const shape = new Proxy(
+			{ a: isString, b: isNumber },
+			{
+				getPrototypeOf() {
+					throw new Error('prototype must not be read')
+				},
+			},
+		)
+
+		expect(pickOf(shape, ['a'])).toEqual({ a: isString })
+		expect(omitOf(shape, ['b'])).toEqual({ a: isString })
+	})
+
+	it('pickOf and omitOf preserve own non-enumerable string declarations', () => {
+		const shape: GuardsShape = {}
+		Object.defineProperty(shape, 'hidden', {
+			value: isString,
+			enumerable: false,
+		})
+
+		const picked = pickOf(shape, ['hidden'])
+		const omitted = omitOf(shape, [])
+		expect(Object.hasOwn(picked, 'hidden')).toBe(true)
+		expect(Object.hasOwn(omitted, 'hidden')).toBe(true)
+		expect(picked.hidden).toBe(isString)
+		expect(omitted.hidden).toBe(isString)
+	})
+
 	it('lock: recordOf with an inline literal shape and bare optional literal marks only the listed key optional', () => {
 		const optionalUser = recordOf({ id: isString, note: isString }, ['note'])
 		expectTypeOf(optionalUser).toEqualTypeOf<Guard<Readonly<{ id: string; note?: string }>>>()
@@ -368,6 +538,28 @@ describe('keyOf', () => {
 		expect(guard(undefined)).toBe(false)
 		expect(guard({})).toBe(false)
 		expect(guard(true)).toBe(false)
+	})
+
+	it('owns all own property keys and remains stable after source mutation', () => {
+		const symbol = Symbol('owned')
+		const source: Record<PropertyKey, unknown> = { 0: 'zero', a: 1, [symbol]: 2 }
+		const guard = keyOf(source)
+		delete source.a
+		source.b = 3
+
+		expect(guard('a')).toBe(true)
+		expect(guard('b')).toBe(false)
+		expect(guard(symbol)).toBe(true)
+		expect(guard(0)).toBe(true)
+	})
+
+	it('refuses an unreadable key source at construction', () => {
+		const error = captureContractError(() =>
+			Reflect.apply(keyOf, undefined, [createRevokedProxy()]),
+		)
+
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('keyOf: value could not be read')
 	})
 })
 
@@ -561,6 +753,22 @@ describe('matchOf', () => {
 		expect(guard('aaa')).toBe(true)
 		expect(pattern.lastIndex).toBe(1)
 	})
+
+	it('owns a genuine foreign pattern and strips its stateful flags', () => {
+		const pattern = createForeignRegExp('^a+$', 'gy')
+		if (!isRegExp(pattern)) throw new Error('expected a genuine foreign RegExp')
+		pattern.lastIndex = 1
+		const direct = matchOf(pattern)
+		const composed = stringOf({ pattern })
+
+		Reflect.apply(RegExp.prototype.compile, pattern, ['^b+$'])
+
+		for (const guard of [direct, composed]) {
+			expect(guard('aaa')).toBe(true)
+			expect(guard('bbb')).toBe(false)
+			expect(guard('aaa')).toBe(true)
+		}
+	})
 })
 
 describe('stringOf', () => {
@@ -703,24 +911,80 @@ describe('empty-collection and zero-guard edge cases', () => {
 
 describe('user-callback throw containment (AGENTS §14)', () => {
 	it('logical, refinement, and nullish combinators contain every callback throw', () => {
-		const guards: readonly (readonly [Guard<unknown>, unknown])[] = [
-			[andOf(isString, throwHostileAccess), 'value'],
-			[orOf(throwHostileAccess, isString), 'value'],
-			[notOf(throwHostileAccess), 'value'],
-			[complementOf(isString, (_value: string): _value is never => throwHostileAccess()), 'value'],
-			[unionOf(throwHostileAccess, isString), 'value'],
-			[intersectionOf(isString, throwHostileAccess), 'value'],
-			[whereOf(isString, throwHostileAccess), 'value'],
-			[lazyOf(throwHostileAccess), 'value'],
-			[transformOf(isString, throwHostileAccess, isString), 'value'],
-			[nullableOf((_value: unknown): _value is string => throwHostileAccess()), 'value'],
-			[optionalOf((_value: unknown): _value is string => throwHostileAccess()), 'value'],
+		// A throwing member is a NON-MATCH, and the answer that follows from that
+		// differs by combinator: a conjunction fails, a disjunction still passes on
+		// a sibling that accepts, and a negation of a non-match passes. The whole
+		// row set used to be pinned at `false`, which is what let `orOf`, `unionOf`,
+		// `notOf` and `complementOf` contain each throw and still answer wrongly.
+		const guards: readonly (readonly [Guard<unknown>, unknown, boolean])[] = [
+			[andOf(isString, throwHostileAccess), 'value', false],
+			[orOf(throwHostileAccess, isString), 'value', true],
+			[notOf(throwHostileAccess), 'value', true],
+			[
+				complementOf(isString, (_value: string): _value is never => throwHostileAccess()),
+				'value',
+				true,
+			],
+			[unionOf(throwHostileAccess, isString), 'value', true],
+			[intersectionOf(isString, throwHostileAccess), 'value', false],
+			[whereOf(isString, throwHostileAccess), 'value', false],
+			[lazyOf(throwHostileAccess), 'value', false],
+			[transformOf(isString, throwHostileAccess, isString), 'value', false],
+			[nullableOf((_value: unknown): _value is string => throwHostileAccess()), 'value', false],
+			[optionalOf((_value: unknown): _value is string => throwHostileAccess()), 'value', false],
 		]
 
-		for (const [guard, value] of guards) {
+		for (const [guard, value, expected] of guards) {
 			expect(() => guard(value)).not.toThrow()
-			expect(guard(value)).toBe(false)
+			expect(guard(value)).toBe(expected)
 		}
+	})
+
+	it('keeps disjunction commutative and the excluded middle intact under a throwing member', () => {
+		// The H9 tier-3 carrier. An ordinary caller predicate that assumes an
+		// object throws on `null`; one `holds` around the WHOLE disjunction let it
+		// erase every later passing member, so the same union answered differently
+		// depending on argument order.
+		const naive = (value: unknown): boolean => {
+			// The ordinary shape of a caller predicate that assumes an object: reading
+			// `value.kind` off `null` is a TypeError, and nothing about that makes
+			// `null` a member of every other guard in the union.
+			if (value === null || typeof value !== 'object') {
+				throw new TypeError('cannot read properties of a non-object')
+			}
+			return 'kind' in value && value.kind === 'x'
+		}
+
+		expect(unionOf(isNull, naive)(null)).toBe(true)
+		expect(unionOf(naive, isNull)(null)).toBe(true)
+		expect(orOf(isNull, naive)(null)).toBe(true)
+		expect(orOf(naive, isNull)(null)).toBe(true)
+		// `g` and `notOf(g)` may not both reject the same value.
+		expect(notOf(naive)(null)).toBe(true)
+		expect(orOf(naive, notOf(naive))(null)).toBe(true)
+		expect(notOf(notOf(naive))(null)).toBe(false)
+		const naiveExclusion = (value: null): value is never => {
+			if (value === null) throw new TypeError('cannot read properties of null')
+			return false
+		}
+		expect(complementOf(isNull, naiveExclusion)(null)).toBe(true)
+		// Control: conjunction is unchanged — a throwing member genuinely did not
+		// pass, so `false` was already the right answer there.
+		expect(andOf(isNull, naive)(null)).toBe(false)
+		expect(intersectionOf(isNull, naive)(null)).toBe(false)
+	})
+
+	it('accepts a callable instance, agreeing with the helper it is built on', () => {
+		// `instanceOf` carried an `isObject` pre-filter, and `typeof fn` is
+		// 'function', so it rejected every callable instance while `isInstance`
+		// accepted the identical pair.
+		const callable = (): void => {}
+		expect(isInstance(callable, Function)).toBe(true)
+		expect(instanceOf(Function)(callable)).toBe(true)
+		// Controls: a non-instance and a non-constructor still answer false.
+		expect(instanceOf(Function)({})).toBe(false)
+		expect(instanceOf(Date)(new Date())).toBe(true)
+		expect(instanceOf(Date)({})).toBe(false)
 	})
 
 	it('whereOf: a throwing refinement predicate is contained as a non-match', () => {
@@ -765,8 +1029,8 @@ describe('user-callback throw containment (AGENTS §14)', () => {
 
 describe('combinator totality sweep', () => {
 	it('carries inherited and non-enumerable string options into its guard', () => {
-		const prototype: { min?: number } = Object.create(null)
-		prototype.min = 2
+		const prototype = createForeignPrototype()
+		Object.defineProperty(prototype, 'min', { value: 2, enumerable: true, configurable: true })
 		const inherited: { readonly min?: number } = Object.create(prototype)
 		const hidden: { readonly min?: number } = {}
 		Object.defineProperty(hidden, 'min', { value: 2, enumerable: false })
@@ -789,22 +1053,37 @@ describe('combinator totality sweep', () => {
 		}
 	})
 
-	it('uses one pattern refusal vocabulary across the three sibling APIs', () => {
-		const hostile = new Proxy(/value/, {
-			get(target, property, receiver) {
-				if (property === 'source' || property === 'flags') throw new Error('hostile pattern')
-				return Reflect.get(target, property, receiver)
+	it('reads a genuine pattern from its internal slots and refuses a non-brand proxy', () => {
+		// A genuine pattern with a hostile OWN `source` accessor. Every read of a
+		// pattern's source and flags now goes through the accessor CAPTURED from
+		// `RegExp.prototype`, which answers from the pattern's internal slots, so an
+		// own decoy — throwing, object-valued, or answering once — decides nothing.
+		// The refusal these three doors used to publish existed only because an
+		// ordinary `.source` read ran whatever accessor the value carried; with the
+		// genuine source in hand the honest answer is available, and publishing it
+		// is more faithful than refusing.
+		const hostile = /value/
+		Object.defineProperty(hostile, 'source', {
+			get() {
+				throw new Error('hostile pattern')
 			},
 		})
 
+		expect(matchOf(hostile)('value')).toBe(true)
+		expect(matchOf(hostile)('other')).toBe(false)
+		expect(stringOf({ pattern: hostile })('value')).toBe(true)
+		expect(stringOf({ pattern: hostile })('other')).toBe(false)
+		expect(stringShape({ pattern: hostile }).pattern?.source).toBe('value')
+
+		const proxy = new Proxy(/value/, {})
 		for (const [reader, run] of [
-			['matchOf', () => matchOf(hostile)],
-			['stringOf', () => stringOf({ pattern: hostile })],
-			['stringShape', () => stringShape({ pattern: hostile })],
+			['matchOf', () => matchOf(proxy)],
+			['stringOf', () => stringOf({ pattern: proxy })],
+			['stringShape', () => stringShape({ pattern: proxy })],
 		] satisfies readonly (readonly [string, () => unknown])[]) {
 			const error = captureContractError(run)
 			expect(error.code).toBe('pattern')
-			expect(error.message).toBe(`${reader}: pattern could not be read`)
+			expect(error.message).toBe(`${reader}: pattern must be a RegExp`)
 		}
 	})
 
@@ -897,29 +1176,42 @@ describe('container-combinator throw containment (AGENTS §14)', () => {
 		expect(tupleGuard(hostile)).toBe(false)
 	})
 
-	it('setOf: a Set subclass with a hostile iterator is contained as a non-match', () => {
-		// A real Set (so isSet's structural check passes) whose iterator is overridden to throw.
-		const set = new Set(['a', 'b'])
-		Object.defineProperty(set, Symbol.iterator, {
-			value: () => {
-				throw new Error('hostile iterator')
-			},
-		})
+	it('setOf: a hostile iterator no longer decides the answer, the genuine contents do', () => {
+		// A real Set whose iterator is overridden to throw. The guard reads
+		// `[[SetData]]` through the CAPTURED `Set.prototype.forEach`, so the
+		// iterator is never entered: the verdict is about what the set genuinely
+		// holds, which is the only verdict a consumer can act on. The old answer —
+		// `false`, because the walk threw — let a replaced iterator that merely
+		// SKIPPED the non-member answer `true` for a set holding one.
+		const strings = new Set(['a', 'b'])
+		const mixed = new Set<unknown>(['a', 42])
+		for (const set of [strings, mixed]) {
+			Object.defineProperty(set, Symbol.iterator, {
+				value: () => {
+					throw new Error('hostile iterator')
+				},
+			})
+		}
 		const guard = setOf(isString)
-		expect(() => guard(set)).not.toThrow()
-		expect(guard(set)).toBe(false)
+		expect(() => guard(strings)).not.toThrow()
+		expect(guard(strings)).toBe(true)
+		expect(guard(mixed)).toBe(false)
 	})
 
-	it('mapOf: a Map with a hostile iterator is contained as a non-match', () => {
-		const map = new Map([['a', 1]])
-		Object.defineProperty(map, Symbol.iterator, {
-			value: () => {
-				throw new Error('hostile iterator')
-			},
-		})
+	it('mapOf: a hostile iterator no longer decides the answer, the genuine entries do', () => {
+		const numbers = new Map<unknown, unknown>([['a', 1]])
+		const mixed = new Map<unknown, unknown>([['a', 'not-a-number']])
+		for (const map of [numbers, mixed]) {
+			Object.defineProperty(map, Symbol.iterator, {
+				value: () => {
+					throw new Error('hostile iterator')
+				},
+			})
+		}
 		const guard = mapOf(isString, isNumber)
-		expect(() => guard(map)).not.toThrow()
-		expect(guard(map)).toBe(false)
+		expect(() => guard(numbers)).not.toThrow()
+		expect(guard(numbers)).toBe(true)
+		expect(guard(mixed)).toBe(false)
 	})
 
 	it('arrayOf: a throwing predicate is contained as a non-match', () => {
@@ -965,5 +1257,95 @@ describe('container-combinator throw containment (AGENTS §14)', () => {
 		})
 		expect(() => guard({ a: 1 })).not.toThrow()
 		expect(guard({ a: 1 })).toBe(false)
+	})
+})
+
+describe('membership answered through an unredirectable vocabulary', () => {
+	// The highest-severity defect of the campaign, asked at every combinator that
+	// answers a membership question: a caller who rewrites `Set.prototype.has`
+	// changed what these guards ANSWER — no throw, no diagnostic, a wrong yes.
+	// The lie is installed for the whole call, so both the build and the read run
+	// under it.
+	const answerTrue = (): boolean => true
+	const answerFalse = (): boolean => false
+
+	it('literalOf rejects a non-member while Set.prototype.has answers true', () => {
+		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+			member: literalOf('a', 'b')('a'),
+			stranger: literalOf('a', 'b')('NOT-A-MEMBER'),
+			listed: literalOf(['a', 'b'])('NOT-A-MEMBER'),
+		}))
+
+		expect(answers).toEqual({ member: true, stranger: false, listed: false })
+	})
+
+	it('literalOf accepts a member while Set.prototype.has answers false', () => {
+		const answers = replaceIntrinsic(Set.prototype, 'has', answerFalse, () =>
+			literalOf('a', 'b')('a'),
+		)
+
+		expect(answers).toBe(true)
+	})
+
+	it('enumOf rejects a non-member while Set.prototype.has answers true', () => {
+		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+			member: enumOf({ red: 'r', blue: 'b' })('r'),
+			stranger: enumOf({ red: 'r', blue: 'b' })('NOT-A-MEMBER'),
+		}))
+
+		expect(answers).toEqual({ member: true, stranger: false })
+	})
+
+	it('enumOf answers false instead of throwing while Set.prototype.has throws', () => {
+		// A guard never throws for adversarial input. Its sibling `literalOf` had
+		// this right one screen away, which is exactly how the gap survived.
+		const thrower = (): boolean => {
+			throw new Error('sethas')
+		}
+		const answers = replaceIntrinsic(Set.prototype, 'has', thrower, () =>
+			attempt(() => enumOf({ red: 'r' })('r')),
+		)
+
+		expect(answers.success).toBe(true)
+		expect(answers.success && answers.value).toBe(true)
+	})
+
+	it('recordOf still rejects an undeclared key while Set.prototype.has answers true', () => {
+		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+			exact: recordOf({ name: isString })({ name: 'Ada' }),
+			extra: recordOf({ name: isString })({ name: 'Ada', ghost: 1 }),
+			missing: recordOf({ name: isString })({}),
+		}))
+
+		expect(answers).toEqual({ exact: true, extra: false, missing: false })
+	})
+
+	it('recordOf still requires a non-optional key while Set.prototype.has answers true', () => {
+		const guard = recordOf({ name: isString, age: isNumber }, ['age'])
+		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+			optionalAbsent: guard({ name: 'Ada' }),
+			requiredAbsent: guard({ age: 1 }),
+		}))
+
+		expect(answers).toEqual({ optionalAbsent: true, requiredAbsent: false })
+	})
+
+	it('keyOf rejects a key the object does not own while Set.prototype.has answers true', () => {
+		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+			member: keyOf({ red: 1, green: 2 })('red'),
+			stranger: keyOf({ red: 1, green: 2 })('purple'),
+		}))
+
+		expect(answers).toEqual({ member: true, stranger: false })
+	})
+
+	it('pickOf and omitOf keep their selections while Set.prototype.has answers true', () => {
+		const shape: GuardsShape = { name: isString, age: isNumber }
+		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+			picked: Object.keys(pickOf(shape, ['name'])),
+			omitted: Object.keys(omitOf(shape, ['age'])),
+		}))
+
+		expect(answers).toEqual({ picked: ['name'], omitted: ['name'] })
 	})
 })

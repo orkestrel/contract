@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import type { JSONRecord, JSONValue, LiteralValue } from '@src/core'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
 	isArray,
 	isArrayBuffer,
@@ -9,6 +10,8 @@ import {
 	isBigInt,
 	isBigInt64Array,
 	isBigUint64Array,
+	isBoundedJSONRecord,
+	isBoundedJSONValue,
 	isBoolean,
 	isConstructor,
 	isDataView,
@@ -34,12 +37,15 @@ import {
 	isIterable,
 	isJSONPrimitive,
 	isJSONValue,
+	isLiteralValue,
 	isMap,
 	isNonEmptyArray,
 	isNonEmptyMap,
 	isNonEmptyObject,
 	isNonEmptySet,
 	isNonEmptyString,
+	isNonNegativeInteger,
+	isNonNegativeNumber,
 	isNull,
 	isNullableBoolean,
 	isNullableNumber,
@@ -66,6 +72,8 @@ import {
 	isZeroArgAsync,
 	isZeroArgAsyncGenerator,
 	isZeroArgGenerator,
+	recordOf,
+	GUARD_DEPTH_LIMIT,
 } from '@src/core'
 import {
 	buildCyclicArray,
@@ -73,10 +81,16 @@ import {
 	buildDeepNest,
 	buildSparseArray,
 	createHostileKeys,
+	createProxiedBrandDeclaration,
 	createRevokedArrayProxy,
 	createRevokedProxy,
 	createThrowingGetter,
+	ForgedBrandDeclaration,
+	NullBaseDeclaration,
+	ProxiedBrandDeclaration,
+	StrippedBrandDeclaration,
 } from '../../setup.js'
+import { createForeignRecord, createForeignRegExp } from '../../setupServer.js'
 
 class JSONExample {
 	readonly value = 1
@@ -131,6 +145,28 @@ describe('primitive validators', () => {
 		expect(isNullableNumber(NaN)).toBe(true)
 	})
 
+	it('narrows the total literal domain without applying finiteness policy', () => {
+		const values: readonly unknown[] = [
+			'',
+			0,
+			-0,
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+			Number.NEGATIVE_INFINITY,
+			true,
+			false,
+		]
+		for (const value of values) {
+			expect(isLiteralValue(value)).toBe(true)
+			if (isLiteralValue(value)) expectTypeOf(value).toEqualTypeOf<LiteralValue>()
+		}
+		for (const value of [null, undefined, 1n, Symbol('literal'), () => 1, [], {}]) {
+			expect(isLiteralValue(value)).toBe(false)
+		}
+		expect(Object.is(-0, 0)).toBe(false)
+		expect(isLiteralValue(-0)).toBe(true)
+	})
+
 	it('detects functions and common built-ins', () => {
 		const fn = (value: unknown) => value
 		expect(isFunction(fn)).toBe(true)
@@ -141,6 +177,41 @@ describe('primitive validators', () => {
 		expect(isRegExp('a')).toBe(false)
 		expect(isError(new Error('boom'))).toBe(true)
 		expect(isError({ message: 'boom' })).toBe(false)
+	})
+
+	it('recognizes genuine local and foreign RegExp brands through their native slot', () => {
+		expect(isRegExp(/local/)).toBe(true)
+		expect(isRegExp(createForeignRegExp('foreign'))).toBe(true)
+	})
+
+	it('rejects RegExp lookalikes and proxies without reading advertised accessors', () => {
+		let reads = 0
+		const accessor = {}
+		for (const field of ['source', 'flags']) {
+			Object.defineProperty(accessor, field, {
+				get() {
+					reads += 1
+					throw new Error('advertised RegExp field')
+				},
+			})
+		}
+		const forged = { source: 'forged', flags: '' }
+		Object.defineProperty(forged, Symbol.toStringTag, { value: 'RegExp' })
+		const transparent = new Proxy(/proxied/, {})
+		const revoked = Proxy.revocable(/revoked/, {})
+		revoked.revoke()
+
+		for (const value of [
+			{ source: 'duck', flags: '', test() {} },
+			forged,
+			accessor,
+			transparent,
+			revoked.proxy,
+		]) {
+			expect(() => isRegExp(value)).not.toThrow()
+			expect(isRegExp(value)).toBe(false)
+		}
+		expect(reads).toBe(0)
 	})
 
 	it('detects iterables and async iterables', async () => {
@@ -373,21 +444,32 @@ describe('emptiness validators', () => {
 		expect(isNonEmptyObject({})).toBe(false)
 	})
 
-	it('counts enumerable symbol keys for object emptiness checks', () => {
+	it('counts every own key for object emptiness, of any kind and any enumerability', () => {
+		// The H9 tier-3 carrier. Counting only ENUMERABLE keys made the
+		// `Record<string | symbol, never>` narrowing unsound: a record carrying an
+		// own non-enumerable `hidden: 1` answered `isEmptyObject === true` while
+		// `recordOf({})` saw the key and rejected the same value, and the
+		// non-enumerable STRING and enumerable SYMBOL cases disagreed with each
+		// other for no stated reason.
 		const hidden = Symbol('hidden')
 		const visible = Symbol('visible')
-		const emptyObject = {}
-		const nonEmptyObject = { [visible]: true }
+		const hiddenSymbol = Object.defineProperty({}, hidden, { value: true, enumerable: false })
+		const hiddenString = Object.defineProperty({}, 'hidden', { value: 1, enumerable: false })
+		const visibleSymbol = { [visible]: true }
 
-		Object.defineProperty(emptyObject, hidden, {
-			value: true,
-			enumerable: false,
-		})
-
-		expect(isEmptyObject(emptyObject)).toBe(true)
-		expect(isNonEmptyObject(emptyObject)).toBe(false)
-		expect(isEmptyObject(nonEmptyObject)).toBe(false)
-		expect(isNonEmptyObject(nonEmptyObject)).toBe(true)
+		expect(Object.getOwnPropertyNames(hiddenString)).toEqual(['hidden'])
+		expect(isEmptyObject(hiddenSymbol)).toBe(false)
+		expect(isNonEmptyObject(hiddenSymbol)).toBe(true)
+		expect(isEmptyObject(hiddenString)).toBe(false)
+		expect(isNonEmptyObject(hiddenString)).toBe(true)
+		expect(isEmptyObject(visibleSymbol)).toBe(false)
+		expect(isNonEmptyObject(visibleSymbol)).toBe(true)
+		// It now agrees with the guard that already saw the key.
+		expect(recordOf({})(hiddenString)).toBe(false)
+		// Controls: a genuinely empty record, of both shapes the guard accepts.
+		expect(isEmptyObject({})).toBe(true)
+		expect(isNonEmptyObject({})).toBe(false)
+		expect(isEmptyObject(Object.create(null))).toBe(true)
 	})
 
 	it('isEmptyString is exact-empty — whitespace-only strings are NOT empty (AGENTS §14 fix)', () => {
@@ -624,14 +706,20 @@ describe('isRecord — realm-agnostic plain-object test', () => {
 		expect(isRecord(record)).toBe(true)
 	})
 
-	it('accepts an object whose prototype-of-prototype is null (the realm-agnostic shape of every plain object)', () => {
-		// Simulates a "plain object from another realm": its direct prototype is
-		// not literally THIS realm's Object.prototype, but that prototype's own
-		// prototype is null — the invariant every realm's Object.prototype
-		// satisfies, since Object.prototype always sits one step above null.
-		const foreignObjectPrototype: object = Object.create(null)
-		const foreignPlain: unknown = Object.create(foreignObjectPrototype)
-		expect(isRecord(foreignPlain)).toBe(true)
+	it('accepts a plain object from a genuine foreign realm', () => {
+		// A real second realm, not a simulation of one: its direct prototype is
+		// that realm's own `Object.prototype`, which carries the members every
+		// conformant realm's `Object.prototype` carries.
+		expect(isRecord(createForeignRecord())).toBe(true)
+	})
+
+	it('rejects an object whose prototype carries none of the realm object-prototype members', () => {
+		// The construct a two-link prototype test cannot separate from a class
+		// prototype reparented to `null`: no realm produces this chain for a plain
+		// object, and accepting it accepted the class instance below with it.
+		const bareIntermediate: object = Object.create(null)
+		const simulatedPlain: unknown = Object.create(bareIntermediate)
+		expect(isRecord(simulatedPlain)).toBe(false)
 	})
 
 	it('accepts an ordinary object literal', () => {
@@ -644,6 +732,27 @@ describe('isRecord — realm-agnostic plain-object test', () => {
 			readonly value = 1
 		}
 		expect(isRecord(new Example())).toBe(false)
+	})
+
+	it('rejects a class instance whose class prototype is reparented to null', () => {
+		expect(isRecord(new NullBaseDeclaration())).toBe(false)
+		expect(isRecord({ type: 'string', min: 1 })).toBe(true)
+	})
+
+	it('accepts a class instance whose prototype is forged into a realm prototype', () => {
+		// The exact limit of the refusal above, kept honest. Reparenting alone
+		// fails; reparenting AND stamping the mandated realm members passes, and
+		// so does a Proxy in prototype position that answers the same questions
+		// without touching the class at all. Nothing observable from outside a
+		// realm separates a forged prototype from a genuine one, so this guard
+		// answers `true` for a value that is still a live class instance.
+		const proxied = createProxiedBrandDeclaration()
+
+		expect(isRecord(new ProxiedBrandDeclaration())).toBe(false)
+		expect(isRecord(new ForgedBrandDeclaration())).toBe(true)
+		expect(isRecord(new StrippedBrandDeclaration())).toBe(true)
+		expect(isRecord(proxied)).toBe(true)
+		expect(typeof Reflect.get(proxied, 'escape')).toBe('function')
 	})
 
 	it('rejects an array', () => {
@@ -888,6 +997,133 @@ describe('isInteger', () => {
 		expect(isInteger(Number.POSITIVE_INFINITY)).toBe(false)
 		expect(isInteger('42')).toBe(false)
 		expect(isInteger(42n)).toBe(false)
+	})
+})
+
+describe('non-negative numeric guards', () => {
+	it('accepts only finite primitive positive numbers and positive zero', () => {
+		const values: readonly unknown[] = [0, 0.5, 1, Number.MAX_SAFE_INTEGER + 1]
+		for (const value of values) {
+			expect(isNonNegativeNumber(value)).toBe(true)
+			if (isNonNegativeNumber(value)) expectTypeOf(value).toEqualTypeOf<number>()
+		}
+
+		for (const value of [
+			-0,
+			-0.5,
+			-1,
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+			Number.NEGATIVE_INFINITY,
+			new Number(1),
+			{ valueOf: Number },
+			'1',
+			1n,
+			null,
+			undefined,
+			Symbol('number'),
+			{},
+			[],
+			() => 1,
+		]) {
+			expect(isNonNegativeNumber(value)).toBe(false)
+		}
+		expect(Object.is(-0, 0)).toBe(false)
+	})
+
+	it('adds integer shape without imposing safe-integer policy', () => {
+		for (const value of [0, 1, Number.MAX_SAFE_INTEGER + 1]) {
+			expect(isNonNegativeInteger(value)).toBe(true)
+			if (isNonNegativeInteger(value)) expectTypeOf(value).toEqualTypeOf<number>()
+		}
+		for (const value of [-0, 0.5, -1, Number.NaN, Number.POSITIVE_INFINITY, '1', 1n]) {
+			expect(isNonNegativeInteger(value)).toBe(false)
+		}
+	})
+})
+
+describe('bounded JSON guards', () => {
+	it('narrows valid JSON values and requires a plain-record root for records', () => {
+		const value: unknown = { nested: [1, 'two', null] }
+		const array: unknown = [1, 2, 3]
+
+		expect(isBoundedJSONValue(value)).toBe(true)
+		if (isBoundedJSONValue(value)) expectTypeOf(value).toEqualTypeOf<JSONValue>()
+		expect(isBoundedJSONRecord(value)).toBe(true)
+		if (isBoundedJSONRecord(value)) expectTypeOf(value).toEqualTypeOf<JSONRecord>()
+		expect(isBoundedJSONValue(array)).toBe(true)
+		expect(isBoundedJSONRecord(array)).toBe(false)
+	})
+
+	it('accepts ordinary, null-prototype, and genuine foreign-realm records', () => {
+		const nullPrototype: Record<string, unknown> = Object.create(null)
+		nullPrototype['value'] = 1
+
+		for (const value of [{ value: 1 }, nullPrototype, createForeignRecord()]) {
+			expect(isBoundedJSONValue(value)).toBe(true)
+			expect(isBoundedJSONRecord(value)).toBe(true)
+		}
+	})
+
+	it('distinguishes depth readability from JSON validity', () => {
+		const sparse = buildSparseArray()
+		const shallowCycle: unknown[] = []
+		shallowCycle.push(shallowCycle)
+		const boundaryCycle: unknown[] = []
+		let cursor = boundaryCycle
+		for (let depth = 1; depth < GUARD_DEPTH_LIMIT; depth += 1) {
+			const child: unknown[] = []
+			cursor.push(child)
+			cursor = child
+		}
+		cursor.push(boundaryCycle)
+
+		for (const value of [sparse, shallowCycle, boundaryCycle, new Date(), new Map()]) {
+			expect(isBoundedJSONValue(value)).toBe(false)
+		}
+	})
+
+	it('short-circuits the depth pass before JSON validation', () => {
+		let reads = 0
+		const deep = buildDeepNest(GUARD_DEPTH_LIMIT)
+		const value = Object.defineProperty({}, 'nested', {
+			get() {
+				reads += 1
+				return deep
+			},
+			enumerable: true,
+		})
+
+		expect(isBoundedJSONValue(value)).toBe(false)
+		expect(reads).toBe(1)
+	})
+
+	it('performs sequential total observations rather than promising one atomic snapshot', () => {
+		let reads = 0
+		const value = Object.defineProperty({}, 'state', {
+			get() {
+				reads += 1
+				return reads === 1 ? 1 : () => 1
+			},
+			enumerable: true,
+		})
+
+		expect(isBoundedJSONValue(value)).toBe(false)
+		expect(reads).toBe(2)
+	})
+
+	it('stays total for hostile records and arrays', () => {
+		for (const value of [
+			createThrowingGetter(),
+			createHostileKeys(),
+			createRevokedProxy(),
+			createRevokedArrayProxy(),
+		]) {
+			expect(() => isBoundedJSONValue(value)).not.toThrow()
+			expect(isBoundedJSONValue(value)).toBe(false)
+			expect(() => isBoundedJSONRecord(value)).not.toThrow()
+			expect(isBoundedJSONRecord(value)).toBe(false)
+		}
 	})
 })
 

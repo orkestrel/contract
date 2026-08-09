@@ -28,6 +28,10 @@ Run one when the work is finished and the evidence is weak in a specific way:
 
 Do not run one for a typo, a mechanical rename, or work whose failure would be immediately visible.
 
+A round also needs something new to attack. When the previous round's claims all held, nothing has
+been added or repaired since, and the only motive is that an auditor could still imagine an attack,
+there is no subject — closing is the correct action and the next subject is the deliverable.
+
 ## Write the brief
 
 The brief is the instrument. A weak brief produces a confirming review no matter which auditor reads
@@ -68,6 +72,21 @@ nobody claimed.
 - Dispatch **two independent auditors on one identical brief**, blind to each other, and reconcile
   yourself. Engine and role selection are the orchestration contract's, not this skill's. A round run
   with one auditor is a deviation; record it rather than glossing it.
+- **Give every auditor the means to run its attacks.** A lens that can only read returns derivations,
+  and a derivation reads exactly like a verdict — it will confirm a claim that one probe would break.
+- **Tell each auditor exactly where a probe may live, and verify that place works before you say it.**
+  A test runner resolves only what its own configuration includes: a probe written outside the project
+  root is typically not discovered at all, and the run reports no test files rather than a result. The
+  reliable form is a file inside the canonical mirrored suite, run by explicit path, deleted before the
+  auditor returns — promoted into a permanent test when it proves something worth keeping. Give each
+  concurrent auditor a distinct filename that already satisfies the repository's test naming
+  convention; never invent a prefix to dodge collisions, and never let two auditors claim one path. A
+  leaked probe is discovered by the suite and fails a run nobody else caused.
+- **Run auditors concurrently only when their writes cannot collide.** Read-only lenses still write
+  probes; give each a distinct path and forbid whole-project runs, or serialize the round. **This binds
+  the orchestrator too:** a tree-wide gate run while a round is live sees the auditors' in-flight probes
+  and reports a failure nobody caused. Wait for the round, or scope the command to paths no auditor
+  owns. Never delete another executor's working file to make your own command pass.
 - Supply the evidence the subject type requires, per the table above.
 - Auditors are read-only and spawn nothing.
 - Blind reports are **immutable**. Nothing an auditor returns is edited, merged, or revised — by
@@ -129,11 +148,17 @@ Follow `references/reconcile.md`. The obligations that are not delegable:
 
 ## Accept, or run it again
 
-The threshold is **a round that returns nothing it can substantiate** — not a round with a short
-list, and never green gates.
+The threshold is **a `PASS` terminal line on a brief whose claims cover what the subject owns** —
+every numbered claim `CONFIRMED` on evidence, nothing `UNRESOLVED`, nothing `NOT-EVIDENCED`, no
+substantiated finding beside them. Never green gates, which prove only that a suite ran.
 
 A round that finds something is a success, not a delay. The alternative is a consumer finding it
-after publication, when the version number is already spent.
+after publication, when the version number is already spent. But an unsubstantiated attack is not a
+finding, and the supply of imaginable ones never runs out: a round is not re-run because an auditor
+can still think of one. A substantiated finding against something no claim names is real and forces
+`FAIL`; an unsubstantiated one is a claim for the successor brief. The escalation law in
+`.claude/rules/quality.md` governs a subject that keeps producing findings at the same seam — after
+enough of them the ruling owed is on the design, not on the next defect.
 
 When a fix round follows, its auditor must be an engine that did not write it, and the next round's
 brief is the successor of this one.

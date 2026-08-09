@@ -3,11 +3,20 @@ import type {
 	AnyConstructor,
 	AnyFunction,
 	JSONPrimitive,
+	JSONRecord,
 	JSONValue,
+	LiteralValue,
 	ZeroArgAsyncFunction,
 	ZeroArgFunction,
 } from './types.js'
-import { enumerableSymbolCount, holds, matchesJSONValue } from './helpers.js'
+import { INTRINSICS } from './constants.js'
+import {
+	holds,
+	matchesJSONDepth,
+	matchesJSONValue,
+	matchesRecordBrand,
+	readPatternSource,
+} from './helpers.js'
 
 // AGENTS §14: guards are total functions — a guard NEVER throws. Adversarial
 // input (hostile getters, exotic objects, cycles) returns `false`, never an
@@ -103,7 +112,7 @@ export function isNumber(value: unknown): value is number {
  * ```
  */
 export function isFiniteNumber(value: unknown): value is number {
-	return typeof value === 'number' && Number.isFinite(value)
+	return typeof value === 'number' && INTRINSICS.finite(value)
 }
 
 /** Determine whether a value is a finite integer (excludes `NaN`, `±Infinity`, and fractional numbers).
@@ -115,7 +124,47 @@ export function isFiniteNumber(value: unknown): value is number {
  * ```
  */
 export function isInteger(value: unknown): value is number {
-	return Number.isInteger(value)
+	return INTRINSICS.integer(value)
+}
+
+/**
+ * Determine whether a value is a finite primitive number at or above positive zero.
+ *
+ * @remarks
+ * Positive fractions pass. Negative zero is rejected explicitly, and no
+ * coercion or property access is performed for non-number inputs.
+ *
+ * @param value - The value to inspect
+ * @returns `true` for finite primitive numbers greater than or equal to zero, except `-0`
+ *
+ * @example
+ * ```ts
+ * isNonNegativeNumber(0.5) // true
+ * isNonNegativeNumber(-0)  // false
+ * ```
+ */
+export function isNonNegativeNumber(value: unknown): value is number {
+	return isFiniteNumber(value) && value >= 0 && !INTRINSICS.same(value, -0)
+}
+
+/**
+ * Determine whether a value is a non-negative finite primitive integer.
+ *
+ * @remarks
+ * Composes {@link isNonNegativeNumber} with {@link isInteger}. Representable
+ * unsafe integers remain integers; safe-integer policy is a separate domain.
+ *
+ * @param value - The value to inspect
+ * @returns `true` for non-negative integers other than `-0`
+ *
+ * @example
+ * ```ts
+ * isNonNegativeInteger(3)   // true
+ * isNonNegativeInteger(3.5) // false
+ * ```
+ */
+export function isNonNegativeInteger(value: unknown): value is number {
+	return isNonNegativeNumber(value) && isInteger(value)
 }
 
 /** Determine whether a value is a boolean.
@@ -128,6 +177,27 @@ export function isInteger(value: unknown): value is number {
  */
 export function isBoolean(value: unknown): value is boolean {
 	return typeof value === 'boolean'
+}
+
+/**
+ * Determine whether a value belongs to the string, number, or boolean literal domain.
+ *
+ * @remarks
+ * Every JavaScript number belongs to this structural domain, including `NaN`,
+ * `±Infinity`, and signed zero. Declaration and schema policies apply finiteness
+ * separately where their contracts require it.
+ *
+ * @param value - The value to inspect
+ * @returns `true` for a string, number, or boolean
+ *
+ * @example
+ * ```ts
+ * isLiteralValue(Number.NaN) // true
+ * isLiteralValue(null)       // false
+ * ```
+ */
+export function isLiteralValue(value: unknown): value is LiteralValue {
+	return isString(value) || isNumber(value) || isBoolean(value)
 }
 
 /** Determine whether a value is exactly `true`.
@@ -297,7 +367,15 @@ export function isDate(value: unknown): value is Date {
  * ```
  */
 export function isRegExp(value: unknown): value is RegExp {
-	return isInstance(value, RegExp)
+	// The CAPTURED `source` getter applied to the candidate. That getter is
+	// defined only on an object carrying the pattern's internal slots, so a
+	// non-pattern throws and this total guard answers `false`. Re-reading the
+	// descriptor off `RegExp.prototype` per call, as this did, observed whatever
+	// getter was CURRENTLY installed and only checked that it returned a string —
+	// so `Object.defineProperty(RegExp.prototype, 'source', { get: () => '.*' })`
+	// made this guard accept a plain string, and it gates `matchOf`, `stringOf`
+	// and every string shape builder.
+	return holds(() => readPatternSource(value) !== undefined)
 }
 
 /** Determine whether a value is an `Error`.
@@ -346,9 +424,9 @@ export function isPromiseLike<T = unknown>(
 		if (!isObject(value)) {
 			return false
 		}
-		const thenValue = Reflect.get(value, 'then')
-		const catchValue = Reflect.get(value, 'catch')
-		const finallyValue = Reflect.get(value, 'finally')
+		const thenValue = INTRINSICS.read(value, 'then')
+		const catchValue = INTRINSICS.read(value, 'catch')
+		const finallyValue = INTRINSICS.read(value, 'finally')
 		return isFunction(thenValue) && isFunction(catchValue) && isFunction(finallyValue)
 	})
 }
@@ -403,7 +481,7 @@ export function isIterable<T = unknown>(value: unknown): value is Iterable<T> {
 		if (isString(value)) {
 			return true
 		}
-		return isObject(value) && isFunction(Reflect.get(value, Symbol.iterator))
+		return isObject(value) && isFunction(INTRINSICS.read(value, Symbol.iterator))
 	})
 }
 
@@ -416,7 +494,7 @@ export function isIterable<T = unknown>(value: unknown): value is Iterable<T> {
  * ```
  */
 export function isAsyncIterable<T = unknown>(value: unknown): value is AsyncIterable<T> {
-	return holds(() => isObject(value) && isFunction(Reflect.get(value, Symbol.asyncIterator)))
+	return holds(() => isObject(value) && isFunction(INTRINSICS.read(value, Symbol.asyncIterator)))
 }
 
 // === Object & collection guards
@@ -444,18 +522,14 @@ export function isObject(value: unknown): value is object {
  * not an array or class instance.
  *
  * @remarks
- * Use instead of {@link isObject} to distinguish a plain `{}` /
- * `Object.create(null)` from arrays, `Date`, `Map`, etc. The prototype-chain
- * test is realm-agnostic: rather than comparing against the current realm's
- * `Object.prototype` (which a plain object from another `vm.Context`, iframe,
- * or worker would fail), it accepts any value whose prototype is `null`, OR
- * whose prototype's own prototype is `null` — the shape every plain object
- * has in every realm, since `Object.prototype` itself always sits one step
- * above `null`. Arrays and class instances are still rejected: an array's
- * prototype chain runs through `Array.prototype` before `null`, and a class
- * instance's runs through the class's own prototype. The whole body runs
- * inside `holds` (AGENTS §14) so a revoked `Proxy` or a hostile
- * `getPrototypeOf` trap cannot escape as a thrown error.
+ * The total form of the shared {@link matchesRecordBrand} rule, and the only
+ * one a guard may use: the whole brand runs inside `holds` (AGENTS §14) so a
+ * revoked `Proxy` or a hostile `getPrototypeOf` trap answers `false` instead of
+ * escaping as a thrown error. Use instead of {@link isObject} to distinguish a
+ * plain `{}` / `Object.create(null)` — or a plain object from another realm,
+ * whose prototype is that realm's `Object.prototype` — from arrays, `Date`,
+ * `Map`, and class instances, including a class whose prototype a caller
+ * reparented to `null`.
  *
  * @example
  * ```ts
@@ -466,13 +540,7 @@ export function isObject(value: unknown): value is object {
  * ```
  */
 export function isRecord(value: unknown): value is Record<string, unknown> {
-	return holds(() => {
-		if (!isObject(value) || isArray(value)) {
-			return false
-		}
-		const prototype = Object.getPrototypeOf(value)
-		return prototype === null || Object.getPrototypeOf(prototype) === null
-	})
+	return holds(() => matchesRecordBrand(value))
 }
 
 /** Determine whether a value is a `Map`.
@@ -534,7 +602,7 @@ export function isWeakSet(value: unknown): value is WeakSet<object> {
  * ```
  */
 export function isArray<T = unknown>(value: unknown): value is readonly T[] {
-	return holds(() => Array.isArray(value))
+	return holds(() => INTRINSICS.array(value))
 }
 
 /** Determine whether a value is a `DataView`.
@@ -729,18 +797,26 @@ export function isEmptyArray(value: unknown): value is readonly [] {
 	return holds(() => isArray(value) && value.length === 0)
 }
 
-/** Determine whether a value is an empty plain object (no own string or enumerable symbol keys).
+/** Determine whether a value is an empty plain object — no OWN keys at all, of any
+ * kind: string or symbol, enumerable or not.
+ *
+ * @remarks
+ * The own-key population is the one `recordOf` inspects (`Reflect.ownKeys`), and
+ * it has to be: this guard narrows to `Record<string | symbol, never>`, so
+ * counting only ENUMERABLE keys made the narrowing unsound — a record carrying
+ * an own non-enumerable `hidden: 1` answered `true` here while `recordOf({})`
+ * saw the key and rejected the same value, and the enumerable-symbol and
+ * non-enumerable-string cases were treated differently for no stated reason.
  *
  * @example
  * ```ts
  * isEmptyObject({})      // true
  * isEmptyObject({ a: 1 }) // false
+ * isEmptyObject(Object.defineProperty({}, 'hidden', { value: 1 })) // false
  * ```
  */
 export function isEmptyObject(value: unknown): value is Record<string | symbol, never> {
-	return holds(
-		() => isRecord(value) && Object.keys(value).length === 0 && enumerableSymbolCount(value) === 0,
-	)
+	return holds(() => isRecord(value) && INTRINSICS.members(value).length === 0)
 }
 
 /** Determine whether a value is an empty `Map`.
@@ -791,7 +867,12 @@ export function isNonEmptyArray<T = unknown>(value: unknown): value is readonly 
 	return holds(() => isArray<T>(value) && value.length > 0)
 }
 
-/** Determine whether a value is a non-empty plain object (at least one own string or enumerable symbol key).
+/** Determine whether a value is a non-empty plain object — at least one own key of
+ * any kind: string or symbol, enumerable or not.
+ *
+ * @remarks
+ * The exact negation of {@link isEmptyObject} over the same own-key population;
+ * see there for why enumerability is not part of the rule.
  *
  * @example
  * ```ts
@@ -800,9 +881,7 @@ export function isNonEmptyArray<T = unknown>(value: unknown): value is readonly 
  * ```
  */
 export function isNonEmptyObject(value: unknown): value is Record<string | symbol, unknown> {
-	return holds(
-		() => isRecord(value) && (Object.keys(value).length > 0 || enumerableSymbolCount(value) > 0),
-	)
+	return holds(() => isRecord(value) && INTRINSICS.members(value).length > 0)
 }
 
 /** Determine whether a value is a non-empty `Map` (at least one entry).
@@ -950,7 +1029,7 @@ export function isConstructor(value: unknown): value is AnyConstructor<object> {
 		if (!isFunction(value)) {
 			return false
 		}
-		Reflect.construct(String, [], value)
+		INTRINSICS.construct(String, [], value)
 		return true
 	})
 }
@@ -978,7 +1057,48 @@ export function isConstructor(value: unknown): value is AnyConstructor<object> {
  * ```
  */
 export function isJSONValue(value: unknown): value is JSONValue {
-	return holds(() => matchesJSONValue(value, new WeakSet()))
+	return holds(() => matchesJSONValue(value, new INTRINSICS.weakSet()))
+}
+
+/**
+ * Determine whether a value is JSON-valid within the fixed container-depth limit.
+ *
+ * @remarks
+ * Runs the total depth predicate before the existing JSON guard. These are
+ * sequential observations of caller-owned input, not an atomic snapshot.
+ *
+ * @param value - The value to inspect
+ * @returns `true` when the value is both depth-bounded and a valid {@link JSONValue}
+ *
+ * @example
+ * ```ts
+ * isBoundedJSONValue({ nested: [1] }) // true
+ * isBoundedJSONValue(new Date())      // false
+ * ```
+ */
+export function isBoundedJSONValue(value: unknown): value is JSONValue {
+	return matchesJSONDepth(value) && isJSONValue(value)
+}
+
+/**
+ * Determine whether a value is a depth-bounded JSON record.
+ *
+ * @remarks
+ * Requires the existing plain-record root invariant before applying
+ * {@link isBoundedJSONValue}. Arrays therefore remain valid bounded JSON
+ * values but never bounded JSON records.
+ *
+ * @param value - The value to inspect
+ * @returns `true` when the value is a plain-record-rooted bounded JSON value
+ *
+ * @example
+ * ```ts
+ * isBoundedJSONRecord({ value: 1 }) // true
+ * isBoundedJSONRecord([1])          // false
+ * ```
+ */
+export function isBoundedJSONRecord(value: unknown): value is JSONRecord {
+	return isRecord(value) && isBoundedJSONValue(value)
 }
 
 /**

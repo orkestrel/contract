@@ -124,6 +124,16 @@ Every role honours this floor and no dispatch may widen it.
 
 - Keep the main context at decision level. Send large reads, repository scans, raw logs and
   diffs, and exploratory sweeps to `grok`; consume the distillate.
+- Settle a behavioural question by running it, not by reasoning about it. The Orchestrator
+  reproduces findings itself precisely because an argument is not an observation; the same rule
+  binds before a brief is written, not only after a report arrives. A round of deliberation that
+  a probe would have ended is the expensive failure, and it is invisible because it feels like
+  rigour.
+- **Serial rounds inherit the previous round's framing.** When several rounds against one subject
+  keep finding the same class through a new door, the search is following a frame rather than the
+  defect. Break it deliberately: bound the scope, then fan out independent lenses over disjoint
+  slices in one pass. Parallelism is worth more for the framing it breaks than the wall-clock it
+  saves — a sweep that asks a different question finds what a faster serial round would not.
 - Decompose by required context and independently verifiable acceptance criteria, not by task
   type.
 - Instructions flow down fully specified; findings flow up smaller than the context consumed.
@@ -161,7 +171,10 @@ absorbed.
    Surface the plan before dispatch, including a routing ledger: every unit names its role
    AND engine. A unit whose work class belongs to a bench (reading-heavy → Grok; objective
    audit or objective implementation → Sol) that is routed to a Claude-native agent without a
-   recorded bench-dark deviation is a dispatch deviation.
+   recorded bench-dark deviation is a dispatch deviation. The plan states the goal's exit
+   criterion beside its units — the enumerated capabilities whose closure ends the campaign, each
+   one to end implemented, repaired, retained, or intentionally excluded on evidence. A plan that
+   names work but not its end can only be abandoned, never finished.
 3. **Implement.** Route each nontrivial objective unit to the Sol `implementer` and each
    nontrivial subjective unit to the Opus `implementer` — main checkout, one sole writer at a
    time. Route a fully specified, taste-free unit to `builder`. Never route implementation to
@@ -179,7 +192,8 @@ absorbed.
    substantiate against the evidence is dropped on the record.
 6. **Verify.** One independent `verifier` runs the authoritative gates.
 7. **Accept.** The Orchestrator decides and reports concise outcomes, decisions, evidence, and
-   remaining risk.
+   remaining risk. When step 2's exit criterion is met and the gates are green, accepting is the
+   correct action and the next goal is the deliverable.
 
 ## Deviation protocol
 
@@ -291,7 +305,7 @@ Four bench laws apply to every external engine:
   reproducible from the diff. A campaign whose working record lives only on ephemeral disk
   loses it the first time the filesystem reverts, and the loss is silent.
   Every campaign artifact lives in the **orchestrator's** repository under
-  `.orkestrel/<package>/` — for this repository, `.orkestrel/supervisor/` — never in the package it
+  `.orkestrel/<package>/`, named for the package the campaign is about — never in the package it
   is about: a published package's tree is its product, and orchestration residue does not belong in
   it. The dot folder is the boundary: everything Orkestrel owns in a consumer's tree lives beneath
   it, named for the package it belongs to, so a convention can be settled there without touching
@@ -306,7 +320,17 @@ Every long bench exec is launched by the Orchestrator as a harness-tracked backg
 under a hard time cap, never detached from inside a bridge agent: the harness owns the
 lifecycle, completion re-invokes the session, and the cap kills a wedged bench loudly instead
 of trusting the bridge to report its own failure. A wedged bridge is silent, and silence must
-never read as progress. A stalled journal or a cap-killed exec follows the deviation ladder,
+never read as progress.
+
+**Liveness is read from the artifact the work produces, never from its wrapper.** A subagent's
+transcript file is not a progress signal — it can report zero bytes while the agent is working
+normally, so an empty or stale wrapper proves nothing about the agent behind it. Judge a unit by
+what it has changed in the tree: modification times on the files it owns, the counts its suite
+reports, the report it was told to write. Before killing anything, check that; a healthy unit
+killed on a false signal loses everything it had not yet written down, and the loss is charged
+to the orchestrator, not the unit. If a unit must be stopped, say plainly that it was stopped
+and why, and assess the tree it left rather than assuming its partial bytes are either good or
+worthless. A stalled journal or a cap-killed exec follows the deviation ladder,
 with the session id from the journal head as the recovery handle. Size the cap from the
 observed high mark of comparable units plus an independently budgeted gate allowance plus
 explicit slack, never from the estimate alone. The first use of any CLI flag, subcommand,
@@ -446,3 +470,6 @@ CODEX_IMPLEMENTER_EFFORT=high
   foreign client driving it, never by source alone; where no such surface exists this law is
   inert.
 - Final acceptance belongs only to the Orchestrator, after independent audit and gate evidence.
+- Acceptance is bounded by the criterion the plan fixed, never by the last engine's remaining
+  appetite. Once that criterion is met and the gates are green the Orchestrator accepts and moves
+  on; reopening an accepted criterion is the user's instruction, not an auditor's finding.

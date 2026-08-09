@@ -4,27 +4,40 @@ import type {
 	GuardsShape,
 	GuardType,
 	IntersectionFromGuards,
+	LiteralValue,
 	OptionalFromGuards,
 	TupleFromGuards,
 } from './types.js'
-import { GUARD_DEPTH_LIMIT } from './constants.js'
+import { GUARD_DEPTH_LIMIT, INTRINSICS } from './constants.js'
 import { ContractError } from './errors.js'
 import {
 	isArray,
-	isBoolean,
 	isConstructor,
 	isFiniteNumber,
 	isInstance,
+	isLiteralValue,
 	isMap,
 	isNumber,
-	isObject,
 	isRecord,
 	isRegExp,
 	isSet,
 	isString,
 	isSymbol,
 } from './validators.js'
-import { holds, readArrayEntries, readOptions, readValue } from './helpers.js'
+import {
+	admitMember,
+	collectMembers,
+	contain,
+	holds,
+	matchesMember,
+	matchesPattern,
+	readArrayEntries,
+	readMapEntries,
+	readOptions,
+	readPattern,
+	readSetEntries,
+	readValue,
+} from './helpers.js'
 
 // Every combinator returns a `Guard<T>` — a total function (AGENTS §14). The
 // combinators that invoke a caller-supplied callback inside the guard body
@@ -36,13 +49,24 @@ import { holds, readArrayEntries, readOptions, readValue } from './helpers.js'
 // propagated throw.
 
 /**
- * Build a guard that accepts arrays whose every element satisfies `elementGuard`.
+ * Build a guard that accepts DENSE arrays whose every element satisfies
+ * `elementGuard`.
+ *
+ * @remarks
+ * Density is part of the contract, not an accident: the guard reads the array
+ * through the shared reflected own-index lens {@link readArrayEntries}, which is
+ * what makes it immune to caller-defined iteration and what `parseArray` reads
+ * too. A SPARSE array is therefore refused outright — `[1, , 3]` fails even when
+ * the element guard accepts `undefined` — because a hole is an absent own
+ * property rather than a present `undefined`, and the two are different facts.
+ * Pass `[1, undefined, 3]` when the middle slot is meant to exist.
  *
  * @example
  * ```ts
  * const isStringArray = arrayOf(isString)
  * isStringArray(['a', 'b']) // true
  * isStringArray(['a', 1])   // false
+ * isStringArray(['a', , 'b']) // false — sparse
  * ```
  */
 export function arrayOf<T>(elementGuard: Guard<T>): Guard<readonly T[]>
@@ -53,22 +77,23 @@ export function arrayOf(elementGuard: (value: unknown) => boolean): Guard<readon
 			if (!isArray(value)) return false
 			const entries = readArrayEntries(value)
 			if (!entries.success || !entries.value.dense) return false
-			for (const entry of entries.value.entries) {
-				if (!elementGuard(entry)) return false
+			for (let index = 0; index < entries.value.entries.length; index += 1) {
+				if (!elementGuard(entries.value.entries[index])) return false
 			}
 			return true
 		})
 }
 
 /**
- * Build a guard that accepts fixed-arity tuples, testing each index with the
- * corresponding guard.
+ * Build a guard that accepts fixed-arity DENSE tuples, testing each index with
+ * the corresponding guard.
  *
  * @example
  * ```ts
  * const isPair = tupleOf(isString, isNumber)
  * isPair(['hello', 42]) // true
  * isPair(['hello'])     // false — wrong arity
+ * isPair([, 42])        // false — sparse; see arrayOf for the dense lens
  * ```
  */
 export function tupleOf<const Gs extends ReadonlyArray<Guard<unknown>>>(
@@ -85,12 +110,16 @@ export function tupleOf(
 			if (!isArray(value)) {
 				return false
 			}
-			if (value.length !== guards.length) {
+			const entries = readArrayEntries(value)
+			if (!entries.success || !entries.value.dense) {
+				return false
+			}
+			if (entries.value.entries.length !== guards.length) {
 				return false
 			}
 			for (let index = 0; index < guards.length; index += 1) {
 				const guard = guards[index]
-				if (!Object.hasOwn(value, index) || guard === undefined || !guard(value[index])) {
+				if (guard === undefined || !guard(entries.value.entries[index])) {
 					return false
 				}
 			}
@@ -123,39 +152,76 @@ export function tupleOf(
  * const isSameRole = literalOf(['admin', 'member', 'guest']) // the same guard, from an array
  * ```
  */
-export function literalOf<const Literals extends ReadonlyArray<string | number | boolean>>(
+export function literalOf<const Literals extends ReadonlyArray<LiteralValue>>(
 	literals: Literals,
 ): Guard<Literals[number]>
-export function literalOf<const Literals extends ReadonlyArray<string | number | boolean>>(
+export function literalOf<const Literals extends ReadonlyArray<LiteralValue>>(
 	...literals: Literals
 ): Guard<Literals[number]>
 export function literalOf(
-	...literals: ReadonlyArray<string | number | boolean | ReadonlyArray<string | number | boolean>>
-): Guard<string | number | boolean> {
-	const [first] = literals
-	const collected =
-		literals.length === 1
-			? readValue(() => Array.isArray(first), 'literalOf', {
-					subject: 'literals',
-					context: { path: ['literals'], shape: 'literal' },
-				})
-			: false
-	const values: readonly unknown[] = collected && isArray(first) ? first : literals
-	const snapshot = readValue(() => [...values], 'literalOf', {
-		subject: 'literals',
-		context: { path: ['literals'], shape: 'literal' },
-	})
-	if (!snapshot.every((value) => isString(value) || isNumber(value) || isBoolean(value))) {
-		throw new ContractError(
-			'literalOf: literals must contain only string, number, or boolean values',
-			{
-				code: 'literal',
-				context: { path: ['literals'], shape: 'literal' },
-			},
-		)
-	}
-	const allowed = new Set<unknown>(snapshot)
-	return (value: unknown): value is string | number | boolean => allowed.has(value)
+	...literals: ReadonlyArray<LiteralValue | ReadonlyArray<LiteralValue>>
+): Guard<LiteralValue> {
+	return contain(
+		() => {
+			// An indexed read, not array destructuring: destructuring dispatches through
+			// `Array.prototype[Symbol.iterator]`, a caller-writable member.
+			const first = literals[0]
+			const collected =
+				literals.length === 1
+					? readValue(() => INTRINSICS.array(first), 'literalOf', {
+							subject: 'literals',
+							context: { path: ['literals'], shape: 'literal' },
+						})
+					: false
+			const snapshot =
+				collected && isArray(first)
+					? readValue(
+							() => {
+								const entries = readArrayEntries(first)
+								if (!entries.success) throw entries.error
+								if (!entries.value.dense) {
+									throw new INTRINSICS.error('Literal vocabulary must be dense')
+								}
+								return entries.value.entries
+							},
+							'literalOf',
+							{
+								subject: 'literals',
+								context: { path: ['literals'], shape: 'literal' },
+							},
+						)
+					: literals
+			// Indexed, not `every`: an array prototype method is a caller-writable
+			// member reached by name, and this statement sits between two statements an
+			// earlier round repaired for exactly that reason. A boundary placed per
+			// statement is only ever as complete as the last sweep; an indexed read
+			// dispatches through nothing at all.
+			let literal = true
+			for (let index = 0; index < snapshot.length; index += 1) {
+				if (!isLiteralValue(snapshot[index])) literal = false
+			}
+			if (!literal) {
+				throw new ContractError(
+					'literalOf: literals must contain only string, number, or boolean values',
+					{
+						code: 'literal',
+						context: { path: ['literals'], shape: 'literal' },
+					},
+				)
+			}
+			// A module-scope membership question, not `set.has(value)` and not a
+			// method on a class this package exports: the answer this guard returns IS
+			// the package's published verdict, and BOTH of those spellings ask a
+			// property every caller can rewrite. `Set.prototype.has = () => true` made
+			// this guard accept a value outside its declared vocabulary; relocating
+			// the read onto an exported class's `has` reproduced it one prototype
+			// higher. A module binding is not a property.
+			const allowed = collectMembers(snapshot)
+			return (value: unknown): value is LiteralValue => holds(() => matchesMember(allowed, value))
+		},
+		'literalOf',
+		{ code: 'literal', context: { path: ['literals'], shape: 'literal' } },
+	)
 }
 
 /**
@@ -175,8 +241,14 @@ export function literalOf(
 export function instanceOf<C extends abstract new (...args: never) => object>(
 	ctor: C,
 ): Guard<InstanceType<C>> {
+	// No `isObject` pre-filter: `typeof fn === 'function'`, so it rejected every
+	// CALLABLE instance and `instanceOf(Function)(() => {})` answered `false`
+	// while `isInstance(() => {}, Function)` — the helper this combinator is
+	// documented to be built on — answered `true`. `isInstance` already refuses a
+	// primitive (`primitive instanceof X` is `false`) and is itself contained, so
+	// the pre-filter narrowed the domain and bought nothing.
 	return (value: unknown): value is InstanceType<C> =>
-		isConstructor(ctor) && isObject(value) && isInstance(value, ctor)
+		isConstructor(ctor) && isInstance(value, ctor)
 }
 
 /**
@@ -198,11 +270,17 @@ export function instanceOf<C extends abstract new (...args: never) => object>(
 export function enumOf<const E extends Record<string, string | number>>(
 	enumeration: E,
 ): Guard<E[keyof E]> {
-	const values = readValue(() => new Set(Object.values(enumeration)), 'enumOf', {
-		subject: 'enumeration',
-	})
-	return (value: unknown): value is E[keyof E] =>
-		(isString(value) || isNumber(value)) && values.has(value)
+	return contain(() => {
+		const values = collectMembers(
+			readValue(() => INTRINSICS.values(enumeration), 'enumOf', { subject: 'enumeration' }),
+		)
+		// `holds`, exactly as `literalOf` does one screen up. The membership read is
+		// now unredirectable, but the guard contract is "never throws" and a guard
+		// that states it for one builder and not its sibling is a guard nobody can
+		// rely on.
+		return (value: unknown): value is E[keyof E] =>
+			holds(() => (isString(value) || isNumber(value)) && matchesMember(values, value))
+	}, 'enumOf')
 }
 
 /**
@@ -224,8 +302,16 @@ export function setOf(elementGuard: (value: unknown) => boolean): Guard<Readonly
 			if (!isSet(value)) {
 				return false
 			}
-			for (const entry of value) {
-				if (!elementGuard(entry)) {
+			// The genuine contents, read through the captured sweep rather than
+			// through `Set.prototype[Symbol.iterator]`. An iterator that silently
+			// skipped the non-string in `new Set(['a', 42])` made this guard answer
+			// `true` while `forEach` and `size` still reported the real contents — the
+			// guard's verdict and every other view of the same object disagreeing is
+			// exactly the silent lie the sibling `arrayOf` was already hardened against.
+			const entries = readSetEntries(value)
+			if (!entries.success) return false
+			for (let index = 0; index < entries.value.length; index += 1) {
+				if (!elementGuard(entries.value[index])) {
 					return false
 				}
 			}
@@ -258,8 +344,17 @@ export function mapOf(
 			if (!isMap(value)) {
 				return false
 			}
-			for (const [key, entryValue] of value) {
-				if (!keyGuard(key) || !valueGuard(entryValue)) {
+			// The captured sweep, and each pair read POSITIONALLY: destructuring
+			// `[key, entryValue]` adds `Array.prototype[Symbol.iterator]` to the
+			// `Map.prototype[Symbol.iterator]` this already avoided, and a
+			// substituting iterator can replace one half of a pair while every
+			// downstream check still passes.
+			const entries = readMapEntries(value)
+			if (!entries.success) return false
+			for (let index = 0; index < entries.value.length; index += 1) {
+				const entry = entries.value[index]
+				if (entry === undefined) return false
+				if (!keyGuard(entry[0]) || !valueGuard(entry[1])) {
 					return false
 				}
 			}
@@ -315,62 +410,83 @@ export function recordOf<
 			? OptionalFromGuards<S, K>
 			: FromGuards<S>
 > {
-	const allowed = readValue(
-		() => {
-			const keys = new Set<string>()
-			for (const key of Reflect.ownKeys(shape)) {
-				if (isString(key)) keys.add(key)
-			}
-			return keys
-		},
-		'recordOf',
-		{ subject: 'shape' },
-	)
-	const optionalSet = readValue(
-		() =>
-			new Set<string>(
-				optional === true
-					? [...allowed]
-					: isArray(optional)
-						? optional.map((key) => String(key))
-						: [],
-			),
-		'recordOf',
-		{ subject: 'optional' },
-	)
+	return contain(() => {
+		// A null-prototype record plus its own key list, not a `Map`: this guard's
+		// declared-key population decides the answer it publishes, and
+		// `Map.prototype.has` / `.get` and Map iteration are three caller-writable
+		// members on that path. An own data key read by index dispatches through
+		// nothing.
+		const declared = readValue(
+			() => {
+				const members = INTRINSICS.members(shape)
+				const collected: Record<string, ((value: unknown) => boolean) | undefined> =
+					INTRINSICS.create(null)
+				const names: string[] = []
+				for (let index = 0; index < members.length; index += 1) {
+					const key = members[index]
+					if (!isString(key)) continue
+					if (!INTRINSICS.own(collected, key)) names[names.length] = key
+					collected[key] = shape[key]
+				}
+				return { collected, names, vocabulary: collectMembers(names) }
+			},
+			'recordOf',
+			{ subject: 'shape' },
+		)
+		const optionalKeys = readValue(
+			() => {
+				if (optional === true) return collectMembers(declared.names)
+				if (!INTRINSICS.array(optional)) return collectMembers([])
+				const entries = readArrayEntries(optional)
+				if (!entries.success) throw entries.error
+				if (!entries.value.dense) throw new INTRINSICS.error('Optional key list must be dense')
+				const keys = collectMembers([])
+				for (let index = 0; index < entries.value.entries.length; index += 1) {
+					admitMember(keys, INTRINSICS.text(entries.value.entries[index]))
+				}
+				return keys
+			},
+			'recordOf',
+			{ subject: 'optional' },
+		)
 
-	return (
-		value: unknown,
-	): value is K extends true
-		? Readonly<{ [P in keyof S]?: FromGuards<S>[P] }>
-		: K extends ReadonlyArray<keyof S & string>
-			? OptionalFromGuards<S, K>
-			: FromGuards<S> =>
-		holds(() => {
-			if (!isRecord(value)) {
-				return false
-			}
-			for (const key of Reflect.ownKeys(value)) {
-				if (isString(key) && !allowed.has(key)) {
+		return (
+			value: unknown,
+		): value is K extends true
+			? Readonly<{ [P in keyof S]?: FromGuards<S>[P] }>
+			: K extends ReadonlyArray<keyof S & string>
+				? OptionalFromGuards<S, K>
+				: FromGuards<S> =>
+			holds(() => {
+				if (!isRecord(value)) {
 					return false
 				}
-			}
-
-			for (const key of allowed) {
-				const present = Object.hasOwn(value, key)
-				if (!optionalSet.has(key) && !present) {
-					return false
-				}
-				if (present) {
-					const guard = shape[key]
-					if (guard === undefined || !guard(value[key])) {
+				const members = INTRINSICS.members(value)
+				for (let index = 0; index < members.length; index += 1) {
+					const key = members[index]
+					if (isString(key) && !matchesMember(declared.vocabulary, key)) {
 						return false
 					}
 				}
-			}
 
-			return true
-		})
+				for (let index = 0; index < declared.names.length; index += 1) {
+					const key = declared.names[index]
+					if (key === undefined) continue
+					const guard = declared.collected[key]
+					const present = INTRINSICS.own(value, key)
+					if (!matchesMember(optionalKeys, key) && !present) {
+						return false
+					}
+					if (present) {
+						if (guard === undefined || !guard(value[key])) {
+							return false
+						}
+					}
+				}
+
+				return true
+			})
+	}, 'recordOf')
 }
 
 /**
@@ -393,10 +509,16 @@ export function recordOf<
 export function keyOf<const O extends Readonly<Record<PropertyKey, unknown>>>(
 	value: O,
 ): Guard<keyof O> {
-	return (entry: unknown): entry is keyof O =>
-		holds(
-			() => (isString(entry) || isSymbol(entry) || isNumber(entry)) && Object.hasOwn(value, entry),
-		)
+	return contain(() => {
+		const keys = collectMembers(readValue(() => INTRINSICS.members(value), 'keyOf'))
+		return (entry: unknown): entry is keyof O =>
+			holds(
+				() =>
+					(isString(entry) && matchesMember(keys, entry)) ||
+					(isSymbol(entry) && matchesMember(keys, entry)) ||
+					(isNumber(entry) && matchesMember(keys, INTRINSICS.text(entry))),
+			)
+	}, 'keyOf')
 }
 
 /**
@@ -414,23 +536,40 @@ export function pickOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 	shape: S,
 	keys: K,
 ): Pick<S, K[number]> {
-	// Honest typing: the accumulator IS the picked-shape type, so every write is
-	// checked against `S[P]` — no `as` / `!` / `asserts`. The seed is a genuine
-	// null-prototype empty object, filled before any read.
-	const selected = readValue(() => Object.freeze([...keys]), 'pickOf', { subject: 'keys' })
-	return readValue(
-		() => {
-			const result: { [P in K[number]]: S[P] } = Object.create(null)
-			for (const key of selected) {
-				if (Object.prototype.hasOwnProperty.call(shape, key)) {
-					result[key] = shape[key]
+	return contain(() => {
+		// Sound over-approximation: only selected keys are defined on the genuine
+		// null-prototype accumulator; its mapped value slots remain checked against S.
+		const selected = readValue(
+			() => {
+				const entries = readArrayEntries(keys)
+				if (!entries.success) throw entries.error
+				if (!entries.value.dense) throw new INTRINSICS.error('Picked key list must be dense')
+				return collectMembers(entries.value.entries)
+			},
+			'pickOf',
+			{ subject: 'keys' },
+		)
+		return readValue(
+			() => {
+				const result: { [P in keyof S]: S[P] } = INTRINSICS.create(null)
+				const members = INTRINSICS.members(shape)
+				for (let index = 0; index < members.length; index += 1) {
+					const key = members[index]
+					if (isString(key) && matchesMember(selected, key)) {
+						INTRINSICS.define(result, key, {
+							value: shape[key],
+							enumerable: true,
+							configurable: true,
+							writable: true,
+						})
+					}
 				}
-			}
-			return result
-		},
-		'pickOf',
-		{ subject: 'shape' },
-	)
+				return result
+			},
+			'pickOf',
+			{ subject: 'shape' },
+		)
+	}, 'pickOf')
 }
 
 /**
@@ -448,26 +587,41 @@ export function omitOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 	shape: S,
 	keys: K,
 ): Omit<S, K[number]> {
-	const skipped = readValue(() => new Set<PropertyKey>(keys), 'omitOf', { subject: 'keys' })
-	// Sound over-approximation: only kept keys are written, so the value
-	// structurally satisfies `Omit<S, K[number]>`. Same honest typing as
-	// `pickOf` — no `as` / `!` / `asserts`.
-	return readValue(
-		() => {
-			const result: { [P in keyof S]: S[P] } = Object.create(null)
-			for (const key in shape) {
-				if (!Object.prototype.hasOwnProperty.call(shape, key)) {
-					continue
+	return contain(() => {
+		const skipped = readValue(
+			() => {
+				const entries = readArrayEntries(keys)
+				if (!entries.success) throw entries.error
+				if (!entries.value.dense) throw new INTRINSICS.error('Omitted key list must be dense')
+				return collectMembers(entries.value.entries)
+			},
+			'omitOf',
+			{ subject: 'keys' },
+		)
+		// Sound over-approximation: only kept keys are written, so the value
+		// structurally satisfies `Omit<S, K[number]>`. Same honest typing as
+		// `pickOf` — no `as` / `!` / `asserts`.
+		return readValue(
+			() => {
+				const result: { [P in keyof S]: S[P] } = INTRINSICS.create(null)
+				const members = INTRINSICS.members(shape)
+				for (let index = 0; index < members.length; index += 1) {
+					const key = members[index]
+					if (isString(key) && !matchesMember(skipped, key)) {
+						INTRINSICS.define(result, key, {
+							value: shape[key],
+							enumerable: true,
+							configurable: true,
+							writable: true,
+						})
+					}
 				}
-				if (!skipped.has(key)) {
-					result[key] = shape[key]
-				}
-			}
-			return result
-		},
-		'omitOf',
-		{ subject: 'shape' },
-	)
+				return result
+			},
+			'omitOf',
+			{ subject: 'shape' },
+		)
+	}, 'omitOf')
 }
 
 /**
@@ -514,7 +668,13 @@ export function orOf(
 	left: (value: unknown) => boolean,
 	right: (value: unknown) => boolean,
 ): Guard<unknown> {
-	return (value: unknown): value is unknown => holds(() => left(value) || right(value))
+	// Each member is contained SEPARATELY. One `holds` around the whole
+	// disjunction let a throwing member veto every later passing one, so
+	// `orOf(isNull, naive)(null)` was `true` and `orOf(naive, isNull)(null)` was
+	// `false` — the same disjunction, the same value, two answers. Disjunction is
+	// commutative by definition, and the package's own doctrine everywhere else
+	// is that a throw is contained as a NON-MATCH, not as a veto over siblings.
+	return (value: unknown): value is unknown => holds(() => left(value)) || holds(() => right(value))
 }
 
 /**
@@ -530,7 +690,11 @@ export function orOf(
  * ```
  */
 export function notOf(guard: (value: unknown) => boolean): Guard<unknown> {
-	return (value: unknown): value is unknown => holds(() => !guard(value))
+	// The negation is applied to the CONTAINED verdict, not contained around the
+	// negation. `holds(() => !guard(value))` never evaluated `!` when the guard
+	// threw, so a guard and its negation both reported a non-match for the same
+	// value and `orOf(g, notOf(g))` stopped being a tautology.
+	return (value: unknown): value is unknown => !holds(() => guard(value))
 }
 
 /**
@@ -548,8 +712,16 @@ export function complementOf<TBase, TExcluded extends TBase>(
 	base: Guard<TBase>,
 	excluded: Guard<TExcluded> | ((value: TBase) => value is TExcluded),
 ): Guard<Exclude<TBase, TExcluded>> {
+	// Two separate containments, for the reason `notOf` carries: a throwing
+	// EXCLUSION is a non-match, so the complement must PASS when the base passes.
+	// One containment around `base(value) && !excluded(value)` made a value fail
+	// both a guard and its complement.
 	return (value: unknown): value is Exclude<TBase, TExcluded> =>
-		holds(() => base(value) && !excluded(value))
+		holds(() => {
+			if (!base(value)) return false
+			const accepted = value
+			return !holds(() => excluded(accepted))
+		})
 }
 
 /**
@@ -566,7 +738,16 @@ export function unionOf<const Gs extends ReadonlyArray<Guard<unknown>>>(
 ): Guard<GuardType<Gs[number]>>
 export function unionOf(...predicates: ReadonlyArray<(value: unknown) => boolean>): Guard<unknown>
 export function unionOf(...guards: ReadonlyArray<(value: unknown) => boolean>): Guard<unknown> {
-	return (value: unknown): value is unknown => holds(() => guards.some((guard) => guard(value)))
+	// Per-member containment, exactly as its declared twin `orOf`: one `holds`
+	// around the whole loop made a throwing member erase every later passing one,
+	// so `unionOf(a, b)` and `unionOf(b, a)` answered differently for one value.
+	return (value: unknown): value is unknown => {
+		for (let index = 0; index < guards.length; index += 1) {
+			const guard = guards[index]
+			if (guard !== undefined && holds(() => guard(value))) return true
+		}
+		return false
+	}
 }
 
 /**
@@ -587,7 +768,20 @@ export function intersectionOf(
 export function intersectionOf(
 	...guards: ReadonlyArray<(value: unknown) => boolean>
 ): Guard<unknown> {
-	return (value: unknown): value is unknown => holds(() => guards.every((guard) => guard(value)))
+	return (value: unknown): value is unknown =>
+		holds(() => {
+			// Indexed, exactly as its declared twin `unionOf` twelve lines up. The
+			// ruling forbidding `Array.prototype.every` here was already stated 528
+			// lines earlier in this same file and applied to `literalOf`, and this
+			// statement was missed by the sweep that wrote it: `every` answering
+			// `true` for everything made this guard accept a value no constituent
+			// guard admits.
+			for (let index = 0; index < guards.length; index += 1) {
+				const guard = guards[index]
+				if (guard === undefined || !guard(value)) return false
+			}
+			return true
+		})
 }
 
 /**
@@ -743,15 +937,16 @@ export function boundsOf(min?: number, max?: number): Guard<number> {
  * ```
  */
 export function matchOf(pattern: RegExp): Guard<string> {
-	if (!isRegExp(pattern)) {
-		throw new ContractError('matchOf: pattern must be a RegExp', { code: 'pattern' })
-	}
-	const owned = readValue(
-		() => new RegExp(pattern.source, pattern.flags.replaceAll('g', '').replaceAll('y', '')),
-		'matchOf',
-		{ subject: 'pattern', code: 'pattern' },
-	)
-	return whereOf(isString, (value) => owned.test(value))
+	return contain(() => {
+		if (!isRegExp(pattern)) {
+			throw new ContractError('matchOf: pattern must be a RegExp', { code: 'pattern' })
+		}
+		const owned = readValue(() => readPattern(pattern), 'matchOf', {
+			subject: 'pattern',
+			code: 'pattern',
+		})
+		return whereOf(isString, (value) => matchesPattern(owned, value))
+	}, 'matchOf')
 }
 
 /**
@@ -785,29 +980,32 @@ export function stringOf(options?: {
 	max?: number
 	pattern?: RegExp
 }): Guard<string> {
-	const safe = readOptions(options, ['min', 'max', 'pattern'], 'stringOf', 'string')
-	const min = safe?.min
-	const max = safe?.max
-	const source = safe?.pattern
-	if (source !== undefined && !isRegExp(source)) {
-		throw new ContractError('stringOf: pattern must be a RegExp', { code: 'pattern' })
-	}
-	const pattern =
-		source === undefined
-			? undefined
-			: readValue(
-					() => new RegExp(source.source, source.flags.replaceAll('g', '').replaceAll('y', '')),
-					'stringOf',
-					{ subject: 'pattern', code: 'pattern', context: { shape: 'string' } },
-				)
-	if (min === undefined && max === undefined && pattern === undefined) {
-		return isString
-	}
-	const withinLength = boundsOf(min, max)
-	return whereOf(
-		isString,
-		(value) => withinLength(value.length) && (pattern === undefined || pattern.test(value)),
-	)
+	return contain(() => {
+		const safe = readOptions(options, ['min', 'max', 'pattern'], 'stringOf', 'string')
+		const min = safe?.min
+		const max = safe?.max
+		const source = safe?.pattern
+		if (source !== undefined && !isRegExp(source)) {
+			throw new ContractError('stringOf: pattern must be a RegExp', { code: 'pattern' })
+		}
+		const pattern =
+			source === undefined
+				? undefined
+				: readValue(() => readPattern(source), 'stringOf', {
+						subject: 'pattern',
+						code: 'pattern',
+						context: { shape: 'string' },
+					})
+		if (min === undefined && max === undefined && pattern === undefined) {
+			return isString
+		}
+		const withinLength = boundsOf(min, max)
+		return whereOf(
+			isString,
+			(value) =>
+				withinLength(value.length) && (pattern === undefined || matchesPattern(pattern, value)),
+		)
+	}, 'stringOf')
 }
 
 /**

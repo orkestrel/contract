@@ -1,19 +1,22 @@
-import type { Guard, JSONValue } from './types.js'
+import type { Guard, JSONValue, LiteralValue } from './types.js'
+import { INTRINSICS } from './constants.js'
 import type { FieldPath } from './types.js'
 import {
 	isArray,
-	isBoolean,
 	isFiniteNumber,
+	isLiteralValue,
 	isNull,
-	isNumber,
 	isObject,
 	isRecord,
 	isString,
 } from './validators.js'
 import {
 	attempt,
+	collectMembers,
+	contain,
 	holds,
 	matchesJSONValue,
+	matchesMember,
 	readArrayEntries,
 	readValue,
 	resolveField,
@@ -79,7 +82,7 @@ import {
  */
 export function parseString(value: unknown): string | undefined {
 	if (isString(value)) return value
-	if (isFiniteNumber(value)) return String(value)
+	if (isFiniteNumber(value)) return INTRINSICS.text(value)
 	return undefined
 }
 
@@ -103,14 +106,20 @@ export function parseString(value: unknown): string | undefined {
  */
 export function parseNumber(value: unknown): number | undefined {
 	if (typeof value === 'number') {
-		return Number.isFinite(value) ? value : undefined
+		return INTRINSICS.finite(value) ? value : undefined
 	}
-	if (isString(value)) {
+	if (!isString(value)) return undefined
+	// Total by containment at the door. `String.prototype.trim` is a
+	// caller-writable member reached by name, and this reader is documented to
+	// ANSWER `undefined`, never to throw — so the boundary belongs here, where it
+	// covers whatever the body reaches, rather than around the one dispatch
+	// somebody happened to notice.
+	const outcome = attempt(() => {
 		if (value.trim() === '') return undefined
-		const parsed = Number(value)
-		return Number.isFinite(parsed) ? parsed : undefined
-	}
-	return undefined
+		const parsed = INTRINSICS.numeric(value)
+		return INTRINSICS.finite(parsed) ? parsed : undefined
+	})
+	return outcome.success ? outcome.value : undefined
 }
 
 /**
@@ -132,7 +141,7 @@ export function parseNumber(value: unknown): number | undefined {
 export function parseInteger(value: unknown): number | undefined {
 	const parsed = parseNumber(value)
 	if (parsed === undefined) return undefined
-	return Number.isInteger(parsed) ? parsed : undefined
+	return INTRINSICS.integer(parsed) ? parsed : undefined
 }
 
 /**
@@ -191,8 +200,10 @@ export function parseNull(value: unknown): null | undefined {
  * @throws {ContractError} When an object value cannot be read
  */
 export function parseRecord(value: unknown): Record<string, unknown> | undefined {
-	if (isObject(value)) readValue(() => Object.values(value), 'parseRecord')
-	return isRecord(value) ? value : undefined
+	return contain(() => {
+		if (isObject(value)) readValue(() => INTRINSICS.values(value), 'parseRecord')
+		return isRecord(value) ? value : undefined
+	}, 'parseRecord')
 }
 
 /**
@@ -223,8 +234,12 @@ export function parseArray<T = unknown>(
 	if (!entries.success || !entries.value.dense) return undefined
 	if (
 		!holds(() => {
-			for (const entry of entries.value.entries) {
-				if (!guard(entry)) return false
+			// Indexed: the snapshot is an array this package built, and walking it
+			// through `Array.prototype[Symbol.iterator]` would let a replaced iterator
+			// decide which elements this parser ever guards.
+			const collected = entries.value.entries
+			for (let index = 0; index < collected.length; index += 1) {
+				if (!guard(collected[index])) return false
 			}
 			return true
 		})
@@ -257,11 +272,13 @@ export function parseArray<T = unknown>(
  * ```
  */
 export function parseJSONValue(value: unknown): JSONValue | undefined {
-	return readValue(
-		() => (matchesJSONValue(value, new WeakSet()) ? value : undefined),
-		'parseJSONValue',
-		{ context: { shape: 'json' } },
-	)
+	return contain(() => {
+		return readValue(
+			() => (matchesJSONValue(value, new INTRINSICS.weakSet()) ? value : undefined),
+			'parseJSONValue',
+			{ context: { shape: 'json' } },
+		)
+	}, 'parseJSONValue')
 }
 
 // === Enum parser
@@ -274,7 +291,8 @@ export function parseJSONValue(value: unknown): JSONValue | undefined {
  * `parseEnum ↔ literalOf(...allowed)` pairing covers every literal primitive
  * (string, number, or boolean), not only strings. Matching is identity, never
  * cross-type coercion: `parseEnum('1', [1])` stays `undefined`. The allowed
- * values are copied into an owned frozen `Set`; hostile iteration returns
+ * values are captured through their dense own-index view and copied into an
+ * owned `Set`; caller-defined iteration is ignored and unreadability returns
  * `undefined` rather than escaping.
  *
  * @param value - The value to parse
@@ -287,21 +305,28 @@ export function parseJSONValue(value: unknown): JSONValue | undefined {
  * parseEnum('z', ['a', 'b', 'c']) // undefined
  * ```
  */
-export function parseEnum<const T extends string | number | boolean>(
+export function parseEnum<const T extends LiteralValue>(
 	value: unknown,
 	allowed: readonly T[],
 ): T | undefined
 export function parseEnum(
 	value: unknown,
-	allowed: readonly (string | number | boolean)[],
-): string | number | boolean | undefined
+	allowed: readonly LiteralValue[],
+): LiteralValue | undefined
 export function parseEnum(
 	value: unknown,
-	allowed: readonly (string | number | boolean)[],
-): string | number | boolean | undefined {
-	const outcome = attempt(() => Object.freeze(new Set<unknown>(allowed)))
-	if (!outcome.success || !outcome.value.has(value)) return undefined
-	return isString(value) || isNumber(value) || isBoolean(value) ? value : undefined
+	allowed: readonly LiteralValue[],
+): LiteralValue | undefined {
+	const outcome = readArrayEntries(allowed)
+	if (!outcome.success || !outcome.value.dense) return undefined
+	// A parser answers `undefined`, never throws, so the vocabulary is built and
+	// consulted inside the never-throw boundary — and the membership question is
+	// asked through a module binding rather than any property, because a coercer
+	// that returns a value outside its own allowed list is the same silent lie the
+	// paired guard was answering: `Set.prototype.has = () => true` made
+	// `parseEnum('zzz', ['a', 'b'])` answer `'zzz'`.
+	if (!holds(() => matchesMember(collectMembers(outcome.value.entries), value))) return undefined
+	return isLiteralValue(value) ? value : undefined
 }
 
 // === Record-field parsers
@@ -440,7 +465,7 @@ export function parseArrayField<T = unknown>(
  * @param allowed - The permitted literal values
  * @returns The matched literal, or `undefined`
  */
-export function parseEnumField<const T extends string | number | boolean>(
+export function parseEnumField<const T extends LiteralValue>(
 	record: Record<string, unknown>,
 	path: FieldPath,
 	allowed: readonly T[],
@@ -490,7 +515,7 @@ export function parseJSONValueField(
  */
 export function parseJSON(value: string): unknown {
 	try {
-		return JSON.parse(value)
+		return INTRINSICS.decode(value)
 	} catch {
 		return undefined
 	}
@@ -520,11 +545,9 @@ export function parseJSON(value: string): unknown {
 export function parseJSONAs<T>(value: string, guard: Guard<T>): T | undefined {
 	const parsed = parseJSON(value)
 	if (parsed === undefined) return undefined
-	let result: T | undefined = undefined
-	holds(() => {
-		if (!guard(parsed)) return false
-		result = parsed
-		return true
-	})
-	return result
+	// The guard runs inside the shared result boundary rather than beside a `let`
+	// the callback assigns into: the narrowed value IS the callback's answer, so
+	// it is returned rather than ferried out of the branch that proved it.
+	const checked = attempt(() => (guard(parsed) ? parsed : undefined))
+	return checked.success ? checked.value : undefined
 }

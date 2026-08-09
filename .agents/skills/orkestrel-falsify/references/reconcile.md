@@ -5,6 +5,9 @@ decision, and it is not delegable.
 
 ## Reproduce before you act
 
+The rule beneath this whole section: **run it rather than argue it.** Every judgement below is
+cheap once the probe exists and unreliable until it does.
+
 An auditor's finding is a **hypothesis** until the orchestrator has run it. Reproduce every sharp
 claim by hand, against the built output, before it enters a fix brief.
 
@@ -137,7 +140,9 @@ outruns its evidence.
 
 ## The threshold
 
-Accept when a round returns **nothing it can substantiate**. Not a short list. Not green gates.
+Accept when the brief's claims are **satisfied on evidence** — the `PASS` terminal line the skill
+defines, against a claim set that covers what the subject owns. Not green gates.
 
 A round that finds something is the process working. The only bad round is the one that finds
-nothing because nobody tried.
+nothing because nobody tried — and the only unfinishable one is the round re-run because an attack
+can still be imagined. Bound the claim set at the brief, rule on what it returned, and close.

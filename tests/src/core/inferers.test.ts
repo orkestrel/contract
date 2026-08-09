@@ -1,10 +1,19 @@
+import type { JSONSchema } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
 	attempt,
+	buildSampleMemo,
 	canonicalizeValue,
 	canonicalStringify,
+	classifyFormat,
 	compileSchema,
+	compileGuard,
+	encodeLeaf,
+	inferArray,
+	inferObject,
 	inferPrimitiveEnum,
+	inferRecordSamples,
+	inferSamples,
 	integerShape,
 	INFER_BREADTH_LIMIT,
 	INFER_DEPTH_LIMIT,
@@ -16,6 +25,7 @@ import {
 	samplesToFormat,
 	samplesToSchema,
 	schemaToObject,
+	schemaToShape,
 	schemaToParameters,
 	stringShape,
 	stringToFormat,
@@ -29,10 +39,15 @@ import {
 	captureContractError,
 	createClassInstance,
 	createHostileKeys,
+	createNativeMaximumSparseArray,
 	createRevokedArrayProxy,
 	createThrowingGetter,
+	createThrowingPrototype,
+	NullBaseDeclaration,
+	replaceIntrinsic,
 	SOUNDNESS_SAMPLE,
 } from '../../setup.js'
+import { createForeignPrototype } from '../../setupServer.js'
 
 describe('valueToSchema — leaf kinds', () => {
 	it('infers null', () => {
@@ -174,8 +189,12 @@ describe('valueToSchema — objects', () => {
 	})
 
 	it('carries inherited and non-enumerable inference options', () => {
-		const prototype: { format?: boolean } = Object.create(null)
-		prototype.format = true
+		const prototype = createForeignPrototype()
+		Object.defineProperty(prototype, 'format', {
+			value: true,
+			enumerable: true,
+			configurable: true,
+		})
 		const inherited: { readonly format?: boolean } = Object.create(prototype)
 		const hidden: { readonly enum?: boolean } = {}
 		Object.defineProperty(hidden, 'enum', { value: true, enumerable: false })
@@ -471,6 +490,64 @@ describe('stringToFormat — direct classification', () => {
 		// A UUID's hex layout never matches the other patterns, but precedence
 		// still checks uuid first per the fixed classification order.
 		expect(stringToFormat('550e8400-e29b-41d4-a716-446655440000')).toBe('uuid')
+	})
+
+	it('accepts real leap dates and rejects normalized calendar overflow', () => {
+		expect(stringToFormat('2024-02-29')).toBe('date')
+		expect(stringToFormat('2000-02-29')).toBe('date')
+		expect(stringToFormat('2023-02-29')).toBeUndefined()
+		expect(stringToFormat('1900-02-29')).toBeUndefined()
+		expect(stringToFormat('2024-04-31')).toBeUndefined()
+		expect(stringToFormat('2024-02-30')).toBeUndefined()
+		expect(stringToFormat('2024-02-30T00:00:00Z')).toBeUndefined()
+	})
+
+	it('rejects normalized hour 24 while retaining the valid clock boundary', () => {
+		expect(stringToFormat('2024-01-15T23:59:59Z')).toBe('date-time')
+		expect(stringToFormat('2024-01-15T24:00:00Z')).toBeUndefined()
+	})
+
+	it('keeps format classification on the complete ISO grammar', () => {
+		expect(stringToFormat('2024-01-15T23:59:59.123Z')).toBe('date-time')
+		expect(stringToFormat('2024-01-15T23:59:59+23:59')).toBe('date-time')
+		expect(stringToFormat('2024-01-15T23:59:59-23:59')).toBe('date-time')
+		expect(stringToFormat('2024-01-15T24:00Z')).toBeUndefined()
+		expect(stringToFormat('2024-01-15 24:00:00Z')).toBeUndefined()
+		expect(stringToFormat('2024-01-15t24:00:00z')).toBeUndefined()
+		expect(stringToFormat('2024-01-15junk')).toBeUndefined()
+	})
+
+	it('returns undefined for runtime non-strings without inspecting or coercing them', () => {
+		const accesses: PropertyKey[] = []
+		const poisoned = new Proxy(
+			{},
+			{
+				get(_target, property) {
+					accesses.push(property)
+					throw new Error('format coercion')
+				},
+			},
+		)
+		const revoked = Proxy.revocable({}, {})
+		revoked.revoke()
+		const values: readonly unknown[] = [
+			undefined,
+			null,
+			false,
+			0,
+			42n,
+			Symbol('format'),
+			{},
+			[],
+			() => 'date',
+			poisoned,
+			revoked.proxy,
+		]
+
+		for (const value of values) {
+			expect(Reflect.apply(stringToFormat, undefined, [value])).toBeUndefined()
+		}
+		expect(accesses).toEqual([])
 	})
 })
 
@@ -947,15 +1024,24 @@ describe('stringToFormat — length bound (C5)', () => {
 	})
 })
 
-describe('valueToSchema — sparse arrays (C7)', () => {
-	it('emits a valid items schema (no undefined/null anyOf member) for a sparse array', () => {
+describe('valueToSchema — sparse arrays (C7, H10-C)', () => {
+	it('widens a sparse array to {} so the emitted schema accepts its own source', () => {
+		// Red before green: this emitted `{"type":"array","items":{"anyOf":[{"type":
+		// "integer"},{}]}}`, and the guard compiled from that schema answered FALSE
+		// for the very array it was inferred from — the one direction the round-trip
+		// law forbids. A hole is an absent own property everywhere else in the
+		// package, so a non-dense array has no JSON expression and widens.
 		const sparse = [1, undefined, 3]
 		delete sparse[1]
-		const schema = valueToSchema(sparse)
-		expect(schema).toEqual({
-			type: 'array',
-			items: { anyOf: [{ type: 'integer' }, {}] },
-		})
+
+		expect(valueToSchema(sparse)).toEqual({})
+		expect(compileGuard(schemaToShape(valueToSchema(sparse)))(sparse)).toBe(true)
+		expect(compileGuard(schemaToShape(valueToSchema({ rows: sparse })))({ rows: sparse })).toBe(
+			true,
+		)
+		// The dense control must still infer a real array schema and still round-trip.
+		expect(valueToSchema([1, 3])).toEqual({ type: 'array', items: { type: 'integer' } })
+		expect(compileGuard(schemaToShape(valueToSchema([1, 3])))([1, 3])).toBe(true)
 	})
 })
 
@@ -993,6 +1079,70 @@ describe('unifySchemas — direct', () => {
 		const second = unifySchemas([{ type: 'null' }, { type: 'boolean' }, { type: 'string' }])
 		expect(JSON.stringify(first)).toBe(JSON.stringify(second))
 		expect(first.anyOf).toHaveLength(3)
+	})
+
+	it.each([
+		['number', 42],
+		['null', null],
+		['callable', () => undefined],
+		['mixed valid and invalid', [{ type: 'string' }, 42]],
+	])('rejects a runtime-invalid %s member', (_label, member) => {
+		const schemas = Array.isArray(member) ? member : [member]
+		const error = captureContractError(() => Reflect.apply(unifySchemas, undefined, [schemas]))
+
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('unifySchemas: schemas could not be read')
+	})
+
+	it('accepts ordinary, null-prototype, and realm-shaped plain records deterministically', () => {
+		const ordinary = { type: 'string' }
+		const nullPrototype: Record<string, unknown> = Object.create(null)
+		nullPrototype.type = 'boolean'
+		const foreignPlain: Record<string, unknown> = Object.create(createForeignPrototype())
+		foreignPlain.type = 'null'
+		const schemas = [ordinary, nullPrototype, foreignPlain]
+
+		const first = Reflect.apply(unifySchemas, undefined, [schemas])
+		const second = Reflect.apply(unifySchemas, undefined, [[foreignPlain, ordinary, nullPrototype]])
+		expect(first).toEqual(second)
+		expect(first).toEqual({
+			anyOf: [{ type: 'boolean' }, { type: 'null' }, { type: 'string' }],
+		})
+	})
+})
+
+describe('encodeLeaf — the leaf half of canonicalizeValue', () => {
+	it('answers JSON’s own encoding for a leaf and undefined where JSON has none', () => {
+		// Shipped public with no test of its own. The contract is JSON's, not this
+		// package's: whatever `JSON.stringify` returns for a non-container.
+		expect(encodeLeaf('hi')).toBe('"hi"')
+		expect(encodeLeaf(42)).toBe('42')
+		expect(encodeLeaf(true)).toBe('true')
+		expect(encodeLeaf(null)).toBe('null')
+		// A non-finite number has no JSON number form, so JSON writes `null` — a
+		// string result, which is why it is a canonical KEY rather than an absence.
+		expect(encodeLeaf(Number.NaN)).toBe('null')
+		expect(encodeLeaf(Number.POSITIVE_INFINITY)).toBe('null')
+		expect(encodeLeaf(-0)).toBe('0')
+
+		// The three values `JSON.stringify` itself answers `undefined` for.
+		expect(encodeLeaf(undefined)).toBeUndefined()
+		expect(encodeLeaf(() => 1)).toBeUndefined()
+		expect(encodeLeaf(Symbol('s'))).toBeUndefined()
+	})
+
+	it('refuses a bigint BEFORE the call instead of through it', () => {
+		// `JSON.stringify(1n)` throws a TypeError. The guard is what keeps this a
+		// total leaf encoder rather than one that raises on a JSON-inexpressible
+		// primitive its siblings answer for.
+		expect(encodeLeaf(10n)).toBeUndefined()
+		expect(attempt(() => JSON.stringify(10n)).success).toBe(false)
+	})
+
+	it('keeps a toJSON member’s ordinary meaning for a non-record object', () => {
+		const date = new Date('2024-01-15T10:30:00Z')
+		expect(encodeLeaf(date)).toBe('"2024-01-15T10:30:00.000Z"')
+		expect(encodeLeaf(new Map([['a', 1]]))).toBe('{}')
 	})
 })
 
@@ -1077,6 +1227,45 @@ describe('canonicalStringify — encoding and read refusal', () => {
 })
 
 describe('canonicalizeValue — direct', () => {
+	it('contains failed record classification at the direct and public reader boundaries', () => {
+		const sentinel = new Error('prototype read')
+
+		const direct = captureContractError(() =>
+			canonicalizeValue(createThrowingPrototype(sentinel), new WeakSet()),
+		)
+		expect(direct.code).toBe('structure')
+		expect(direct.message).toBe('canonicalizeValue: value could not be read')
+		expect(direct.cause).toBe(sentinel)
+
+		const outer = captureContractError(() => canonicalStringify(createThrowingPrototype(sentinel)))
+		expect(outer.code).toBe('structure')
+		expect(outer.message).toBe('canonicalStringify: value could not be read')
+		expect(isContractError(outer.cause)).toBe(true)
+		if (!isContractError(outer.cause)) throw new Error('expected the contained canonicalize error')
+		expect(outer.cause.message).toBe('canonicalizeValue: value could not be read')
+		expect(outer.cause.cause).toBe(sentinel)
+	})
+
+	it('sorts readable record realms but leaves readable exotics on native JSON fallback', () => {
+		const realmRecord = Object.create(createForeignPrototype())
+		Reflect.set(realmRecord, 'b', 1)
+		Reflect.set(realmRecord, 'a', 2)
+		class Exotic {
+			readonly b = 1
+			readonly a = 2
+		}
+
+		expect(canonicalizeValue(realmRecord, new WeakSet())).toBe('{"a":2,"b":1}')
+		expect(canonicalizeValue(new Exotic(), new WeakSet())).toBe('{"b":1,"a":2}')
+		// A class whose prototype a caller reparented to `null` is an exotic too:
+		// the shared record brand refuses it, so it keeps declaration order
+		// instead of being canonicalized as a plain record.
+		expect(canonicalizeValue(new NullBaseDeclaration(), new WeakSet())).toBe(
+			'{"type":"string","min":1}',
+		)
+		expect(canonicalizeValue(new Map([['b', 1]]), new WeakSet())).toBe('{}')
+	})
+
 	it('refuses hostile traversal at the direct recursive export', () => {
 		const error = captureContractError(() => canonicalizeValue(createHostileKeys(), new WeakSet()))
 
@@ -1107,6 +1296,26 @@ describe('canonicalizeValue — direct', () => {
 })
 
 describe('unifySchemas / inferPrimitiveEnum — un-canonicalizable members', () => {
+	it('propagates a classification failure reached after the consumer record gate', () => {
+		const sentinel = new Error('second prototype read')
+		let reads = 0
+		const schema = new Proxy({ type: 'string' } satisfies JSONSchema, {
+			getPrototypeOf(target) {
+				reads += 1
+				if (reads === 2) throw sentinel
+				return Reflect.getPrototypeOf(target)
+			},
+		})
+
+		const error = captureContractError(() => unifySchemas([schema]))
+		expect(reads).toBe(2)
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('unifySchemas: schemas could not be read')
+		expect(isContractError(error.cause)).toBe(true)
+		if (!isContractError(error.cause)) throw new Error('expected the canonical stringify error')
+		expect(error.cause.message).toBe('canonicalStringify: value could not be read')
+	})
+
 	it('keeps an un-canonicalizable member in the union instead of dropping it (never narrows)', () => {
 		const cyclic: Record<string, unknown> = { type: 'object' }
 		cyclic.self = cyclic
@@ -1147,6 +1356,52 @@ describe('isValidISOInstant — direct', () => {
 
 	it('returns false for an impossible date', () => {
 		expect(isValidISOInstant('2020-13-45')).toBe(false)
+	})
+
+	it('accepts real leap dates and rejects normalized calendar overflow', () => {
+		expect(isValidISOInstant('2024-02-29')).toBe(true)
+		expect(isValidISOInstant('2000-02-29')).toBe(true)
+		expect(isValidISOInstant('2023-02-29')).toBe(false)
+		expect(isValidISOInstant('1900-02-29')).toBe(false)
+		expect(isValidISOInstant('2024-04-31')).toBe(false)
+		expect(isValidISOInstant('2024-02-30')).toBe(false)
+		expect(isValidISOInstant('2024-02-30T00:00:00Z')).toBe(false)
+	})
+
+	it('rejects normalized hour 24 while retaining the valid clock boundary', () => {
+		expect(isValidISOInstant('2024-01-15T23:59:59Z')).toBe(true)
+		expect(isValidISOInstant('2024-01-15T24:00:00Z')).toBe(false)
+	})
+
+	it('accepts the complete date and offset date-time grammar', () => {
+		expect(isValidISOInstant('2024-01-15')).toBe(true)
+		expect(isValidISOInstant('2024-01-15T23:59:59Z')).toBe(true)
+		expect(isValidISOInstant('2024-01-15T23:59:59.123Z')).toBe(true)
+		expect(isValidISOInstant('2024-01-15T23:59:59+23:59')).toBe(true)
+		expect(isValidISOInstant('2024-01-15T23:59:59-23:59')).toBe(true)
+	})
+
+	it('rejects incomplete clocks instead of validating only the date prefix', () => {
+		expect(isValidISOInstant('2024-01-15T24:00Z')).toBe(false)
+		expect(isValidISOInstant('2024-01-15T23:59Z')).toBe(false)
+	})
+
+	it('rejects space and lowercase separators instead of validating only the date prefix', () => {
+		expect(isValidISOInstant('2024-01-15 24:00:00Z')).toBe(false)
+		expect(isValidISOInstant('2024-01-15t24:00:00z')).toBe(false)
+	})
+
+	it('rejects a junk suffix instead of validating only the date prefix', () => {
+		expect(isValidISOInstant('2024-01-15junk')).toBe(false)
+		expect(isValidISOInstant('2024-01-15T00:00:00Zjunk')).toBe(false)
+	})
+
+	it('rejects complete clock and offset boundaries outside the supported range', () => {
+		expect(isValidISOInstant('2024-01-15T24:00:00Z')).toBe(false)
+		expect(isValidISOInstant('2024-01-15T23:60:00Z')).toBe(false)
+		expect(isValidISOInstant('2024-01-15T23:59:60Z')).toBe(false)
+		expect(isValidISOInstant('2024-01-15T23:59:59+24:00')).toBe(false)
+		expect(isValidISOInstant('2024-01-15T23:59:59+23:60')).toBe(false)
 	})
 
 	it('is total (never throws) for a hostile string', () => {
@@ -1322,5 +1577,597 @@ describe('valueToSchema — Date leaf at the depth boundary under format: true',
 describe('samplesToFormat — single-sample unanimity', () => {
 	it('classifies a single-element date list', () => {
 		expect(samplesToFormat(['2024-01-01'])).toBe('date')
+	})
+})
+
+describe('caller-owned inference arrays', () => {
+	it('inferArray samples only a native-maximum sparse prefix without source index reads', () => {
+		const fixture = createNativeMaximumSparseArray<unknown>()
+		const schema = inferArray(fixture.value, 8, 3, true, false, new WeakSet(), new WeakMap())
+		const fallback = inferArray(
+			fixture.value,
+			8,
+			Infinity,
+			true,
+			false,
+			new WeakSet(),
+			new WeakMap(),
+		)
+
+		// A non-dense source has no JSON expression, so it widens rather than being
+		// read as a list of present `undefined` leaves — and the walk still performs
+		// no index read on the source.
+		expect(schema).toEqual({})
+		expect(fallback).toEqual({})
+		expect(fixture.probes).toEqual([])
+
+		const sparse = [1, undefined, 3]
+		Reflect.deleteProperty(sparse, '1')
+		expect(inferArray(sparse, 8, 3, true, false, new WeakSet(), new WeakMap())).toEqual({})
+		// The dense control at the same door still samples and still unifies.
+		expect(inferArray([1, 'x'], 8, 3, true, false, new WeakSet(), new WeakMap())).toEqual({
+			type: 'array',
+			items: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
+		})
+	})
+
+	it('normalizes an invalid fractional breadth through the shared fallback', () => {
+		const values = [1, 'value', true, null]
+		const expected = inferArray(
+			values,
+			INFER_DEPTH_LIMIT,
+			INFER_BREADTH_LIMIT,
+			true,
+			false,
+			new WeakSet(),
+			new WeakMap(),
+		)
+
+		// Anchored to a literal, not only to the canonical call's own answer: two
+		// calls agreeing on a degenerate `{}` would satisfy an equality alone, and
+		// this row is about the fractional budget being normalized rather than
+		// about both budgets failing identically.
+		expect(expected).toEqual({
+			type: 'array',
+			items: {
+				anyOf: [{ type: 'boolean' }, { type: 'integer' }, { type: 'null' }, { type: 'string' }],
+			},
+		})
+		expect(
+			inferArray(values, INFER_DEPTH_LIMIT, 2.5, true, false, new WeakSet(), new WeakMap()),
+		).toEqual(expected)
+	})
+
+	it('bounds an infinite direct breadth before a hostile child', () => {
+		// The list is DENSE. Built with `new Array(INFER_BREADTH_LIMIT + 1)` it was
+		// sparse, so both calls answered `{}` for sparseness and the hostile child
+		// at the last index was never reached by either — the row compared one
+		// degenerate answer with another and could not have failed if the budget
+		// were ignored.
+		const values: unknown[] = []
+		for (let index = 0; index < INFER_BREADTH_LIMIT; index += 1) values[index] = 1
+		values[INFER_BREADTH_LIMIT] = new Proxy([], {
+			get() {
+				throw new Error('breadth exceeded')
+			},
+		})
+		const expected = inferArray(
+			values,
+			INFER_DEPTH_LIMIT,
+			INFER_BREADTH_LIMIT,
+			true,
+			false,
+			new WeakSet(),
+			new WeakMap(),
+		)
+
+		// The canonical budget stops one element short of the hostile child, so the
+		// answer is a real schema rather than an abandonment.
+		expect(expected).toEqual({ type: 'array', items: { type: 'integer' } })
+		expect(
+			inferArray(values, INFER_DEPTH_LIMIT, Infinity, true, false, new WeakSet(), new WeakMap()),
+		).toEqual(expected)
+	})
+
+	it('bounds an infinite direct depth before a hostile descendant', () => {
+		const hostile = new Proxy([], {
+			get() {
+				throw new Error('depth exceeded')
+			},
+		})
+		let values: readonly unknown[] = [hostile]
+		for (let level = 0; level < INFER_DEPTH_LIMIT; level += 1) values = [values]
+		const expected = inferArray(
+			values,
+			INFER_DEPTH_LIMIT,
+			1,
+			true,
+			false,
+			new WeakSet(),
+			new WeakMap(),
+		)
+
+		// The canonical budget produces a real nested schema rather than an
+		// abandonment, so the equality below is about the infinite budget being
+		// normalized and not about both calls giving up in the same way.
+		expect(expected).not.toEqual({})
+		expect(expected.type).toBe('array')
+		expect(inferArray(values, Infinity, 1, true, false, new WeakSet(), new WeakMap())).toEqual(
+			expected,
+		)
+	})
+
+	it('inferArray refuses split membership', () => {
+		const split = new Proxy([1, 2], {
+			ownKeys() {
+				return ['0', 'length']
+			},
+			getOwnPropertyDescriptor(target, property) {
+				return property === '0' ? undefined : Reflect.getOwnPropertyDescriptor(target, property)
+			},
+		})
+		const error = captureContractError(() =>
+			inferArray(split, 8, 8, true, false, new WeakSet(), new WeakMap()),
+		)
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('inferArray: value could not be read')
+	})
+
+	it('inferArray refuses canonical indices outside advertised length', () => {
+		const shortened = new Proxy([1, 2], {
+			get(target, property, receiver) {
+				return property === 'length' ? 1 : Reflect.get(target, property, receiver)
+			},
+		})
+
+		const error = captureContractError(() =>
+			inferArray(shortened, 8, 8, true, false, new WeakSet(), new WeakMap()),
+		)
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('inferArray: value could not be read')
+	})
+
+	it('unifySchemas ignores caller iteration and keeps every indexed schema', () => {
+		const schemas: JSONSchema[] = [{ type: 'string' }, { type: 'boolean' }]
+		const substituted: JSONSchema[] = [{ type: 'string' }]
+		Object.defineProperty(schemas, Symbol.iterator, {
+			value: substituted[Symbol.iterator].bind(substituted),
+		})
+
+		expect(unifySchemas(schemas)).toEqual({
+			anyOf: [{ type: 'boolean' }, { type: 'string' }],
+		})
+	})
+
+	it('samplesToFormat ignores contradictory membership for indexed strings', () => {
+		const values = new Proxy(['2024-01-01', '2024-02-02'], {
+			has() {
+				return false
+			},
+		})
+
+		expect(samplesToFormat(values)).toBe('date')
+	})
+
+	it('inferPrimitiveEnum does not narrow away mixed indexed primitives through has', () => {
+		const values = new Proxy(['a', 'a', true], {
+			has() {
+				return false
+			},
+		})
+
+		expect(inferPrimitiveEnum(values, INFER_ENUM_LIMIT)).toBeUndefined()
+	})
+
+	it('inferSamples keeps every indexed sample despite contradictory membership', () => {
+		const samples = new Proxy([1, true], {
+			has() {
+				return false
+			},
+		})
+
+		expect(inferSamples(samples, 8, 8, true, false, false, buildSampleMemo())).toEqual({
+			anyOf: [{ type: 'boolean' }, { type: 'integer' }],
+		})
+	})
+
+	it('samplesToSchema keeps every indexed sample despite contradictory membership', () => {
+		const samples = new Proxy([1, 2, 3], {
+			has() {
+				return false
+			},
+		})
+
+		expect(samplesToSchema(samples)).toEqual({ type: 'integer' })
+	})
+
+	it('samplesToSchema ignores an iterator that hides indexed record rows', () => {
+		const samples = [{ a: 1 }, { b: 'value' }]
+		const substituted = [samples[0]]
+		Object.defineProperty(samples, Symbol.iterator, {
+			value: substituted[Symbol.iterator].bind(substituted),
+		})
+
+		expect(samplesToSchema(samples)).toEqual({
+			type: 'object',
+			properties: { a: { type: 'integer' }, b: { type: 'string' } },
+			additionalProperties: false,
+		})
+	})
+
+	it('inferRecordSamples ignores an iterator that hides indexed rows', () => {
+		const samples = [{ a: 1 }, { b: 'value' }]
+		const substituted = [samples[0]]
+		Object.defineProperty(samples, Symbol.iterator, {
+			value: substituted[Symbol.iterator].bind(substituted),
+		})
+
+		expect(inferRecordSamples(samples, 8, 8, true, false, false, buildSampleMemo())).toEqual({
+			type: 'object',
+			properties: { a: { type: 'integer' }, b: { type: 'string' } },
+			additionalProperties: false,
+		})
+	})
+
+	it('refuses sparse schema and record populations through their existing read boundaries', () => {
+		const schemas: JSONSchema[] = []
+		schemas.length = 2
+		schemas[0] = { type: 'string' }
+		const schemaError = captureContractError(() => unifySchemas(schemas))
+		expect(schemaError.code).toBe('structure')
+		expect(schemaError.message).toBe('unifySchemas: schemas could not be read')
+
+		const rows: Record<string, unknown>[] = []
+		rows.length = 2
+		rows[0] = { value: 1 }
+		const rowError = captureContractError(() =>
+			inferRecordSamples(rows, 8, 8, true, false, false, buildSampleMemo()),
+		)
+		expect(rowError.code).toBe('structure')
+		// A HOLE is readable — every advertised read succeeded — so the refusal is
+		// true but its old diagnosis was not. The guide attributes `could not be
+		// read` to "a hostile getter or failed key walk"; a hole is neither.
+		expect(rowError.message).toBe('inferRecordSamples: samples must be a dense array')
+	})
+
+	it('performs no sample-container read when record depth is exhausted', () => {
+		let reads = 0
+		const rows = new Proxy([{ value: 1 }], {
+			get() {
+				reads += 1
+				throw new Error('sample read')
+			},
+			getOwnPropertyDescriptor() {
+				reads += 1
+				throw new Error('sample descriptor')
+			},
+			has() {
+				reads += 1
+				throw new Error('sample membership')
+			},
+			ownKeys() {
+				reads += 1
+				throw new Error('sample keys')
+			},
+		})
+
+		expect(inferRecordSamples(rows, 0, 8, true, false, false, buildSampleMemo())).toEqual({})
+		expect(inferRecordSamples(rows, -1, 8, true, false, false, buildSampleMemo())).toEqual({})
+		expect(reads).toBe(0)
+
+		const error = captureContractError(() =>
+			inferRecordSamples(rows, 1, 8, true, false, false, buildSampleMemo()),
+		)
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('inferRecordSamples: samples could not be read')
+		expect(reads).toBeGreaterThan(0)
+	})
+})
+
+describe('classifyFormat', () => {
+	// The pattern-only classifier `stringToFormat` delegates to once a candidate
+	// is inside the length bound. It was shipped public and untested.
+	it('classifies each supported format', () => {
+		expect(classifyFormat('123e4567-e89b-12d3-a456-426614174000')).toBe('uuid')
+		expect(classifyFormat('2024-01-15T10:30:00Z')).toBe('date-time')
+		expect(classifyFormat('2024-01-15T10:30:00.500+02:00')).toBe('date-time')
+		expect(classifyFormat('2024-01-15')).toBe('date')
+		expect(classifyFormat('10:30:00Z')).toBe('time')
+		expect(classifyFormat('ada@example.com')).toBe('email')
+		expect(classifyFormat('https://example.com/a')).toBe('uri')
+	})
+
+	it('answers undefined for text that matches no format', () => {
+		expect(classifyFormat('')).toBeUndefined()
+		expect(classifyFormat('plain text')).toBeUndefined()
+		expect(classifyFormat('123e4567-e89b-12d3-a456')).toBeUndefined()
+	})
+
+	it('rejects a well-formed but calendar-invalid instant', () => {
+		expect(classifyFormat('2024-02-31')).toBeUndefined()
+		expect(classifyFormat('2024-13-01T00:00:00Z')).toBeUndefined()
+	})
+
+	it('agrees with stringToFormat inside the length bound', () => {
+		const samples = ['2024-01-15', 'ada@example.com', 'https://example.com/a', 'plain']
+		for (const sample of samples) {
+			expect(classifyFormat(sample)).toBe(stringToFormat(sample))
+		}
+	})
+})
+
+describe('inference publishes its own answer under a lying publication walk', () => {
+	// Every emitted schema is ordered and assembled through array operations the
+	// caller can rewrite. A `sort` that empties its receiver TRUNCATED a published
+	// schema and a substituted `map` replaced one wholesale, both silently.
+	function emptySort(this: unknown[]): unknown[] {
+		this.length = 0
+		return this
+	}
+
+	it('valueToSchema publishes every property while Array.prototype.sort empties', () => {
+		const published = replaceIntrinsic(Array.prototype, 'sort', emptySort, () =>
+			valueToSchema({ b: 1, a: 2 }),
+		)
+
+		expect(published).toEqual({
+			type: 'object',
+			properties: { a: { type: 'integer' }, b: { type: 'integer' } },
+			required: ['a', 'b'],
+			additionalProperties: false,
+		})
+	})
+
+	it('valueToSchema publishes its own items while Array.prototype.map lies', () => {
+		const lie = (): readonly string[] => ['INJECTED']
+		const published = replaceIntrinsic(Array.prototype, 'map', lie, () =>
+			valueToSchema({ a: [1, 2] }),
+		)
+
+		expect(JSON.stringify(published)).not.toContain('INJECTED')
+	})
+
+	it('samplesToSchema publishes every sampled key while Array.prototype.sort empties', () => {
+		const published = replaceIntrinsic(Array.prototype, 'sort', emptySort, () =>
+			samplesToSchema([
+				{ b: 1, a: 2 },
+				{ b: 3, a: 4 },
+			]),
+		)
+
+		expect(JSON.stringify(published)).toContain('"a"')
+		expect(JSON.stringify(published)).toContain('"b"')
+	})
+
+	it('unifySchemas publishes its own members while Array.prototype.sort empties', () => {
+		const published = replaceIntrinsic(Array.prototype, 'sort', emptySort, () =>
+			unifySchemas([{ type: 'string' }, { type: 'boolean' }]),
+		)
+
+		expect(published).toEqual({ anyOf: [{ type: 'boolean' }, { type: 'string' }] })
+	})
+
+	it('canonicalStringify publishes a marker-free key while the array iterator injects', () => {
+		function* injectLeading(this: readonly unknown[]): Generator<unknown> {
+			yield 'INJECTED'
+			for (let index = 0; index < this.length; index += 1) yield this[index]
+		}
+		const published = replaceIntrinsic(Array.prototype, Symbol.iterator, injectLeading, () =>
+			attempt(() => canonicalStringify({ a: [1, 2] })),
+		)
+
+		expect(published.success).toBe(true)
+		expect(published.success ? String(published.value) : '').not.toContain('INJECTED')
+	})
+
+	it('inferPrimitiveEnum publishes its own vocabulary while Set.prototype.has answers true', () => {
+		const answerTrue = (): boolean => true
+		const published = replaceIntrinsic(Set.prototype, 'has', answerTrue, () =>
+			inferPrimitiveEnum(['b', 'a', 'b'], INFER_ENUM_LIMIT),
+		)
+
+		expect(published).toEqual({ enum: ['a', 'b'] })
+	})
+})
+
+describe('samplesToSchema — bounded work on shared references (H9, H10-B)', () => {
+	// MEMBERSHIP RULE of the instrument below: a slot whose collected values are
+	// MORE THAN ONE row. The H9 instrument drew every case from `owned.length ===
+	// 1`, which was exactly the population its own fix handled, so it certified a
+	// memo that covered one row and missed every multi-row slot — the shape this
+	// door exists for. Each case here is drawn from OUTSIDE that population, and
+	// the one-row case is kept only as the inside-the-population control.
+	it('reads a shared leaf a bounded number of times for a MULTI-ROW slot', () => {
+		// Red before green: `samplesToSchema([{id:1,detail:c},{id:2,detail:c}])` over
+		// an 18-level shared-child DAG took 6.5 s and read the shared leaf 32,768
+		// times at 14 levels, because the memo keyed only the one-row slot.
+		let reads = 0
+		const leaf: Record<string, unknown> = {}
+		Object.defineProperty(leaf, 'v', {
+			enumerable: true,
+			get() {
+				reads += 1
+				return 1
+			},
+		})
+		let node: unknown = leaf
+		for (let index = 0; index < 18; index += 1) node = { a: node, b: node }
+
+		// Outside the fixed population, case 1: two DISTINCT rows sharing one child.
+		const started = Date.now()
+		const distinct = samplesToSchema([
+			{ id: 1, detail: node },
+			{ id: 2, detail: node },
+		])
+		const elapsed = Date.now() - started
+
+		expect(reads).toBeLessThanOrEqual(INFER_DEPTH_LIMIT)
+		expect(elapsed).toBeLessThan(1_000)
+		expect(distinct.type).toBe('object')
+
+		// Outside the fixed population, case 2: the same row repeated.
+		reads = 0
+		expect(samplesToSchema([node, node]).type).toBe('object')
+		expect(reads).toBeLessThanOrEqual(INFER_DEPTH_LIMIT)
+
+		// Outside the fixed population, case 3: rows whose per-key value LISTS
+		// differ at every level, so no slot is ever a repeated single object. This
+		// is the case a first-row-only memo would still miss.
+		let left: Record<string, unknown> = { leaf: 1 }
+		let right: Record<string, unknown> = { leaf: 2 }
+		for (let index = 0; index < 16; index += 1) {
+			const nextLeft = { a: left, b: right }
+			const nextRight = { a: right, b: left }
+			left = nextLeft
+			right = nextRight
+		}
+		const swapped = Date.now()
+		expect(samplesToSchema([left, right]).type).toBe('object')
+		expect(Date.now() - swapped).toBeLessThan(1_000)
+
+		// Inside the population, kept as the control the H9 round had: one row.
+		reads = 0
+		expect(samplesToSchema([node]).type).toBe('object')
+		expect(reads).toBeLessThanOrEqual(INFER_DEPTH_LIMIT)
+
+		// The negative control the counter needs: the same instrument reports the
+		// LINEAR sibling truthfully, so it discriminates a bounded walk from an
+		// unbounded one rather than failing uniformly.
+		reads = 0
+		valueToSchema(node)
+		expect(reads).toBe(1)
+	})
+
+	it('serves no answer across a differing budget or flag from one memo', () => {
+		// The memo used to key `(row, remaining depth)` only, so two ordinary calls
+		// sharing one memo disagreed: `closed: true` then `closed: false` returned
+		// the FIRST call's `additionalProperties: false`.
+		const row = { a: 1 }
+		const memo = buildSampleMemo()
+		const closed = inferRecordSamples([row], 32, 256, true, false, false, memo)
+		const open = inferRecordSamples([row], 32, 256, false, false, false, memo)
+		const narrow = inferRecordSamples([row], 32, 1, false, false, false, memo)
+
+		expect(closed).toEqual(
+			inferRecordSamples([row], 32, 256, true, false, false, buildSampleMemo()),
+		)
+		expect(open).toEqual(inferRecordSamples([row], 32, 256, false, false, false, buildSampleMemo()))
+		expect(narrow).toEqual(inferRecordSamples([row], 32, 1, false, false, false, buildSampleMemo()))
+		expect(open.additionalProperties).toBe(true)
+	})
+
+	it('refuses a memo that is not a sample memo under the memo argument name', () => {
+		// The only argument position these doors never checked; a wrong value there
+		// used to be published as `samples could not be read`, blaming a readable
+		// first argument for the seventh one.
+		for (const memo of [{}, new Map(), [], 'x', null]) {
+			const error = captureContractError(() =>
+				Reflect.apply(inferSamples, undefined, [[{ a: 1 }], 32, 256, true, false, false, memo]),
+			)
+			expect(error.message).toBe('inferSamples: memo must be a sample memo')
+			expect(error.code).toBe('structure')
+			expect(error.context?.path).toEqual(['memo'])
+		}
+		// Control: the same call with a real memo answers.
+		expect(inferSamples([{ a: 1 }], 32, 256, true, false, false, buildSampleMemo()).type).toBe(
+			'object',
+		)
+	})
+
+	it('terminates on a self-referencing row in bounded time', () => {
+		const row: Record<string, unknown> = {}
+		row.a = row
+		row.b = row
+
+		const started = Date.now()
+		const schema = samplesToSchema([row])
+		expect(Date.now() - started).toBeLessThan(1_000)
+		expect(schema.type).toBe('object')
+
+		// Outside the one-row population: the same cycle reached as a multi-row slot.
+		const pair = Date.now()
+		expect(samplesToSchema([row, row]).type).toBe('object')
+		expect(
+			samplesToSchema([
+				{ id: 1, r: row },
+				{ id: 2, r: row },
+			]).type,
+		).toBe('object')
+		expect(Date.now() - pair).toBeLessThan(1_000)
+	})
+
+	it('keeps a column two rows carry when one row holds undefined', () => {
+		// The key was skipped entirely, discarding a property two of three rows
+		// carried as a real integer. Both the TSDoc and the guide promise only that
+		// the schema OPENS.
+		expect(
+			samplesToSchema([
+				{ a: 1, b: 2 },
+				{ a: 2, b: undefined },
+				{ a: 3, b: 4 },
+			]),
+		).toEqual({
+			type: 'object',
+			properties: { a: { type: 'integer' }, b: { type: 'integer' } },
+			required: ['a'],
+			additionalProperties: true,
+		})
+	})
+
+	it('sanitizes a NaN breadth budget instead of emitting a schema that rejects its own source', () => {
+		// `limitEntries(keys, NaN)` returned the EMPTY key list while
+		// `allKeys.length > NaN` left `truncated` false, so these doors emitted
+		// `{ type: 'object', additionalProperties: false }` — the one direction the
+		// schema-inversion law forbids.
+		const source = { a: 1, b: 2 }
+		const expected: JSONSchema = {
+			type: 'object',
+			properties: { a: { type: 'integer' }, b: { type: 'integer' } },
+			required: ['a', 'b'],
+			additionalProperties: false,
+		}
+
+		expect(
+			inferRecordSamples([source], 32, Number.NaN, true, false, false, buildSampleMemo()),
+		).toEqual(expected)
+		expect(inferSamples([source], 32, Number.NaN, true, false, false, buildSampleMemo())).toEqual(
+			expected,
+		)
+		expect(inferObject(source, 32, Number.NaN, true, false, new WeakSet(), new WeakMap())).toEqual(
+			expected,
+		)
+		expect(
+			compileGuard(
+				schemaToShape(
+					inferRecordSamples([source], 32, Number.NaN, true, false, false, buildSampleMemo()),
+				),
+			)(source),
+		).toBe(true)
+
+		// Control: a valid budget is used verbatim, so sanitization did not simply
+		// discard the caller's number.
+		expect(inferRecordSamples([source], 32, 1, true, false, false, buildSampleMemo())).toEqual({
+			type: 'object',
+			properties: { a: { type: 'integer' } },
+			required: ['a'],
+			additionalProperties: true,
+		})
+	})
+
+	it('refuses a sparse sample list with an honest diagnosis', () => {
+		// A hole is READABLE — every advertised read succeeds, and `valueToSchema`
+		// answers for it — so `samples could not be read` was a true refusal with a
+		// false reason. `samplesToSchema` requires density of its SAMPLE LIST;
+		// `valueToSchema` widens a sparse VALUE, and neither reads a hole as a
+		// present member.
+		const sparse = buildSparseArray()
+		const error = captureContractError(() => samplesToSchema(sparse))
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('samplesToSchema: samples must be a dense array')
+		expect(valueToSchema(sparse)).toEqual({})
+
+		// Control: a genuinely unreadable sample list still reports unreadability.
+		const unreadable = captureContractError(() => samplesToSchema(createRevokedArrayProxy()))
+		expect(unreadable.message).toBe('samplesToSchema: samples could not be read')
 	})
 })

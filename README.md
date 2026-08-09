@@ -45,7 +45,9 @@ user.generate(seededRandom(42)) // reproducible seed data; omit the arg for a wa
 ## Guide
 
 For the full surface — guards, combinators, parsers, the JSON boundary, and the shape DSL — see
-[`guides/src/contract.md`](guides/src/contract.md).
+[`guides/src/contract.md`](https://github.com/orkestrel/contract/blob/main/guides/src/contract.md).
+The guide is not published in the npm tarball (`files` ships `dist/src` and this README), so the
+link is absolute on purpose: a relative one resolves in the repository and is dead in the package.
 
 ## Package
 
