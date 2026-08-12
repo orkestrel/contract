@@ -25,7 +25,7 @@ import { setFlagsFromString } from 'node:v8'
  * @returns A promise that settles after bounded pressure and collection rounds
  */
 export async function requestWeakReferenceCollection(
-	references: readonly WeakRef<object>[],
+	references: ReadonlyArray<WeakRef<object>>,
 ): Promise<void> {
 	setFlagsFromString('--expose_gc')
 	try {

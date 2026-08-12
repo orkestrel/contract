@@ -139,14 +139,14 @@ export class ContractCompiler<
 		| { readonly phase: 'running'; readonly poison: ContractError }
 		| { readonly phase: 'interrupted'; readonly poison: ContractError }
 		| { readonly phase: 'failed'; readonly error: ContractError }
-	#stack: (
+	#stack: Array<
 		| { readonly operation: 'enter'; readonly shape: ContractShape }
 		| { readonly operation: 'exit'; readonly index: number }
-	)[]
-	readonly #emptyStack: (
+	>
+	readonly #emptyStack: Array<
 		| { readonly operation: 'enter'; readonly shape: ContractShape }
 		| { readonly operation: 'exit'; readonly index: number }
-	)[]
+	>
 	// The prepared index. `#nodes[0]` is the owned root by construction, `#index`
 	// answers "which node is this child" by identity, and `#order` lists every
 	// node with its children already listed before it — so a family solves any
@@ -163,16 +163,16 @@ export class ContractCompiler<
 	// does at call time reaches back into the index this class later releases.
 	#schemas: JSONSchema[]
 	readonly #emptySchemas: JSONSchema[]
-	#guards: Guard<unknown>[]
-	readonly #emptyGuards: Guard<unknown>[]
-	#parsers: Parser<unknown>[]
-	readonly #emptyParsers: Parser<unknown>[]
-	#audits: ((value: unknown, path: readonly string[]) => readonly AuditFault[])[]
-	readonly #emptyAudits: ((value: unknown, path: readonly string[]) => readonly AuditFault[])[]
-	#reports: ((value: unknown, path: readonly string[]) => readonly Fault[])[]
-	readonly #emptyReports: ((value: unknown, path: readonly string[]) => readonly Fault[])[]
-	#seeds: ((random: RandomFunction) => unknown)[]
-	readonly #emptySeeds: ((random: RandomFunction) => unknown)[]
+	#guards: Array<Guard<unknown>>
+	readonly #emptyGuards: Array<Guard<unknown>>
+	#parsers: Array<Parser<unknown>>
+	readonly #emptyParsers: Array<Parser<unknown>>
+	#audits: Array<(value: unknown, path: readonly string[]) => readonly AuditFault[]>
+	readonly #emptyAudits: Array<(value: unknown, path: readonly string[]) => readonly AuditFault[]>
+	#reports: Array<(value: unknown, path: readonly string[]) => readonly Fault[]>
+	readonly #emptyReports: Array<(value: unknown, path: readonly string[]) => readonly Fault[]>
+	#seeds: Array<(random: RandomFunction) => unknown>
+	readonly #emptySeeds: Array<(random: RandomFunction) => unknown>
 	#schema: JSONSchema | undefined
 	#guard: Guard<unknown> | undefined
 	#parser: Parser<unknown> | undefined
@@ -878,7 +878,7 @@ export class ContractCompiler<
 				}
 			}
 			case 'union': {
-				const guards: Guard<unknown>[] = []
+				const guards: Array<Guard<unknown>> = []
 				for (let index2 = 0; index2 < owned.variants.length; index2 += 1) {
 					const variant = owned.variants[index2]
 					if (variant === undefined) continue
@@ -1039,7 +1039,7 @@ export class ContractCompiler<
 			// auditor is the artifact that reports it, one `'extra'` fault per
 			// undeclared key.
 			case 'object': {
-				const entries: { key: string; parse: Parser<unknown>; optional: boolean }[] = []
+				const entries: Array<{ key: string; parse: Parser<unknown>; optional: boolean }> = []
 				const keyList = INTRINSICS.keys(owned.properties)
 				for (let keyIndex = 0; keyIndex < keyList.length; keyIndex += 1) {
 					const key = keyList[keyIndex]
@@ -1141,7 +1141,7 @@ export class ContractCompiler<
 				}
 			}
 			case 'union': {
-				const variants: { parse: Parser<unknown>; guard: Guard<unknown> }[] = []
+				const variants: Array<{ parse: Parser<unknown>; guard: Guard<unknown> }> = []
 				for (let index2 = 0; index2 < owned.variants.length; index2 += 1) {
 					const variant = owned.variants[index2]
 					if (variant === undefined) continue
@@ -1328,12 +1328,12 @@ export class ContractCompiler<
 				}
 			}
 			case 'object': {
-				const entries: {
+				const entries: Array<{
 					key: string
 					audit: (value: unknown, path: readonly string[]) => readonly AuditFault[]
 					optional: boolean
 					kind: FaultKind
-				}[] = []
+				}> = []
 				const declaredKeys = INTRINSICS.keys(owned.properties)
 				for (let keyIndex = 0; keyIndex < declaredKeys.length; keyIndex += 1) {
 					const key = declaredKeys[keyIndex]
@@ -1423,7 +1423,7 @@ export class ContractCompiler<
 				}
 			}
 			case 'union': {
-				const plans: ((value: unknown, path: readonly string[]) => readonly AuditFault[])[] = []
+				const plans: Array<(value: unknown, path: readonly string[]) => readonly AuditFault[]> = []
 				for (let index2 = 0; index2 < owned.variants.length; index2 += 1) {
 					const variant = owned.variants[index2]
 					if (variant === undefined) continue
@@ -1432,7 +1432,7 @@ export class ContractCompiler<
 				const exclusive = owned.mode === 'oneOf'
 				const count = owned.variants.length
 				return (value, path) => {
-					const perVariant: (readonly AuditFault[])[] = []
+					const perVariant: Array<readonly AuditFault[]> = []
 					let matched = 0
 					for (let index2 = 0; index2 < plans.length; index2 += 1) {
 						const plan = plans[index2]
@@ -1579,12 +1579,12 @@ export class ContractCompiler<
 				}
 			}
 			case 'object': {
-				const entries: {
+				const entries: Array<{
 					key: string
 					report: (value: unknown, path: readonly string[]) => readonly Fault[]
 					optional: boolean
 					kind: FaultKind
-				}[] = []
+				}> = []
 				const keyList = INTRINSICS.keys(owned.properties)
 				for (let keyIndex = 0; keyIndex < keyList.length; keyIndex += 1) {
 					const key = keyList[keyIndex]
@@ -1679,8 +1679,8 @@ export class ContractCompiler<
 				}
 			}
 			case 'union': {
-				const plans: ((value: unknown, path: readonly string[]) => readonly Fault[])[] = []
-				const guards: Guard<unknown>[] = []
+				const plans: Array<(value: unknown, path: readonly string[]) => readonly Fault[]> = []
+				const guards: Array<Guard<unknown>> = []
 				for (let index2 = 0; index2 < owned.variants.length; index2 += 1) {
 					const variant = owned.variants[index2]
 					if (variant === undefined) continue
@@ -1690,7 +1690,7 @@ export class ContractCompiler<
 				const exclusive = owned.mode === 'oneOf'
 				const count = owned.variants.length
 				return (value, path) => {
-					const perVariant: (readonly Fault[])[] = []
+					const perVariant: Array<readonly Fault[]> = []
 					for (let index2 = 0; index2 < plans.length; index2 += 1) {
 						const plan = plans[index2]
 						if (plan === undefined) continue
@@ -1865,11 +1865,11 @@ export class ContractCompiler<
 				}
 			}
 			case 'object': {
-				const entries: {
+				const entries: Array<{
 					key: string
 					seed: (random: RandomFunction) => unknown
 					optional: boolean
-				}[] = []
+				}> = []
 				const keyList = INTRINSICS.keys(owned.properties)
 				for (let keyIndex = 0; keyIndex < keyList.length; keyIndex += 1) {
 					const key = keyList[keyIndex]
@@ -1923,7 +1923,7 @@ export class ContractCompiler<
 				}
 			}
 			case 'union': {
-				const plans: ((random: RandomFunction) => unknown)[] = []
+				const plans: Array<(random: RandomFunction) => unknown> = []
 				for (let index2 = 0; index2 < owned.variants.length; index2 += 1) {
 					const variant = owned.variants[index2]
 					if (variant === undefined) continue

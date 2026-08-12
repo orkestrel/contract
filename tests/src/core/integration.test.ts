@@ -585,7 +585,7 @@ describe('cross-pair composition', () => {
 	it('lazyOf recursive guard validates a nested tree built from contract-generated leaves', () => {
 		const isTree: Guard<Tree<number>> = recordOf({
 			value: isNumber,
-			children: (input: unknown): input is readonly Tree<number>[] =>
+			children: (input: unknown): input is ReadonlyArray<Tree<number>> =>
 				Array.isArray(input) && input.every((entry) => lazyOf(() => isTree)(entry)),
 		})
 
@@ -784,7 +784,7 @@ describe('no caller-reachable member decides a membership answer', () => {
 	const mixedMap = new Map<unknown, unknown>([['a', 'not-a-number']])
 	const reachable = new ReachableVocabulary(['a', 'b'])
 
-	const answers: readonly (readonly [string, () => unknown, unknown])[] = [
+	const answers: ReadonlyArray<readonly [string, () => unknown, unknown]> = [
 		['literalOf/stranger', () => literalGuard('NOT-A-MEMBER'), false],
 		['literalOf/member', () => literalGuard('a'), true],
 		['enumOf/stranger', () => enumGuard('NOT-A-MEMBER'), false],
@@ -866,7 +866,7 @@ describe('no caller-reachable member decides a membership answer', () => {
 		): Generator<unknown> {
 			for (const entry of Array.from(this.entries())) yield [entry[0], 1]
 		}
-		const lies: readonly (readonly [string, object, PropertyKey, unknown])[] = [
+		const lies: ReadonlyArray<readonly [string, object, PropertyKey, unknown]> = [
 			['Set.prototype.has answers true', Set.prototype, 'has', (): boolean => true],
 			['Set.prototype.has answers false', Set.prototype, 'has', (): boolean => false],
 			['WeakSet.prototype.has answers true', WeakSet.prototype, 'has', (): boolean => true],
@@ -906,7 +906,7 @@ describe('no caller-reachable member decides a membership answer', () => {
 			}
 			replaceIntrinsic(lie[1], lie[2], lie[3], () => driftOf(control, lie[0], named))
 		}
-		const accessors: readonly ('source' | 'flags')[] = ['source', 'flags']
+		const accessors: ReadonlyArray<'source' | 'flags'> = ['source', 'flags']
 		for (const accessor of accessors) {
 			for (let index = 0; index < answers.length; index += 1) {
 				const door = answers[index]
@@ -934,7 +934,7 @@ describe('no caller-reachable member decides a membership answer', () => {
 			via: 'replacement',
 		}
 		const rows: readonly TerminalIntrinsic[] = [...OWNED_MEMBERS, Object.freeze(vocabularyMember)]
-		const substitutes: readonly (() => boolean)[] = [(): boolean => true, (): boolean => false]
+		const substitutes: ReadonlyArray<() => boolean> = [(): boolean => true, (): boolean => false]
 		const drift: string[] = []
 		const named: string[] = []
 

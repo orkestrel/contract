@@ -294,12 +294,12 @@ describe('ShapeCloner', () => {
 
 	it('captures every category and observes present and absent fields through one table', () => {
 		const leaf: StringShape = { type: 'string', description: 'leaf' }
-		const rows: readonly {
+		const rows: ReadonlyArray<{
 			readonly source: ContractShape
 			readonly fields: readonly string[]
 			readonly absent?: readonly string[]
 			readonly wrapped?: boolean
-		}[] = [
+		}> = [
 			{
 				source: {
 					type: 'string',

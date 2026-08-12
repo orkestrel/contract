@@ -621,7 +621,7 @@ describe('eager ownership boundaries — reparented class brands', () => {
 		// with the mandated realm members is not, because nothing observable from
 		// outside a realm separates the two. The forgery buys acceptance, and the
 		// snapshots published are still owned plain data.
-		const doors: readonly { readonly name: string; readonly operation: () => unknown }[] = [
+		const doors: ReadonlyArray<{ readonly name: string; readonly operation: () => unknown }> = [
 			{ name: 'cloneShape', operation: () => cloneShape(new ForgedBrandDeclaration()) },
 			{ name: 'ownShape', operation: () => ownShape(new ForgedBrandDeclaration()) },
 			{ name: 'cloneJSONValue', operation: () => cloneJSONValue(new ForgedBrandDeclaration()) },

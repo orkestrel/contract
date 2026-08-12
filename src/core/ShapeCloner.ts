@@ -90,15 +90,15 @@ export class ShapeCloner implements ShapeClonerInterface {
 	// caller's text.
 	#properties: Map<ContractShape, readonly ShapeProperty[]>
 	readonly #emptyProperties: Map<ContractShape, readonly ShapeProperty[]>
-	#variants: Map<ContractShape, readonly (ContractShape | undefined)[]>
-	readonly #emptyVariants: Map<ContractShape, readonly (ContractShape | undefined)[]>
+	#variants: Map<ContractShape, ReadonlyArray<ContractShape | undefined>>
+	readonly #emptyVariants: Map<ContractShape, ReadonlyArray<ContractShape | undefined>>
 	// FIFO, walked with a read cursor rather than `pop()`. A LIFO drain captured
 	// siblings in REVERSE declaration order, so the first refusal this class threw
 	// named the LAST offending sibling while the shared gate named the first — one
 	// declaration, two different codes, messages and `context.path` values from
 	// doors the guide names in one sentence as agreeing.
-	#pending: { readonly shape: ContractShape; readonly depth: number }[]
-	readonly #emptyPending: { readonly shape: ContractShape; readonly depth: number }[]
+	#pending: Array<{ readonly shape: ContractShape; readonly depth: number }>
+	readonly #emptyPending: Array<{ readonly shape: ContractShape; readonly depth: number }>
 	#sources: ContractShape[]
 	readonly #emptySources: ContractShape[]
 	#fidelity: ContractError | undefined

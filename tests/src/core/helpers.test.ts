@@ -7,6 +7,7 @@ import type {
 	ContractErrorOptions,
 	Fault,
 	JSONSchema,
+	JSONSchemaType,
 	NumberShape,
 	Result,
 	StringShape,
@@ -219,11 +220,11 @@ describe('ContractError', () => {
 
 	it('establishes cause ownership before reading the cause at all', () => {
 		const cause = Object.freeze({ source: 'proxy' })
-		const observed: {
+		const observed: Array<{
 			readonly owned: boolean
 			readonly reads: number
 			readonly adopted: boolean
-		}[] = []
+		}> = []
 
 		for (const owned of [true, false]) {
 			let reads = 0
@@ -574,7 +575,7 @@ describe('readValue', () => {
 		// applied to the field a probe happened to choose is not a rule.
 		const stolen = Object.freeze(['pwned'])
 		const reason = Object.freeze({ stage: 'read' })
-		const fields: readonly (keyof ContractErrorContext)[] = ['path', 'shape', 'limit', 'received']
+		const fields: ReadonlyArray<keyof ContractErrorContext> = ['path', 'shape', 'limit', 'received']
 		const observed = fields.map((field) => {
 			// The carried field is always one the probed field does not name, so
 			// `context` is defined and the omission under test is genuine.
@@ -643,7 +644,7 @@ describe('readArrayEntries', () => {
 	it('freezes one own-index snapshot and derives density', () => {
 		const dense = readArrayEntries([1, 2])
 		if (!dense.success) throw dense.error
-		expectTypeOf(dense.value.entries).toEqualTypeOf<readonly (number | undefined)[]>()
+		expectTypeOf(dense.value.entries).toEqualTypeOf<ReadonlyArray<number | undefined>>()
 		expectTypeOf<ArrayRead['entries']>().toEqualTypeOf<readonly unknown[]>()
 		expect(dense).toEqual({ success: true, value: { entries: [1, 2], dense: true } })
 		expect(Object.isFrozen(dense.value)).toBe(true)
@@ -654,7 +655,7 @@ describe('readArrayEntries', () => {
 		sparseSource[1] = 2
 		const sparse = readArrayEntries(sparseSource)
 		if (!sparse.success) throw sparse.error
-		expectTypeOf(sparse.value.entries).toEqualTypeOf<readonly (number | undefined)[]>()
+		expectTypeOf(sparse.value.entries).toEqualTypeOf<ReadonlyArray<number | undefined>>()
 		expect(sparse).toEqual({
 			success: true,
 			value: { entries: [undefined, 2, undefined], dense: false },
@@ -797,7 +798,7 @@ describe('matchesRecordBrand', () => {
 	it('accepts every plain-record population, including a genuine foreign realm', () => {
 		// The whole acceptance population, enumerated rather than sampled, so a
 		// later tightening of the brand has to prove it did not narrow this set.
-		const population: readonly (readonly [string, unknown])[] = [
+		const population: ReadonlyArray<readonly [string, unknown]> = [
 			['object literal', {}],
 			['populated literal', { a: 1 }],
 			['null prototype', Object.create(null)],
@@ -1107,7 +1108,7 @@ describe('sanitizeDepth', () => {
 
 describe('sanitizeBudget', () => {
 	it('refuses an invalid selected numeric fallback with exact bound diagnostics', () => {
-		const invalid: readonly (readonly [number, string])[] = [
+		const invalid: ReadonlyArray<readonly [number, string]> = [
 			[Number.NaN, 'NaN'],
 			[Number.POSITIVE_INFINITY, 'Infinity'],
 			[Number.NEGATIVE_INFINITY, '-Infinity'],
@@ -1126,7 +1127,7 @@ describe('sanitizeBudget', () => {
 	})
 
 	it('refuses wrong-runtime fallbacks through the same safe diagnostic', () => {
-		const invalid: readonly (readonly [unknown, string])[] = [
+		const invalid: ReadonlyArray<readonly [unknown, string]> = [
 			[undefined, 'undefined'],
 			[null, 'null'],
 			['3', '"3"'],
@@ -1775,7 +1776,7 @@ describe('schemaToParameters', () => {
 		// plain record (its prototype is the class, not `Object.prototype`), so the `isRecord` boundary
 		// guard rejects it and the helper yields its `undefined` fallback — the §14 narrowing in action.
 		class FakeSchema {
-			type: 'object' = 'object'
+			readonly type: JSONSchemaType = 'object'
 		}
 		const notRecord: JSONSchema = new FakeSchema()
 		expect(schemaToParameters(notRecord)).toBeUndefined()

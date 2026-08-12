@@ -56,13 +56,13 @@ export class JSONCloner implements JSONClonerInterface {
 	readonly #source: unknown
 	readonly #owned: WeakSet<object>
 	readonly #active: WeakSet<object>
-	readonly #pending: {
+	readonly #pending: Array<{
 		readonly source: object
 		readonly clone: JSONValue[] | JSONRecord
 		readonly array: boolean
-		entries: readonly (readonly [key: string, value: unknown])[] | undefined
+		entries: ReadonlyArray<readonly [key: string, value: unknown]> | undefined
 		index: number
-	}[]
+	}>
 	// Every node this walk PRODUCES, not every node the source holds: the two
 	// differ by exactly the alias duplication the tree contract requires, and it
 	// is the produced count that grows exponentially.
@@ -202,7 +202,7 @@ export class JSONCloner implements JSONClonerInterface {
 		return clone
 	}
 
-	#captureArray(source: object): readonly (readonly [key: string, value: unknown])[] {
+	#captureArray(source: object): ReadonlyArray<readonly [key: string, value: unknown]> {
 		const keysOutcome = attempt(() => INTRINSICS.members(source))
 		if (!keysOutcome.success) this.#refuse('cloneJSONValue: own keys could not be inspected')
 		const lengthOutcome = attempt(() => INTRINSICS.reveal(source, 'length'))
@@ -235,7 +235,7 @@ export class JSONCloner implements JSONClonerInterface {
 		if (keysOutcome.value.length !== lengthDescriptor.value + 1) {
 			this.#refuse('cloneJSONValue: array own keys are not exact')
 		}
-		const entries: [key: string, value: unknown][] = []
+		const entries: Array<[key: string, value: unknown]> = []
 		for (let index = 0; index < lengthDescriptor.value; index += 1) {
 			const key = INTRINSICS.text(index)
 			if (!matchesMember(owned, key)) {
@@ -254,10 +254,10 @@ export class JSONCloner implements JSONClonerInterface {
 		return entries
 	}
 
-	#captureRecord(source: object): readonly (readonly [key: string, value: unknown])[] {
+	#captureRecord(source: object): ReadonlyArray<readonly [key: string, value: unknown]> {
 		const keysOutcome = attempt(() => INTRINSICS.members(source))
 		if (!keysOutcome.success) this.#refuse('cloneJSONValue: own keys could not be inspected')
-		const entries: [key: string, value: unknown][] = []
+		const entries: Array<[key: string, value: unknown]> = []
 		const names = keysOutcome.value
 		// Indexed, not iterated: this walk decides the published record's own-key
 		// population, and an iterator is a caller-writable member that can yield a

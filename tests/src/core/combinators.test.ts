@@ -314,7 +314,7 @@ describe('recordOf, pickOf, omitOf', () => {
 			['recordOf', () => Reflect.apply(recordOf, undefined, [hostile])],
 			['pickOf', () => Reflect.apply(pickOf, undefined, [hostile, ['id']])],
 			['omitOf', () => Reflect.apply(omitOf, undefined, [hostile, ['id']])],
-		] satisfies readonly (readonly [string, () => unknown])[]) {
+		] satisfies ReadonlyArray<readonly [string, () => unknown]>) {
 			const error = captureContractError(run)
 			expect(error.code).toBe('structure')
 			expect(error.message).toBe(`${reader}: shape could not be read`)
@@ -366,7 +366,7 @@ describe('recordOf, pickOf, omitOf', () => {
 	})
 
 	it('recordOf owns optional membership before caller-list mutation', () => {
-		const optional: 'note'[] = ['note']
+		const optional: Array<'note'> = ['note']
 		const guard = recordOf({ id: isString, note: isString }, optional)
 		optional.length = 0
 
@@ -398,7 +398,7 @@ describe('recordOf, pickOf, omitOf', () => {
 		for (const [reader, run] of [
 			['pickOf', () => pickOf(shape, ['a'])],
 			['omitOf', () => omitOf(shape, [])],
-		] satisfies readonly (readonly [string, () => unknown])[]) {
+		] satisfies ReadonlyArray<readonly [string, () => unknown]>) {
 			const error = captureContractError(run)
 			expect(error.code).toBe('structure')
 			expect(error.message).toBe(`${reader}: shape could not be read`)
@@ -916,7 +916,7 @@ describe('user-callback throw containment (AGENTS §14)', () => {
 		// a sibling that accepts, and a negation of a non-match passes. The whole
 		// row set used to be pinned at `false`, which is what let `orOf`, `unionOf`,
 		// `notOf` and `complementOf` contain each throw and still answer wrongly.
-		const guards: readonly (readonly [Guard<unknown>, unknown, boolean])[] = [
+		const guards: ReadonlyArray<readonly [Guard<unknown>, unknown, boolean]> = [
 			[andOf(isString, throwHostileAccess), 'value', false],
 			[orOf(throwHostileAccess, isString), 'value', true],
 			[notOf(throwHostileAccess), 'value', true],
@@ -1080,7 +1080,7 @@ describe('combinator totality sweep', () => {
 			['matchOf', () => matchOf(proxy)],
 			['stringOf', () => stringOf({ pattern: proxy })],
 			['stringShape', () => stringShape({ pattern: proxy })],
-		] satisfies readonly (readonly [string, () => unknown])[]) {
+		] satisfies ReadonlyArray<readonly [string, () => unknown]>) {
 			const error = captureContractError(run)
 			expect(error.code).toBe('pattern')
 			expect(error.message).toBe(`${reader}: pattern must be a RegExp`)
@@ -1091,7 +1091,7 @@ describe('combinator totality sweep', () => {
 		let recursive: Guard<unknown> = isString
 		recursive = unionOf(isString, arrayOf(lazyOf(() => recursive)))
 		const shape = { id: isString, count: isNumber }
-		const guards: readonly Guard<unknown>[] = [
+		const guards: ReadonlyArray<Guard<unknown>> = [
 			arrayOf(isString),
 			tupleOf(isString),
 			literalOf('value'),

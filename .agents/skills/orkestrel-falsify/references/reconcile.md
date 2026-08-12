@@ -17,7 +17,7 @@ arity, a `require` in an ESM context all surface as the finding you were hoping 
 first, let harness failures crash loudly, and only guard the call under test. Every campaign that has
 run this process has produced at least one finding that was the instrument failing.
 
-This is not ceremony. In practice reproduction produces three outcomes, and all three matter:
+Reproduction produces three outcomes, and all three matter:
 
 - the finding **confirms** and is often **wider** than reported — the reproduction reaches doors the
   auditor did not try;
@@ -143,6 +143,6 @@ outruns its evidence.
 Accept when the brief's claims are **satisfied on evidence** — the `PASS` terminal line the skill
 defines, against a claim set that covers what the subject owns. Not green gates.
 
-A round that finds something is the process working. The only bad round is the one that finds
-nothing because nobody tried — and the only unfinishable one is the round re-run because an attack
-can still be imagined. Bound the claim set at the brief, rule on what it returned, and close.
+A round that finds something is the process working. A round that finds nothing because nobody tried
+is the failure; a round re-run because an attack can still be imagined never ends. Bound the claim
+set at the brief, rule on what it returned, and close.

@@ -53,10 +53,12 @@ confirmed finding in scope and rebuilding the harness gaps the verdicts expose.
 2. **Seed candidates.** Turn your own mid-integration observations into numbered
    confirm-or-refute candidates inside the verdict brief. Observations that stay in your
    head are neither evidence nor findings.
-3. **Take three independent verdicts** on the SAME portfolio, in the fixed shape below, no
-   lane seeing another's answer before all have returned. The three work classes are
-   subjective design fit; objective state truth; and mechanical inventory of copy, classes,
-   icons, and accessibility attributes.
+3. **Take three independent verdicts** on the SAME portfolio, in the fixed shape below. The
+   three lanes are subjective design fit; objective state truth; and mechanical inventory of
+   copy, classes, icons, and accessibility attributes. This is the surface variant of the
+   adversarial pass in `.agents/orchestration.md`, so its rules bind: each lane is a fresh
+   subagent with a clean context, run in parallel, blind to the others until all have
+   returned, and no lane is dropped because an engine is dark.
 4. **Reconcile.** Confirmed findings get carriers; refuted findings die on the record with
    the evidence that killed them; conflicts get a dated ruling. Then walk the reconciled
    list once and name the fix-brief item carrying each finding — a finding with no carrier
@@ -65,7 +67,7 @@ confirmed finding in scope and rebuilding the harness gaps the verdicts expose.
    truth the subjective lane reads. Each unit records the failing proof before the
    repair — the exact command and its red count — and the same command's green count
    after. Commit each accepted unit before dispatching the next.
-6. **Cross-audit.** A fix unit's auditor is the engine that did not write it. Same-engine
+6. **Cross-audit.** A fix unit's auditor is an engine that did not write it. Same-engine
    re-review returns the author's own blind spot.
 7. **Recapture,** repairing every harness gap the verdicts exposed, and re-verdict against
    the new portfolio, not the old one.

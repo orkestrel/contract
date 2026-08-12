@@ -216,7 +216,7 @@ describe('valueToSchema — objects', () => {
 			for (const [reader, run] of [
 				['valueToSchema', () => Reflect.apply(valueToSchema, undefined, ['value', options])],
 				['samplesToSchema', () => Reflect.apply(samplesToSchema, undefined, [['value'], options])],
-			] satisfies readonly (readonly [string, () => unknown])[]) {
+			] satisfies ReadonlyArray<readonly [string, () => unknown]>) {
 				const error = captureContractError(run)
 				expect(error.code).toBe('structure')
 				expect(error.message).toBe(`${reader}: options must be a plain record`)
@@ -1817,7 +1817,7 @@ describe('caller-owned inference arrays', () => {
 		expect(schemaError.code).toBe('structure')
 		expect(schemaError.message).toBe('unifySchemas: schemas could not be read')
 
-		const rows: Record<string, unknown>[] = []
+		const rows: Array<Record<string, unknown>> = []
 		rows.length = 2
 		rows[0] = { value: 1 }
 		const rowError = captureContractError(() =>

@@ -48,7 +48,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	#phase:
 		| { readonly phase: 'idle' }
 		| { readonly phase: 'active'; readonly poison?: ContractError } = { phase: 'idle' }
-	#stack: (
+	#stack: Array<
 		| {
 				readonly operation: 'enter'
 				readonly shape: ContractShape | undefined
@@ -58,7 +58,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 				readonly second?: string
 		  }
 		| { readonly operation: 'exit'; readonly index: number; readonly segments: number }
-	)[] = []
+	> = []
 	#path: string[] = []
 	#active = new ShapeValidator.#weakSet<ContractShape>()
 	// The capture. Discovery observes each unique node ONCE — descriptors, two
@@ -70,17 +70,17 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	// with it. `raw` is the height of a raw node's embedded schema, `0` for every
 	// other node.
 	#index = new ShapeValidator.#weakMap<ContractShape, number>()
-	#captures: {
+	#captures: Array<{
 		readonly shape: ContractShape
 		readonly category: ContractShape['type'] | undefined
-		readonly children: readonly {
+		readonly children: ReadonlyArray<{
 			readonly shape: ContractShape | undefined
 			readonly optional: boolean
 			readonly first: string
 			readonly second?: string
-		}[]
+		}>
 		readonly raw: number
-	}[] = []
+	}> = []
 	// Discovery postorder: children finish before parents, so reading it forwards
 	// solves any bottom-up fact in one pass and reading it backwards solves any
 	// top-down one. Both replace a walk that was multiplicative in incoming edges.
@@ -91,18 +91,18 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	// taken FROM can be spelled back out as a path. A refusal answered from the
 	// deepest occurrence and reported at the first-discovered one accuses a slot
 	// the same declaration proves legal on its own.
-	#via: { readonly parent: number; readonly first: string; readonly second?: string }[] = []
+	#via: Array<{ readonly parent: number; readonly first: string; readonly second?: string }> = []
 	// One node per node per incoming edge: the size of the TREE a compiler would
 	// build from this DAG, which is what actually bounds compilation.
 	#counts: number[] = []
 	#schemas = new ShapeValidator.#weakMap<object, number>()
 	#expansion = 0
-	#children: {
+	#children: Array<{
 		readonly shape: ContractShape | undefined
 		readonly optional: boolean
 		readonly first: string
 		readonly second?: string
-	}[] = []
+	}> = []
 	#category: ContractShape['type'] | undefined
 	#raw = 0
 	#structure: ContractError | undefined
@@ -694,10 +694,10 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			return this.#refuse('validateShapeDepth: raw schema must be a plain record', 'schema')
 		}
 		const active = new ShapeValidator.#weakSet<object>()
-		const stack: (
+		const stack: Array<
 			| { readonly operation: 'enter'; readonly schema: unknown }
 			| { readonly operation: 'exit'; readonly schema: object; readonly nested: readonly unknown[] }
-		)[] = [{ operation: 'enter', schema: source }]
+		> = [{ operation: 'enter', schema: source }]
 
 		while (stack.length > 0) {
 			const frame = stack.pop()
@@ -1237,12 +1237,12 @@ export class ShapeValidator implements ShapeValidatorInterface {
 
 	#schedule(current: ContractShape, depth: number, segments: number): number {
 		admitVisited(this.#active, current)
-		const children: {
+		const children: Array<{
 			readonly shape: ContractShape | undefined
 			readonly optional: boolean
 			readonly first: string
 			readonly second?: string
-		}[] = []
+		}> = []
 		for (let index = 0; index < this.#children.length; index += 1) {
 			const child = this.#children[index]
 			if (child === undefined) continue
@@ -1267,12 +1267,12 @@ export class ShapeValidator implements ShapeValidatorInterface {
 
 	#capture(
 		shape: ContractShape,
-		children: readonly {
+		children: ReadonlyArray<{
 			readonly shape: ContractShape | undefined
 			readonly optional: boolean
 			readonly first: string
 			readonly second?: string
-		}[],
+		}>,
 	): number {
 		const index = this.#captures.length
 		this.#captures[index] = { shape, category: this.#category, children, raw: this.#raw }
@@ -1449,7 +1449,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 		let oldest = 0
 		const active = new ShapeValidator.#weakSet<ContractShape>()
 		const path: string[] = []
-		const stack: (
+		const stack: Array<
 			| {
 					readonly operation: 'enter'
 					readonly index: number | undefined
@@ -1464,7 +1464,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 					readonly segments: number
 					readonly outer: number
 			  }
-		)[] = [{ operation: 'enter', index: 0, depth: 0 }]
+		> = [{ operation: 'enter', index: 0, depth: 0 }]
 
 		while (stack.length > 0) {
 			const frame = stack.pop()

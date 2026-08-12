@@ -73,7 +73,7 @@ type BuilderRole = 'options' | 'shape' | 'properties' | 'values' | 'schema'
 
 interface BuilderCase {
 	readonly name: string
-	readonly valid: readonly (readonly unknown[])[]
+	readonly valid: ReadonlyArray<readonly unknown[]>
 	readonly positions: Readonly<Record<number, BuilderRole>>
 	readonly options?: Readonly<Record<number, readonly string[]>>
 	run(args: readonly unknown[]): unknown
@@ -340,11 +340,11 @@ describe('shape builders', () => {
 			expect(result.outcome.success, `${result.builder} rejected a legitimate call`).toBe(true)
 		}
 
-		const hostile: {
+		const hostile: Array<{
 			readonly builder: string
 			readonly position: number
 			readonly outcome: Result<unknown>
-		}[] = []
+		}> = []
 		for (const builder of BUILDER_CASES) {
 			const base = builder.valid[0] ?? []
 			for (const [positionText, role] of Object.entries(builder.positions)) {
@@ -620,7 +620,7 @@ describe('shape builders', () => {
 				throw new Error('poisoned')
 			},
 		}
-		const cases: readonly (readonly [string, () => unknown])[] = [
+		const cases: ReadonlyArray<readonly [string, () => unknown]> = [
 			['stringShape.min', () => Reflect.apply(stringShape, undefined, [{ min: poison }])],
 			['stringShape.max', () => Reflect.apply(stringShape, undefined, [{ max: poison }])],
 			['numberShape.min', () => Reflect.apply(numberShape, undefined, [{ min: poison }])],
@@ -1097,7 +1097,8 @@ describe('Infer', () => {
 		const empty = objectShape({})
 		const value: Infer<typeof empty> = {}
 		expect(value).toEqual({})
-		type _Lock = Expect<Equal<Infer<typeof empty>, Readonly<Record<never, never>>>>
+		const lock: Expect<Equal<Infer<typeof empty>, Readonly<Record<never, never>>>> = true
+		expect(lock).toBe(true)
 	})
 })
 
@@ -1185,7 +1186,7 @@ describe('Infer depth-robustness tripwire', () => {
 		type Expected = {
 			readonly id: string
 			readonly title?: string
-			readonly messages: readonly (UserMessage | AssistantMessage)[]
+			readonly messages: ReadonlyArray<UserMessage | AssistantMessage>
 			readonly metadata: {
 				readonly [k: string]: {
 					readonly key: string
@@ -1201,7 +1202,8 @@ describe('Infer depth-robustness tripwire', () => {
 				}
 			}
 		}
-		type _Lock = Expect<Equal<Snapshot, Expected>>
+		const lock: Expect<Equal<Snapshot, Expected>> = true
+		expect(lock).toBe(true)
 
 		const value: Snapshot = {
 			id: 'abc',
@@ -1788,7 +1790,7 @@ describe('schemaToShape — hostile validated values', () => {
 describe('schemaToShape — createContract never throws (malformed schema sweep)', () => {
 	// Each entry is built via JSON.parse (untyped) then pinned to JSONSchema on
 	// assignment — deliberately malformed keyword values with no type assertion.
-	const malformedSchemas: readonly { readonly label: string; readonly schema: JSONSchema }[] = [
+	const malformedSchemas: ReadonlyArray<{ readonly label: string; readonly schema: JSONSchema }> = [
 		{ label: 'enum with only object entries', schema: JSON.parse('{"enum":[{"nested":true}]}') },
 		{ label: 'empty enum', schema: JSON.parse('{"enum":[]}') },
 		{

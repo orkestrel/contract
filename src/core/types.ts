@@ -132,7 +132,7 @@ export interface ContainOptions {
  */
 export interface ArrayRead<T = unknown> {
 	/** Frozen native entries in index order, retaining sparse positions as holes. */
-	readonly entries: readonly (T | undefined)[]
+	readonly entries: ReadonlyArray<T | undefined>
 	/** Whether every index from zero through length minus one was reflected. */
 	readonly dense: boolean
 }
@@ -662,12 +662,12 @@ export type Infer<S extends ContractShape> = [ContractShape] extends [S]
 				: S extends NullShape
 					? null
 					: S extends { readonly type: 'literal'; readonly values: infer V }
-						? V extends readonly (infer L)[]
+						? V extends ReadonlyArray<infer L>
 							? L
 							: never
 						: S extends { readonly type: 'array'; readonly items: infer I }
 							? I extends ContractShape
-								? readonly Infer<I>[]
+								? ReadonlyArray<Infer<I>>
 								: never
 							: S extends ObjectShape<infer P, infer A>
 								? P extends Readonly<Record<string, ContractShape>>
@@ -785,11 +785,8 @@ export type InferOpenIndex<A extends boolean | ContractShape> = [A] extends [fal
 			: unknown
 
 /** {@link Infer} of a union shape's `variants` — the union of each variant's inferred type. */
-export type InferUnion<V extends readonly ContractShape[]> = V extends readonly (infer U)[]
-	? U extends ContractShape
-		? Infer<U>
-		: never
-	: never
+export type InferUnion<V extends readonly ContractShape[]> =
+	V extends ReadonlyArray<infer U> ? (U extends ContractShape ? Infer<U> : never) : never
 
 /** {@link Infer} with its TOP-LEVEL `readonly` modifiers stripped (a shallow strip — nested object/array properties stay readonly) — for consumers writing the parsed value's own fields. */
 export type InferMutable<S extends ContractShape> = { -readonly [K in keyof Infer<S>]: Infer<S>[K] }

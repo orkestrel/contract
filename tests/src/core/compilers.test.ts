@@ -255,7 +255,7 @@ describe('validateShapeDepth', () => {
 			(shape: ContractShape) => createContract(shape),
 			'validateShapeDepth: every structural child must be a shape',
 		],
-	] satisfies readonly (readonly [string, (shape: ContractShape) => unknown, string])[])(
+	] satisfies ReadonlyArray<readonly [string, (shape: ContractShape) => unknown, string]>)(
 		'%s refuses an accessor-backed property entry without invoking it',
 		(_name, entry, message) => {
 			let reads = 0
@@ -292,7 +292,7 @@ describe('validateShapeDepth', () => {
 		// discarded work over a population the artifacts never saw, and removing it
 		// leaves one population with one refusal vocabulary at every entry.
 		['createContract', (shape: ContractShape) => createContract(shape), true],
-	] satisfies readonly (readonly [string, (shape: ContractShape) => unknown, boolean])[])(
+	] satisfies ReadonlyArray<readonly [string, (shape: ContractShape) => unknown, boolean]>)(
 		'%s applies descriptor-first accessor policy across all 38 node fields',
 		(_name, entry, ownership) => {
 			let fields = 0
@@ -354,7 +354,7 @@ describe('validateShapeDepth', () => {
 		['compileGenerator', (shape: ContractShape) => compileGenerator(shape, () => 0)],
 		['compileReporter', (shape: ContractShape) => compileReporter(shape, undefined)],
 		['compileAuditor', (shape: ContractShape) => compileAuditor(shape, undefined)],
-	] satisfies readonly (readonly [string, (shape: ContractShape) => unknown])[])(
+	] satisfies ReadonlyArray<readonly [string, (shape: ContractShape) => unknown]>)(
 		'%s performs two present-data node-field reads and none after capture',
 		(_name, entry) => {
 			let reads = 0
@@ -420,7 +420,7 @@ describe('validateShapeDepth', () => {
 		// walk was removed: it now reads a property entry exactly as often as the
 		// eight doors above it, because it reaches the declaration the same way.
 		['createContract', (shape: ContractShape) => createContract(shape)],
-	] satisfies readonly (readonly [string, (shape: ContractShape) => unknown])[])(
+	] satisfies ReadonlyArray<readonly [string, (shape: ContractShape) => unknown]>)(
 		'%s retains the two-read property-entry population without a third read',
 		(_name, entry) => {
 			const captured = numberShape()
@@ -756,13 +756,13 @@ describe('validateShapeDepth', () => {
 		Reflect.set(anyOf, '0', undefined)
 		const oneOf: JSONSchema[] = []
 		Reflect.set(oneOf, '0', undefined)
-		const entries: readonly {
+		const entries: ReadonlyArray<{
 			readonly name: string
 			readonly shape: ContractShape
 			readonly message: string
 			readonly code: 'structure' | 'pattern'
 			readonly context: Readonly<Record<string, unknown>>
-		}[] = [
+		}> = [
 			{
 				name: 'raw properties undefined',
 				shape: { type: 'raw', schema: { properties } },
@@ -937,42 +937,44 @@ describe('validateShapeDepth', () => {
 		Reflect.set(rawItems.schema, 'items', new Date())
 		const rawAdditional = structuredClone(COMPLETE_SHAPES.raw)
 		Reflect.set(rawAdditional.schema, 'additionalProperties', new Map())
-		const cases: readonly { readonly malformed: ContractShape; readonly control: ContractShape }[] =
-			[
-				{
-					malformed: literalString,
-					control: { type: 'literal', values: ['a', 'b', 'c'] },
+		const cases: ReadonlyArray<{
+			readonly malformed: ContractShape
+			readonly control: ContractShape
+		}> = [
+			{
+				malformed: literalString,
+				control: { type: 'literal', values: ['a', 'b', 'c'] },
+			},
+			{
+				malformed: literalObject,
+				control: { type: 'literal', values: ['a', 'b'] },
+			},
+			{
+				malformed: literalTyped,
+				control: { type: 'literal', values: [1, 2] },
+			},
+			{
+				malformed: rawProperties,
+				control: {
+					type: 'union',
+					variants: [{ type: 'raw', schema: { properties: {} } }, { type: 'string' }],
 				},
-				{
-					malformed: literalObject,
-					control: { type: 'literal', values: ['a', 'b'] },
+			},
+			{
+				malformed: rawItems,
+				control: {
+					type: 'union',
+					variants: [{ type: 'raw', schema: { items: {} } }, { type: 'string' }],
 				},
-				{
-					malformed: literalTyped,
-					control: { type: 'literal', values: [1, 2] },
+			},
+			{
+				malformed: rawAdditional,
+				control: {
+					type: 'union',
+					variants: [{ type: 'raw', schema: { additionalProperties: {} } }, { type: 'string' }],
 				},
-				{
-					malformed: rawProperties,
-					control: {
-						type: 'union',
-						variants: [{ type: 'raw', schema: { properties: {} } }, { type: 'string' }],
-					},
-				},
-				{
-					malformed: rawItems,
-					control: {
-						type: 'union',
-						variants: [{ type: 'raw', schema: { items: {} } }, { type: 'string' }],
-					},
-				},
-				{
-					malformed: rawAdditional,
-					control: {
-						type: 'union',
-						variants: [{ type: 'raw', schema: { additionalProperties: {} } }, { type: 'string' }],
-					},
-				},
-			]
+			},
+		]
 		for (const entry of cases) {
 			const malformed = [
 				attempt(() => ownShape(entry.malformed)),
@@ -1004,10 +1006,10 @@ describe('validateShapeDepth', () => {
 	})
 
 	it('rejects integer-empty ranges and misplaced optionals at all eleven shape entries', () => {
-		const malformed: readonly {
+		const malformed: ReadonlyArray<{
 			readonly shape: ContractShape
 			readonly code: 'range' | 'placement'
-		}[] = [
+		}> = [
 			{
 				shape: JSON.parse('{"type":"number","integer":true,"min":1.2,"max":1.8}'),
 				code: 'range',
@@ -1180,10 +1182,10 @@ describe('validateShapeDepth', () => {
 		const malformedInteger: ContractShape = JSON.parse(
 			'{"type":"number","integer":true,"min":2.5,"max":2.6}',
 		)
-		const cases: readonly {
+		const cases: ReadonlyArray<{
 			readonly shape: ContractShape
 			readonly code: 'range' | 'empty' | 'placement' | 'literal'
-		}[] = [
+		}> = [
 			{ shape: { type: 'string', min: 5, max: 1 }, code: 'range' },
 			{ shape: malformedInteger, code: 'range' },
 			{ shape: JSON.parse('{"type":"literal","values":[]}'), code: 'empty' },
@@ -1641,11 +1643,11 @@ describe('malformed shape children', () => {
 				throw new Error('symbol trap')
 			},
 		})
-		const fields: readonly {
+		const fields: ReadonlyArray<{
 			readonly shape: ContractShape
 			readonly field: string
 			readonly path: readonly string[]
-		}[] = [
+		}> = [
 			{
 				shape: JSON.parse('{"type":"string"}'),
 				field: 'min',
@@ -1785,10 +1787,10 @@ describe('malformed shape children', () => {
 
 	it('distinguishes corrupt nodes, structural children, property maps, and variant arrays', () => {
 		const missing: { readonly child: ContractShape } = JSON.parse('{}')
-		const cases: readonly {
+		const cases: ReadonlyArray<{
 			readonly shape: ContractShape
 			readonly message: string
-		}[] = [
+		}> = [
 			{
 				shape: JSON.parse('{}'),
 				message: 'validateShapeDepth: every node must be a recognized shape',
@@ -2008,10 +2010,10 @@ describe('malformed shape children', () => {
 	it('rejects every non-shape child with a structure ContractError at every entry point', () => {
 		const source: { readonly child: ContractShape } = JSON.parse('{}')
 		const child = source.child
-		const cases: readonly {
+		const cases: ReadonlyArray<{
 			readonly shape: ContractShape
 			readonly path: readonly string[]
-		}[] = [
+		}> = [
 			{
 				shape: { type: 'object', properties: { k: child } },
 				path: ['properties', 'k'],
@@ -2053,10 +2055,10 @@ describe('malformed shape children', () => {
 			value: undefined,
 			enumerable: true,
 		})
-		const cases: readonly {
+		const cases: ReadonlyArray<{
 			readonly shape: ContractShape
 			readonly path: readonly string[]
-		}[] = [
+		}> = [
 			{
 				shape: JSON.parse('{"type":"array","items":42}'),
 				path: ['items'],
@@ -2121,7 +2123,7 @@ describe('malformed shape children', () => {
 			Number.MAX_SAFE_INTEGER + 1,
 		]
 		const finite = [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]
-		const cases: { readonly shape: ContractShape; readonly code: 'bound' | 'range' }[] = []
+		const cases: Array<{ readonly shape: ContractShape; readonly code: 'bound' | 'range' }> = []
 
 		for (const boundary of ['min', 'max']) {
 			for (const value of integral) {
@@ -2167,10 +2169,10 @@ describe('malformed shape children', () => {
 	})
 
 	it('rejects malformed scalar snapshots instead of normalizing them', () => {
-		const cases: readonly {
+		const cases: ReadonlyArray<{
 			readonly shape: ContractShape
 			readonly path: readonly string[]
-		}[] = [
+		}> = [
 			{ shape: JSON.parse('{"type":"string","pattern":"x"}'), path: ['pattern'] },
 			{ shape: JSON.parse('{"type":"raw","schema":[]}'), path: ['schema'] },
 		]
@@ -2212,7 +2214,7 @@ describe('malformed shape children', () => {
 		for (let level = 0; level <= COMPILE_DEPTH_LIMIT + 1; level += 1) {
 			deep = { type: 'array', items: deep }
 		}
-		const cases: readonly { readonly name: string; readonly shape: ContractShape }[] = [
+		const cases: ReadonlyArray<{ readonly name: string; readonly shape: ContractShape }> = [
 			{ name: 'optional placement', shape: { type: 'array', items: optionalShape(stringShape()) } },
 			{ name: 'integer range', shape: { type: 'number', integer: true, min: 0.2, max: 0.8 } },
 			{ name: 'string min domain', shape: { type: 'string', min: -1 } },
@@ -2379,12 +2381,12 @@ describe('malformed shape children', () => {
 		const dataFlags = new PatternFixture('flags', false)
 		const accessorSource = new PatternFixture('source', true)
 		const accessorFlags = new PatternFixture('flags', true)
-		const cases: readonly {
+		const cases: ReadonlyArray<{
 			readonly name: string
 			readonly shape: ContractShape
 			readonly path?: readonly string[]
 			readonly message?: string
-		}[] = [
+		}> = [
 			{
 				name: 'array properties',
 				shape: JSON.parse('{"type":"object","properties":[]}'),
@@ -2609,7 +2611,7 @@ describe('malformed shape children', () => {
 		// pass buys is acceptance and nothing else: the published snapshot is an
 		// owned frozen plain record built from captured data, and no class
 		// instance, class behavior, or forged prototype survives into it.
-		const subjects: readonly { readonly name: string; readonly value: ContractShape }[] = [
+		const subjects: ReadonlyArray<{ readonly name: string; readonly value: ContractShape }> = [
 			{ name: 'stamped prototype', value: new ForgedBrandDeclaration() },
 			{ name: 'stripped prototype', value: new StrippedBrandDeclaration() },
 			{ name: 'proxied prototype', value: createProxiedBrandDeclaration() },
@@ -2848,15 +2850,17 @@ describe('malformed shape children', () => {
 
 describe('JSON Schema vocabulary safety', () => {
 	it('refuses empty applicator vocabularies and non-finite literal members at the shared gate', () => {
-		const cases: readonly { readonly shape: ContractShape; readonly code: 'empty' | 'literal' }[] =
-			[
-				{ shape: JSON.parse('{"type":"union","variants":[]}'), code: 'empty' },
-				{ shape: JSON.parse('{"type":"union","variants":[],"mode":"oneOf"}'), code: 'empty' },
-				{ shape: JSON.parse('{"type":"literal","values":[]}'), code: 'empty' },
-				{ shape: { type: 'literal', values: [Number.NaN] }, code: 'literal' },
-				{ shape: { type: 'literal', values: [Number.POSITIVE_INFINITY] }, code: 'literal' },
-				{ shape: { type: 'literal', values: [Number.NEGATIVE_INFINITY] }, code: 'literal' },
-			]
+		const cases: ReadonlyArray<{
+			readonly shape: ContractShape
+			readonly code: 'empty' | 'literal'
+		}> = [
+			{ shape: JSON.parse('{"type":"union","variants":[]}'), code: 'empty' },
+			{ shape: JSON.parse('{"type":"union","variants":[],"mode":"oneOf"}'), code: 'empty' },
+			{ shape: JSON.parse('{"type":"literal","values":[]}'), code: 'empty' },
+			{ shape: { type: 'literal', values: [Number.NaN] }, code: 'literal' },
+			{ shape: { type: 'literal', values: [Number.POSITIVE_INFINITY] }, code: 'literal' },
+			{ shape: { type: 'literal', values: [Number.NEGATIVE_INFINITY] }, code: 'literal' },
+		]
 
 		for (const entry of cases) {
 			const errors = [
@@ -3218,7 +3222,7 @@ describe('compileGuard', () => {
 })
 
 describe('compileAuditor — strict soundness matrix', () => {
-	const shapes: readonly (readonly [string, ContractShape])[] = [
+	const shapes: ReadonlyArray<readonly [string, ContractShape]> = [
 		...leafShapeVariations(),
 		['composite', compositeShape(2)],
 	]
@@ -3319,7 +3323,7 @@ describe('compileAuditor — object exactness', () => {
 
 describe('compileAuditor — strict coercion delta', () => {
 	it('faults every coercive leaf while explain stays clean and parse succeeds', () => {
-		const cases: readonly (readonly [string, ContractShape, unknown])[] = [
+		const cases: ReadonlyArray<readonly [string, ContractShape, unknown]> = [
 			['string-number', stringShape(), 42],
 			['number-string', numberShape(), '42'],
 			['boolean-word', booleanShape(), 'true'],
@@ -3423,7 +3427,7 @@ describe('compileAuditor — totality and cap', () => {
 			[object, {}],
 			[array, [{}]],
 			[nested, [[{}]]],
-		] satisfies readonly (readonly [ContractShape, unknown])[]) {
+		] satisfies ReadonlyArray<readonly [ContractShape, unknown]>) {
 			const faults = compileAuditor(shape, value)
 			expect(faults.length).toBe(FAULT_LIMIT)
 			expect(faults.length).toBeGreaterThan(0)
@@ -3683,7 +3687,7 @@ describe('compileParser', () => {
 })
 
 describe('compileReporter — soundness matrix', () => {
-	const shapes: readonly (readonly [string, ContractShape])[] = [
+	const shapes: ReadonlyArray<readonly [string, ContractShape]> = [
 		...leafShapeVariations(),
 		['composite', compositeShape(2)],
 	]
@@ -4986,7 +4990,7 @@ describe('four-door agreement — the whole matrix (H9)', () => {
 	// The instrument that settled the tier-1 findings, adopted as a gate. It sweeps
 	// every shape category against every sample and asks the only question that
 	// matters for soundness: may any door CERTIFY a value another door refuses?
-	const shapes: readonly (readonly [string, ContractShape])[] = [
+	const shapes: ReadonlyArray<readonly [string, ContractShape]> = [
 		...leafShapeVariations(),
 		['composite', compositeShape(2)],
 		['object:closed', objectShape({ a: stringShape() })],

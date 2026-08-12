@@ -152,14 +152,14 @@ export function tupleOf(
  * const isSameRole = literalOf(['admin', 'member', 'guest']) // the same guard, from an array
  * ```
  */
-export function literalOf<const Literals extends ReadonlyArray<LiteralValue>>(
+export function literalOf<const Literals extends readonly LiteralValue[]>(
 	literals: Literals,
 ): Guard<Literals[number]>
-export function literalOf<const Literals extends ReadonlyArray<LiteralValue>>(
+export function literalOf<const Literals extends readonly LiteralValue[]>(
 	...literals: Literals
 ): Guard<Literals[number]>
 export function literalOf(
-	...literals: ReadonlyArray<LiteralValue | ReadonlyArray<LiteralValue>>
+	...literals: ReadonlyArray<LiteralValue | readonly LiteralValue[]>
 ): Guard<LiteralValue> {
 	return contain(
 		() => {

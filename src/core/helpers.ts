@@ -67,7 +67,7 @@ import {
  */
 export function pathOf(
 	path: readonly string[],
-	...segments: readonly (string | undefined)[]
+	...segments: ReadonlyArray<string | undefined>
 ): readonly string[] {
 	const extended: string[] = []
 	for (let index = 0; index < path.length; index += 1) {
@@ -509,7 +509,7 @@ export function readSetEntries(value: ReadonlySet<unknown>): Result<readonly unk
  */
 export function readMapEntries(
 	value: ReadonlyMap<unknown, unknown>,
-): Result<readonly (readonly unknown[])[]> {
+): Result<ReadonlyArray<readonly unknown[]>> {
 	return attempt(() => {
 		const collected: unknown[][] = []
 		INTRINSICS.apply(INTRINSICS.pairs, value, [collectEntries(collected)])
@@ -1113,7 +1113,7 @@ export function enumerableKeys(value: object): readonly string[] | undefined {
  */
 export function readOptions<T extends object>(
 	source: T | undefined,
-	keys: readonly (keyof T & string)[],
+	keys: ReadonlyArray<keyof T & string>,
 	builder: string,
 	shape: string,
 ): T | undefined {
@@ -1280,10 +1280,10 @@ export function resolveField(record: Readonly<Record<string, unknown>>, path: Fi
  */
 export function matchesJSONDepth(value: unknown): boolean {
 	return holds(() => {
-		const stack: (
+		const stack: Array<
 			| { readonly operation: 'enter'; readonly value: unknown; readonly depth: number }
 			| { readonly operation: 'exit'; readonly value: object; readonly depth: number }
-		)[] = [{ operation: 'enter', value, depth: 0 }]
+		> = [{ operation: 'enter', value, depth: 0 }]
 		const active = new INTRINSICS.weakSet<object>()
 		const settled = new INTRINSICS.weakMap<object, number>()
 
@@ -1378,10 +1378,10 @@ export function matchesJSONDepth(value: unknown): boolean {
 export function matchesJSONValue(entry: unknown, ancestors: WeakSet<object>): entry is JSONValue {
 	return readValue(
 		() => {
-			const stack: (
+			const stack: Array<
 				| { readonly operation: 'enter'; readonly value: unknown }
 				| { readonly operation: 'exit'; readonly value: object }
-			)[] = [{ operation: 'enter', value: entry }]
+			> = [{ operation: 'enter', value: entry }]
 			// Walk-local, never the caller's set: a node whose WHOLE subtree already
 			// matched needs no second walk. Soundness — if a proved node could reach
 			// an ancestor active on some later path, that ancestor was inside the
@@ -1975,7 +1975,7 @@ export function createArrayFaults(
  * ```
  */
 export function selectClosestFaults<T extends AuditFault>(
-	reports: readonly (readonly T[])[],
+	reports: ReadonlyArray<readonly T[]>,
 ): readonly T[] {
 	let closest: readonly T[] | undefined
 	for (let index = 0; index < reports.length; index += 1) {

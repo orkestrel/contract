@@ -41,7 +41,7 @@ Load [hardening.md](references/hardening.md) for the hardening lane and for any 
 
 1. **Bound the campaign.** Record requested outcomes, in-scope environments/domains, explicit exclusions, supported hosts, dirty files, and evidence needed for acceptance.
 2. **Map before editing.** Trace public types, implementations, callers, tests, guides, exports, runtime boundaries, installed Orkestrel dependencies, and applicable legacy/upstream references.
-3. **Establish the intended contract.** Build a capability/defect matrix. Separate verified fact from inference. Mark each row implement, repair, retain, or exclude with a reason. The matrix is fixed at this step and is the campaign's definition of done: every later step serves a row, and work that serves no row belongs to the next campaign.
+3. **Establish the intended contract.** Build a capability/defect matrix. Separate verified fact from inference. Mark each row implement, repair, retain, or exclude with a reason. The matrix is fixed at this step and is the campaign's definition of done: every later step serves a row, and work that serves no row belongs to the next campaign. The row set is fixed; the planned work that closes it is not. Re-baseline that work at each phase boundary per `.agents/orchestration.md`, which owns the step and its boundary with rescoping.
 4. **Design types first.** Update guide/spec intent and `*/types.ts` before implementation, under the root design laws. A contract that needs a compatibility shim is the wrong contract.
 5. **Implement completely.** Finish every in-scope branch and reuse the exact installed Orkestrel primitives whose semantics match. The root completion law decides what may not be left behind.
 6. **Prove each defect before repairing it.** A repair begins with a test that fails for that defect: record the exact command and its failing count before the fix and the same command's passing count after. A repair with no red-then-green record is unproven.
@@ -51,7 +51,7 @@ Load [hardening.md](references/hardening.md) for the hardening lane and for any 
 10. **Document the final behavior.** Update the governing guide, examples, method tables, limitations, and parity coverage. Document architectural limits honestly.
 11. **Audit completion.** Inspect test discovery, `.todo`/`.skip`/conditional skip use, source/test helper duplication, exports, environment isolation, unexpected text corruption, and the entire diff.
 12. **Verify.** Run the repository-prescribed gates in order and inspect the generated outputs relevant to the request.
-13. **Review independently, and never by the author.** When orchestration is available, require a design-fit reviewer, an objective correctness/constraints analyst, and a mechanical checker; add an adversarial pass for security, concurrency, destructive paths, or external input. A unit's auditor is the engine that did not write it — same-engine re-review returns the author's own blind spot. Resolve every required finding, then rerun affected verification.
+13. **Review independently, and never by the author.** When orchestration is available, run the two-lane adversarial pass — subjective design fit and objective correctness — plus a mechanical checker, per `.agents/orchestration.md`. Add a dedicated adversarial round for security, concurrency, destructive paths, or external input. A unit's auditor is an engine that did not write it; same-engine re-review returns the author's own blind spot. Resolve every required finding, then rerun affected verification.
 
 ## Accept the result
 

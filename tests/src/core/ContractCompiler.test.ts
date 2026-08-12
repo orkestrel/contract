@@ -239,7 +239,7 @@ describe('ContractCompiler', () => {
 	})
 
 	it('agrees across is, audit, parse, and explain for every shape category', () => {
-		const cases: readonly (readonly [ContractShape, readonly unknown[]])[] = [
+		const cases: ReadonlyArray<readonly [ContractShape, readonly unknown[]]> = [
 			[stringShape({ min: 1, max: 4 }), ['', 'ab', 'abcde', 1, null, undefined]],
 			[numberShape({ min: 0, max: 10 }), [-1, 5, 11, '5', Number.NaN, null]],
 			[integerShape({ min: 0 }), [1, 1.5, -1, '2', null]],

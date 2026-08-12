@@ -153,7 +153,7 @@ for (const entry of manifest) {
 // every declaration in the tree and still disagree with the object the package
 // actually ships. These read the real prototypes instead, and the two halves
 // answer different questions — which is why both are here.
-const CORE_GUIDE = 'guides/src/contract.md'
+const CORE_GUIDE = 'guides/contract.md'
 const RUNTIME_CLASSES = [
 	{ name: 'ContractCompiler', value: ContractCompiler },
 	{ name: 'ContractError', value: ContractError },

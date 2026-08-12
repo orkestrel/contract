@@ -330,7 +330,9 @@ describe('collection and typed-array validators', () => {
 		})
 
 		it('a class instance → true', () => {
-			class Example {}
+			class Example {
+				readonly member = 'value'
+			}
 			expect(isObject(new Example())).toBe(true)
 		})
 
@@ -361,7 +363,13 @@ describe('collection and typed-array validators', () => {
 
 		it('a function → false (typeof is "function", not "object")', () => {
 			expect(isObject(() => undefined)).toBe(false)
-			expect(isObject(class Example {})).toBe(false)
+			expect(
+				isObject(
+					class Example {
+						readonly member = 'value'
+					},
+				),
+			).toBe(false)
 		})
 
 		it('narrows to object when true', () => {
@@ -866,7 +874,13 @@ describe('function validators', () => {
 	})
 
 	it('detects constructor functions', () => {
-		expect(isConstructor(class Example {})).toBe(true)
+		expect(
+			isConstructor(
+				class Example {
+					readonly member = 'value'
+				},
+			),
+		).toBe(true)
 		expect(isConstructor(Date)).toBe(true)
 		expect(isConstructor(() => undefined)).toBe(false)
 		expect(isConstructor('not a function')).toBe(false)
@@ -887,7 +901,7 @@ describe('function validators', () => {
 
 describe('validator totality sweep', () => {
 	it('every exported is* guard returns a boolean for every hostile fixture', () => {
-		const guards: readonly ((value: unknown) => boolean)[] = [
+		const guards: ReadonlyArray<(value: unknown) => boolean> = [
 			isNull,
 			isUndefined,
 			isDefined,

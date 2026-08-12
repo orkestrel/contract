@@ -1510,7 +1510,7 @@ export function publicDoors(): readonly PublicDoor[] {
 	// probe's own construction as the package's escape.
 	const instant = new Date()
 	const ancestors = new WeakSet<object>()
-	const coded: readonly (readonly [string, () => unknown])[] = [
+	const coded: ReadonlyArray<readonly [string, () => unknown]> = [
 		['new ShapeCloner', () => new ShapeCloner(shape)],
 		['ShapeCloner.clone', () => new ShapeCloner(shape).clone()],
 		['new SchemaCloner', () => new SchemaCloner(schema)],
@@ -1623,7 +1623,7 @@ export function publicDoors(): readonly PublicDoor[] {
 		['orOf', () => orOf(isString, isNumber)('a')],
 		['complementOf', () => complementOf(isString, isEmptyString)('a')],
 	]
-	const total: readonly (readonly [string, () => unknown])[] = [
+	const total: ReadonlyArray<readonly [string, () => unknown]> = [
 		['contract.is', () => contract.is(record)],
 		['contract.schema', () => contract.schema],
 		['isContractError', () => isContractError(record)],
@@ -1736,7 +1736,7 @@ export class LateMutation {
 		return this.#walks
 	}
 
-	#enumerate(target: object): readonly (string | symbol)[] {
+	#enumerate(target: object): ReadonlyArray<string | symbol> {
 		this.#walks += 1
 		if (this.#walks > 1) this.#mutate()
 		return Reflect.ownKeys(target)
@@ -2390,7 +2390,7 @@ export interface Tree<T> {
 	/** Value stored at this node. */
 	readonly value: T
 	/** Child nodes below this node. */
-	readonly children: readonly Tree<T>[]
+	readonly children: ReadonlyArray<Tree<T>>
 }
 
 /**
@@ -3172,7 +3172,7 @@ export const SHAPE_SEPARATIONS: Readonly<Record<ContractShape['type'], ShapeSepa
 	})
 
 /** Every `stringShape` variation: plain, min-only, max-only, min+max, described. */
-export function stringShapeVariations(): readonly (readonly [string, ContractShape])[] {
+export function stringShapeVariations(): ReadonlyArray<readonly [string, ContractShape]> {
 	return [
 		['string:plain', stringShape()],
 		['string:min', stringShape({ min: 2 })],
@@ -3186,7 +3186,7 @@ export function stringShapeVariations(): readonly (readonly [string, ContractSha
  * Every `numberShape` / `integerShape` variation: plain, bounded, integer,
  * bounded integer, and an integer with fractional (but non-empty) bounds.
  */
-export function numberShapeVariations(): readonly (readonly [string, ContractShape])[] {
+export function numberShapeVariations(): ReadonlyArray<readonly [string, ContractShape]> {
 	return [
 		['number:plain', numberShape()],
 		['number:bounds', numberShape({ min: -5, max: 5 })],
@@ -3197,17 +3197,17 @@ export function numberShapeVariations(): readonly (readonly [string, ContractSha
 }
 
 /** The single `booleanShape` variation. */
-export function booleanShapeVariations(): readonly (readonly [string, ContractShape])[] {
+export function booleanShapeVariations(): ReadonlyArray<readonly [string, ContractShape]> {
 	return [['boolean:plain', booleanShape({ description: 'a flag' })]]
 }
 
 /** The single `nullShape` variation. */
-export function nullShapeVariations(): readonly (readonly [string, ContractShape])[] {
+export function nullShapeVariations(): ReadonlyArray<readonly [string, ContractShape]> {
 	return [['null:plain', nullShape()]]
 }
 
 /** Every `literalShape` variation: single/multi string, number, boolean, mixed, described. */
-export function literalShapeVariations(): readonly (readonly [string, ContractShape])[] {
+export function literalShapeVariations(): ReadonlyArray<readonly [string, ContractShape]> {
 	return [
 		['literal:single', literalShape(['only'])],
 		['literal:multi', literalShape(['a', 'b', 'c'])],
@@ -3219,7 +3219,7 @@ export function literalShapeVariations(): readonly (readonly [string, ContractSh
 }
 
 /** The single `jsonShape` variation. */
-export function jsonShapeVariations(): readonly (readonly [string, ContractShape])[] {
+export function jsonShapeVariations(): ReadonlyArray<readonly [string, ContractShape]> {
 	return [['json:plain', jsonShape()]]
 }
 
@@ -3227,7 +3227,7 @@ export function jsonShapeVariations(): readonly (readonly [string, ContractShape
  * Every leaf-kind × variation pair, flattened — string, number, boolean,
  * null, literal, and json, each with every knob combination named above.
  */
-export function leafShapeVariations(): readonly (readonly [string, ContractShape])[] {
+export function leafShapeVariations(): ReadonlyArray<readonly [string, ContractShape]> {
 	return [
 		...stringShapeVariations(),
 		...numberShapeVariations(),
@@ -3446,8 +3446,8 @@ export function buildTypeFault(expected: FaultKind): Fault {
  */
 export function faultsToConstraints(
 	faults: readonly AuditFault[],
-): readonly (FaultConstraint | undefined)[] {
-	const constraints: (FaultConstraint | undefined)[] = []
+): ReadonlyArray<FaultConstraint | undefined> {
+	const constraints: Array<FaultConstraint | undefined> = []
 	for (let index = 0; index < faults.length; index += 1) {
 		const fault = faults[index]
 		if (fault === undefined) continue

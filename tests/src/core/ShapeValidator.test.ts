@@ -311,7 +311,7 @@ describe('ShapeValidator', () => {
 				},
 			},
 		)
-		const entries: readonly (readonly [ContractShape, readonly string[]])[] = [
+		const entries: ReadonlyArray<readonly [ContractShape, readonly string[]]> = [
 			[object, ['properties']],
 			[union, ['variants']],
 			[literal, ['values']],
@@ -471,7 +471,7 @@ describe('ShapeValidator', () => {
 	it.each([
 		['domain-cycle-structure', ['domain', 'cycle', 'structure']],
 		['structure-domain-cycle', ['structure', 'domain', 'cycle']],
-	] satisfies readonly (readonly [string, readonly ('domain' | 'cycle' | 'structure')[]])[])(
+	] satisfies ReadonlyArray<readonly [string, ReadonlyArray<'domain' | 'cycle' | 'structure'>]>)(
 		'keeps structure before cycle before domain for %s insertion order',
 		(_name, order) => {
 			const source = createShapeValidationCase(order)
@@ -720,10 +720,10 @@ describe('ShapeValidator', () => {
 		}
 		const malformed: ContractShape = { type: 'object', properties: {} }
 		Reflect.set(malformed.type === 'object' ? malformed.properties : {}, 'name', null)
-		const doors: readonly {
+		const doors: ReadonlyArray<{
 			readonly name: string
 			readonly open: (shape: ContractShape) => void
-		}[] = [
+		}> = [
 			{ name: 'ShapeValidator.validate', open: (shape) => new ShapeValidator(shape).validate() },
 			{ name: 'validateShapeDepth', open: (shape) => validateShapeDepth(shape) },
 		]
@@ -1363,7 +1363,7 @@ describe('the cyclic fallback agrees with an unmemoized walk (R6-A-fix)', () => 
 		const tally = { accepted: 0, cycle: 0, depth: 0, other: 0 }
 		for (let round = 0; round < 400; round += 1) {
 			const hubCount = 3 + Math.floor(draw() * 4)
-			const hubProperties: Record<string, ContractShape>[] = []
+			const hubProperties: Array<Record<string, ContractShape>> = []
 			const hubs: ContractShape[] = []
 			for (let hub = 0; hub < hubCount; hub += 1) {
 				const properties: Record<string, ContractShape> = {}

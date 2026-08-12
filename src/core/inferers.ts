@@ -104,7 +104,7 @@ export function canonicalizeValue(value: unknown, ancestors: WeakSet<object>): s
 			}
 			const encodings = new INTRINSICS.weakMap<object, string>()
 			const admitted: object[] = []
-			const stack: (
+			const stack: Array<
 				| { readonly operation: 'enter'; readonly value: object }
 				| {
 						readonly operation: 'exit'
@@ -112,7 +112,7 @@ export function canonicalizeValue(value: unknown, ancestors: WeakSet<object>): s
 						readonly members: readonly unknown[]
 						readonly keys: readonly string[] | undefined
 				  }
-			)[] = [{ operation: 'enter', value }]
+			> = [{ operation: 'enter', value }]
 			try {
 				while (stack.length > 0) {
 					const frame = stack.pop()
@@ -639,7 +639,7 @@ export function inferPrimitiveEnum(
 				}
 				if (keys.length >= owned.length || keys.length > limit) return undefined
 				const ordered = sortValues(keys)
-				const population: (string | number)[] = []
+				const population: Array<string | number> = []
 				for (let index = 0; index < ordered.length; index += 1) {
 					const key = ordered[index]
 					if (key === undefined) continue
@@ -1128,7 +1128,7 @@ export function inferSamples(
 				// Indexed rather than `every`, and the narrowed rows are collected as they
 				// are recognized so the record branch keeps its honest typing without an
 				// assertion.
-				const records: Record<string, unknown>[] = []
+				const records: Array<Record<string, unknown>> = []
 				for (let index = 0; index < owned.length; index += 1) {
 					const sample = owned[index]
 					if (isRecord(sample)) records[records.length] = sample
@@ -1214,7 +1214,7 @@ export function inferSamples(
  * ```
  */
 export function inferRecordSamples(
-	samples: readonly Record<string, unknown>[],
+	samples: ReadonlyArray<Record<string, unknown>>,
 	depth: number,
 	breadth: number,
 	closed: boolean,

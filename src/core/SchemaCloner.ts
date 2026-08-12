@@ -57,18 +57,18 @@ export class SchemaCloner implements SchemaClonerInterface {
 	readonly #owned: WeakSet<object>
 	#memo: Map<object, object>
 	readonly #emptyMemo: Map<object, object>
-	#pending: {
+	#pending: Array<{
 		readonly source: object
 		readonly clone: object
 		readonly path: readonly string[]
 		readonly depth: number
-	}[]
-	readonly #emptyPending: {
+	}>
+	readonly #emptyPending: Array<{
 		readonly source: object
 		readonly clone: object
 		readonly path: readonly string[]
 		readonly depth: number
-	}[]
+	}>
 	#state:
 		| { readonly phase: 'ready' }
 		| { readonly phase: 'running'; readonly poison: ContractError }
