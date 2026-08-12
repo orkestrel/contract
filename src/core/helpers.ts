@@ -17,7 +17,13 @@ import type {
 	SampleMemo,
 	StringShape,
 } from './types.js'
-import { COMPILE_NODE_LIMIT, GUARD_DEPTH_LIMIT, INTRINSICS, PREVIEW_LIMIT } from './constants.js'
+import {
+	COMPILE_NODE_LIMIT,
+	GUARD_DEPTH_LIMIT,
+	INFER_DEPTH_LIMIT,
+	INTRINSICS,
+	PREVIEW_LIMIT,
+} from './constants.js'
 import { ContractError, isContractError } from './errors.js'
 import {
 	isBigInt,
@@ -1628,6 +1634,36 @@ export function sanitizeBudget(value: number | undefined, fallback: number): num
 			context: { limit: 'finite non-negative integer', received: preview(fallback) },
 		})
 	}, 'sanitizeBudget')
+}
+
+/**
+ * Resolve a caller's depth budget to one the traversal can actually survive.
+ *
+ * @remarks
+ * {@link sanitizeBudget} decides the SHAPE of a budget and deliberately lets any
+ * finite non-negative integer through, because it must never read a fallback a
+ * hostile caller supplied. That left the depth axis unbounded from above, and
+ * depth is the axis that recurses: `1e9` is a valid integer, so the walk descended
+ * until the call STACK failed, at a depth that varied between runs, and the
+ * refusal surfaced as an unreadable value rather than as the exhaustion the guard
+ * promises. Breadth needs no such ceiling — its loop is already bounded by the
+ * entries actually present.
+ *
+ * So {@link INFER_DEPTH_LIMIT} is the ceiling as well as the default, and
+ * `maxDepth` narrows the walk rather than widening it. One bound, and the same
+ * answer on every host.
+ *
+ * @param value - The candidate depth budget
+ * @returns A finite non-negative integer no greater than `INFER_DEPTH_LIMIT`
+ *
+ * @example
+ * ```ts
+ * sanitizeDepth(4) // 4
+ * sanitizeDepth(1e9) // 32
+ * ```
+ */
+export function sanitizeDepth(value: number | undefined): number {
+	return INTRINSICS.min(sanitizeBudget(value, INFER_DEPTH_LIMIT), INFER_DEPTH_LIMIT)
 }
 
 // === Reporting

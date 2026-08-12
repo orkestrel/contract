@@ -100,12 +100,14 @@ import {
 	objectShape,
 	nullableShape,
 	optionalShape,
+	INFER_DEPTH_LIMIT,
 	preview,
 	readArrayEntries,
 	readOptions,
 	readValue,
 	resolveField,
 	sanitizeBudget,
+	sanitizeDepth,
 	schemaToObject,
 	schemaToParameters,
 	seededRandom,
@@ -1071,6 +1073,35 @@ describe('readOptions', () => {
 		expect(error.code).toBe('structure')
 		expect(error.message).toBe('stringShape: options could not be read')
 		expect(error.cause).toBeInstanceOf(Error)
+	})
+})
+
+describe('sanitizeDepth', () => {
+	it('caps a valid but oversized budget at the limit', () => {
+		expect(sanitizeDepth(1e9)).toBe(INFER_DEPTH_LIMIT)
+		expect(sanitizeDepth(INFER_DEPTH_LIMIT + 1)).toBe(INFER_DEPTH_LIMIT)
+		expect(sanitizeDepth(Number.MAX_SAFE_INTEGER)).toBe(INFER_DEPTH_LIMIT)
+	})
+
+	it('passes a budget at or below the limit through unchanged', () => {
+		// The control: without this the helper could return the constant for every
+		// input and still satisfy the cap above, which would make `maxDepth` inert
+		// rather than narrowing.
+		for (const value of [0, 1, 4, INFER_DEPTH_LIMIT - 1, INFER_DEPTH_LIMIT]) {
+			expect(sanitizeDepth(value)).toBe(value)
+		}
+	})
+
+	it('falls back to the limit for a budget that is not a finite non-negative integer', () => {
+		for (const value of [Number.NaN, Number.POSITIVE_INFINITY, -1, 2.5, undefined]) {
+			expect(sanitizeDepth(value)).toBe(INFER_DEPTH_LIMIT)
+		}
+	})
+
+	it('leaves sanitizeBudget free to pass an oversized budget through', () => {
+		// The two are deliberately different: sanitizeBudget decides shape and must
+		// never read a hostile fallback, so the ceiling lives here instead.
+		expect(sanitizeBudget(1e9, INFER_DEPTH_LIMIT)).toBe(1e9)
 	})
 })
 

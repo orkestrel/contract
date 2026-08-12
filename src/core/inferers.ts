@@ -3,7 +3,6 @@ import {
 	FORMAT_MAX_LENGTH,
 	FORMAT_PATTERNS,
 	INFER_BREADTH_LIMIT,
-	INFER_DEPTH_LIMIT,
 	INFER_ENUM_LIMIT,
 	INTRINSICS,
 } from './constants.js'
@@ -41,6 +40,7 @@ import {
 	readValue,
 	retainDepth,
 	sanitizeBudget,
+	sanitizeDepth,
 	sortValues,
 } from './helpers.js'
 
@@ -49,7 +49,7 @@ import {
 // compileSchema (compilers.ts), which walks a finite, developer-authored
 // ContractShape tree. Recursion here is runtime-only and bounded on three
 // axes: a WeakSet of ancestor objects/arrays (cycle safety), a decrementing
-// depth budget (INFER_DEPTH_LIMIT default), and a per-container sampling cap
+// depth budget held at the INFER_DEPTH_LIMIT ceiling, and a per-container sampling cap
 // (INFER_BREADTH_LIMIT default). Readable unsupported values widen only where
 // documented; failed traversal is a coded refusal, never a permissive schema.
 
@@ -787,7 +787,7 @@ export function inferArray(
 	memo: WeakMap<object, Map<number, JSONSchema>>,
 ): JSONSchema {
 	return contain(() => {
-		const maxDepth = sanitizeBudget(depth, INFER_DEPTH_LIMIT)
+		const maxDepth = sanitizeDepth(depth)
 		const maxBreadth = sanitizeBudget(breadth, INFER_BREADTH_LIMIT)
 		return readValue(() => {
 			if (!(maxDepth > 0) || matchesVisited(visited, value)) return {}
@@ -910,12 +910,16 @@ export function inferObject(
 		// export emitted `{ type: 'object', additionalProperties: false }` — a
 		// CLOSED schema that rejects the very record it was inferred from, the one
 		// direction the schema-inversion law forbids. The DEPTH budget is left
-		// exactly as it was: `!(depth > 0)` already fails safe for `NaN` by widening
-		// to `{}`, and a non-positive direct budget means EXHAUSTED at this door.
+		// exactly as it was in one respect — `!(maxDepth > 0)` still fails safe by
+		// widening to `{}` — but it now passes through `sanitizeDepth` as well, so a
+		// direct caller cannot hand this door a budget deeper than the walk survives.
+		// `inferArray` already sanitized its depth and this one did not, so the two
+		// containers answered a hostile budget differently at the same level.
 		const maxBreadth = sanitizeBudget(breadth, INFER_BREADTH_LIMIT)
+		const maxDepth = sanitizeDepth(depth)
 		return readValue(() => {
-			if (!(depth > 0) || matchesVisited(visited, value)) return {}
-			const cached = INTRINSICS.apply(INTRINSICS.recall, memo, [value])?.get(depth)
+			if (!(maxDepth > 0) || matchesVisited(visited, value)) return {}
+			const cached = INTRINSICS.apply(INTRINSICS.recall, memo, [value])?.get(maxDepth)
 			if (cached) return cached
 			admitVisited(visited, value)
 			// Contain the whole key-enumeration + value-read walk before converting a
@@ -945,7 +949,7 @@ export function inferObject(
 					}
 					properties[key] = inferValue(
 						propertyValue,
-						depth - 1,
+						maxDepth - 1,
 						maxBreadth,
 						closed,
 						format,
@@ -968,7 +972,7 @@ export function inferObject(
 				...(required.length > 0 ? { required } : {}),
 				additionalProperties: partial ? true : !closed,
 			}
-			retainDepth(memo, value, depth, schema)
+			retainDepth(memo, value, maxDepth, schema)
 			return schema
 		}, 'inferObject')
 	}, 'inferObject')
@@ -992,11 +996,16 @@ export function inferObject(
  * expect an object-shaped `inputSchema`; wrap a non-object payload with
  * {@link schemaToObject} before advertising it as a tool's parameters.
  *
- * `maxDepth` / `maxProperties` are sanitized via {@link sanitizeBudget} to a
- * finite non-negative integer, falling back to {@link INFER_DEPTH_LIMIT} /
- * {@link INFER_BREADTH_LIMIT} for anything else (`NaN`, `Infinity`, negative,
- * fractional) — a hostile or malformed budget can never defeat the depth
- * guard or corrupt the sampled key/element list.
+ * `maxProperties` is sanitized via {@link sanitizeBudget} to a finite
+ * non-negative integer, falling back to {@link INFER_BREADTH_LIMIT} for anything
+ * else (`NaN`, `Infinity`, negative, fractional), so a malformed breadth cannot
+ * corrupt the sampled key/element list.
+ *
+ * `maxDepth` goes through {@link sanitizeDepth}, which does the same and then caps
+ * at {@link INFER_DEPTH_LIMIT}, so the option NARROWS the walk and cannot widen
+ * it. The cap is what makes the depth guard unbreakable: depth is the recursing
+ * axis, and a large-but-valid budget used to descend until the call STACK failed
+ * rather than until the guard said stop.
  *
  * @param value - The value to infer a schema from
  * @param options - Optional `maxDepth` / `maxProperties` / `closed` / `format` bounds
@@ -1019,7 +1028,7 @@ export function valueToSchema(value: unknown, options?: ValueToSchemaOptions): J
 			'valueToSchema',
 			'schema',
 		)
-		const maxDepth = sanitizeBudget(optionsSnapshot?.maxDepth, INFER_DEPTH_LIMIT)
+		const maxDepth = sanitizeDepth(optionsSnapshot?.maxDepth)
 		const maxProperties = sanitizeBudget(optionsSnapshot?.maxProperties, INFER_BREADTH_LIMIT)
 		const closed = optionsSnapshot?.closed ?? true
 		const format = optionsSnapshot?.format ?? false
@@ -1369,8 +1378,9 @@ export function inferRecordSamples(
  * and `enum` (both default `false`) opt a low-cardinality/unanimous-format
  * slot into the corresponding keyword — see {@link inferSamples} for the
  * precedence and the multi-sample format-disabling seam. `maxDepth` /
- * `maxProperties` are sanitized via {@link sanitizeBudget} the same way
- * {@link valueToSchema} sanitizes them — see there for why.
+ * `maxProperties` are resolved exactly as {@link valueToSchema} resolves them —
+ * breadth through {@link sanitizeBudget}, depth through {@link sanitizeDepth},
+ * which also caps at {@link INFER_DEPTH_LIMIT}; see there for why.
  *
  * @param samples - The example values to infer a schema from
  * @param options - Optional `maxDepth` / `maxProperties` / `closed` / `format` / `enum` bounds
@@ -1396,7 +1406,7 @@ export function samplesToSchema(
 			'samplesToSchema',
 			'schema',
 		)
-		const maxDepth = sanitizeBudget(optionsSnapshot?.maxDepth, INFER_DEPTH_LIMIT)
+		const maxDepth = sanitizeDepth(optionsSnapshot?.maxDepth)
 		const maxProperties = sanitizeBudget(optionsSnapshot?.maxProperties, INFER_BREADTH_LIMIT)
 		const closed = optionsSnapshot?.closed ?? true
 		const format = optionsSnapshot?.format ?? false

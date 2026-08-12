@@ -386,14 +386,21 @@ export const GENERATION_ATTEMPT_LIMIT = 32
 // Value-to-schema inference bounds (`valueToSchema` / `samplesToSchema`).
 
 /**
- * The default maximum object/array nesting depth {@link valueToSchema} walks,
- * frozen.
+ * The maximum object/array nesting depth {@link valueToSchema} walks, frozen.
  *
  * @remarks
  * Bounds inference against adversarial or cyclic runtime input — once the
  * remaining depth budget reaches zero, inference stops descending and emits
  * the empty accept-anything schema `{}` for that branch instead of recursing
- * further. Overridable per call via {@link ValueToSchemaOptions.maxDepth}.
+ * further. LOWERABLE per call via {@link ValueToSchemaOptions.maxDepth}; a
+ * higher value is held here.
+ *
+ * A ceiling rather than a default, because the walk recurses: what a deeper
+ * walk spends is the JavaScript call stack rather than this budget, and that
+ * stack is not a fixed quantity. The survivable depth measured on one host rose
+ * across repeated calls within a single process as the engine optimized, and
+ * fell to roughly this number under a reduced stack size. Any larger constant
+ * therefore has a host where it fails, which is why none is published.
  */
 export const INFER_DEPTH_LIMIT = 32
 
