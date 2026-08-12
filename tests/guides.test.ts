@@ -1,6 +1,3 @@
-// The consumer-side drop-in (PROPOSAL §6): the guides-parity suite run against
-// this repo's own guides/README.md manifest.
-
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -26,9 +23,9 @@ import {
 	ShapeCloner,
 	ShapeValidator,
 } from '@src/core'
-import { DriftedMethods, SMUGGLED_KEY, SmuggledMember } from '../../setup.js'
+import { DriftedMethods, SMUGGLED_KEY, SmuggledMember } from './setup.js'
 
-const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
+const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const WALK_DIRS = ['src', 'guides', 'tests']
 const SELF_SPECIFIERS = ['@orkestrel/contract', '@src/core']
 
