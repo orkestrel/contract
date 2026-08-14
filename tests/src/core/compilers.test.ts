@@ -1195,7 +1195,7 @@ describe('validateShapeDepth', () => {
 		]
 
 		for (const entry of cases) {
-			expect(() => validateShapeDepth(entry.shape)).toThrowError(ContractError)
+			expect(() => validateShapeDepth(entry.shape)).toThrow(ContractError)
 			const error = captureContractError(() => validateShapeDepth(entry.shape))
 			expect(isContractError(error)).toBe(true)
 			expect(error.code).toBe(entry.code)
@@ -1207,7 +1207,7 @@ describe('validateShapeDepth', () => {
 		raw.items = raw
 		const shape: ContractShape = raw
 
-		expect(() => validateShapeDepth(shape)).toThrowError(ContractError)
+		expect(() => validateShapeDepth(shape)).toThrow(ContractError)
 		const error = captureContractError(() => validateShapeDepth(shape))
 		expect(error).toBeInstanceOf(ContractError)
 		expect(error.code).toBe('cycle')
@@ -1220,7 +1220,7 @@ describe('validateShapeDepth', () => {
 		raw.properties.self = raw
 		const shape: ContractShape = raw
 
-		expect(() => validateShapeDepth(shape)).toThrowError(ContractError)
+		expect(() => validateShapeDepth(shape)).toThrow(ContractError)
 		const error = captureContractError(() => validateShapeDepth(shape))
 		expect(error).toBeInstanceOf(ContractError)
 		expect(error.code).toBe('cycle')
@@ -1232,7 +1232,7 @@ describe('validateShapeDepth', () => {
 		raw.variants.push(raw)
 		const shape: ContractShape = raw
 
-		expect(() => validateShapeDepth(shape)).toThrowError(ContractError)
+		expect(() => validateShapeDepth(shape)).toThrow(ContractError)
 		const error = captureContractError(() => validateShapeDepth(shape))
 		expect(error).toBeInstanceOf(ContractError)
 		expect(error.code).toBe('cycle')
@@ -4521,7 +4521,7 @@ describe('compileGenerator', () => {
 	it('throws generate when no oneOf candidate can satisfy the compiled guard', () => {
 		const shape = oneOfShape(literalShape(['same']), literalShape(['same']))
 
-		expect(() => compileGenerator(shape, seededRandom(1))).toThrowError(ContractError)
+		expect(() => compileGenerator(shape, seededRandom(1))).toThrow(ContractError)
 		const error = captureContractError(() => compileGenerator(shape, seededRandom(1)))
 		expect(isContractError(error)).toBe(true)
 		expect(error.code).toBe('generate')

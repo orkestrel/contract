@@ -526,13 +526,13 @@ describe('shape builders', () => {
 	})
 
 	it('rejects invalid string, array, and number bounds plus stateful patterns at construction', () => {
-		expect(() => stringShape({ min: -1 })).toThrowError(ContractError)
-		expect(() => stringShape({ max: 1.5 })).toThrowError(ContractError)
-		expect(() => arrayShape(stringShape(), { min: Number.MAX_SAFE_INTEGER + 1 })).toThrowError(
+		expect(() => stringShape({ min: -1 })).toThrow(ContractError)
+		expect(() => stringShape({ max: 1.5 })).toThrow(ContractError)
+		expect(() => arrayShape(stringShape(), { min: Number.MAX_SAFE_INTEGER + 1 })).toThrow(
 			ContractError,
 		)
-		expect(() => numberShape({ max: Number.POSITIVE_INFINITY })).toThrowError(ContractError)
-		expect(() => stringShape({ pattern: /^value$/g })).toThrowError(ContractError)
+		expect(() => numberShape({ max: Number.POSITIVE_INFINITY })).toThrow(ContractError)
+		expect(() => stringShape({ pattern: /^value$/g })).toThrow(ContractError)
 
 		const bound = captureContractError(() => stringShape({ min: -1 }))
 		expect(bound).toBeInstanceOf(ContractError)
@@ -740,7 +740,7 @@ describe('shape builders', () => {
 
 		expect(shape.pattern).not.toBe(shape.pattern)
 		expect(Object.isFrozen(shape.pattern)).toBe(true)
-		expect(() => shape.pattern?.compile('^owned-drift$')).toThrowError(TypeError)
+		expect(() => shape.pattern?.compile('^owned-drift$')).toThrow(TypeError)
 		expect(shape.pattern?.source).toBe('^stable$')
 		expect(shape.pattern?.lastIndex).toBe(0)
 		expect(compileSchema(shape).pattern).toBe('^stable$')
@@ -756,7 +756,7 @@ describe('shape builders', () => {
 		])
 
 		const generated = stringShape({ min: 1, max: 1, pattern: /^[a-z0-9]$/ })
-		expect(() => generated.pattern?.compile('^owned-drift$')).toThrowError(TypeError)
+		expect(() => generated.pattern?.compile('^owned-drift$')).toThrow(TypeError)
 		expect(compileGenerator(generated, () => 0)).toBe('a')
 	})
 
