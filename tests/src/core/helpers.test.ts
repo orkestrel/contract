@@ -87,8 +87,9 @@ import {
 	inferSamples,
 	isBoundedJSONValue,
 	isJSONValue,
-	isRecord,
 	isContractError,
+	isRecord,
+	isString,
 	parseJSONValue,
 	integerShape,
 	JSONCloner,
@@ -104,6 +105,7 @@ import {
 	INFER_DEPTH_LIMIT,
 	preview,
 	readArrayEntries,
+	readGuardShape,
 	readOptions,
 	readValue,
 	resolveField,
@@ -768,6 +770,39 @@ describe('readArrayEntries', () => {
 		const value = readArrayEntries(hostileValue)
 		expect(value.success).toBe(false)
 		expect(!value.success && value.error).toBe(valueReason)
+	})
+})
+
+describe('readGuardShape', () => {
+	it('snapshots required, listed-optional, and all-optional modes', () => {
+		const required = readGuardShape({ id: isString }, undefined, 'recordOf')
+		expect(required.names).toEqual(['id'])
+		expect(required.guards.id).toBe(isString)
+		expect(matchesMember(required.optional, 'id')).toBe(false)
+		expect(matchesMember(required.vocabulary, 'id')).toBe(true)
+
+		const listed = readGuardShape({ id: isString, note: isString }, ['note'], 'objectOf')
+		expect(listed.names).toEqual(['id', 'note'])
+		expect(matchesMember(listed.optional, 'id')).toBe(false)
+		expect(matchesMember(listed.optional, 'note')).toBe(true)
+
+		const partial = readGuardShape({ id: isString, note: isString }, true, 'objectOf')
+		expect(matchesMember(partial.optional, 'id')).toBe(true)
+		expect(matchesMember(partial.optional, 'note')).toBe(true)
+	})
+
+	it('refuses unreadable shape and optional-key inputs under the supplied reader', () => {
+		const shape = captureContractError(() =>
+			Reflect.apply(readGuardShape, undefined, [createRevokedProxy(), undefined, 'objectOf']),
+		)
+		expect(shape.code).toBe('structure')
+		expect(shape.message).toBe('objectOf: shape could not be read')
+
+		const optional = captureContractError(() =>
+			readGuardShape({ id: isString }, createRevokedArrayProxy<'id'>(), 'recordOf'),
+		)
+		expect(optional.code).toBe('structure')
+		expect(optional.message).toBe('recordOf: optional could not be read')
 	})
 })
 

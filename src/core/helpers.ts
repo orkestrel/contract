@@ -8,6 +8,8 @@ import type {
 	Fault,
 	FaultKind,
 	FieldPath,
+	Guard,
+	GuardsShape,
 	JSONSchema,
 	JSONValue,
 	NumberShape,
@@ -256,7 +258,7 @@ export function collectMembers(values: readonly unknown[]): Set<unknown> {
  * matchesMember(collectMembers([Number.NaN]), Number.NaN) // true — SameValueZero
  * ```
  */
-export function matchesMember(members: Set<unknown>, value: unknown): boolean {
+export function matchesMember(members: ReadonlySet<unknown>, value: unknown): boolean {
 	return INTRINSICS.apply(INTRINSICS.member, members, [value]) === true
 }
 
@@ -1054,6 +1056,78 @@ export function readArrayEntries<T>(value: readonly T[]): Result<ArrayRead<T>> {
 			dense: indices.length === length,
 		})
 	})
+}
+
+/**
+ * Snapshot a guard shape and its optional-key mode for a shape combinator.
+ *
+ * @remarks
+ * A null-prototype record plus its own key list is used instead of a `Map`.
+ * The declared-key population decides the guard's answer, and
+ * `Map.prototype.has`, `Map.prototype.get`, and map iteration are three
+ * caller-writable members on that path. An own data key read by index
+ * dispatches through nothing.
+ *
+ * @param shape - The guard shape whose own string declarations to snapshot
+ * @param optional - The optional-key list, `true` for every key, or `undefined`
+ * @param reader - The public combinator name used in read refusals
+ * @returns The owned guards and names plus the collected optional-key membership
+ * @throws {ContractError} When the shape or optional-key list cannot be read
+ *
+ * @example
+ * ```ts
+ * readGuardShape({ id: isString }, undefined, 'recordOf')
+ * ```
+ */
+export function readGuardShape(
+	shape: GuardsShape,
+	optional: readonly string[] | true | undefined,
+	reader: string,
+): Readonly<{
+	readonly guards: Readonly<Record<string, Guard<unknown> | undefined>>
+	readonly names: readonly string[]
+	readonly optional: ReadonlySet<unknown>
+	readonly vocabulary: ReadonlySet<unknown>
+}> {
+	const declared = readValue(
+		() => {
+			const members = INTRINSICS.members(shape)
+			const guards: Record<string, Guard<unknown> | undefined> = INTRINSICS.create(null)
+			const names: string[] = []
+			for (let index = 0; index < members.length; index += 1) {
+				const key = members[index]
+				if (!isString(key)) continue
+				if (!INTRINSICS.own(guards, key)) names[names.length] = key
+				guards[key] = shape[key]
+			}
+			return { guards, names, vocabulary: collectMembers(names) }
+		},
+		reader,
+		{ subject: 'shape' },
+	)
+	const optionalKeys = readValue(
+		() => {
+			if (optional === true) return collectMembers(declared.names)
+			if (!INTRINSICS.array(optional)) return collectMembers([])
+			const entries = readArrayEntries(optional)
+			if (!entries.success) throw entries.error
+			if (!entries.value.dense) throw new INTRINSICS.error('Optional key list must be dense')
+			const keys = collectMembers([])
+			for (let index = 0; index < entries.value.entries.length; index += 1) {
+				admitMember(keys, INTRINSICS.text(entries.value.entries[index]))
+			}
+			return keys
+		},
+		reader,
+		{ subject: 'optional' },
+	)
+
+	return {
+		guards: declared.guards,
+		names: declared.names,
+		optional: optionalKeys,
+		vocabulary: declared.vocabulary,
+	}
 }
 
 /**

@@ -974,7 +974,7 @@ describe('no caller-reachable member decides a membership answer', () => {
 		// the drift a shape-only assertion cannot see. This literal is the number
 		// `guides/src/contract.md` states; a new export moves it, and moving it
 		// must be a deliberate edit in both places rather than a silent one here.
-		expect(OWNED_MEMBERS.length).toBe(214)
+		expect(OWNED_MEMBERS.length).toBe(216)
 		expect(
 			OWNED_MEMBERS.filter((member) => !member.label.endsWith('.prototype.constructor')).map(
 				(member) => member.label,

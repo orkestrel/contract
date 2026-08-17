@@ -24,6 +24,7 @@ import {
 	matchOf,
 	notOf,
 	nullableOf,
+	objectOf,
 	omitOf,
 	optionalOf,
 	orOf,
@@ -312,6 +313,7 @@ describe('recordOf, pickOf, omitOf', () => {
 		const hostile = createHostileKeys()
 		for (const [reader, run] of [
 			['recordOf', () => Reflect.apply(recordOf, undefined, [hostile])],
+			['objectOf', () => Reflect.apply(objectOf, undefined, [hostile])],
 			['pickOf', () => Reflect.apply(pickOf, undefined, [hostile, ['id']])],
 			['omitOf', () => Reflect.apply(omitOf, undefined, [hostile, ['id']])],
 		] satisfies ReadonlyArray<readonly [string, () => unknown]>) {
@@ -376,13 +378,15 @@ describe('recordOf, pickOf, omitOf', () => {
 		expect(guard({ id: 'u1', note: 1 })).toBe(false)
 	})
 
-	it('recordOf refuses an unreadable optional-key list at construction', () => {
-		const error = captureContractError(() =>
-			recordOf({ a: isString }, createRevokedArrayProxy<'a'>()),
-		)
-
-		expect(error.code).toBe('structure')
-		expect(error.message).toBe('recordOf: optional could not be read')
+	it('shape guards refuse an unreadable optional-key list at construction', () => {
+		for (const [reader, run] of [
+			['recordOf', () => recordOf({ a: isString }, createRevokedArrayProxy<'a'>())],
+			['objectOf', () => objectOf({ a: isString }, createRevokedArrayProxy<'a'>())],
+		] satisfies ReadonlyArray<readonly [string, () => unknown]>) {
+			const error = captureContractError(run)
+			expect(error.code).toBe('structure')
+			expect(error.message).toBe(`${reader}: optional could not be read`)
+		}
 	})
 
 	it('pickOf and omitOf both require the complete own-key population', () => {
@@ -499,6 +503,136 @@ describe('recordOf, pickOf, omitOf', () => {
 			const allOpt = recordOf({ toString: isString }, true)
 			expect(allOpt({})).toBe(true)
 		})
+	})
+})
+
+describe('objectOf', () => {
+	it('supports required, listed-optional, and all-optional overload modes', () => {
+		const required = objectOf({ id: isString, age: isNumber })
+		expectTypeOf(required).toEqualTypeOf<Guard<Readonly<{ id: string; age: number }>>>()
+		expect(required({ id: 'u1', age: 1 })).toBe(true)
+		expect(required({ id: 'u1' })).toBe(false)
+
+		const listed = objectOf({ id: isString, note: isString }, ['note'])
+		expectTypeOf(listed).toEqualTypeOf<Guard<Readonly<{ id: string; note?: string }>>>()
+		expect(listed({ id: 'u1' })).toBe(true)
+		expect(listed({ id: 'u1', note: 'ready' })).toBe(true)
+
+		const partial = objectOf({ id: isString, age: isNumber }, true)
+		expectTypeOf(partial).toEqualTypeOf<Guard<Readonly<{ id?: string; age?: number }>>>()
+		expect(partial({})).toBe(true)
+		expect(partial({ id: 'u1' })).toBe(true)
+	})
+
+	it('prototype-accessor defining control: objectOf true; recordOf false', () => {
+		class ForeignResult {
+			get conclusion(): boolean {
+				return true
+			}
+		}
+
+		const value = new ForeignResult()
+		expect(objectOf({ conclusion: isBoolean })(value)).toBe(true)
+		expect(recordOf({ conclusion: isBoolean })(value)).toBe(false)
+	})
+
+	it('admits unknown string, symbol, and non-enumerable members without inspecting them', () => {
+		const symbol = Symbol('metadata')
+		const value = { id: 'u1', extra: true, [symbol]: 1 }
+		Object.defineProperty(value, 'hidden', {
+			get: throwHostileAccess,
+			enumerable: false,
+		})
+
+		expect(objectOf({ id: isString })(value)).toBe(true)
+		expect(recordOf({ id: isString })(value)).toBe(false)
+	})
+
+	it('rejects each absent or wrong required member', () => {
+		const guard = objectOf({ id: isString, age: isNumber })
+
+		expect(guard({ age: 1 })).toBe(false)
+		expect(guard({ id: 'u1' })).toBe(false)
+		expect(guard({ id: 1, age: 1 })).toBe(false)
+		expect(guard({ id: 'u1', age: '1' })).toBe(false)
+	})
+
+	it('reads an optional member openly: absent and undefined pass, wrong typed fails', () => {
+		const guard = objectOf({ id: isString, note: isString }, ['note'])
+
+		expect(guard({ id: 'u1' })).toBe(true)
+		expect(guard({ id: 'u1', note: undefined })).toBe(true)
+		expect(guard({ id: 'u1', note: 1 })).toBe(false)
+	})
+
+	it('admits a matching null-prototype object and rejects a non-matching one', () => {
+		const accepted: Record<string, unknown> = Object.create(null)
+		accepted.id = 'u1'
+		const refused: Record<string, unknown> = Object.create(null)
+
+		expect(objectOf({ id: isString })(accepted)).toBe(true)
+		expect(objectOf({ id: isString })(refused)).toBe(false)
+	})
+
+	it('admits a member-carrying callable while an exact record refuses it', () => {
+		const value = Object.assign(() => {}, { conclusion: true })
+
+		expect(objectOf({ conclusion: isBoolean })(value)).toBe(true)
+		expect(recordOf({ conclusion: isBoolean })(value)).toBe(false)
+	})
+
+	it('refuses arrays, null, and primitive values', () => {
+		const guard = objectOf({ id: isString })
+
+		for (const value of [[], ['u1'], null, undefined, true, 1, 'u1', Symbol('id')]) {
+			expect(() => guard(value)).not.toThrow()
+			expect(guard(value)).toBe(false)
+		}
+	})
+
+	it('returns false without throwing for a cyclic object', () => {
+		const guard = objectOf({ id: isString })
+		const value = buildCyclicRecord()
+
+		expect(() => guard(value)).not.toThrow()
+		expect(guard(value)).toBe(false)
+	})
+
+	it('returns false without throwing for a declared throwing getter', () => {
+		const guard = objectOf({ id: isString })
+		const value = createThrowingGetter('id')
+
+		expect(() => guard(value)).not.toThrow()
+		expect(guard(value)).toBe(false)
+	})
+
+	it('returns false without throwing for a revoked proxy', () => {
+		const guard = objectOf({ id: isString })
+		const value = createRevokedProxy()
+
+		expect(() => guard(value)).not.toThrow()
+		expect(guard(value)).toBe(false)
+	})
+
+	it('returns false without traversing deep unknown junk', () => {
+		const guard = objectOf({ id: isString })
+		const value = { id: 'u1', extra: buildDeepNest(10_000) }
+
+		expect(() => guard(value)).not.toThrow()
+		expect(guard(value)).toBe(true)
+	})
+
+	it('executes the guide example through the public barrel', () => {
+		class ForeignResult {
+			get conclusion(): boolean {
+				return true
+			}
+		}
+
+		const isResult = objectOf({ conclusion: isBoolean })
+		expect(isResult(new ForeignResult())).toBe(true)
+		expect(isResult({ conclusion: true, metadata: 'retained' })).toBe(true)
+		expect(isResult([])).toBe(false)
 	})
 })
 

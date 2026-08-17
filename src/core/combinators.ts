@@ -14,10 +14,12 @@ import {
 	isArray,
 	isConstructor,
 	isFiniteNumber,
+	isFunction,
 	isInstance,
 	isLiteralValue,
 	isMap,
 	isNumber,
+	isObject,
 	isRecord,
 	isRegExp,
 	isSet,
@@ -25,13 +27,13 @@ import {
 	isSymbol,
 } from './validators.js'
 import {
-	admitMember,
 	collectMembers,
 	contain,
 	holds,
 	matchesMember,
 	matchesPattern,
 	readArrayEntries,
+	readGuardShape,
 	readMapEntries,
 	readOptions,
 	readPattern,
@@ -411,44 +413,7 @@ export function recordOf<
 			: FromGuards<S>
 > {
 	return contain(() => {
-		// A null-prototype record plus its own key list, not a `Map`: this guard's
-		// declared-key population decides the answer it publishes, and
-		// `Map.prototype.has` / `.get` and Map iteration are three caller-writable
-		// members on that path. An own data key read by index dispatches through
-		// nothing.
-		const declared = readValue(
-			() => {
-				const members = INTRINSICS.members(shape)
-				const collected: Record<string, ((value: unknown) => boolean) | undefined> =
-					INTRINSICS.create(null)
-				const names: string[] = []
-				for (let index = 0; index < members.length; index += 1) {
-					const key = members[index]
-					if (!isString(key)) continue
-					if (!INTRINSICS.own(collected, key)) names[names.length] = key
-					collected[key] = shape[key]
-				}
-				return { collected, names, vocabulary: collectMembers(names) }
-			},
-			'recordOf',
-			{ subject: 'shape' },
-		)
-		const optionalKeys = readValue(
-			() => {
-				if (optional === true) return collectMembers(declared.names)
-				if (!INTRINSICS.array(optional)) return collectMembers([])
-				const entries = readArrayEntries(optional)
-				if (!entries.success) throw entries.error
-				if (!entries.value.dense) throw new INTRINSICS.error('Optional key list must be dense')
-				const keys = collectMembers([])
-				for (let index = 0; index < entries.value.entries.length; index += 1) {
-					admitMember(keys, INTRINSICS.text(entries.value.entries[index]))
-				}
-				return keys
-			},
-			'recordOf',
-			{ subject: 'optional' },
-		)
+		const declared = readGuardShape(shape, optional, 'recordOf')
 
 		return (
 			value: unknown,
@@ -472,9 +437,9 @@ export function recordOf<
 				for (let index = 0; index < declared.names.length; index += 1) {
 					const key = declared.names[index]
 					if (key === undefined) continue
-					const guard = declared.collected[key]
+					const guard = declared.guards[key]
 					const present = INTRINSICS.own(value, key)
-					if (!matchesMember(optionalKeys, key) && !present) {
+					if (!matchesMember(declared.optional, key) && !present) {
 						return false
 					}
 					if (present) {
@@ -487,6 +452,86 @@ export function recordOf<
 				return true
 			})
 	}, 'recordOf')
+}
+
+export function objectOf<S extends GuardsShape>(shape: S): Guard<FromGuards<S>>
+export function objectOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & string>>(
+	shape: S,
+	optional: K,
+): Guard<OptionalFromGuards<S, K>>
+export function objectOf<S extends GuardsShape>(
+	shape: S,
+	optional: true,
+): Guard<Readonly<{ [P in keyof S]?: FromGuards<S>[P] }>>
+
+/**
+ * Build a guard that accepts non-array objects matching an open guard shape.
+ *
+ * @remarks
+ * Three calling modes mirror {@link recordOf}:
+ * - **No `optional`** — all shape keys required; unknown members admitted.
+ * - **`optional: K[]`** — the listed keys are optional; all others required.
+ * - **`optional: true`** — every shape key is optional.
+ *
+ * Each declared member is read through `Reflect.get`, so inherited data and
+ * prototype accessors can satisfy the shape. An optional member passes when its
+ * read value is `undefined`; otherwise its guard must accept the value. Unknown
+ * members are never enumerated or inspected. Member-carrying functions are
+ * accepted. Arrays, `null`, and primitives are rejected. Hostile reads return
+ * `false` rather than throwing.
+ *
+ * @example
+ * ```ts
+ * const isResult = objectOf({ conclusion: isBoolean })
+ * isResult({ conclusion: true, metadata: 'retained' }) // true
+ * isResult([]) // false
+ * ```
+ */
+export function objectOf<
+	S extends GuardsShape,
+	K extends ReadonlyArray<keyof S & string> | true | undefined,
+>(
+	shape: S,
+	optional?: K,
+): Guard<
+	K extends true
+		? Readonly<{ [P in keyof S]?: FromGuards<S>[P] }>
+		: K extends ReadonlyArray<keyof S & string>
+			? OptionalFromGuards<S, K>
+			: FromGuards<S>
+> {
+	return contain(() => {
+		const declared = readGuardShape(shape, optional, 'objectOf')
+
+		return (
+			value: unknown,
+		): value is K extends true
+			? Readonly<{ [P in keyof S]?: FromGuards<S>[P] }>
+			: K extends ReadonlyArray<keyof S & string>
+				? OptionalFromGuards<S, K>
+				: FromGuards<S> =>
+			holds(() => {
+				if ((!isObject(value) && !isFunction(value)) || INTRINSICS.array(value)) {
+					return false
+				}
+
+				for (let index = 0; index < declared.names.length; index += 1) {
+					const key = declared.names[index]
+					if (key === undefined) continue
+					const guard = declared.guards[key]
+					const member = INTRINSICS.read(value, key)
+					if (matchesMember(declared.optional, key)) {
+						if (member !== undefined && (guard === undefined || !guard(member))) {
+							return false
+						}
+					} else if (guard === undefined || !guard(member)) {
+						return false
+					}
+				}
+
+				return true
+			})
+	}, 'objectOf')
 }
 
 /**
