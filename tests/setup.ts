@@ -608,8 +608,8 @@ export const captured = Object.freeze({
  * `Array.prototype.filter` or `Object.freeze` was invisible to both and the
  * permanent sweep reported green against every one of them.
  *
- * Controls drawn from OUTSIDE this rule: {@link OWNED_STATICS}, whose members
- * belong to a class this package exports rather than to a host intrinsic, and
+ * Controls drawn from OUTSIDE this rule: {@link OWNED_MEMBERS}, whose members
+ * belong to values this package exports rather than to a host intrinsic, and
  * {@link TERMINAL_LIES}, which is enumerated by EFFECT rather than by
  * installation site and therefore holds rows this table structurally cannot
  * carry.
@@ -739,35 +739,17 @@ export const TERMINAL_MEMBERS: readonly TerminalIntrinsic[] = Object.freeze(
 )
 
 /**
- * Caller-writable own members of the classes this package exports, derived by
- * reflection rather than listed.
+ * The retired class-static recognition corpus.
  *
  * @remarks
- * Membership rule: *an own member of a class this package exports whose
- * descriptor lets a caller replace it.* It is computed from the export itself,
- * so a member added later joins the corpus without anyone remembering to write
- * a row — which is the whole reason the previous corpus missed
- * `ContractError.owns`: it drew host intrinsics only, so the package's own new
- * writable static was structurally inexpressible and one assignment could deny
- * recognition at every door while the sweep stayed green.
- *
- * Control drawn from OUTSIDE this rule: any {@link TERMINAL_MEMBERS} row, whose
- * holder is a host intrinsic this package never declared.
+ * Recognition reads no `ContractError` static after the answering member was
+ * removed, so reflection produced an empty risk population. Its caller-writable
+ * dependencies are captured host members named by {@link TERMINAL_MEMBERS};
+ * dedicated recognition proofs replace the live globals and assert the
+ * captured answers instead of treating an empty class-member sweep as evidence.
  */
-export const OWNED_STATICS: readonly TerminalIntrinsic[] = Object.freeze(
-	captured.names(ContractError).flatMap((member) => {
-		const descriptor = captured.descriptor(ContractError, member)
-		if (descriptor === undefined) return []
-		if (descriptor.writable !== true && descriptor.configurable !== true) return []
-		const row: TerminalIntrinsic = {
-			label: `ContractError.${member}`,
-			target: ContractError,
-			key: member,
-			via: 'replacement',
-		}
-		return [Object.freeze(row)]
-	}),
-)
+// No declaration follows because the empty corpus is retired rather than
+// preserved as an instrument that can pass without exercising recognition.
 
 /**
  * Caller-writable members on the PROTOTYPES of the classes this package
@@ -775,9 +757,8 @@ export const OWNED_STATICS: readonly TerminalIntrinsic[] = Object.freeze(
  *
  * @remarks
  * Membership rule: *a writable own member of the `prototype` of any value the
- * core barrel exports as a constructor.* {@link OWNED_STATICS} draws the class
- * OBJECT's own members and structurally cannot express this population, which
- * is exactly how the previous round shipped its worst defect: a fix moved every
+ * core barrel exports as a constructor.* A class-object static corpus cannot
+ * express this population, which is exactly how a previous round moved every
  * membership read off `Set.prototype.has` and onto the `has` method of a class
  * the barrel exports, so `Vocabulary.prototype.has = () => true` reproduced the
  * defect verbatim at nineteen door groups while every corpus stayed green. A

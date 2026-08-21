@@ -63,7 +63,6 @@ import {
 	compositeShape,
 	createInertOutcome,
 	createWorkBound,
-	denyRecognition,
 	expectJSONRoundtrip,
 	expectLockstep,
 	findInstallationControls,
@@ -72,7 +71,6 @@ import {
 	leafShapeVariations,
 	lieIntrinsic,
 	OWNED_MEMBERS,
-	OWNED_STATICS,
 	publicDoors,
 	redirectIntrinsic,
 	replaceAccessor,
@@ -81,6 +79,7 @@ import {
 	TERMINAL_HOOKS,
 	TERMINAL_LIES,
 	TERMINAL_MEMBERS,
+	throwSentinel,
 } from '../../setup.js'
 
 const SEEDS = [0, 1, 7, 42, 999]
@@ -310,7 +309,6 @@ describe('caller-reachable dispatch on a path whose contract forbids failure', (
 		...TERMINAL_CONSTRUCTORS,
 		...TERMINAL_HOOKS,
 		...TERMINAL_MEMBERS,
-		...OWNED_STATICS,
 	]
 
 	it('lets no public door escape with a raw caller value while any member is redirected', () => {
@@ -448,108 +446,100 @@ describe('error recognition', () => {
 	// its authored-versus-adopted decision through it, so a caller who can deny
 	// it makes the package rewrap an error it authored as an unreadable failure,
 	// and a caller who can make it throw puts a raw value through fifteen doors.
-	const inputs: readonly unknown[] = [
-		undefined,
-		null,
-		0,
-		Number.NaN,
-		'text',
-		Symbol('brand'),
-		{},
-		[],
-		Object.create(null),
-		new Error('foreign'),
-		Object.create(ContractError.prototype),
-		new Proxy(
-			{},
-			{
-				get: () => {
-					throw new Error('trap')
-				},
-			},
-		),
-	]
-
-	it('answers every input without throwing while any writable member of the class is a thrower', () => {
-		const escaped: string[] = []
-
-		for (let row = 0; row < OWNED_STATICS.length; row += 1) {
-			const intrinsic = OWNED_STATICS[row]
-			if (intrinsic === undefined) continue
-			const sentinel = Object.freeze({ stage: intrinsic.label })
-			for (let index = 0; index < inputs.length; index += 1) {
-				const value = inputs[index]
-				const outcome = redirectIntrinsic(intrinsic, sentinel, (armed) =>
-					armed ? attempt(() => isContractError(value)) : createInertOutcome(false),
-				)
-				if (!outcome.success) escaped[escaped.length] = `${intrinsic.label} at input ${index}`
-				else if (outcome.value !== false) escaped[escaped.length] = `${intrinsic.label} forged`
-			}
-		}
-
-		expect(escaped).toEqual([])
-	})
-
-	it('still recognizes an authored error while any writable member of the class denies', () => {
+	it('recognizes a genuine error while live descriptor lookup denies it', () => {
 		const authored = new ContractError('authored', { code: 'structure' })
-		const denied: string[] = []
+		const control = Object.freeze({ brand: true })
+		const answers = replaceIntrinsic(
+			Object,
+			'getOwnPropertyDescriptor',
+			() => undefined,
+			() => ({
+				descriptor: Object.getOwnPropertyDescriptor(control, 'brand'),
+				recognized: isContractError(authored),
+			}),
+		)
 
-		for (let row = 0; row < OWNED_STATICS.length; row += 1) {
-			const intrinsic = OWNED_STATICS[row]
-			if (intrinsic === undefined) continue
-			const answers = replaceIntrinsic(intrinsic.target, intrinsic.key, denyRecognition, () =>
-				attempt(() => ({
-					authored: isContractError(authored),
-					foreign: isContractError(new Error('foreign')),
-				})),
-			)
-			if (!answers.success) denied[denied.length] = `${intrinsic.label} threw`
-			else if (!answers.value.authored || answers.value.foreign) {
-				denied[denied.length] = intrinsic.label
-			}
-		}
-
-		expect(denied).toEqual([])
+		expect(answers.descriptor).toBeUndefined()
+		expect(answers.recognized).toBe(true)
 	})
 
-	it('publishes the authored diagnostic while any writable member of the class denies', () => {
-		// The symptom the private brand was chosen to remove, asked at the door
-		// rather than at the guard: a denied recognition demotes the authored
-		// refusal to a cause and republishes a blank structural failure.
-		const hostile = Object.freeze({ type: 'string', min: -1 })
-		const degraded: string[] = []
+	it('refuses a forgery while live descriptor lookup supplies the old brand', () => {
+		const forgery = Reflect.construct(Error, ['forged'], class extends Error {})
+		Reflect.set(forgery, 'name', 'ContractError')
+		Reflect.set(forgery, 'code', 'structure')
+		const control = Object.freeze({ brand: false })
+		const answers = replaceIntrinsic(
+			Object,
+			'getOwnPropertyDescriptor',
+			() => ({ value: true }),
+			() => ({
+				descriptor: Object.getOwnPropertyDescriptor(control, 'brand'),
+				recognized: isContractError(forgery),
+			}),
+		)
 
-		for (let row = 0; row < OWNED_STATICS.length; row += 1) {
-			const intrinsic = OWNED_STATICS[row]
-			if (intrinsic === undefined) continue
-			const outcome = replaceIntrinsic(intrinsic.target, intrinsic.key, denyRecognition, () =>
-				attempt(() => validateShapeDepth(hostile)),
-			)
-			if (outcome.success || !isContractError(outcome.error)) {
-				degraded[degraded.length] = `${intrinsic.label} did not refuse`
-				continue
-			}
-			if (outcome.error.code !== 'bound') degraded[degraded.length] = intrinsic.label
-		}
-
-		expect(degraded).toEqual([])
+		expect(answers.descriptor?.value).toBe(true)
+		expect(answers.recognized).toBe(false)
 	})
 
-	it('pins the one member on the recognition path against replacement', () => {
-		// The corpus above draws only members a caller CAN replace, so a member that
-		// became non-writable would silently leave the population. Naming it here
-		// keeps the exclusion a measured fact rather than a gap.
-		const descriptor = Object.getOwnPropertyDescriptor(ContractError, 'guard')
+	it('recognizes a genuine error while live prototype lookup lies', () => {
+		const authored = new ContractError('authored', { code: 'structure' })
+		const control = Object.freeze({})
+		const answers = replaceIntrinsic(
+			Object,
+			'getPrototypeOf',
+			() => Error.prototype,
+			() => ({
+				prototype: Object.getPrototypeOf(control),
+				recognized: isContractError(authored),
+			}),
+		)
 
-		expect(descriptor).toBeDefined()
-		expect(descriptor?.writable).toBe(false)
-		expect(descriptor?.configurable).toBe(false)
+		expect(answers.prototype).toBe(Error.prototype)
+		expect(answers.recognized).toBe(true)
+	})
+
+	it('recognizes a genuine error while live symbol lookup lies', () => {
+		const authored = new ContractError('authored', { code: 'structure' })
+		const liar = Symbol('liar')
+		const answers = replaceIntrinsic(
+			Symbol,
+			'for',
+			() => liar,
+			() => ({
+				key: Symbol.for('@orkestrel/contract.error'),
+				recognized: isContractError(authored),
+			}),
+		)
+
+		expect(answers.key).toBe(liar)
+		expect(answers.recognized).toBe(true)
+	})
+
+	it('installs its brand through the captured property definition', () => {
+		const original = captured.descriptor(Object, 'defineProperty')
+		if (original === undefined) throw new Error('Object.defineProperty descriptor is absent')
+		const sentinel = Object.freeze({ stage: 'defineProperty' })
+
+		try {
+			captured.define(Object, 'defineProperty', {
+				...original,
+				value: throwSentinel(sentinel),
+			})
+			const control = attempt(() => Object.defineProperty({}, 'brand', { value: true }))
+			const authored = new ContractError('authored', { code: 'structure' })
+
+			expect(control.success).toBe(false)
+			expect(control.success ? undefined : control.error).toBe(sentinel)
+			expect(isContractError(authored)).toBe(true)
+		} finally {
+			captured.define(Object, 'defineProperty', original)
+		}
 	})
 
 	it('exposes no member of the class that answers the recognition question', () => {
-		// Exactly one public spelling. A second one is not merely surplus API: it
-		// is the caller-writable surface the private brand existed to remove, and
-		// publishing the brand test as a writable static reintroduced it verbatim.
+		// Exactly one public spelling. Publishing the brand test as a writable
+		// static would give callers a second surface that can decide recognition.
 		const answering: string[] = []
 		const authored = new ContractError('authored', { code: 'structure' })
 
@@ -1016,27 +1006,20 @@ describe('no caller-reachable member decides a membership answer', () => {
 		expect(naiveRefusal).toBe(overflow)
 	})
 
-	it('refuses to define its error class when its own pin cannot be installed', async () => {
-		// `installing is not reading`: the static block closes the window in which
-		// anything could READ an unpinned member, and says nothing about whether the
-		// pin INSTALLS. A module that evaluated earlier can no-op the one dispatch
-		// the installation makes, after which the pin silently never happened.
+	it('refuses to define its error class when a prototype pin cannot be installed', async () => {
 		const genuine = Object.defineProperty
 		const selective = function (
 			target: object,
 			key: PropertyKey,
 			descriptor: PropertyDescriptor,
 		): object {
-			return key === 'guard' ? target : genuine(target, key, descriptor)
+			return key === 'constructor' && descriptor.writable === false
+				? target
+				: genuine(target, key, descriptor)
 		}
 		const original = captured.descriptor(Object, 'defineProperty')
 		if (original === undefined) throw new Error('Object.defineProperty descriptor is absent')
 		captured.define(Object, 'defineProperty', { ...original, value: selective })
-		// A fresh module record is the only way to re-run a static block, and
-		// `resetModules` is what makes the record fresh. It is not a mock and
-		// simulates nothing: it discards the registry so the REAL module evaluates
-		// again, under the sabotage this test installs. The registry is reset again
-		// afterwards so the discarded copy never becomes a sibling test's import.
 		let outcome: { readonly success: boolean; readonly error?: unknown }
 		try {
 			vi.resetModules()
