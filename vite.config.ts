@@ -2,6 +2,7 @@ import type { UserConfig } from 'vite'
 import { defineConfig, mergeConfig } from 'vitest/config'
 import manifest from './package.json' with { type: 'json' }
 import tsconfig from './tsconfig.json' with { type: 'json' }
+import { enforceBuildLog } from './configs/helpers.js'
 import { fileURLToPath, URL } from 'node:url'
 
 export function resolveWorkspacePath(relativePath: string): string {
@@ -37,6 +38,7 @@ export const srcCore = (options?: UserConfig): UserConfig =>
 				emptyOutDir: true,
 				sourcemap: true,
 				minify: false,
+				rolldownOptions: { onLog: enforceBuildLog },
 			},
 			test: {
 				name: { label: 'src:core', color: 'magenta' },
