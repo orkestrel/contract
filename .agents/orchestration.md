@@ -211,6 +211,13 @@ Every role honours this floor. No dispatch may widen it.
   same class of defect through a new door, the search is following the frame rather than the
   defect. Bound the scope, then fan out independent lenses over disjoint slices in one pass.
   Parallelism is worth more here for the framing it breaks than for the wall-clock it saves.
+- When the recurring class has a direction — each fix relocates it along one stream: a dependency
+  chain, a data path, a call chain — the source sits elsewhere on that stream, and deepening the
+  current station cannot reach it. Switch from depth to breadth: fan probes over the stream's
+  stations in parallel, blind and clean-contexted, as far up and down as the stream runs, to locate
+  the source. Then plan downstream from the source with the sweep's map of how far the defect
+  reaches, so the remaining work carries a measured bound instead of an open count of rounds. The
+  seam budget in `.claude/rules/quality.md` § Rounds and verdicts states when this fires.
 - The subjective and objective lanes are the adversarial pass's FLOOR, not its shape. Where a
   subject has more seams than that pass can attack, fan out one lens per seam over disjoint slices,
   keep every lens blind and
@@ -566,7 +573,9 @@ right to stop.
   allowlist. A read-only role cannot write a report file, cannot write a probe, and cannot run a
   sandbox that writes, so naming any of those stops the unit on arrival over a detail the allowlist
   already settled. Where a read-only lane needs executed evidence, produce it separately and hand it
-  over: the Orchestrator supplies the evidence and the lane rules on it.
+  over: the Orchestrator supplies the evidence and the lane rules on it. When the evidence a lane
+  needs is a `prove` verdict and the lane's allowlist omits that tool, the Orchestrator takes the
+  call outside the lane's live interval and hands over the complete rendered verdict.
 - Scope a change by the files its result makes **false**, not by the files that declare the thing
   changing. Counting importers finds only part of that set. A test asserting the behaviour being
   reversed, a fixture carrying a value being raised, a golden digest over generated output, and a
