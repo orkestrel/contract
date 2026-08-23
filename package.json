@@ -64,14 +64,15 @@
 		"build:src": "npm run build:src:core",
 		"build:src:core": "vite build --config configs/src/vite.core.config.ts && npm run copy dist/src/core/index.d.ts dist/src/core/index.d.cts",
 		"prepack": "npm run build",
-		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test"
+		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test && npm run test:distribution -- --mode release",
+		"test:distribution": "vitest run --config vite.config.ts --no-cache --reporter=dot --project distribution"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.0",
-		"@orkestrel/guide": "^0.0.12",
-		"@orkestrel/probe": "^0.0.2",
+		"@orkestrel/guide": "^0.0.13",
+		"@orkestrel/probe": "^0.0.3",
 		"@orkestrel/scaffold": "^0.0.49",
-		"@orkestrel/test": "^0.0.10",
+		"@orkestrel/test": "^0.0.11",
 		"@types/node": "^26.2.0",
 		"oxfmt": "^0.64.0",
 		"oxlint": "^1.79.0",
