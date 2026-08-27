@@ -5,7 +5,9 @@ import {
 	FUNCTION_SOURCE_FILES,
 	GENERIC_POLICY_SOURCES,
 	inspectPolicyControl,
+	inspectPolicyFilenamePaths,
 	inspectPolicyMirrorPaths,
+	inspectPolicyPortability,
 	inspectPolicySources,
 	inspectPolicyWorkspace,
 	inspectSkillFamily,
@@ -14,7 +16,13 @@ import {
 	parseSkillFrontmatter,
 	POLICY_CONTROLS,
 	POLICY_SUPPRESSION_DIRECTIVE,
+	PORTABILITY_POLICY_CONTROLS,
+	PORTABILITY_POLICY_EXCLUSION,
+	PORTABILITY_POLICY_LOCAL,
+	PORTABILITY_POLICY_SPLIT,
+	readPolicyPaths,
 	readSkillFamily,
+	RULES_POLICY_CONTROLS,
 	SKILL_POLICY_APOSTROPHE,
 	SKILL_POLICY_BACKTICKED,
 	SKILL_POLICY_CONTROLS,
@@ -413,8 +421,84 @@ describe('skill bridge policy', () => {
 	}
 })
 
+describe('rule map policy', () => {
+	for (const control of RULES_POLICY_CONTROLS) {
+		it(`${control.label} [membership: ${control.membership}]`, () => {
+			const violations = inspectPolicyControl(control)
+			expect(violations).toHaveLength(1)
+			expect(violations[0]?.rule).toBe(control.rule)
+			expect(control.message === undefined || violations[0]?.message === control.message).toBe(true)
+		})
+	}
+})
+
+describe('portability policy', () => {
+	for (const control of PORTABILITY_POLICY_CONTROLS) {
+		it(`${control.label} [membership: ${control.membership}]`, () => {
+			const violations = inspectPolicyControl(control)
+			expect(violations).toHaveLength(1)
+			expect(violations[0]?.rule).toBe(control.rule)
+			expect(control.message === undefined || violations[0]?.message === control.message).toBe(true)
+		})
+	}
+
+	for (const control of [
+		PORTABILITY_POLICY_EXCLUSION,
+		PORTABILITY_POLICY_LOCAL,
+		PORTABILITY_POLICY_SPLIT,
+	]) {
+		it(`${control.label} [membership: ${control.membership}]`, () => {
+			expect(inspectPolicyControl(control)).toEqual([])
+		})
+	}
+
+	it('rejects a character Windows refuses inside a path segment', () => {
+		// A Windows host refuses to create this name, so the population itself is the control.
+		expect(inspectPolicyFilenamePaths(['src/worker/read<write>.ts'])).toEqual([
+			{
+				rule: 'portability',
+				path: 'src/worker/read<write>.ts',
+				message: 'path segments avoid the characters Windows refuses',
+			},
+		])
+	})
+
+	it('rejects sibling paths that differ by case alone', () => {
+		// A Windows host folds the pair into one file, so the population itself is the control.
+		expect(inspectPolicyFilenamePaths(['guides/Readme.md', 'guides/readme.md'])).toEqual([
+			{
+				rule: 'portability',
+				path: 'guides/readme.md',
+				message: 'path differs from guides/Readme.md by case alone',
+			},
+		])
+	})
+
+	it('accepts sibling paths that differ by more than case', () => {
+		expect(
+			inspectPolicyFilenamePaths([
+				'guides/readme.md',
+				'guides/readmes.md',
+				'src/worker/helpers.ts',
+			]),
+		).toEqual([])
+	})
+})
+
 describe('repository policy', () => {
 	it('enforces placement and mirrors over the real workspace', () => {
 		expect(inspectPolicyWorkspace(process.cwd())).toEqual([])
+	})
+
+	it('reaches every branch of the workspace-authored path population', () => {
+		const paths = readPolicyPaths(process.cwd())
+		expect(paths).toContain('tests/setupPolicy.ts')
+		expect(paths).toContain('.claude/rules/names.md')
+		expect(paths).toContain('package.json')
+		expect(paths).toContain('.gitattributes')
+	})
+
+	it('keeps every workspace path, script, and source portable', () => {
+		expect(inspectPolicyPortability(process.cwd())).toEqual([])
 	})
 })
