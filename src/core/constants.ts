@@ -1,4 +1,4 @@
-import type { JSONSchemaType } from './types.js'
+import type { ContractCode, JSONSchemaType } from './types.js'
 
 /**
  * The registry-global key used to recognize {@link ContractError} values across
@@ -248,6 +248,40 @@ export const JSON_SCHEMA_TYPES: readonly JSONSchemaType[] = Object.freeze([
 	'number',
 	'integer',
 	'string',
+])
+
+/**
+ * Every declared {@link ContractCode} refusal category, frozen.
+ *
+ * @remarks
+ * The runtime source of truth for the {@link ContractCode} vocabulary, and the
+ * one list every membership test over it reads: `readValue` decides from it
+ * whether a caller-supplied code is declared, and `isContractError` decides
+ * from it whether a candidate error carries a declared one. A code added to the
+ * union is added here, so neither test can drift from the type or from the
+ * other.
+ *
+ * @example
+ * ```ts
+ * import { CONTRACT_CODES, literalOf } from '@orkestrel/contract'
+ *
+ * const isContractCode = literalOf(...CONTRACT_CODES) // Guard<ContractCode>
+ * ```
+ */
+export const CONTRACT_CODES: readonly ContractCode[] = Object.freeze([
+	'bound',
+	'range',
+	'empty',
+	'placement',
+	'structure',
+	'literal',
+	'cycle',
+	'pattern',
+	'generate',
+	'random',
+	'clone',
+	'depth',
+	'expansion',
 ])
 
 // Reporting-surface bounds (`compileReporter` / `compileAuditor` —

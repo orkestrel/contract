@@ -38,6 +38,9 @@ import {
 
 /** Determine whether a value is `null`.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is `null`; false otherwise
+ *
  * @example
  * ```ts
  * isNull(null)      // true
@@ -49,6 +52,9 @@ export function isNull(value: unknown): value is null {
 }
 
 /** Determine whether a value is `undefined`.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is `undefined`; false otherwise
  *
  * @example
  * ```ts
@@ -62,6 +68,9 @@ export function isUndefined(value: unknown): value is undefined {
 
 /** Determine whether a value is defined (neither `null` nor `undefined`).
  *
+ * @param value - The value to inspect
+ * @returns True if the value is defined; false otherwise
+ *
  * @example
  * ```ts
  * isDefined('hi')     // true
@@ -74,6 +83,9 @@ export function isDefined<T>(value: T | null | undefined): value is T {
 }
 
 /** Determine whether a value is a string.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a string; false otherwise
  *
  * @example
  * ```ts
@@ -91,6 +103,9 @@ export function isString(value: unknown): value is string {
  * @remarks
  * Includes `NaN` and `±Infinity` — use {@link isFiniteNumber} to exclude them.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a number; false otherwise
+ *
  * @example
  * ```ts
  * isNumber(42)         // true
@@ -104,6 +119,9 @@ export function isNumber(value: unknown): value is number {
 
 /** Determine whether a value is a finite number (excludes `NaN` and `±Infinity`).
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a finite number; false otherwise
+ *
  * @example
  * ```ts
  * isFiniteNumber(42)         // true
@@ -116,6 +134,9 @@ export function isFiniteNumber(value: unknown): value is number {
 }
 
 /** Determine whether a value is a finite integer (excludes `NaN`, `±Infinity`, and fractional numbers).
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a finite integer; false otherwise
  *
  * @example
  * ```ts
@@ -169,6 +190,9 @@ export function isNonNegativeInteger(value: unknown): value is number {
 
 /** Determine whether a value is a boolean.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a boolean; false otherwise
+ *
  * @example
  * ```ts
  * isBoolean(true) // true
@@ -202,6 +226,9 @@ export function isLiteralValue(value: unknown): value is LiteralValue {
 
 /** Determine whether a value is exactly `true`.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is exactly `true`; false otherwise
+ *
  * @example
  * ```ts
  * isTrue(true)  // true
@@ -213,6 +240,9 @@ export function isTrue(value: unknown): value is true {
 }
 
 /** Determine whether a value is exactly `false`.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is exactly `false`; false otherwise
  *
  * @example
  * ```ts
@@ -226,6 +256,9 @@ export function isFalse(value: unknown): value is false {
 
 /** Determine whether a value is a bigint.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a bigint; false otherwise
+ *
  * @example
  * ```ts
  * isBigInt(1n) // true
@@ -237,6 +270,9 @@ export function isBigInt(value: unknown): value is bigint {
 }
 
 /** Determine whether a value is a symbol.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a symbol; false otherwise
  *
  * @example
  * ```ts
@@ -250,6 +286,9 @@ export function isSymbol(value: unknown): value is symbol {
 
 /** Determine whether a value is callable.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is callable; false otherwise
+ *
  * @example
  * ```ts
  * isFunction(() => {}) // true
@@ -261,6 +300,9 @@ export function isFunction(value: unknown): value is AnyFunction {
 }
 
 /** Determine whether a value is a string or `null`.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a string or `null`; false otherwise
  *
  * @example
  * ```ts
@@ -275,6 +317,9 @@ export function isNullableString(value: unknown): value is string | null {
 
 /** Determine whether a value is a number or `null` (the number may be `NaN` / `±Infinity`).
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a number or `null`; false otherwise
+ *
  * @example
  * ```ts
  * isNullableNumber(42)   // true
@@ -287,6 +332,9 @@ export function isNullableNumber(value: unknown): value is number | null {
 }
 
 /** Determine whether a value is a boolean or `null`.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a boolean or `null`; false otherwise
  *
  * @example
  * ```ts
@@ -348,6 +396,9 @@ export function isInstance<C>(
 
 /** Determine whether a value is a `Date`.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a `Date`; false otherwise
+ *
  * @example
  * ```ts
  * isDate(new Date()) // true
@@ -359,6 +410,9 @@ export function isDate(value: unknown): value is Date {
 }
 
 /** Determine whether a value is a `RegExp`.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a `RegExp`; false otherwise
  *
  * @example
  * ```ts
@@ -380,6 +434,9 @@ export function isRegExp(value: unknown): value is RegExp {
 
 /** Determine whether a value is an `Error`.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is an `Error`; false otherwise
+ *
  * @example
  * ```ts
  * isError(new Error('boom')) // true
@@ -391,6 +448,9 @@ export function isError(value: unknown): value is Error {
 }
 
 /** Determine whether a value is a native `Promise` (use {@link isPromiseLike} for any thenable).
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a native `Promise`; false otherwise
  *
  * @example
  * ```ts
@@ -409,6 +469,9 @@ export function isPromise<T = unknown>(value: unknown): value is Promise<T> {
  * @remarks
  * Accepts any object with all three methods, not only native `Promise`
  * instances. Use {@link isPromise} when you specifically need `instanceof Promise`.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is promise-like; false otherwise
  *
  * @example
  * ```ts
@@ -433,6 +496,9 @@ export function isPromiseLike<T = unknown>(
 
 /** Determine whether a value is an `ArrayBuffer`.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is an `ArrayBuffer`; false otherwise
+ *
  * @example
  * ```ts
  * isArrayBuffer(new ArrayBuffer(8)) // true
@@ -449,6 +515,9 @@ export function isArrayBuffer(value: unknown): value is ArrayBuffer {
  * @remarks
  * Guards the global existence of `SharedArrayBuffer` first — safe where it is
  * absent or disabled (e.g. a context that is not cross-origin isolated).
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a `SharedArrayBuffer`; false otherwise
  *
  * @example
  * ```ts
@@ -469,6 +538,9 @@ export function isSharedArrayBuffer(value: unknown): value is SharedArrayBuffer 
  * Strings are explicitly included: a string has a callable `Symbol.iterator`
  * but is not an object, so the generic object path alone would miss it.
  *
+ * @param value - The value to inspect
+ * @returns True if the value implements the iterable protocol; false otherwise
+ *
  * @example
  * ```ts
  * isIterable([1, 2])       // true
@@ -486,6 +558,9 @@ export function isIterable<T = unknown>(value: unknown): value is Iterable<T> {
 }
 
 /** Determine whether a value implements the async iterable protocol (`Symbol.asyncIterator`).
+ *
+ * @param value - The value to inspect
+ * @returns True if the value implements the async iterable protocol; false otherwise
  *
  * @example
  * ```ts
@@ -505,6 +580,9 @@ export function isAsyncIterable<T = unknown>(value: unknown): value is AsyncIter
  * @remarks
  * `true` for arrays, class instances, plain objects, `Map`, `Set`, etc. — use
  * {@link isRecord} when you need a plain-record check.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a non-null object; false otherwise
  *
  * @example
  * ```ts
@@ -531,6 +609,9 @@ export function isObject(value: unknown): value is object {
  * `Map`, and class instances, including a class whose prototype a caller
  * reparented to `null`.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a plain record; false otherwise
+ *
  * @example
  * ```ts
  * isRecord({ a: 1 })         // true
@@ -545,6 +626,9 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Determine whether a value is a `Map`.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a `Map`; false otherwise
+ *
  * @example
  * ```ts
  * isMap(new Map()) // true
@@ -556,6 +640,9 @@ export function isMap<K = unknown, V = unknown>(value: unknown): value is Readon
 }
 
 /** Determine whether a value is a `Set`.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a `Set`; false otherwise
  *
  * @example
  * ```ts
@@ -569,6 +656,9 @@ export function isSet<T = unknown>(value: unknown): value is ReadonlySet<T> {
 
 /** Determine whether a value is a `WeakMap`.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a `WeakMap`; false otherwise
+ *
  * @example
  * ```ts
  * isWeakMap(new WeakMap()) // true
@@ -580,6 +670,9 @@ export function isWeakMap(value: unknown): value is WeakMap<object, unknown> {
 }
 
 /** Determine whether a value is a `WeakSet`.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a `WeakSet`; false otherwise
  *
  * @example
  * ```ts
@@ -595,6 +688,9 @@ export function isWeakSet(value: unknown): value is WeakSet<object> {
 
 /** Determine whether a value is an array.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is an array; false otherwise
+ *
  * @example
  * ```ts
  * isArray([1, 2]) // true
@@ -606,6 +702,9 @@ export function isArray<T = unknown>(value: unknown): value is readonly T[] {
 }
 
 /** Determine whether a value is a `DataView`.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a `DataView`; false otherwise
  *
  * @example
  * ```ts
@@ -619,6 +718,9 @@ export function isDataView(value: unknown): value is DataView<ArrayBufferLike> {
 
 /** Determine whether a value is an `ArrayBufferView` (any typed array or `DataView`).
  *
+ * @param value - The value to inspect
+ * @returns True if the value is an `ArrayBufferView`; false otherwise
+ *
  * @example
  * ```ts
  * isArrayBufferView(new Uint8Array(4)) // true
@@ -630,6 +732,9 @@ export function isArrayBufferView(value: unknown): value is ArrayBufferView {
 }
 
 /** Determine whether a value is an `Int8Array`.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is an `Int8Array`; false otherwise
  *
  * @example
  * ```ts
@@ -643,6 +748,9 @@ export function isInt8Array(value: unknown): value is Int8Array {
 
 /** Determine whether a value is a `Uint8Array`.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a `Uint8Array`; false otherwise
+ *
  * @example
  * ```ts
  * isUint8Array(new Uint8Array(2)) // true
@@ -654,6 +762,9 @@ export function isUint8Array(value: unknown): value is Uint8Array {
 }
 
 /** Determine whether a value is a `Uint8ClampedArray`.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a `Uint8ClampedArray`; false otherwise
  *
  * @example
  * ```ts
@@ -667,6 +778,9 @@ export function isUint8ClampedArray(value: unknown): value is Uint8ClampedArray 
 
 /** Determine whether a value is an `Int16Array`.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is an `Int16Array`; false otherwise
+ *
  * @example
  * ```ts
  * isInt16Array(new Int16Array(2)) // true
@@ -678,6 +792,9 @@ export function isInt16Array(value: unknown): value is Int16Array {
 }
 
 /** Determine whether a value is a `Uint16Array`.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a `Uint16Array`; false otherwise
  *
  * @example
  * ```ts
@@ -691,6 +808,9 @@ export function isUint16Array(value: unknown): value is Uint16Array {
 
 /** Determine whether a value is an `Int32Array`.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is an `Int32Array`; false otherwise
+ *
  * @example
  * ```ts
  * isInt32Array(new Int32Array(2)) // true
@@ -702,6 +822,9 @@ export function isInt32Array(value: unknown): value is Int32Array {
 }
 
 /** Determine whether a value is a `Uint32Array`.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a `Uint32Array`; false otherwise
  *
  * @example
  * ```ts
@@ -715,6 +838,9 @@ export function isUint32Array(value: unknown): value is Uint32Array {
 
 /** Determine whether a value is a `Float32Array`.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a `Float32Array`; false otherwise
+ *
  * @example
  * ```ts
  * isFloat32Array(new Float32Array(2)) // true
@@ -726,6 +852,9 @@ export function isFloat32Array(value: unknown): value is Float32Array {
 }
 
 /** Determine whether a value is a `Float64Array`.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a `Float64Array`; false otherwise
  *
  * @example
  * ```ts
@@ -744,6 +873,9 @@ export function isFloat64Array(value: unknown): value is Float64Array {
  * Guards the global existence of `BigInt64Array` first — safe in environments
  * that pre-date the BigInt typed-array additions.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a `BigInt64Array`; false otherwise
+ *
  * @example
  * ```ts
  * isBigInt64Array(new BigInt64Array(2)) // true
@@ -761,6 +893,9 @@ export function isBigInt64Array(value: unknown): value is BigInt64Array {
  * Guards the global existence of `BigUint64Array` first — safe in environments
  * that pre-date the BigInt typed-array additions.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a `BigUint64Array`; false otherwise
+ *
  * @example
  * ```ts
  * isBigUint64Array(new BigUint64Array(2)) // true
@@ -775,6 +910,9 @@ export function isBigUint64Array(value: unknown): value is BigUint64Array {
 
 /** Determine whether a value is the empty string `''`.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is the empty string `''`; false otherwise
+ *
  * @example
  * ```ts
  * isEmptyString('')  // true
@@ -786,6 +924,9 @@ export function isEmptyString(value: unknown): value is '' {
 }
 
 /** Determine whether a value is an empty array.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is an empty array; false otherwise
  *
  * @example
  * ```ts
@@ -808,6 +949,9 @@ export function isEmptyArray(value: unknown): value is readonly [] {
  * saw the key and rejected the same value, and the enumerable-symbol and
  * non-enumerable-string cases were treated differently for no stated reason.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is an empty plain object; false otherwise
+ *
  * @example
  * ```ts
  * isEmptyObject({})      // true
@@ -821,6 +965,9 @@ export function isEmptyObject(value: unknown): value is Record<string | symbol, 
 
 /** Determine whether a value is an empty `Map`.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is an empty `Map`; false otherwise
+ *
  * @example
  * ```ts
  * isEmptyMap(new Map())            // true
@@ -832,6 +979,9 @@ export function isEmptyMap(value: unknown): value is ReadonlyMap<never, never> {
 }
 
 /** Determine whether a value is an empty `Set`.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is an empty `Set`; false otherwise
  *
  * @example
  * ```ts
@@ -845,6 +995,9 @@ export function isEmptySet(value: unknown): value is ReadonlySet<never> {
 
 /** Determine whether a value is a non-empty string (at least one character).
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a non-empty string; false otherwise
+ *
  * @example
  * ```ts
  * isNonEmptyString('a') // true
@@ -856,6 +1009,9 @@ export function isNonEmptyString(value: unknown): value is string {
 }
 
 /** Determine whether a value is a non-empty array (at least one element).
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a non-empty array; false otherwise
  *
  * @example
  * ```ts
@@ -874,6 +1030,9 @@ export function isNonEmptyArray<T = unknown>(value: unknown): value is readonly 
  * The exact negation of {@link isEmptyObject} over the same own-key population;
  * see there for why enumerability is not part of the rule.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a non-empty plain object; false otherwise
+ *
  * @example
  * ```ts
  * isNonEmptyObject({ a: 1 }) // true
@@ -885,6 +1044,9 @@ export function isNonEmptyObject(value: unknown): value is Record<string | symbo
 }
 
 /** Determine whether a value is a non-empty `Map` (at least one entry).
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a non-empty `Map`; false otherwise
  *
  * @example
  * ```ts
@@ -900,6 +1062,9 @@ export function isNonEmptyMap<K = unknown, V = unknown>(
 
 /** Determine whether a value is a non-empty `Set` (at least one element).
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a non-empty `Set`; false otherwise
+ *
  * @example
  * ```ts
  * isNonEmptySet(new Set([1])) // true
@@ -913,6 +1078,9 @@ export function isNonEmptySet<T = unknown>(value: unknown): value is ReadonlySet
 // === Function guards
 
 /** Determine whether a value is a function that declares zero parameters (`Function.length === 0`).
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a function that declares zero parameters; false otherwise
  *
  * @example
  * ```ts
@@ -932,6 +1100,9 @@ export function isZeroArg(value: unknown): value is ZeroArgFunction {
  * unreliable across realms. The `?.` keeps the guard total (§14): a function
  * whose `constructor` was nulled yields `undefined`, never a thrown `null.name`.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a native `async function`; false otherwise
+ *
  * @example
  * ```ts
  * isAsyncFunction(async () => {}) // true
@@ -943,6 +1114,9 @@ export function isAsyncFunction(value: unknown): value is AnyAsyncFunction {
 }
 
 /** Determine whether a value is a generator function (`function*`).
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a generator function; false otherwise
  *
  * @example
  * ```ts
@@ -958,6 +1132,9 @@ export function isGeneratorFunction(
 
 /** Determine whether a value is an async generator function (`async function*`).
  *
+ * @param value - The value to inspect
+ * @returns True if the value is an async generator function; false otherwise
+ *
  * @example
  * ```ts
  * isAsyncGeneratorFunction(async function* () {}) // true
@@ -972,6 +1149,9 @@ export function isAsyncGeneratorFunction(
 
 /** Determine whether a value is a zero-argument async function.
  *
+ * @param value - The value to inspect
+ * @returns True if the value is a zero-argument async function; false otherwise
+ *
  * @example
  * ```ts
  * isZeroArgAsync(async () => {}) // true
@@ -983,6 +1163,9 @@ export function isZeroArgAsync(value: unknown): value is ZeroArgAsyncFunction {
 }
 
 /** Determine whether a value is a zero-argument generator function.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a zero-argument generator function; false otherwise
  *
  * @example
  * ```ts
@@ -997,6 +1180,9 @@ export function isZeroArgGenerator(
 }
 
 /** Determine whether a value is a zero-argument async generator function.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a zero-argument async generator function; false otherwise
  *
  * @example
  * ```ts
@@ -1017,6 +1203,9 @@ export function isZeroArgAsyncGenerator(
  * Probes with `Reflect.construct(String, [], value)`: a real constructor
  * succeeds, while arrow functions, plain functions, and non-functions throw
  * and yield `false`. Never throws. Backs the `instanceOf` combinator.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value can be used as a `new`-target constructor; false otherwise
  *
  * @example
  * ```ts

@@ -143,36 +143,23 @@ export class ContractCompiler<
 		| { readonly operation: 'enter'; readonly shape: ContractShape }
 		| { readonly operation: 'exit'; readonly index: number }
 	>
-	readonly #emptyStack: Array<
-		| { readonly operation: 'enter'; readonly shape: ContractShape }
-		| { readonly operation: 'exit'; readonly index: number }
-	>
 	// The prepared index. `#nodes[0]` is the owned root by construction, `#index`
 	// answers "which node is this child" by identity, and `#order` lists every
 	// node with its children already listed before it — so a family solves any
 	// bottom-up fact by reading it forwards once.
 	#nodes: ContractShape[]
-	readonly #emptyNodes: ContractShape[]
 	#index: WeakMap<ContractShape, number>
-	readonly #emptyIndex: WeakMap<ContractShape, number>
 	#order: number[]
-	readonly #emptyOrder: number[]
 	// One plan per family, each indexed by the same node index. A plan entry is a
 	// self-contained artifact for that node: it closes over the CHILD entries it
 	// needs, resolved while the family is built, so nothing a compiled artifact
 	// does at call time reaches back into the index this class later releases.
 	#schemas: JSONSchema[]
-	readonly #emptySchemas: JSONSchema[]
 	#guards: Array<Guard<unknown>>
-	readonly #emptyGuards: Array<Guard<unknown>>
 	#parsers: Array<Parser<unknown>>
-	readonly #emptyParsers: Array<Parser<unknown>>
 	#audits: Array<(value: unknown, path: readonly string[]) => readonly AuditFault[]>
-	readonly #emptyAudits: Array<(value: unknown, path: readonly string[]) => readonly AuditFault[]>
 	#reports: Array<(value: unknown, path: readonly string[]) => readonly Fault[]>
-	readonly #emptyReports: Array<(value: unknown, path: readonly string[]) => readonly Fault[]>
 	#seeds: Array<(random: RandomFunction) => unknown>
-	readonly #emptySeeds: Array<(random: RandomFunction) => unknown>
 	#schema: JSONSchema | undefined
 	#guard: Guard<unknown> | undefined
 	#parser: Parser<unknown> | undefined
@@ -190,25 +177,15 @@ export class ContractCompiler<
 		this.#source = shape
 		this.#state = { phase: 'ready' }
 		this.#stack = []
-		this.#emptyStack = []
 		this.#nodes = []
-		this.#emptyNodes = []
 		this.#index = new ContractCompiler.#weakMap()
-		this.#emptyIndex = new ContractCompiler.#weakMap()
 		this.#order = []
-		this.#emptyOrder = []
 		this.#schemas = []
-		this.#emptySchemas = []
 		this.#guards = []
-		this.#emptyGuards = []
 		this.#parsers = []
-		this.#emptyParsers = []
 		this.#audits = []
-		this.#emptyAudits = []
 		this.#reports = []
-		this.#emptyReports = []
 		this.#seeds = []
-		this.#emptySeeds = []
 		this.#schema = undefined
 		this.#guard = undefined
 		this.#parser = undefined
@@ -351,21 +328,22 @@ export class ContractCompiler<
 		this.#release()
 	}
 
-	// Assignment of preconstructed peers only. Nothing here calls a caller-mutable
-	// cleanup member and nothing here constructs a collection after the source was
-	// observed, so release cannot be redirected into leaving state behind.
+	// Assignment of fresh empty collections only. An array literal reads no
+	// caller-reachable binding, and the captured `WeakMap` is the constructor this
+	// module captured while it evaluated, so nothing here calls a caller-mutable
+	// cleanup member and release cannot be redirected into leaving state behind.
 	#release(): void {
 		this.#source = undefined
-		this.#stack = this.#emptyStack
-		this.#nodes = this.#emptyNodes
-		this.#index = this.#emptyIndex
-		this.#order = this.#emptyOrder
-		this.#schemas = this.#emptySchemas
-		this.#guards = this.#emptyGuards
-		this.#parsers = this.#emptyParsers
-		this.#audits = this.#emptyAudits
-		this.#reports = this.#emptyReports
-		this.#seeds = this.#emptySeeds
+		this.#stack = []
+		this.#nodes = []
+		this.#index = new ContractCompiler.#weakMap()
+		this.#order = []
+		this.#schemas = []
+		this.#guards = []
+		this.#parsers = []
+		this.#audits = []
+		this.#reports = []
+		this.#seeds = []
 	}
 
 	// === Preparation

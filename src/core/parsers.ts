@@ -1,6 +1,5 @@
-import type { Guard, JSONValue, LiteralValue } from './types.js'
+import type { FieldPath, Guard, JSONValue, LiteralValue } from './types.js'
 import { INTRINSICS } from './constants.js'
-import type { FieldPath } from './types.js'
 import {
 	isArray,
 	isFiniteNumber,

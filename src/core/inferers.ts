@@ -1,7 +1,6 @@
 import type { JSONSchema, SampleMemo, SchemaFormat, ValueToSchemaOptions } from './types.js'
 import {
 	FORMAT_MAX_LENGTH,
-	FORMAT_PATTERNS,
 	INFER_BREADTH_LIMIT,
 	INFER_ENUM_LIMIT,
 	INTRINSICS,
@@ -15,7 +14,6 @@ import {
 	isInteger,
 	isNull,
 	isNumber,
-	isObject,
 	isRecord,
 	isString,
 } from './validators.js'
@@ -25,13 +23,13 @@ import {
 	appendEntries,
 	attempt,
 	buildSampleMemo,
+	canonicalStringify,
+	classifyFormat,
 	collectMembers,
 	contain,
 	enumerableKeys,
 	limitEntries,
 	matchesMember,
-	matchesPattern,
-	matchesRecordBrand,
 	matchesVisited,
 	omitVisited,
 	readArrayEntries,
@@ -52,220 +50,6 @@ import {
 // depth budget held at the INFER_DEPTH_LIMIT ceiling, and a per-container sampling cap
 // (INFER_BREADTH_LIMIT default). Readable unsupported values widen only where
 // documented; failed traversal is a coded refusal, never a permissive schema.
-
-// === Canonicalization
-
-/**
- * Encode one value as a deterministic, key-sorted JSON string — the traversal
- * spine of {@link canonicalStringify}.
- *
- * @remarks
- * Arrays keep their element order through the shared dense own-index lens;
- * records sort their own keys before encoding, at every nesting level. Every
- * other value is encoded by
- * `JSON.stringify`, so `NaN` / `±Infinity` collapse to `'null'` and `-0`
- * encodes as `'0'` — the same lossy-but-deterministic mapping real JSON makes.
- *
- * Returns `undefined` for anything JSON cannot encode: `undefined` itself, a
- * function, a symbol, an array hole, or a cyclic back-edge to an ancestor. A
- * container carrying such a member is itself un-encodable and returns
- * `undefined` too, so the result is either a faithful encoding of the WHOLE
- * value or nothing — a partially-encoded key is never emitted. A hostile
- * getter or `Proxy` trap is refused through this function's own required-read
- * boundary, including when this spine is called directly.
- *
- * The walk is ITERATIVE over an explicit enter/exit stack and keeps a
- * walk-local encoding memo, so a container reached through several paths is
- * encoded ONCE. That memo is sound precisely because a partial answer does not
- * exist here: any cycle or JSON-inexpressible member abandons the whole call,
- * so a recorded encoding is the container's complete encoding on every path.
- * The earlier recursion re-encoded per path, which made thirty ordinary shared
- * aliases cost `2^30` encodings through the public {@link canonicalStringify}
- * and {@link unifySchemas} doors. Each container's members are read ONCE, at
- * the moment it is entered, and the ancestor set is restored on every exit
- * including the abandoning ones.
- *
- * @param value - The value to encode
- * @param ancestors - Objects on the active traversal path, guarding cycles
- * @returns The deterministic encoding, or `undefined` when JSON cannot encode
- *          `value`
- *
- * @example
- * ```ts
- * canonicalizeValue({ b: 1, a: 2 }, new WeakSet()) // '{"a":2,"b":1}'
- * canonicalizeValue(undefined, new WeakSet())      // undefined
- * ```
- */
-export function canonicalizeValue(value: unknown, ancestors: WeakSet<object>): string | undefined {
-	return contain(() => {
-		return readValue(() => {
-			if (!isObject(value) || (!isArray(value) && !matchesRecordBrand(value))) {
-				return encodeLeaf(value)
-			}
-			const encodings = new INTRINSICS.weakMap<object, string>()
-			const admitted: object[] = []
-			const stack: Array<
-				| { readonly operation: 'enter'; readonly value: object }
-				| {
-						readonly operation: 'exit'
-						readonly value: object
-						readonly members: readonly unknown[]
-						readonly keys: readonly string[] | undefined
-				  }
-			> = [{ operation: 'enter', value }]
-			try {
-				while (stack.length > 0) {
-					const frame = stack.pop()
-					if (frame === undefined) return undefined
-					if (frame.operation === 'exit') {
-						// Indexed and concatenated, not iterated and joined: this string IS
-						// the canonical identity every schema de-duplication and every `enum`
-						// ordering is keyed by, and both `Array.prototype[Symbol.iterator]`
-						// and `Array.prototype.join` are caller-writable members on it.
-						let encoded = ''
-						for (let index = 0; index < frame.members.length; index += 1) {
-							const member = frame.members[index]
-							const part = isObject(member)
-								? (INTRINSICS.apply(INTRINSICS.recall, encodings, [member]) ?? encodeLeaf(member))
-								: encodeLeaf(member)
-							if (part === undefined) return undefined
-							const key = frame.keys?.[index]
-							const text = key === undefined ? part : `${INTRINSICS.stringify(key)}:${part}`
-							encoded += index === 0 ? text : `,${text}`
-						}
-						const text = frame.keys === undefined ? `[${encoded}]` : `{${encoded}}`
-						INTRINSICS.apply(INTRINSICS.retain, encodings, [frame.value, text])
-						omitVisited(ancestors, frame.value)
-						continue
-					}
-
-					const container = frame.value
-					if (matchesVisited(ancestors, container)) return undefined
-					if (INTRINSICS.apply(INTRINSICS.recall, encodings, [container]) !== undefined) continue
-					const members: unknown[] = []
-					const selected: string[] = []
-					let keys: readonly string[] | undefined
-					if (isArray(container)) {
-						const snapshot = readArrayEntries(container)
-						if (!snapshot.success) throw snapshot.error
-						if (!snapshot.value.dense) return undefined
-						// Indexed, not `appendEntries`: a PRESENT `undefined` element is a
-						// value JSON cannot encode and must abandon the whole encoding, and
-						// the shared appender skips `undefined` by design.
-						const entries = snapshot.value.entries
-						for (let index = 0; index < entries.length; index += 1) {
-							members[members.length] = entries[index]
-						}
-					} else {
-						const names = sortValues(INTRINSICS.keys(container))
-						for (let index = 0; index < names.length; index += 1) {
-							const key = names[index]
-							if (key === undefined) continue
-							selected[selected.length] = key
-							members[members.length] = INTRINSICS.read(container, key)
-						}
-						keys = selected
-					}
-					admitVisited(ancestors, container)
-					admitted[admitted.length] = container
-					stack[stack.length] = { operation: 'exit', value: container, members, keys }
-					for (let index = members.length - 1; index >= 0; index -= 1) {
-						const member = members[index]
-						if (isObject(member) && (isArray(member) || matchesRecordBrand(member))) {
-							stack[stack.length] = { operation: 'enter', value: member }
-						}
-					}
-				}
-				return INTRINSICS.apply(INTRINSICS.recall, encodings, [value])
-			} finally {
-				// An abandoning return leaves entered containers on the caller's
-				// ancestor set, and that set outlives this call when a direct caller
-				// brought it.
-				for (let index = 0; index < admitted.length; index += 1) {
-					const entered = admitted[index]
-					if (entered !== undefined) omitVisited(ancestors, entered)
-				}
-			}
-		}, 'canonicalizeValue')
-	}, 'canonicalizeValue')
-}
-
-/**
- * Encode one non-container value the way JSON encodes it, or `undefined` when
- * JSON cannot encode it at all.
- *
- * @remarks
- * The leaf half of {@link canonicalizeValue}: `JSON.stringify` returns
- * `undefined` (never a string) for `undefined`, a function, and a symbol —
- * exactly the values with no JSON encoding — and THROWS on a bigint, which is
- * refused before the call rather than through it. A `Date` and any other
- * non-record object encode through the same captured `JSON.stringify`, so a
- * `toJSON` member keeps its ordinary meaning.
- *
- * @param value - The non-container value to encode
- * @returns The JSON encoding, or `undefined` when JSON cannot encode `value`
- *
- * @example
- * ```ts
- * encodeLeaf(Number.NaN)  // 'null'
- * encodeLeaf(undefined)   // undefined
- * ```
- */
-export function encodeLeaf(value: unknown): string | undefined {
-	if (typeof value === 'bigint') return undefined
-	return INTRINSICS.stringify(value)
-}
-
-/**
- * Render a value as a deterministic, key-sorted JSON string — or `undefined`
- * when it has no faithful JSON encoding.
- *
- * @remarks
- * The stable-stringify backing {@link unifySchemas}'s de-duplication and
- * ordering: unlike `JSON.stringify`, object keys are sorted before encoding
- * (recursively, at every nesting level), so two structurally-equal
- * `JSONSchema` fragments built independently always canonicalize to the same
- * string. Pure host-independent ECMAScript with no environment-specific imports.
- *
- * For READABLE input it returns `undefined` — never a partial or invalid
- * encoding — for every value JSON cannot faithfully encode:
- *
- * - `undefined` itself, a function, a symbol, or an array hole (JSON encodes
- *   none of them), at the top level or anywhere inside a container;
- * - a bigint (`JSON.stringify` throws on one);
- * - cyclic input, tracked with the same ancestor-{@link WeakSet} discipline
- *   {@link inferArray} / {@link inferObject} use, so a shared (non-cyclic)
- *   reference reached twice through different paths still encodes;
- * A hostile traversal is categorically different: a throwing own-getter,
- * hostile `ownKeys` trap, or revoked `Proxy` throws a `structure`
- * {@link ContractError} through {@link readValue}. A caller can therefore
- * distinguish "not JSON-encodable" from "could not be read".
- *
- * A caller therefore treats `undefined` as "this value has no canonical key",
- * never as an encoding: see {@link unifySchemas} (an un-keyed member cannot
- * participate in de-duplication or ordering) and {@link inferPrimitiveEnum} (an
- * un-keyed member makes the slot enum-ineligible).
- *
- * @param value - The value to canonicalize (a `JSONSchema` fragment, or any
- *                nested piece of one)
- * @returns A deterministic string encoding of `value`, or `undefined` when JSON
- *          cannot encode it
- * @throws {ContractError} When the value cannot be read
- *
- * @example
- * ```ts
- * canonicalStringify({ type: 'object', properties: {} }) ===
- * 	canonicalStringify({ properties: {}, type: 'object' }) // true
- * canonicalStringify(Number.NaN)  // 'null' — JSON.stringify semantics
- * canonicalStringify(undefined)   // undefined
- * canonicalStringify(cyclicValue) // undefined
- * ```
- */
-export function canonicalStringify(value: unknown): string | undefined {
-	return contain(() => {
-		return readValue(() => canonicalizeValue(value, new INTRINSICS.weakSet()), 'canonicalStringify')
-	}, 'canonicalStringify')
-}
 
 /**
  * Unify a list of inferred `JSONSchema` fragments into one schema.
@@ -371,70 +155,6 @@ export function unifySchemas(schemas: readonly JSONSchema[]): JSONSchema {
 // === Format inference
 
 /**
- * Determine whether a supported ISO-8601 date or date-time is valid.
- *
- * @remarks
- * Accepts exactly `YYYY-MM-DD`, or `YYYY-MM-DDTHH:MM:SS` with optional
- * fractional seconds followed by `Z` or a numeric offset. Inside the
- * {@link attempt} boundary, captured components receive explicit Gregorian
- * month/leap/day and clock validation before `Date#getTime` performs the final
- * offset/instant refusal. Backs {@link stringToFormat}'s `date`, `date-time`,
- * and prefixed `time` validation.
- *
- * @param value - The candidate ISO-8601 string
- * @returns `true` when `value` parses to a real instant
- *
- * @example
- * ```ts
- * isValidISOInstant('2024-02-29')          // true
- * isValidISOInstant('2024-01-01T24:00Z')   // false — incomplete normalized clock
- * ```
- */
-export function isValidISOInstant(value: string): boolean {
-	const outcome = attempt(() => {
-		// The CAPTURED `exec`, not the live member: `RegExp.prototype.test` is
-		// spec-defined in terms of `RegExpExec`, so both spellings of a pattern
-		// question answer whatever the caller most recently installed, and a decoy
-		// match published a `format` for a string that never had one.
-		const match = INTRINSICS.apply(
-			INTRINSICS.captures,
-			/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$/,
-			[value],
-		)
-		const yearText = match?.[1]
-		const monthText = match?.[2]
-		const dayText = match?.[3]
-		if (yearText === undefined || monthText === undefined || dayText === undefined) return false
-		const year = INTRINSICS.numeric(yearText)
-		const month = INTRINSICS.numeric(monthText)
-		const day = INTRINSICS.numeric(dayText)
-		if (month < 1 || month > 12) return false
-		const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
-		const limit =
-			month === 2
-				? 28 + INTRINSICS.numeric(leap)
-				: 31 - INTRINSICS.numeric(month === 4 || month === 6 || month === 9 || month === 11)
-		if (day < 1 || day > limit) return false
-		const hourText = match?.[4]
-		const minuteText = match?.[5]
-		const secondText = match?.[6]
-		if (hourText !== undefined || minuteText !== undefined || secondText !== undefined) {
-			if (hourText === undefined || minuteText === undefined || secondText === undefined)
-				return false
-			const hour = INTRINSICS.numeric(hourText)
-			const minute = INTRINSICS.numeric(minuteText)
-			const second = INTRINSICS.numeric(secondText)
-			if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
-				return false
-			}
-		}
-		const date = new INTRINSICS.date(value)
-		return !INTRINSICS.nan(INTRINSICS.apply(INTRINSICS.instant, date, []))
-	})
-	return outcome.success && outcome.value
-}
-
-/**
  * Classify a string against the {@link SchemaFormat} vocabulary.
  *
  * @remarks
@@ -467,47 +187,6 @@ export function stringToFormat(value: string): SchemaFormat | undefined {
 	// with no `@throws` at all.
 	const outcome = attempt(() => classifyFormat(value))
 	return outcome.success ? outcome.value : undefined
-}
-
-/**
- * Classify an already-bounded string against the pattern-only and
- * calendar-checked {@link SchemaFormat} vocabulary.
- *
- * @remarks
- * The pure leaf behind {@link stringToFormat}'s total boundary: it performs the
- * pattern dispatch, and the door decides what a failed dispatch answers. Order
- * is significant — `date-time` is tried before `date`, and both require the
- * calendar check, so `2020-13-45` matches the pattern and is still refused.
- *
- * @param value - The candidate string, already length-bounded
- * @returns The matched {@link SchemaFormat}, or `undefined`
- * @throws The exact value thrown by a redirected pattern dispatch
- *
- * @example
- * ```ts
- * classifyFormat('ada@example.com') // 'email'
- * ```
- */
-export function classifyFormat(value: string): SchemaFormat | undefined {
-	if (matchesPattern(FORMAT_PATTERNS.uuid, value)) return 'uuid'
-	if (
-		matchesPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/, value) &&
-		isValidISOInstant(value)
-	) {
-		return 'date-time'
-	}
-	if (matchesPattern(/^\d{4}-\d{2}-\d{2}$/, value) && isValidISOInstant(value)) {
-		return 'date'
-	}
-	if (
-		matchesPattern(/^\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/, value) &&
-		isValidISOInstant(`1970-01-01T${value}`)
-	) {
-		return 'time'
-	}
-	if (matchesPattern(FORMAT_PATTERNS.email, value)) return 'email'
-	if (matchesPattern(FORMAT_PATTERNS.uri, value)) return 'uri'
-	return undefined
 }
 
 /**

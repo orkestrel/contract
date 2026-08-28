@@ -170,6 +170,7 @@ export function cloneShape(shape: ContractShape): ContractShape {
  *
  * @param shape - The contract shape to own
  * @returns A deeply cloned frozen snapshot
+ * @throws {ContractError} When the declaration cannot be copied faithfully, when hostile shape or raw-schema traversal prevents ownership, or when a frozen root fails validation
  *
  * @example
  * ```ts

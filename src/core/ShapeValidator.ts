@@ -45,7 +45,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	static readonly #weakSet = WeakSet
 	static readonly #weakMap = WeakMap
 	readonly #source: ContractShape
-	#phase:
+	#state:
 		| { readonly phase: 'idle' }
 		| { readonly phase: 'active'; readonly poison?: ContractError } = { phase: 'idle' }
 	#stack: Array<
@@ -148,21 +148,21 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	 * @throws {ContractError} When the declaration is malformed, cyclic, too deep, unreadable, or reentered
 	 */
 	validate(): void {
-		if (this.#phase.phase === 'active') {
+		if (this.#state.phase === 'active') {
 			const poison =
-				this.#phase.poison ??
+				this.#state.poison ??
 				new ContractError('ShapeValidator.validate: shape validation may not be reentered', {
 					code: 'structure',
 					context: { path: [] },
 				})
-			this.#phase = { phase: 'active', poison }
+			this.#state = { phase: 'active', poison }
 			throw poison
 		}
 
 		this.#clear()
-		this.#phase = { phase: 'active' }
+		this.#state = { phase: 'active' }
 		const outcome = attempt(() => this.#execute())
-		const poison = this.#phase.phase === 'active' ? this.#phase.poison : undefined
+		const poison = this.#state.phase === 'active' ? this.#state.poison : undefined
 		this.#clear()
 		if (poison !== undefined) throw poison
 		if (outcome.success) return
@@ -179,7 +179,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	}
 
 	#clear(): void {
-		this.#phase = { phase: 'idle' }
+		this.#state = { phase: 'idle' }
 		this.#stack = []
 		this.#path = []
 		this.#active = new ShapeValidator.#weakSet()
@@ -1554,9 +1554,10 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	}
 
 	static {
-		// Pinned while this class is DEFINED: `validateShape` and `validateShapeDepth`
-		// reach it through `ShapeValidator.prototype.validate`, so an assignment
-		// there decides whether a shape gate the caller never touched ever runs.
+		// Pinned while this class is DEFINED: `ShapeCloner`'s `#validateShape` and
+		// `validateShapeDepth` reach it through `ShapeValidator.prototype.validate`,
+		// so an assignment there decides whether a shape gate the caller never
+		// touched ever runs.
 		pinMembers(ShapeValidator.prototype, 'ShapeValidator')
 	}
 }

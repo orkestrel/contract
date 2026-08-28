@@ -34,6 +34,8 @@ import {
 	attempt,
 	collectMembers,
 	contain,
+	deriveLengthBounds,
+	deriveRangeBounds,
 	limitEntries,
 	matchesMember,
 	matchesRecordBrand,
@@ -50,7 +52,6 @@ import {
 import {
 	isArray,
 	isFiniteNumber,
-	isInteger,
 	isLiteralValue,
 	isObject,
 	isRecord,
@@ -728,79 +729,6 @@ export function rawShape(schema: JSONSchema): RawShape {
 // instance, a function, `NaN`) whose inferred schema is exactly `{}` — the
 // round trip below would then be a false claim. `jsonShape` remains the shape a
 // user AUTHORS to mean "any JSON value"; it is never inferred.
-
-/**
- * Derive `min`/`max` shape bounds from a pair of non-negative-integer JSON
- * Schema length keywords (`minLength`/`maxLength`, `minItems`/`maxItems`).
- *
- * @remarks
- * Total and pure. Either keyword is used only when it is a non-negative
- * safe integer (`Number.isSafeInteger` + `>= 0`); a malformed value (a string,
- * a negative number, `NaN`, `Infinity`, a fraction, or an unsafe integer) is
- * dropped as if absent. When both bounds are present and `min` exceeds `max`,
- * the PAIR is dropped entirely (an unbounded shape is always a legal widening
- * of a contradictory schema).
- *
- * @param min - The raw `minLength` / `minItems` keyword value
- * @param max - The raw `maxLength` / `maxItems` keyword value
- * @returns The derived `min` / `max` pair, either possibly `undefined`
- *
- * @example
- * ```ts
- * deriveLengthBounds(1, 10)     // { min: 1, max: 10 }
- * deriveLengthBounds(10, 1)     // {} — contradictory, dropped
- * deriveLengthBounds(-1, 10)    // { max: 10 } — negative min dropped
- * ```
- */
-export function deriveLengthBounds(
-	min: unknown,
-	max: unknown,
-): { readonly min?: number; readonly max?: number } {
-	return contain(() => {
-		const lo = isInteger(min) && INTRINSICS.safe(min) && min >= 0 ? min : undefined
-		const hi = isInteger(max) && INTRINSICS.safe(max) && max >= 0 ? max : undefined
-		if (lo !== undefined && hi !== undefined && lo > hi) return {}
-		return {
-			...(lo === undefined ? {} : { min: lo }),
-			...(hi === undefined ? {} : { max: hi }),
-		}
-	}, 'deriveLengthBounds')
-}
-
-/**
- * Derive `min`/`max` shape bounds from a pair of finite-number JSON Schema
- * range keywords (`minimum`/`maximum`).
- *
- * @remarks
- * Total and pure. Either keyword is used only when it is a finite number
- * ({@link isFiniteNumber} — rejects `NaN` / `±Infinity` / non-numbers); when
- * both bounds are present and `min` exceeds `max`, the PAIR is dropped
- * entirely, the same contradiction rule {@link deriveLengthBounds} applies.
- *
- * @param min - The raw `minimum` keyword value
- * @param max - The raw `maximum` keyword value
- * @returns The derived `min` / `max` pair, either possibly `undefined`
- *
- * @example
- * ```ts
- * deriveRangeBounds(0, 120)   // { min: 0, max: 120 }
- * deriveRangeBounds(5, 1)     // {} — contradictory, dropped
- * ```
- */
-export function deriveRangeBounds(
-	min: unknown,
-	max: unknown,
-): { readonly min?: number; readonly max?: number } {
-	return contain(() => {
-		const lo = isFiniteNumber(min) ? min : undefined
-		const hi = isFiniteNumber(max) ? max : undefined
-		if (lo !== undefined && hi !== undefined && lo > hi) return {}
-		return {
-			...(lo === undefined ? {} : { min: lo }),
-			...(hi === undefined ? {} : { max: hi }),
-		}
-	}, 'deriveRangeBounds')
-}
 
 /**
  * Build an {@link ObjectShape} from a JSON Schema object node's `properties` /

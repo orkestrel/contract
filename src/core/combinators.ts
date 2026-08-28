@@ -6,6 +6,7 @@ import type {
 	IntersectionFromGuards,
 	LiteralValue,
 	OptionalFromGuards,
+	StringGuardOptions,
 	TupleFromGuards,
 } from './types.js'
 import { GUARD_DEPTH_LIMIT, INTRINSICS } from './constants.js'
@@ -63,6 +64,9 @@ import {
  * property rather than a present `undefined`, and the two are different facts.
  * Pass `[1, undefined, 3]` when the middle slot is meant to exist.
  *
+ * @param elementGuard - The guard each element must satisfy
+ * @returns A guard accepting a dense array whose every element is accepted
+ *
  * @example
  * ```ts
  * const isStringArray = arrayOf(isString)
@@ -89,6 +93,9 @@ export function arrayOf(elementGuard: (value: unknown) => boolean): Guard<readon
 /**
  * Build a guard that accepts fixed-arity DENSE tuples, testing each index with
  * the corresponding guard.
+ *
+ * @param guards - One guard per tuple index, in declaration order
+ * @returns A guard accepting a dense tuple of that exact arity whose every index is accepted
  *
  * @example
  * ```ts
@@ -233,6 +240,9 @@ export function literalOf(
  * Verifies that `ctor` is a real constructor (via {@link isConstructor}) first,
  * so passing an arrow function does not silently produce a broken guard.
  *
+ * @param ctor - The constructor whose instances the guard accepts
+ * @returns A guard narrowing to that constructor's instance type
+ *
  * @example
  * ```ts
  * const isDateValue = instanceOf(Date)
@@ -256,7 +266,7 @@ export function instanceOf<C extends abstract new (...args: never) => object>(
 /**
  * Build a guard from a native `enum` or any object whose values are strings or
  * numbers.
-
+ *
  * @param enumeration - The readable enumeration whose values the guard accepts
  * @returns A guard accepting one enumeration value
  * @throws {ContractError} When the enumeration cannot be read
@@ -288,6 +298,9 @@ export function enumOf<const E extends Record<string, string | number>>(
 /**
  * Build a guard that accepts `Set` instances whose every element satisfies
  * `elementGuard`.
+ *
+ * @param elementGuard - The guard each element must satisfy
+ * @returns A guard accepting a `Set` whose every element is accepted
  *
  * @example
  * ```ts
@@ -324,6 +337,10 @@ export function setOf(elementGuard: (value: unknown) => boolean): Guard<Readonly
 /**
  * Build a guard that accepts `Map` instances where every key satisfies
  * `keyGuard` and every value satisfies `valueGuard`.
+ *
+ * @param keyGuard - The guard each key must satisfy
+ * @param valueGuard - The guard each value must satisfy
+ * @returns A guard accepting a `Map` whose every entry is accepted
  *
  * @example
  * ```ts
@@ -364,16 +381,6 @@ export function mapOf(
 		})
 }
 
-export function recordOf<S extends GuardsShape>(shape: S): Guard<FromGuards<S>>
-export function recordOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & string>>(
-	shape: S,
-	optional: K,
-): Guard<OptionalFromGuards<S, K>>
-export function recordOf<S extends GuardsShape>(
-	shape: S,
-	optional: true,
-): Guard<Readonly<{ [P in keyof S]?: FromGuards<S>[P] }>>
-
 /**
  * Build a guard that accepts plain records matching a guard shape.
  *
@@ -385,9 +392,13 @@ export function recordOf<S extends GuardsShape>(
  *
  * Key presence is tested with `Object.hasOwn`, so a shape key satisfied only by
  * an inherited prototype member (`toString`, `constructor`, …) counts as absent.
- * A non-object / `null` / array input returns `false` rather than throwing. The
+ * A non-object / `null` / array input returns `false` rather than throwing.
  * The exactness check inspects every own string key, including non-enumerable
  * keys. Symbol keys are ignored intentionally for JSON fidelity.
+ *
+ * @param shape - The guard shape whose own string keys the record must satisfy
+ * @param optional - The optional-key list, `true` for every key, or absent for none
+ * @returns A guard accepting a record satisfying the shape under the selected mode
  *
  * @example
  * ```ts
@@ -399,6 +410,15 @@ export function recordOf<S extends GuardsShape>(
  * isPartial({ name: 'Ada' }) // true
  * ```
  */
+export function recordOf<S extends GuardsShape>(shape: S): Guard<FromGuards<S>>
+export function recordOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & string>>(
+	shape: S,
+	optional: K,
+): Guard<OptionalFromGuards<S, K>>
+export function recordOf<S extends GuardsShape>(
+	shape: S,
+	optional: true,
+): Guard<Readonly<{ [P in keyof S]?: FromGuards<S>[P] }>>
 export function recordOf<
 	S extends GuardsShape,
 	K extends ReadonlyArray<keyof S & string> | true | undefined,
@@ -454,16 +474,6 @@ export function recordOf<
 	}, 'recordOf')
 }
 
-export function objectOf<S extends GuardsShape>(shape: S): Guard<FromGuards<S>>
-export function objectOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & string>>(
-	shape: S,
-	optional: K,
-): Guard<OptionalFromGuards<S, K>>
-export function objectOf<S extends GuardsShape>(
-	shape: S,
-	optional: true,
-): Guard<Readonly<{ [P in keyof S]?: FromGuards<S>[P] }>>
-
 /**
  * Build a guard that accepts non-array objects matching an open guard shape.
  *
@@ -480,6 +490,10 @@ export function objectOf<S extends GuardsShape>(
  * accepted. Arrays, `null`, and primitives are rejected. Hostile reads return
  * `false` rather than throwing.
  *
+ * @param shape - The guard shape whose declared members the object must satisfy
+ * @param optional - The optional-key list, `true` for every key, or absent for none
+ * @returns A guard accepting an object satisfying the shape under the selected mode
+ *
  * @example
  * ```ts
  * const isResult = objectOf({ conclusion: isBoolean })
@@ -487,6 +501,15 @@ export function objectOf<S extends GuardsShape>(
  * isResult([]) // false
  * ```
  */
+export function objectOf<S extends GuardsShape>(shape: S): Guard<FromGuards<S>>
+export function objectOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & string>>(
+	shape: S,
+	optional: K,
+): Guard<OptionalFromGuards<S, K>>
+export function objectOf<S extends GuardsShape>(
+	shape: S,
+	optional: true,
+): Guard<Readonly<{ [P in keyof S]?: FromGuards<S>[P] }>>
 export function objectOf<
 	S extends GuardsShape,
 	K extends ReadonlyArray<keyof S & string> | true | undefined,
@@ -542,6 +565,9 @@ export function objectOf<
  * (`toString`, `constructor`, …) are rejected. An own property that shadows a
  * prototype name is accepted.
  *
+ * @param value - The object whose own keys the guard accepts
+ * @returns A guard narrowing to that object's own key union
+ *
  * @example
  * ```ts
  * const COLORS = { red: '#f00', green: '#0f0', blue: '#00f' } as const
@@ -569,6 +595,10 @@ export function keyOf<const O extends Readonly<Record<PropertyKey, unknown>>>(
 /**
  * Build a new guard shape by keeping only the listed keys — the structural
  * equivalent of `Pick<T, K>`. Produces a shape for {@link recordOf}, not a guard.
+ *
+ * @param shape - The guard shape to narrow
+ * @param keys - The keys to keep
+ * @returns A guard shape carrying only the kept keys
  *
  * @example
  * ```ts
@@ -620,6 +650,10 @@ export function pickOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 /**
  * Build a new guard shape by removing the listed keys — the structural
  * equivalent of `Omit<T, K>`. Produces a shape for {@link recordOf}, not a guard.
+ *
+ * @param shape - The guard shape to narrow
+ * @param keys - The keys to remove
+ * @returns A guard shape carrying every key except the removed ones
  *
  * @example
  * ```ts
@@ -676,6 +710,10 @@ export function omitOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
  * Use {@link whereOf} when the right side refines an already-narrowed type; use
  * `andOf` to combine two independent guards.
  *
+ * @param left - The guard tested first
+ * @param right - The guard tested only after `left` passes
+ * @returns A guard accepting a value both accept
+ *
  * @example
  * ```ts
  * const isShortString = andOf(isString, isNonEmptyString)
@@ -698,6 +736,10 @@ export function andOf(
 /**
  * Combine two guards with logical OR — passes when at least one passes. For more
  * than two variants prefer {@link unionOf}.
+ *
+ * @param left - The guard tested first
+ * @param right - The guard tested only after `left` fails
+ * @returns A guard accepting a value either accepts
  *
  * @example
  * ```ts
@@ -729,6 +771,9 @@ export function orOf(
  * Typed as `Guard<unknown>` because `Exclude<unknown, T>` is not useful; use
  * {@link complementOf} when you need the narrowed `Exclude<TBase, TExcluded>`.
  *
+ * @param guard - The guard or predicate to negate
+ * @returns A guard accepting exactly the values `guard` rejects
+ *
  * @example
  * ```ts
  * const isNotNull = notOf(isNull)
@@ -745,6 +790,10 @@ export function notOf(guard: (value: unknown) => boolean): Guard<unknown> {
 /**
  * Build a guard for `Exclude<TBase, TExcluded>` — accepts values that pass
  * `base` but not `excluded`.
+ *
+ * @param base - The guard establishing the accepted domain
+ * @param excluded - The guard whose accepted values are removed from that domain
+ * @returns A guard accepting a value `base` accepts and `excluded` rejects
  *
  * @example
  * ```ts
@@ -773,6 +822,9 @@ export function complementOf<TBase, TExcluded extends TBase>(
  * Build a guard that accepts values matching at least one of the provided
  * guards — the variadic form of {@link orOf}.
  *
+ * @param guards - The guards tried in order
+ * @returns A guard accepting a value at least one guard accepts
+ *
  * @example
  * ```ts
  * const isStringOrBoolean = unionOf(isString, isBoolean)
@@ -798,6 +850,9 @@ export function unionOf(...guards: ReadonlyArray<(value: unknown) => boolean>): 
 /**
  * Build a guard that accepts values matching ALL of the provided guards — the
  * variadic form of {@link andOf}.
+ *
+ * @param guards - The guards every accepted value must satisfy
+ * @returns A guard accepting a value every guard accepts
  *
  * @example
  * ```ts
@@ -840,6 +895,10 @@ export function intersectionOf(
  * §14 the returned guard never throws: if `predicate` throws, the throw is
  * contained and the guard reports a non-match.
  *
+ * @param base - The guard establishing the accepted domain
+ * @param predicate - The refinement run only after `base` passes
+ * @returns A guard accepting a value `base` accepts and the refinement admits
+ *
  * @example
  * ```ts
  * const isPositive = whereOf(isNumber, (n) => n > 0)
@@ -874,6 +933,9 @@ export function whereOf<T>(base: Guard<T>, predicate: (value: T) => boolean): Gu
  * counter always unwinds after the contained call, so one deep or cyclic input
  * cannot poison later guard calls.
  *
+ * @param thunk - The factory producing the guard to apply, called on every invocation
+ * @returns A guard deferring each call to the thunk's guard
+ *
  * @example
  * ```ts
  * type Tree = { value: number; children: Tree[] }
@@ -905,6 +967,11 @@ export function lazyOf<T>(thunk: () => Guard<T>): Guard<T> {
  * non-match. (Unlike the reference implementation, there is no
  * "curried projector" branch — a projection that legitimately returns a function
  * would be double-invoked under that scheme. Compose explicitly if you need it.)
+ *
+ * @param base - The guard establishing the accepted domain
+ * @param project - The projection applied to a value `base` accepted
+ * @param target - The guard the projection's result must satisfy
+ * @returns A guard narrowing to the base type, accepting only a value whose projection satisfies `target`
  *
  * @example
  * ```ts
@@ -945,6 +1012,10 @@ export function transformOf<T>(
  * constrains that side. Reused for a number's own value AND, applied to a
  * `.length`, for string and array length refinements — the single source of the
  * bound logic shared by the compiled guard and parser (compilers.ts).
+ *
+ * @param min - The inclusive lower bound, absent for unbounded below
+ * @param max - The inclusive upper bound, absent for unbounded above
+ * @returns A guard accepting a finite number inside the bounds
  *
  * @example
  * ```ts
@@ -1020,11 +1091,7 @@ export function matchOf(pattern: RegExp): Guard<string> {
  * stringOf() // identical to isString
  * ```
  */
-export function stringOf(options?: {
-	min?: number
-	max?: number
-	pattern?: RegExp
-}): Guard<string> {
+export function stringOf(options?: StringGuardOptions): Guard<string> {
 	return contain(() => {
 		const safe = readOptions(options, ['min', 'max', 'pattern'], 'stringOf', 'string')
 		const min = safe?.min
@@ -1056,6 +1123,9 @@ export function stringOf(options?: {
 /**
  * Extend a guard to also allow `null`.
  *
+ * @param guard - The guard to extend
+ * @returns A guard accepting `null` and every value `guard` accepts
+ *
  * @example
  * ```ts
  * const isNullableString = nullableOf(isString)
@@ -1071,6 +1141,9 @@ export function nullableOf<T>(guard: Guard<T>): Guard<T | null> {
 /**
  * Extend a guard to also allow `undefined` — the optional counterpart of
  * {@link nullableOf}.
+ *
+ * @param guard - The guard to extend
+ * @returns A guard accepting `undefined` and every value `guard` accepts
  *
  * @example
  * ```ts

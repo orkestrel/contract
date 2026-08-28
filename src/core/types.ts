@@ -137,6 +137,49 @@ export interface ArrayRead<T = unknown> {
 	readonly dense: boolean
 }
 
+/**
+ * Owned result of reading one guard shape and its optional-key mode.
+ *
+ * @remarks
+ * A null-prototype record plus its own key list, never a `Map`: the declared-key
+ * population decides a shape combinator's answer, and map lookup and map
+ * iteration are caller-writable members on that path.
+ */
+export interface GuardShapeRead {
+	/** The owned guards, keyed by their own string declaration name. */
+	readonly guards: Readonly<Record<string, Guard<unknown> | undefined>>
+	/** The declared names in own-key order. */
+	readonly names: readonly string[]
+	/** Membership of the keys the combinator treats as optional. */
+	readonly optional: ReadonlySet<unknown>
+	/** Membership of every declared key, for exactness checks. */
+	readonly vocabulary: ReadonlySet<unknown>
+}
+
+/**
+ * Derived numeric bounds pair, either member absent.
+ *
+ * @remarks
+ * The reduced result of a JSON Schema length or range keyword pair. A malformed
+ * keyword is dropped as if absent, and a contradictory pair drops both members,
+ * so an absent member always widens rather than narrows.
+ */
+export interface BoundsRead {
+	/** The derived lower bound, absent when the keyword was malformed or contradictory. */
+	readonly min?: number
+	/** The derived upper bound, absent when the keyword was malformed or contradictory. */
+	readonly max?: number
+}
+
+/**
+ * The collector a captured `forEach` sweep invokes per entry.
+ *
+ * @remarks
+ * Both the `Set` and `Map` sweeps hand the callback `(value, key)`; a `Set`
+ * passes its entry in both positions, so one collector serves both.
+ */
+export type EntryCollectorFunction = (value: unknown, key: unknown) => void
+
 // === Guards
 
 /** A runtime type guard: returns `true` when `value` satisfies `T` and narrows it. */
@@ -317,17 +360,6 @@ export interface SchemaClonerInterface {
 }
 
 /**
- * Stateful owner of one contract-shape snapshot operation.
- *
- * @remarks
- * Construction retains the shape without observing it. The first
- * {@link clone} call settles once; later calls replay the exact same frozen
- * shape or exact same owned {@link ContractError}. Nonredirectable terminal
- * settlement releases populated traversal state before publishing that exact
- * result, while retaining the source and result afterward.
- * Reentry permanently poisons the active operation with one shared error.
- */
-/**
  * One captured property of an object shape, held as an ordered entry rather
  * than as a `Map` pair.
  *
@@ -346,6 +378,17 @@ export interface ShapeProperty {
 	readonly child: ContractShape | undefined
 }
 
+/**
+ * Stateful owner of one contract-shape snapshot operation.
+ *
+ * @remarks
+ * Construction retains the shape without observing it. The first
+ * {@link clone} call settles once; later calls replay the exact same frozen
+ * shape or exact same owned {@link ContractError}. Nonredirectable terminal
+ * settlement releases populated traversal state before publishing that exact
+ * result, while retaining the source and result afterward.
+ * Reentry permanently poisons the active operation with one shared error.
+ */
 export interface ShapeClonerInterface {
 	/**
 	 * Clone the retained shape into a deeply frozen identity-preserving graph.
@@ -799,6 +842,21 @@ export interface StringShapeOptions {
 	readonly max?: number
 	readonly pattern?: RegExp
 	readonly description?: string
+}
+
+/**
+ * Options for the `stringOf` guard builder.
+ *
+ * @remarks
+ * The refinement half of {@link StringShapeOptions}: the same `min`, `max`, and
+ * `pattern` members, without the `description` a shape carries for its emitted
+ * schema. A guard publishes no description, so the two surfaces share the
+ * refinements and nothing else.
+ */
+export interface StringGuardOptions {
+	readonly min?: number
+	readonly max?: number
+	readonly pattern?: RegExp
 }
 
 /** Options for {@link NumberShape} (via `numberShape` / `integerShape`). */

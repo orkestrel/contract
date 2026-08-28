@@ -1007,19 +1007,24 @@ describe('no caller-reachable member decides a membership answer', () => {
 	})
 
 	it('refuses to define its error class when a prototype pin cannot be installed', async () => {
-		const genuine = Object.defineProperty
+		// The sabotage targets the placement the class actually dispatches through:
+		// `pinMembers` and the copy of it `errors.ts` inlines both place through the
+		// ANSWERING `Reflect.defineProperty`, so a `defineProperty` that reports
+		// success without installing anything is the silent failure the corroborating
+		// descriptor read exists to catch.
+		const genuine = Reflect.defineProperty
 		const selective = function (
 			target: object,
 			key: PropertyKey,
 			descriptor: PropertyDescriptor,
-		): object {
+		): boolean {
 			return key === 'constructor' && descriptor.writable === false
-				? target
+				? true
 				: genuine(target, key, descriptor)
 		}
-		const original = captured.descriptor(Object, 'defineProperty')
-		if (original === undefined) throw new Error('Object.defineProperty descriptor is absent')
-		captured.define(Object, 'defineProperty', { ...original, value: selective })
+		const original = captured.descriptor(Reflect, 'defineProperty')
+		if (original === undefined) throw new Error('Reflect.defineProperty descriptor is absent')
+		captured.define(Reflect, 'defineProperty', { ...original, value: selective })
 		let outcome: { readonly success: boolean; readonly error?: unknown }
 		try {
 			vi.resetModules()
@@ -1029,7 +1034,7 @@ describe('no caller-reachable member decides a membership answer', () => {
 				(error: unknown) => ({ success: false, error }),
 			)
 		} finally {
-			captured.define(Object, 'defineProperty', original)
+			captured.define(Reflect, 'defineProperty', original)
 			vi.resetModules()
 		}
 

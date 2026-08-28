@@ -1,5 +1,5 @@
 import type { ContractErrorContext, ContractErrorOptions } from './types.js'
-import { CONTRACT_ERROR_BRAND, INTRINSICS } from './constants.js'
+import { CONTRACT_CODES, CONTRACT_ERROR_BRAND, INTRINSICS } from './constants.js'
 
 /**
  * Error carrying a machine-readable contract category, optional context, and
@@ -35,13 +35,23 @@ export class ContractError extends Error {
 	}
 
 	static {
+		// The `pinMembers` body, inlined for the reason that helper's `@remarks`
+		// records: `helpers.ts` imports this module, so calling it here would invert
+		// the dependency. It stays aligned with that helper, accessor branch and
+		// answering `declare` included, so the two copies cannot pin differently.
 		const members = INTRINSICS.members(this.prototype)
 		for (let index = 0; index < members.length; index += 1) {
 			const key = members[index]
 			if (key === undefined) continue
-			INTRINSICS.define(this.prototype, key, { writable: false, configurable: false })
+			const declared = INTRINSICS.describe(this.prototype, key)
+			const accessor = declared !== undefined && !INTRINSICS.own(declared, 'value')
+			INTRINSICS.declare(
+				this.prototype,
+				key,
+				accessor ? { configurable: false } : { writable: false, configurable: false },
+			)
 			const pinned = INTRINSICS.describe(this.prototype, key)
-			if (pinned?.writable !== false || pinned.configurable !== false) {
+			if (pinned?.configurable !== false || (!accessor && pinned.writable !== false)) {
 				throw new ContractError('ContractError: a prototype member could not be pinned', {
 					code: 'structure',
 				})
@@ -86,21 +96,15 @@ export function isContractError(value: unknown): value is ContractError {
 		const descriptor = INTRINSICS.describe(value, CONTRACT_ERROR_BRAND)
 		if (descriptor?.value !== value) return false
 		const code: unknown = value.code
-		return (
-			code === 'bound' ||
-			code === 'range' ||
-			code === 'empty' ||
-			code === 'placement' ||
-			code === 'structure' ||
-			code === 'literal' ||
-			code === 'cycle' ||
-			code === 'pattern' ||
-			code === 'generate' ||
-			code === 'random' ||
-			code === 'clone' ||
-			code === 'depth' ||
-			code === 'expansion'
-		)
+		// Indexed over the one declared vocabulary. `collectMembers` /
+		// `matchesMember` express the same membership everywhere else in the
+		// package, and this file cannot reach them: `helpers.ts` imports this
+		// module, so asking it would invert the dependency — the same reason this
+		// guard carries its own `try` / `catch`.
+		for (let index = 0; index < CONTRACT_CODES.length; index += 1) {
+			if (code === CONTRACT_CODES[index]) return true
+		}
+		return false
 	} catch {
 		return false
 	}
