@@ -673,6 +673,36 @@ describe('readArrayEntries', () => {
 		expect(unknownSparse.success && unknownSparse.value.dense).toBe(false)
 	})
 
+	it('reads a reordered key view identically to an ordinary copy', () => {
+		// A caller-defined key view is the only source of a non-ascending arrival.
+		// Its answer is pinned to the answer an ordinary copy of the same members
+		// produces, and its membership reads to the documented ascending order —
+		// which the snapshot alone cannot show, because entries are assigned by
+		// index and retain no trace of the order their indices arrived in.
+		const observed: string[] = []
+		const source = [10, 20, 30]
+		const reordered = new Proxy(source, {
+			getOwnPropertyDescriptor(target, property) {
+				if (typeof property === 'string') observed[observed.length] = property
+				return Reflect.getOwnPropertyDescriptor(target, property)
+			},
+			ownKeys() {
+				return ['2', '1', '0', 'length']
+			},
+		})
+		const expected = readArrayEntries([...source])
+		const outcome = readArrayEntries(reordered)
+
+		expect(outcome.success).toBe(true)
+		if (!outcome.success) throw outcome.error
+		if (!expected.success) throw expected.error
+		expect(observed).toEqual(['0', '1', '2'])
+		expect(outcome.value.entries).toEqual([10, 20, 30])
+		expect(outcome.value.entries).toEqual(expected.value.entries)
+		expect(outcome.value.dense).toBe(expected.value.dense)
+		expect(outcome.value.dense).toBe(true)
+	})
+
 	it('fails a non-native advertised length', () => {
 		const hostile = new Proxy([], {
 			get(target, property, receiver) {

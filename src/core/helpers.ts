@@ -1027,6 +1027,9 @@ export function readArrayEntries<T>(value: readonly T[]): Result<ArrayRead<T>> {
 			throw new INTRINSICS.error('Array length is outside the native array domain')
 		}
 		const collected: number[] = []
+		const keys: string[] = []
+		let ascending = true
+		let previous = -1
 		const members = INTRINSICS.members(value)
 		for (let position = 0; position < members.length; position += 1) {
 			const key = members[position]
@@ -1039,16 +1042,25 @@ export function readArrayEntries<T>(value: readonly T[]): Result<ArrayRead<T>> {
 				INTRINSICS.text(index) === key
 			) {
 				if (index >= length) throw new INTRINSICS.error('Array index views disagree')
+				if (index <= previous) ascending = false
+				previous = index
 				collected[collected.length] = index
+				keys[keys.length] = key
 			}
 		}
-		const indices = sortValues(collected)
+		// Ordered on arrival, not by default: a caller-defined key view may deliver
+		// the canonical indices in any order, so the sort answers that view alone
+		// and the parallel key list carries the string already proven canonical
+		// against its index, which the ordered arrival then never re-derives.
+		const indices = ascending ? collected : sortValues(collected)
 		const entries = new INTRINSICS.list<T | undefined>(length)
 		for (let position = 0; position < indices.length; position += 1) {
 			const index = indices[position]
 			if (index === undefined) continue
-			const key = INTRINSICS.text(index)
-			if (!INTRINSICS.own(value, key)) throw new INTRINSICS.error('Array index views disagree')
+			const key = ascending ? keys[position] : INTRINSICS.text(index)
+			if (key === undefined || !INTRINSICS.own(value, key)) {
+				throw new INTRINSICS.error('Array index views disagree')
+			}
 			entries[index] = value[index]
 		}
 		return INTRINSICS.freeze({
