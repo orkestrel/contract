@@ -367,7 +367,7 @@ export const COMPILE_NODE_LIMIT = 16_384
  * mask stays positive. A declaration with more keys than this is ordinary
  * authoring rather than an attack, so it is answered rather than refused:
  * {@link ContractCompiler} builds no position record for it and its compiled
- * guard, parser, auditor and reporter decide presence from a collected key
+ * guard, parser, auditor, and reporter decide presence from a collected key
  * vocabulary instead. Both branches answer identically; only the cost differs.
  *
  * @example

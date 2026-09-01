@@ -1532,10 +1532,15 @@ export class ContractCompiler<
 				// declared entry answers the per-entry presence question the same way,
 				// with a bit test in place of a membership dispatch; past the mask's
 				// width the collected-vocabulary form still answers.
-				const declared = readValue(() => collectMembers(declaredKeys), 'compileAuditor', {
-					subject: 'object',
-					context: { shape: 'object' },
-				})
+				//
+				// Plan time is not a call, so it has no path to name and no refusal to
+				// publish: this build is contained by `attempt` and holds `undefined`
+				// when it fails. A `globalThis.Set` replaced before this module loaded,
+				// and so captured into `INTRINSICS`, is what makes it fail. The call
+				// rebuilds it inside the walk's own containment, where that failure
+				// reaches the coded refusal this door publishes, carrying the path.
+				const planned = attempt(() => collectMembers(declaredKeys))
+				const declared = planned.success ? planned.value : undefined
 				const maskable = entries.length <= PRESENCE_MASK_LIMIT
 				const positions: Record<string, number> = INTRINSICS.create(null)
 				if (maskable) {
@@ -1562,11 +1567,14 @@ export class ContractCompiler<
 						{ subject: 'object', context: { path, shape: 'object' } },
 					)
 					const faults: AuditFault[] = []
-					// The value-side presence view is built inside the contained walk: a
-					// replaced `globalThis.Set` must reach the auditor's own containment
-					// rather than throw the caller's raw value out of a total report.
+					// The value-side presence view is built inside the contained walk, and
+					// the declared vocabulary rebuilt there whenever its plan-time build
+					// failed: a replaced `globalThis.Set` must reach the auditor's own
+					// containment rather than throw the caller's raw value out of a report
+					// this door answers.
 					const outcome = attempt(() => {
 						const present = maskable ? undefined : collectMembers(keys)
+						const vocabulary = declared ?? collectMembers(declaredKeys)
 						let seen = 0
 						if (present === undefined) {
 							for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
@@ -1601,7 +1609,7 @@ export class ContractCompiler<
 							const key = keys[keyIndex]
 							if (key === undefined) continue
 							if (faults.length >= FAULT_LIMIT) return
-							if (matchesMember(declared, key)) continue
+							if (matchesMember(vocabulary, key)) continue
 							if (closed) {
 								faults[faults.length] = { reason: 'extra', path: pathOf(path, key) }
 								continue
@@ -1797,6 +1805,7 @@ export class ContractCompiler<
 					optional: boolean
 					kind: FaultKind
 				}> = []
+				const names: string[] = []
 				const keyList = INTRINSICS.keys(owned.properties)
 				for (let keyIndex = 0; keyIndex < keyList.length; keyIndex += 1) {
 					const key = keyList[keyIndex]
@@ -1811,6 +1820,7 @@ export class ContractCompiler<
 						optional,
 						kind: shapeToKind(inner),
 					}
+					names[names.length] = key
 				}
 				const extra = owned.additionalProperties
 				const tail =
@@ -1819,23 +1829,20 @@ export class ContractCompiler<
 						: this.#reportAt(extra)
 				const open = extra === true || tail !== undefined
 				// The declared vocabulary is a compile-time constant, so it is built
-				// once here rather than admitted key by key on every report. One bit
-				// position per declared entry answers the per-entry presence question
-				// the same way, with a bit test in place of a membership dispatch; past
-				// the mask's width the collected-vocabulary form still answers.
-				const known = readValue(
-					() => {
-						const admitted = collectMembers([])
-						for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
-							const entry = entries[entryIndex]
-							if (entry === undefined) continue
-							admitMember(admitted, entry.key)
-						}
-						return admitted
-					},
-					'compileReporter',
-					{ subject: 'object', context: { shape: 'object' } },
-				)
+				// once here over the entry key names rather than admitted key by key on
+				// every report. One bit position per declared entry answers the
+				// per-entry presence question the same way, with a bit test in place of
+				// a membership dispatch; past the mask's width the collected-vocabulary
+				// form still answers.
+				//
+				// Plan time is not a call, so it has no value to report on: this build
+				// is contained by `attempt` and holds `undefined` when it fails. A
+				// `globalThis.Set` replaced before this module loaded, and so captured
+				// into `INTRINSICS`, is what makes it fail. The call rebuilds it inside
+				// the walk's own containment, which keeps this door's answer a fault
+				// array in exactly the regime its totality promise names.
+				const planned = attempt(() => collectMembers(names))
+				const known = planned.success ? planned.value : undefined
 				const maskable = entries.length <= PRESENCE_MASK_LIMIT
 				const positions: Record<string, number> = INTRINSICS.create(null)
 				if (maskable) {
@@ -1855,12 +1862,14 @@ export class ContractCompiler<
 						return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
 					}
 					const faults: Fault[] = []
-					// The value-side presence view is built inside the contained walk: a
-					// replaced `globalThis.Set` must reach the reporter's own diagnostic
-					// containment rather than throw the caller's raw value out of a total
-					// report.
+					// The value-side presence view is built inside the contained walk, and
+					// the declared vocabulary rebuilt there whenever its plan-time build
+					// failed: a replaced `globalThis.Set` must reach the reporter's own
+					// diagnostic containment rather than throw the caller's raw value out
+					// of a total report.
 					const outcome = attempt(() => {
 						const present = maskable ? undefined : collectMembers(keys)
+						const vocabulary = known ?? collectMembers(names)
 						let seen = 0
 						if (present === undefined) {
 							for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
@@ -1916,7 +1925,7 @@ export class ContractCompiler<
 								const key = keys[keyIndex]
 								if (key === undefined) continue
 								if (faults.length >= FAULT_LIMIT) return
-								if (matchesMember(known, key)) continue
+								if (matchesMember(vocabulary, key)) continue
 								const observed: unknown = record[key]
 								if (tail !== undefined) {
 									appendEntries(faults, tail(observed, pathOf(path, key)))
