@@ -30,6 +30,7 @@ import {
 	oneOfShape,
 	optionalShape,
 	ownShape,
+	PRESENCE_MASK_LIMIT,
 	preview,
 	rawShape,
 	recordShape,
@@ -5375,5 +5376,117 @@ describe('R3 — the canonical door matrix', () => {
 		expect(isRecord(generated) && typeof generated.value).toBe('number')
 		expect(contract.is(generated)).toBe(true)
 		expect(reads).toBe(2)
+	})
+})
+
+describe('compiled object presence decides the same keys at every plan width', () => {
+	// The compiled object plans decide presence from a compile-time bit position
+	// per declared key, and fall back to a collected key vocabulary once the
+	// declaration is wider than one mask. Both cases are driven here with ordinary
+	// values through all four doors, because neither branch is observable at the
+	// artifact door except through the answer it gives.
+
+	it('decides a required key literally named __proto__ through every door', () => {
+		// A computed key defines an own property; the plain `__proto__:` form in an
+		// object literal would set the prototype instead. The position record is
+		// null-prototype own data for exactly this key.
+		const shape = objectShape({
+			name: stringShape({ min: 1 }),
+			['__proto__']: stringShape({ min: 1 }),
+		})
+		const complete = { name: 'Ada', ['__proto__']: 'own-data' }
+		const missing = { name: 'Ada' }
+		const parsed = compileParser(shape)(complete)
+		const absence = { reason: 'missing', path: ['__proto__'], expected: 'string' }
+
+		expect(compileGuard(shape)(complete)).toBe(true)
+		expect(compileGuard(shape)(missing)).toBe(false)
+		expect(isRecord(parsed) && parsed.name).toBe('Ada')
+		expect(isRecord(parsed) && parsed['__proto__']).toBe('own-data')
+		expect(compileParser(shape)(missing)).toBeUndefined()
+		expect(compileAuditor(shape, complete)).toEqual([])
+		expect(compileAuditor(shape, missing)).toEqual([absence])
+		expect(compileReporter(shape, complete)).toEqual([])
+		expect(compileReporter(shape, missing)).toEqual([absence])
+	})
+
+	it('decides presence identically at the mask width and one key past it', () => {
+		const maskedProperties: Record<string, ContractShape> = {}
+		const widenedProperties: Record<string, ContractShape> = {}
+		const maskedComplete: Record<string, unknown> = {}
+		const widenedComplete: Record<string, unknown> = {}
+		for (let index = 0; index <= PRESENCE_MASK_LIMIT; index += 1) {
+			const key = `key${String(index)}`
+			widenedProperties[key] = stringShape({ min: 1 })
+			widenedComplete[key] = 'value'
+			if (index < PRESENCE_MASK_LIMIT) {
+				maskedProperties[key] = stringShape({ min: 1 })
+				maskedComplete[key] = 'value'
+			}
+		}
+		const masked = objectShape(maskedProperties)
+		const widened = objectShape(widenedProperties)
+		const maskedAbsent = { ...maskedComplete }
+		const widenedAbsent = { ...widenedComplete }
+		delete maskedAbsent.key0
+		delete widenedAbsent.key0
+		const maskedExtra = { ...maskedComplete, ghost: 'x' }
+		const widenedExtra = { ...widenedComplete, ghost: 'x' }
+		const absence = { reason: 'missing', path: ['key0'], expected: 'string' }
+		const surplus = { reason: 'extra', path: ['ghost'] }
+
+		expect(compileGuard(masked)(maskedComplete)).toBe(true)
+		expect(compileGuard(widened)(widenedComplete)).toBe(true)
+		expect(compileParser(masked)(maskedComplete)).toEqual(maskedComplete)
+		expect(compileParser(widened)(widenedComplete)).toEqual(widenedComplete)
+		expect(compileAuditor(masked, maskedComplete)).toEqual([])
+		expect(compileAuditor(widened, widenedComplete)).toEqual([])
+		expect(compileReporter(masked, maskedComplete)).toEqual([])
+		expect(compileReporter(widened, widenedComplete)).toEqual([])
+
+		expect(compileGuard(masked)(maskedAbsent)).toBe(false)
+		expect(compileGuard(widened)(widenedAbsent)).toBe(false)
+		expect(compileParser(masked)(maskedAbsent)).toBeUndefined()
+		expect(compileParser(widened)(widenedAbsent)).toBeUndefined()
+		expect(compileAuditor(masked, maskedAbsent)).toEqual([absence])
+		expect(compileAuditor(widened, widenedAbsent)).toEqual([absence])
+		expect(compileReporter(masked, maskedAbsent)).toEqual([absence])
+		expect(compileReporter(widened, widenedAbsent)).toEqual([absence])
+
+		expect(compileGuard(masked)(maskedExtra)).toBe(false)
+		expect(compileGuard(widened)(widenedExtra)).toBe(false)
+		expect(compileParser(masked)(maskedExtra)).toEqual(maskedComplete)
+		expect(compileParser(widened)(widenedExtra)).toEqual(widenedComplete)
+		expect(compileAuditor(masked, maskedExtra)).toEqual([surplus])
+		expect(compileAuditor(widened, widenedExtra)).toEqual([surplus])
+		expect(compileReporter(masked, maskedExtra)).toEqual([])
+		expect(compileReporter(widened, widenedExtra)).toEqual([])
+	})
+
+	it('decides presence identically far past the mask width, where a bit position would alias', () => {
+		// Twice the mask width plus one: a plan that assigned bit positions here
+		// would wrap `1 << position` back onto an earlier key's bit, so a value
+		// carrying the aliased key would read as carrying the absent one.
+		const properties: Record<string, ContractShape> = {}
+		const complete: Record<string, unknown> = {}
+		for (let index = 0; index <= PRESENCE_MASK_LIMIT * 2; index += 1) {
+			const key = `key${String(index)}`
+			properties[key] = stringShape({ min: 1 })
+			complete[key] = 'value'
+		}
+		const shape = objectShape(properties)
+		const aliased = { ...complete }
+		delete aliased[`key${String(PRESENCE_MASK_LIMIT * 2)}`]
+		const absence = {
+			reason: 'missing',
+			path: [`key${String(PRESENCE_MASK_LIMIT * 2)}`],
+			expected: 'string',
+		}
+
+		expect(compileGuard(shape)(complete)).toBe(true)
+		expect(compileGuard(shape)(aliased)).toBe(false)
+		expect(compileParser(shape)(aliased)).toBeUndefined()
+		expect(compileAuditor(shape, aliased)).toEqual([absence])
+		expect(compileReporter(shape, aliased)).toEqual([absence])
 	})
 })

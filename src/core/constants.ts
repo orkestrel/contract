@@ -353,6 +353,31 @@ export const COMPILE_DEPTH_LIMIT = 512
 export const COMPILE_NODE_LIMIT = 16_384
 
 /**
+ * The maximum number of object keys one compiled presence mask carries, frozen.
+ *
+ * @remarks
+ * A compiled object plan decides which declared keys a value carries. The keys
+ * it asks about are fixed when the plan is built, so the plan assigns each one a
+ * bit position once and a call ORs one bit per own key it finds and compares the
+ * result against the full mask — no per-call collection, and one integer compare
+ * instead of one membership dispatch per declared key.
+ *
+ * The bound is the width a JavaScript bitwise operand has: `1 << position`
+ * evaluates on a 32-bit signed integer, so positions run `0` through `30` and a
+ * mask stays positive. A declaration with more keys than this is ordinary
+ * authoring rather than an attack, so it is answered rather than refused:
+ * {@link ContractCompiler} builds no position record for it and its compiled
+ * guard, parser, auditor and reporter decide presence from a collected key
+ * vocabulary instead. Both branches answer identically; only the cost differs.
+ *
+ * @example
+ * ```ts
+ * PRESENCE_MASK_LIMIT // 31
+ * ```
+ */
+export const PRESENCE_MASK_LIMIT = 31
+
+/**
  * The maximum number of nodes one JSON snapshot may produce, frozen.
  *
  * @remarks

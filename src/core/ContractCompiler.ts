@@ -19,7 +19,12 @@ import type {
 	SeederFunction,
 	StringShape,
 } from './types.js'
-import { FAULT_LIMIT, GENERATION_ATTEMPT_LIMIT, INTRINSICS } from './constants.js'
+import {
+	FAULT_LIMIT,
+	GENERATION_ATTEMPT_LIMIT,
+	INTRINSICS,
+	PRESENCE_MASK_LIMIT,
+} from './constants.js'
 import { ContractError, isContractError } from './errors.js'
 import {
 	admitMember,
@@ -906,6 +911,24 @@ export class ContractCompiler<
 					}
 					if (!optional) required[required.length] = key
 				}
+				// The required keys are fixed here, so their presence question is
+				// answered by one integer rather than by a per-call vocabulary: each
+				// required key takes a bit position now, and a call ORs one bit per own
+				// key it recognizes and compares the result against the full mask. The
+				// record is null-prototype own data so a key literally named
+				// '__proto__' takes a position like any other. Past the mask's width
+				// the collected-vocabulary form below still answers.
+				const maskable = required.length <= PRESENCE_MASK_LIMIT
+				const positions: Record<string, number> = INTRINSICS.create(null)
+				let full = 0
+				if (maskable) {
+					for (let keyIndex = 0; keyIndex < required.length; keyIndex += 1) {
+						const key = required[keyIndex]
+						if (key === undefined) continue
+						positions[key] = keyIndex
+						full |= 1 << keyIndex
+					}
+				}
 				return (value: unknown): value is unknown => {
 					if (!isRecord(value)) return false
 					const keys = enumerableKeys(value)
@@ -914,11 +937,23 @@ export class ContractCompiler<
 					// getter on `value`, or a replaced `globalThis.Set` reached by the
 					// presence view, must yield `false`, never throw (AGENTS §14).
 					const outcome = attempt(() => {
-						const present = collectMembers(keys)
-						for (let keyIndex = 0; keyIndex < required.length; keyIndex += 1) {
-							const key = required[keyIndex]
-							if (key === undefined) continue
-							if (!matchesMember(present, key)) return false
+						if (maskable) {
+							let seen = 0
+							for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+								const key = keys[keyIndex]
+								if (key === undefined) continue
+								if (!INTRINSICS.own(positions, key)) continue
+								const position = positions[key]
+								if (position !== undefined) seen |= 1 << position
+							}
+							if (seen !== full) return false
+						} else {
+							const present = collectMembers(keys)
+							for (let keyIndex = 0; keyIndex < required.length; keyIndex += 1) {
+								const key = required[keyIndex]
+								if (key === undefined) continue
+								if (!matchesMember(present, key)) return false
+							}
 						}
 						for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
 							const key = keys[keyIndex]
@@ -1136,6 +1171,20 @@ export class ContractCompiler<
 						context: { shape: 'object' },
 					},
 				)
+				// One bit position per declared entry, assigned here because the entry
+				// list is fixed here: a call then reads presence as a bit test instead
+				// of a membership dispatch per entry. Null-prototype own data, so an
+				// entry named '__proto__' takes a position like any other. Past the
+				// mask's width the collected-vocabulary form still answers.
+				const maskable = entries.length <= PRESENCE_MASK_LIMIT
+				const positions: Record<string, number> = INTRINSICS.create(null)
+				if (maskable) {
+					for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+						const entry = entries[entryIndex]
+						if (entry === undefined) continue
+						positions[entry.key] = entryIndex
+					}
+				}
 				const extra = owned.additionalProperties
 				const additional =
 					extra === undefined || extra === false || extra === true
@@ -1159,7 +1208,17 @@ export class ContractCompiler<
 					// replaced `globalThis.Set` reached by the presence view, must yield
 					// `undefined`, never throw (AGENTS §14).
 					const outcome = attempt(() => {
-						const present = collectMembers(keys)
+						const present = maskable ? undefined : collectMembers(keys)
+						let seen = 0
+						if (present === undefined) {
+							for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+								const key = keys[keyIndex]
+								if (key === undefined) continue
+								if (!INTRINSICS.own(positions, key)) continue
+								const position = positions[key]
+								if (position !== undefined) seen |= 1 << position
+							}
+						}
 						// Honest typing: a null-prototype accumulator so an input own key
 						// literally named '__proto__' lands as an own data key instead of
 						// mutating the prototype (same pattern as `pickOf`).
@@ -1167,7 +1226,11 @@ export class ContractCompiler<
 						for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
 							const entry = entries[entryIndex]
 							if (entry === undefined) continue
-							if (!matchesMember(present, entry.key)) {
+							const absent =
+								present === undefined
+									? (seen & (1 << entryIndex)) === 0
+									: !matchesMember(present, entry.key)
+							if (absent) {
 								if (entry.optional) continue
 								return undefined
 							}
@@ -1419,6 +1482,24 @@ export class ContractCompiler<
 				const extra = owned.additionalProperties
 				const closed = extra === undefined || extra === false
 				const additional = closed || extra === true ? undefined : this.#auditAt(extra)
+				// The declared vocabulary is a compile-time constant, so it is built
+				// once here rather than rebuilt on every report. One bit position per
+				// declared entry answers the per-entry presence question the same way,
+				// with a bit test in place of a membership dispatch; past the mask's
+				// width the collected-vocabulary form still answers.
+				const declared = readValue(() => collectMembers(declaredKeys), 'compileAuditor', {
+					subject: 'object',
+					context: { shape: 'object' },
+				})
+				const maskable = entries.length <= PRESENCE_MASK_LIMIT
+				const positions: Record<string, number> = INTRINSICS.create(null)
+				if (maskable) {
+					for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+						const entry = entries[entryIndex]
+						if (entry === undefined) continue
+						positions[entry.key] = entryIndex
+					}
+				}
 				return (value, path) => {
 					if (isObject(value)) {
 						readValue(() => INTRINSICS.parent(value), 'compileAuditor', {
@@ -1436,17 +1517,30 @@ export class ContractCompiler<
 						{ subject: 'object', context: { path, shape: 'object' } },
 					)
 					const faults: AuditFault[] = []
-					// Both views are built inside the contained walk: a replaced
-					// `globalThis.Set` must reach the auditor's own containment rather than
-					// throw the caller's raw value out of a total report.
+					// The value-side presence view is built inside the contained walk: a
+					// replaced `globalThis.Set` must reach the auditor's own containment
+					// rather than throw the caller's raw value out of a total report.
 					const outcome = attempt(() => {
-						const present = collectMembers(keys)
-						const declared = collectMembers(declaredKeys)
+						const present = maskable ? undefined : collectMembers(keys)
+						let seen = 0
+						if (present === undefined) {
+							for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+								const key = keys[keyIndex]
+								if (key === undefined) continue
+								if (!INTRINSICS.own(positions, key)) continue
+								const position = positions[key]
+								if (position !== undefined) seen |= 1 << position
+							}
+						}
 						for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
 							const entry = entries[entryIndex]
 							if (entry === undefined) continue
 							if (faults.length >= FAULT_LIMIT) return
-							if (!matchesMember(present, entry.key)) {
+							const absent =
+								present === undefined
+									? (seen & (1 << entryIndex)) === 0
+									: !matchesMember(present, entry.key)
+							if (absent) {
 								if (!entry.optional) {
 									faults[faults.length] = {
 										reason: 'missing',
@@ -1673,6 +1767,33 @@ export class ContractCompiler<
 						? undefined
 						: this.#reportAt(extra)
 				const open = extra === true || tail !== undefined
+				// The declared vocabulary is a compile-time constant, so it is built
+				// once here rather than admitted key by key on every report. One bit
+				// position per declared entry answers the per-entry presence question
+				// the same way, with a bit test in place of a membership dispatch; past
+				// the mask's width the collected-vocabulary form still answers.
+				const known = readValue(
+					() => {
+						const admitted = collectMembers([])
+						for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+							const entry = entries[entryIndex]
+							if (entry === undefined) continue
+							admitMember(admitted, entry.key)
+						}
+						return admitted
+					},
+					'compileReporter',
+					{ subject: 'object', context: { shape: 'object' } },
+				)
+				const maskable = entries.length <= PRESENCE_MASK_LIMIT
+				const positions: Record<string, number> = INTRINSICS.create(null)
+				if (maskable) {
+					for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+						const entry = entries[entryIndex]
+						if (entry === undefined) continue
+						positions[entry.key] = entryIndex
+					}
+				}
 				return (value, path) => {
 					if (!isRecord(value)) {
 						return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
@@ -1683,22 +1804,35 @@ export class ContractCompiler<
 						return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
 					}
 					const faults: Fault[] = []
-					// Both views are built inside the contained walk: a replaced
-					// `globalThis.Set` must reach the reporter's own diagnostic containment
-					// rather than throw the caller's raw value out of a total report.
+					// The value-side presence view is built inside the contained walk: a
+					// replaced `globalThis.Set` must reach the reporter's own diagnostic
+					// containment rather than throw the caller's raw value out of a total
+					// report.
 					const outcome = attempt(() => {
-						const present = collectMembers(keys)
-						const known = collectMembers([])
+						const present = maskable ? undefined : collectMembers(keys)
+						let seen = 0
+						if (present === undefined) {
+							for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+								const key = keys[keyIndex]
+								if (key === undefined) continue
+								if (!INTRINSICS.own(positions, key)) continue
+								const position = positions[key]
+								if (position !== undefined) seen |= 1 << position
+							}
+						}
 						for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
 							const entry = entries[entryIndex]
 							if (entry === undefined) continue
 							if (faults.length >= FAULT_LIMIT) return
-							admitMember(known, entry.key)
 							// Mirror the parser's presence gate exactly: only an own
 							// enumerable string key is present. A present key with an
 							// explicit `undefined` value is still treated like absence, so
 							// `explain` never faults where `parse` silently skips it.
-							if (!matchesMember(present, entry.key)) {
+							const absent =
+								present === undefined
+									? (seen & (1 << entryIndex)) === 0
+									: !matchesMember(present, entry.key)
+							if (absent) {
 								if (!entry.optional) {
 									faults[faults.length] = {
 										reason: 'missing',
