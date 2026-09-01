@@ -767,24 +767,22 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 		// prototype chose what a refusal this module authored published and
 		// retained the caller's object by identity. Spread copies own enumerable
 		// properties only through the spec's own copy operation, so the projection
-		// stays own-only without dispatching through a replaceable global.
-		const owned = {
-			path: undefined,
-			shape: undefined,
-			limit: undefined,
-			received: undefined,
-			...source,
-		}
-		const context =
+		// stays own-only without dispatching through a replaceable global. The
+		// copy stays EAGER because performing it is what refuses a hostile
+		// context: a throwing getter on any own key — advertised or not — must
+		// refuse this call whether or not the callback goes on to succeed.
+		const owned =
 			source === undefined
 				? undefined
 				: {
-						...(owned.path === undefined ? {} : { path: owned.path }),
-						...(owned.shape === undefined ? {} : { shape: owned.shape }),
-						...(owned.limit === undefined ? {} : { limit: owned.limit }),
-						...(owned.received === undefined ? {} : { received: owned.received }),
+						path: undefined,
+						shape: undefined,
+						limit: undefined,
+						received: undefined,
+						...source,
 					}
 		const requested = options?.code
+		const subject = options?.subject
 		const code: ContractCode =
 			requested === 'bound' ||
 			requested === 'range' ||
@@ -802,9 +800,9 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 				: 'structure'
 		return {
 			reader: isString(reader) ? reader : 'readValue',
-			subject: isString(options?.subject) ? options.subject : 'value',
+			subject: isString(subject) ? subject : 'value',
 			code,
-			context,
+			owned,
 		}
 	})
 	if (!diagnostics.success) {
@@ -815,11 +813,24 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 	}
 	const outcome = attempt(callback)
 	if (!outcome.success) {
+		// Only a refusal publishes a context, so the published object is assembled
+		// in this branch rather than beside the copy. `owned` already holds copied
+		// values, so assembling it outside the contained read cannot throw.
+		const owned = diagnostics.value.owned
+		const context =
+			owned === undefined
+				? undefined
+				: {
+						...(owned.path === undefined ? {} : { path: owned.path }),
+						...(owned.shape === undefined ? {} : { shape: owned.shape }),
+						...(owned.limit === undefined ? {} : { limit: owned.limit }),
+						...(owned.received === undefined ? {} : { received: owned.received }),
+					}
 		throw new ContractError(
 			`${diagnostics.value.reader}: ${diagnostics.value.subject} could not be read`,
 			{
 				code: diagnostics.value.code,
-				...(diagnostics.value.context === undefined ? {} : { context: diagnostics.value.context }),
+				...(context === undefined ? {} : { context }),
 				cause: outcome.error,
 			},
 		)
@@ -1781,15 +1792,32 @@ export function sanitizeDepth(value: number | undefined): number {
  * @remarks
  * A primitive renders as printable text: a string retains its quoted JSON
  * representation, while a narrowed symbol renders through intrinsic `String`
- * and receives the same escaping without outer quotes. One bounded indexed
- * encoder appends only complete escaped code-point tokens within
- * {@link PREVIEW_LIMIT}; clipping therefore never retrieves the mutable string
- * iterator or splits an escape/surrogate pair before its trailing `…`, and
- * enormous primitive text is not fully traversed. A number / boolean / bigint
- * renders via `String`; `null` and `undefined` render as their own name. An
- * array renders as `'array'`. Every other host — a plain object, a function, a
- * class instance, a `Map` — is NEVER traversed or stringified; it renders as
- * its bare `typeof` tag (`'object'` / `'function'`).
+ * and receives the same escaping without outer quotes. A string of at most
+ * {@link PREVIEW_LIMIT} code units takes its answer from one whole-string
+ * encode when that encode fits the same limit, and the length predicate
+ * deciding it is exact rather than approximate. Every other string and every
+ * symbol renders through one bounded indexed encoder that appends only
+ * complete escaped code-point tokens within {@link PREVIEW_LIMIT}; clipping
+ * therefore never retrieves the mutable string iterator or splits an
+ * escape/surrogate pair before its trailing `…`, and enormous primitive text
+ * is not fully traversed. A number / boolean / bigint renders via `String`;
+ * `null` and `undefined` render as their own name. An array renders as
+ * `'array'`. Every other host — a plain object, a function, a class instance,
+ * a `Map` — is NEVER traversed or stringified; it renders as its bare
+ * `typeof` tag (`'object'` / `'function'`).
+ *
+ * The indexed encoder appends every token and closes with the quote exactly
+ * when the escaped inner length is at most `PREVIEW_LIMIT - 2`, which is
+ * character for character what one `JSON.stringify` call returns. At an inner
+ * length of `PREVIEW_LIMIT - 1` the indexed encoder appends every token and
+ * closes with `…` instead, while one `JSON.stringify` call over that same
+ * string measures `PREVIEW_LIMIT + 1` — so the predicate refuses that string
+ * and every longer one, and each of them renders through the indexed encoder.
+ * Escaping never shrinks text, so the leading `source.length` gate admits
+ * every string the predicate could accept while keeping enormous primitive
+ * text out of the whole-string encode. A symbol renders through the indexed
+ * encoder because its unquoted text is not what a `JSON.stringify` call
+ * returns.
  *
  * @param value - The value to preview
  * @returns A short descriptive string, always safe to embed in a diagnostic
@@ -1809,6 +1837,10 @@ export function preview(value: unknown): string {
 	if (isString(value) || isSymbol(value)) {
 		const quoted = isString(value)
 		const source = INTRINSICS.text(value)
+		if (quoted && source.length <= PREVIEW_LIMIT) {
+			const whole = INTRINSICS.stringify(source)
+			if (whole.length <= PREVIEW_LIMIT) return whole
+		}
 		let text = quoted ? '"' : ''
 		let index = 0
 		while (index < source.length) {

@@ -619,6 +619,102 @@ describe('readValue', () => {
 		expect(Object.values(error.context ?? {})).not.toContain(stolen)
 		expect(error.message).toBe('stringShape: options could not be read')
 	})
+
+	it('refuses the read when any own context field throws, advertised or not', () => {
+		// The copy takes every OWN enumerable key, so a key `ContractErrorContext`
+		// never advertises is read at the same moment as one it does. A reader
+		// consulting the four consumed names BY NAME would let the unadvertised
+		// getter through and go on to publish a refusal built from a context
+		// nothing could finish reading.
+		const reason = Object.freeze({ stage: 'context read' })
+		const observed = ['path', 'detail'].map((key) => {
+			const context: ContractErrorContext = {}
+			Object.defineProperty(context, key, { enumerable: true, get: throwSentinel(reason) })
+			const error = captureContractError(() => readValue(() => 42, 'example', { context }))
+			return [key, error.message, error.code, error.cause === reason]
+		})
+
+		expect(observed).toEqual([
+			['path', 'readValue: options could not be read', 'structure', true],
+			['detail', 'readValue: options could not be read', 'structure', true],
+		])
+	})
+
+	it('publishes carried context fields in one canonical order and retains no caller object', () => {
+		const reason = Object.freeze({ stage: 'read' })
+		const carried: ContractErrorContext = {
+			received: '"sample"',
+			limit: 8,
+			shape: 'string',
+			path: ['values', 'name'],
+		}
+		const error = captureContractError(() =>
+			readValue(throwSentinel(reason), 'example', {
+				subject: 'array',
+				code: 'bound',
+				context: carried,
+			}),
+		)
+
+		expect(Object.keys(error.context ?? {})).toEqual(['path', 'shape', 'limit', 'received'])
+		expect(error.context).toEqual({
+			path: ['values', 'name'],
+			shape: 'string',
+			limit: 8,
+			received: '"sample"',
+		})
+		expect(error.context).not.toBe(carried)
+		expect(error.code).toBe('bound')
+		expect(error.message).toBe('example: array could not be read')
+		expect(error.cause).toBe(reason)
+
+		const partial = captureContractError(() =>
+			readValue(throwSentinel(reason), 'example', { context: { received: 'null', path: ['id'] } }),
+		)
+
+		expect(Object.keys(partial.context ?? {})).toEqual(['path', 'received'])
+	})
+
+	it('returns the callback value by identity when every context field is carried', () => {
+		const value = Object.freeze({ id: 1 })
+		const read = readValue(() => value, 'example', {
+			subject: 'record',
+			code: 'clone',
+			context: { path: ['values'], shape: 'object', limit: 4, received: 'object' },
+		})
+
+		expect(read).toBe(value)
+		expect(readValue(() => undefined, 'example')).toBeUndefined()
+	})
+
+	it('refuses through its own error when a subject accessor changes its answer between reads', () => {
+		let reads = 0
+		const options = {
+			get subject() {
+				reads += 1
+				return reads === 1
+					? 'thing'
+					: {
+							toString() {
+								throw new Error('hostile toString')
+							},
+						}
+			},
+		}
+		const error = captureContractError(() =>
+			Reflect.apply(readValue, undefined, [
+				() => {
+					throw new Error('hostile read')
+				},
+				'door',
+				options,
+			]),
+		)
+
+		expect(error).toBeInstanceOf(ContractError)
+		expect(error.message).toBe('door: thing could not be read')
+		expect(reads).toBe(1)
+	})
 })
 
 describe('readArrayEntries', () => {
@@ -2391,6 +2487,63 @@ describe('preview', () => {
 		expect(preview({ a: 1 })).toBe('object')
 		expect(preview([1, 2, 3])).toBe('array')
 		expect(preview(() => 1)).toBe('function')
+	})
+
+	it('renders a string by its escaped length at, on, and past the clip boundary', () => {
+		// The ESCAPED inner length decides the answer, never the input length. At
+		// two under `PREVIEW_LIMIT` the render closes with the quote, and one
+		// character further it closes with the clip mark instead.
+		expect(preview('x'.repeat(62))).toBe(`"${'x'.repeat(62)}"`)
+		expect(preview('x'.repeat(63))).toBe(`"${'x'.repeat(63)}…`)
+		expect(preview('x'.repeat(64))).toBe(`"${'x'.repeat(63)}…`)
+		expect(preview('\n'.repeat(31))).toBe(`"${'\\n'.repeat(31)}"`)
+		expect(preview(`${'\n'.repeat(30)}xxx`)).toBe(`"${'\\n'.repeat(30)}xxx…`)
+		expect(preview('\n'.repeat(32))).toBe(`"${'\\n'.repeat(31)}…`)
+	})
+
+	it('escapes a lone surrogate and keeps a short astral pair whole', () => {
+		const pair = `a${String.fromCodePoint(0x1f600)}b`
+
+		expect(preview('\ud800')).toBe('"\\ud800"')
+		expect(preview('a\udc00b')).toBe('"a\\udc00b"')
+		expect(preview(pair)).toBe(`"${pair}"`)
+		expect(preview(pair).isWellFormed()).toBe(true)
+	})
+
+	it('renders a symbol unquoted at a length a string renders quoted', () => {
+		expect(preview(Symbol('sample'))).toBe('Symbol(sample)')
+		expect(preview(Symbol('line\n'))).toBe('Symbol(line\\n)')
+		expect(preview('sample')).toBe('"sample"')
+	})
+
+	it('renders text far past the limit without encoding the text it never renders', () => {
+		// The clipped answer is the same whether or not the whole string was
+		// encoded first, so the promise that enormous primitive text is never
+		// fully encoded is a cost relationship rather than an output difference.
+		// The lowest reading of several is taken on each side, so a scheduler
+		// stall lengthens one reading instead of deciding the comparison. The
+		// encoded length is asserted as well, because a control that skipped the
+		// work would make the comparison meaningless.
+		const huge = '\n'.repeat(2_000_000)
+		let rendering = Number.POSITIVE_INFINITY
+		let encoding = Number.POSITIVE_INFINITY
+		let rendered = ''
+		let encoded = ''
+		for (let round = 0; round < 3; round += 1) {
+			const renderStart = performance.now()
+			rendered = preview(huge)
+			rendering = Math.min(rendering, performance.now() - renderStart)
+			const encodeStart = performance.now()
+			encoded = INTRINSICS.stringify(huge)
+			encoding = Math.min(encoding, performance.now() - encodeStart)
+		}
+
+		expect(rendered).toBe(`"${'\\n'.repeat(31)}…`)
+		expect(encoded.length).toBe(4_000_002)
+		// The threshold is 20 times; the gate measured about 2600 times on an
+		// idle host, so a red reading here is host noise or a lost gate, and
+		// the Orchestrator's idle re-run decides which.
+		expect(rendering * 20).toBeLessThan(encoding)
 	})
 })
 
