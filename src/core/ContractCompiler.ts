@@ -136,11 +136,17 @@ export class ContractCompiler<
 	// The released state, shared by every compiler this class ever builds.
 	// `#release` assigns these in place of the working collections, so an instance
 	// allocates one collection per family instead of two and construction carries
-	// no empty peer of its own. Sharing them is safe because nothing writes to a
-	// released collection: every writer runs behind `#prepare`, which refuses
-	// after `#release` clears `#source`. The static block beneath freezes them, so
-	// a write that did reach one fails loudly at its own line rather than leaking
-	// a node of one compiler's graph into every other compiler's release.
+	// no empty peer of its own. Sharing them is safe because nothing MUTATES a
+	// released collection: every element write — `#discover`, `#schedule`, and the
+	// six family loops — runs behind `#prepare`, which refuses after `#release`
+	// clears `#source`; the constructor and `#release` assign the field and never
+	// touch a sentinel's elements. The static block beneath freezes them, so a
+	// write that did reach one fails at its own line rather than leaking a node of
+	// one compiler's graph into every other compiler's release — under the same
+	// qualification `#weakMap` carries earlier: `INTRINSICS.freeze` is captured
+	// while this module evaluates, so a consumer module ordered before
+	// `constants.ts` defeats it, and that limit is stated there rather than
+	// defended.
 	static readonly #emptyStack: Array<
 		| { readonly operation: 'enter'; readonly shape: ContractShape }
 		| { readonly operation: 'exit'; readonly index: number }

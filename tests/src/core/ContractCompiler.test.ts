@@ -138,12 +138,13 @@ describe('ContractCompiler', () => {
 	})
 
 	it('keeps two released compilers answering their own declaration and settles a later one alone', () => {
-		// Release hands every working collection to a peer the class owns rather
-		// than to one the instance built, so the question sharing raises is whether
-		// one compiler's release can reach another's answers. Two compilers driven
-		// past release through `contract` keep answering for their own declaration,
-		// and a third built afterwards refuses its own malformed declaration with
-		// its own coded error while leaving those answers intact.
+		// A preservation pin, not a discriminator: release mechanics are `#` private
+		// and publish nothing, so no assertion here can observe a sentinel or bind to
+		// the freeze — the heap baseline instrument in the campaign record is what
+		// discriminates the sentinel design. What this case pins is that two
+		// compilers driven past release keep answering for their own declaration,
+		// and that a compiler built afterwards settles alone with its own coded
+		// error while those answers stand.
 		const names = new ContractCompiler(objectShape({ name: stringShape({ min: 1 }) }))
 		const counts = new ContractCompiler(objectShape({ count: integerShape({ min: 0 }) }))
 
