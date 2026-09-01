@@ -703,6 +703,82 @@ describe('readArrayEntries', () => {
 		expect(outcome.value.dense).toBe(true)
 	})
 
+	it('snapshots an array carrying an extra own string key like a plain array', () => {
+		const annotated: number[] = [1, 2]
+		Object.defineProperty(annotated, 'note', { value: 'metadata', enumerable: true })
+		const outcome = readArrayEntries(annotated)
+		const plain = readArrayEntries([1, 2])
+
+		expect(Reflect.ownKeys(annotated)).toEqual(['0', '1', 'length', 'note'])
+		expect(outcome.success).toBe(true)
+		if (!outcome.success) throw outcome.error
+		if (!plain.success) throw plain.error
+		expect(outcome.value.entries).toEqual(plain.value.entries)
+		expect(outcome.value.dense).toBe(plain.value.dense)
+		expect(outcome.value.dense).toBe(true)
+		expect(Reflect.ownKeys(outcome.value.entries)).toEqual(['0', '1', 'length'])
+	})
+
+	it('snapshots an array carrying an own symbol key like a plain array', () => {
+		const marked: number[] = [1, 2]
+		Object.defineProperty(marked, Symbol('mark'), { value: 'metadata', enumerable: true })
+		const outcome = readArrayEntries(marked)
+		const plain = readArrayEntries([1, 2])
+
+		expect(Reflect.ownKeys(marked).length).toBe(4)
+		expect(outcome.success).toBe(true)
+		if (!outcome.success) throw outcome.error
+		if (!plain.success) throw plain.error
+		expect(outcome.value.entries).toEqual(plain.value.entries)
+		expect(outcome.value.dense).toBe(plain.value.dense)
+		expect(outcome.value.dense).toBe(true)
+		expect(Object.getOwnPropertySymbols(outcome.value.entries)).toEqual([])
+	})
+
+	it('refuses a canonical population that disowns its last index', () => {
+		// The reported population is exactly the canonical indices then `length`,
+		// so the direct copy answers it — and every index is still corroborated
+		// against its own membership read rather than taken from the report. The
+		// refusal is pinned to its exact message, so a refusal arriving from
+		// another cause cannot stand in for this one.
+		const disowning = new Proxy([1, 2], {
+			getOwnPropertyDescriptor(target, property) {
+				return property === '1' ? undefined : Reflect.getOwnPropertyDescriptor(target, property)
+			},
+		})
+
+		expect(Reflect.ownKeys(disowning)).toEqual(['0', '1', 'length'])
+		expect(Object.hasOwn(disowning, '1')).toBe(false)
+
+		const outcome = readArrayEntries(disowning)
+		expect(outcome.success).toBe(false)
+		if (outcome.success) throw new Error('a disowned last index was accepted')
+		const refusal = outcome.error
+		if (!(refusal instanceof Error)) throw refusal
+		expect(refusal.message).toBe('Array index views disagree')
+	})
+
+	it('refuses a canonical population that disowns its first index', () => {
+		// The first index is pinned beside the last: a corroboration reaching only
+		// one end of the population still refuses the other, and one end alone
+		// would read as covered.
+		const disowning = new Proxy([1, 2], {
+			getOwnPropertyDescriptor(target, property) {
+				return property === '0' ? undefined : Reflect.getOwnPropertyDescriptor(target, property)
+			},
+		})
+
+		expect(Reflect.ownKeys(disowning)).toEqual(['0', '1', 'length'])
+		expect(Object.hasOwn(disowning, '0')).toBe(false)
+
+		const outcome = readArrayEntries(disowning)
+		expect(outcome.success).toBe(false)
+		if (outcome.success) throw new Error('a disowned first index was accepted')
+		const refusal = outcome.error
+		if (!(refusal instanceof Error)) throw refusal
+		expect(refusal.message).toBe('Array index views disagree')
+	})
+
 	it('fails a non-native advertised length', () => {
 		const hostile = new Proxy([], {
 			get(target, property, receiver) {

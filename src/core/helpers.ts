@@ -1004,12 +1004,15 @@ export function matchesRecordBrand(value: unknown): boolean {
  * frozen native snapshot retains actual holes: reading one yields `undefined`,
  * while own membership remains absent. Its work is proportional to the
  * reflected population, so a length-driven consumer must require `dense` or
- * carry an independent bound. Caller-defined iteration is ignored. A
- * descriptor-only index omitted from reflection is deliberately outside this
- * lens and remains a hole. Failure retains the exact thrown value when length,
- * reflection, membership, or indexed value observation throws; a non-native
- * length or view disagreement is also failure. `4294967295` is metadata rather
- * than an array index.
+ * carry an independent bound. A population that is exactly the canonical
+ * indices in ascending order followed by `length` is copied straight by index
+ * under the same per-index corroboration, and answers with the same entries,
+ * the same `dense` fact, and the same refusals as the walk. Caller-defined
+ * iteration is ignored. A descriptor-only index omitted from reflection is
+ * deliberately outside this lens and remains a hole. Failure retains the exact
+ * thrown value when length, reflection, membership, or indexed value
+ * observation throws; a non-native length or view disagreement is also
+ * failure. `4294967295` is metadata rather than an array index.
  *
  * @param value - The array whose reflected indexed entries to read
  * @returns A successful frozen entry snapshot with its dense fact, or a
@@ -1026,11 +1029,28 @@ export function readArrayEntries<T>(value: readonly T[]): Result<ArrayRead<T>> {
 		if (!INTRINSICS.safe(length) || length < 0 || length > 2 ** 32 - 1) {
 			throw new INTRINSICS.error('Array length is outside the native array domain')
 		}
+		const members = INTRINSICS.members(value)
+		// One canonicality question, asked once: the reported population is the
+		// ascending index texts and `length`, and nothing else. The scan stops at
+		// the first disagreement, so a population that fails the question pays for
+		// the prefix it shares with a canonical one before it walks.
+		let matched = 0
+		while (matched < length && members[matched] === INTRINSICS.text(matched)) matched += 1
+		if (matched === length && members.length === length + 1 && members[length] === 'length') {
+			const packed = new INTRINSICS.list<T | undefined>(length)
+			for (let index = 0; index < length; index += 1) {
+				const key = members[index]
+				if (key === undefined || !INTRINSICS.own(value, key)) {
+					throw new INTRINSICS.error('Array index views disagree')
+				}
+				packed[index] = value[index]
+			}
+			return INTRINSICS.freeze({ entries: INTRINSICS.freeze(packed), dense: true })
+		}
 		const collected: number[] = []
 		const keys: string[] = []
 		let ascending = true
 		let previous = -1
-		const members = INTRINSICS.members(value)
 		for (let position = 0; position < members.length; position += 1) {
 			const key = members[position]
 			if (!isString(key)) continue
