@@ -29,14 +29,16 @@ import {
 } from '@src/core'
 import {
 	buildCountedGraph,
+	buildCountedSlots,
 	buildDeepShape,
 	buildSharedDagShape,
 	buildStaircaseShape,
+	captured,
 	captureContractError,
 	ObservedShape,
 	ReentrantShape,
 } from '../../setup.js'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 describe('ContractCompiler', () => {
 	it('exposes exactly the seven ruled getters and pins them', () => {
@@ -135,6 +137,39 @@ describe('ContractCompiler', () => {
 		expect(compiler.generator).toBe(generator)
 	})
 
+	it('keeps two released compilers answering their own declaration and settles a later one alone', () => {
+		// A preservation pin, not a discriminator: release mechanics are `#` private
+		// and publish nothing, so no assertion here can observe a sentinel or bind to
+		// the freeze — the heap baseline instrument in the campaign record is what
+		// discriminates the sentinel design. What this case pins is that two
+		// compilers driven past release keep answering for their own declaration,
+		// and that a compiler built afterwards settles alone with its own coded
+		// error while those answers stand.
+		const names = new ContractCompiler(objectShape({ name: stringShape({ min: 1 }) }))
+		const counts = new ContractCompiler(objectShape({ count: integerShape({ min: 0 }) }))
+
+		const named = names.contract
+		const counted = counts.contract
+
+		expect([named.is({ name: 'Ada' }), named.is({ count: 1 })]).toEqual([true, false])
+		expect([counted.is({ count: 1 }), counted.is({ name: 'Ada' })]).toEqual([true, false])
+		expect(named.parse({ name: 'Ada' })).toEqual({ name: 'Ada' })
+		expect(counted.parse({ count: 1 })).toEqual({ count: 1 })
+		expect(named.audit({ name: 1 })).toHaveLength(1)
+		expect(counted.audit({ count: 'x' })).toHaveLength(1)
+		expect(names.schema).not.toEqual(counts.schema)
+
+		const malformed: ContractShape = JSON.parse('{"type":"string","min":5,"max":1}')
+		const later = new ContractCompiler(malformed)
+		const error = captureContractError(() => later.contract)
+
+		expect(error.code).toBe('range')
+		expect(captureContractError(() => later.guard)).toBe(error)
+		expect([named.is({ name: 'Ada' }), counted.is({ count: 1 })]).toEqual([true, true])
+		expect(names.contract).toBe(named)
+		expect(counts.contract).toBe(counted)
+	})
+
 	it('compiles one entry per unique node, so a shared child emits one shared subschema', () => {
 		const child = objectShape({ id: stringShape() })
 		const shape = objectShape({
@@ -219,6 +254,26 @@ describe('ContractCompiler', () => {
 
 		expect(error.code).toBe('clone')
 		expect(error.message).toBe('cloneShape: failed to create an owned shape snapshot')
+		expect(captureContractError(() => compiler.guard)).toBe(error)
+		expect(captureContractError(() => compiler.parser)).toBe(error)
+		expect(captureContractError(() => compiler.auditor)).toBe(error)
+		expect(captureContractError(() => compiler.reporter)).toBe(error)
+		expect(captureContractError(() => compiler.generator)).toBe(error)
+		expect(captureContractError(() => compiler.contract)).toBe(error)
+	})
+
+	it('replays one settling refusal by identity from all seven getters, whichever one settled it', () => {
+		// Settlement belongs to the lifecycle rather than to the door that reached
+		// it. A refusal adopted at `reporter` is the refusal `schema` and every
+		// other getter rethrows — the settling getter included — and none of them
+		// retries preparation against a compiler whose working state is gone.
+		const malformed: ContractShape = JSON.parse('{"type":"number","min":5,"max":1}')
+		const compiler = new ContractCompiler(malformed)
+
+		const error = captureContractError(() => compiler.reporter)
+
+		expect(error.code).toBe('range')
+		expect(captureContractError(() => compiler.schema)).toBe(error)
 		expect(captureContractError(() => compiler.guard)).toBe(error)
 		expect(captureContractError(() => compiler.parser)).toBe(error)
 		expect(captureContractError(() => compiler.auditor)).toBe(error)
@@ -324,6 +379,18 @@ describe('ContractCompiler', () => {
 		expect([guarded.count(), audited.count(), explained.count()]).toEqual([levels, levels, levels])
 	})
 
+	it('reads a shared object once per call where two slots of one node reach it', () => {
+		const shared = buildCountedSlots(true)
+		const distinct = buildCountedSlots(false)
+		const answers = [
+			compileGuard(shared.shape)(shared.value),
+			compileGuard(distinct.shape)(distinct.value),
+		]
+
+		expect(answers).toEqual([true, true])
+		expect([shared.count(), distinct.count()]).toEqual([1, 2])
+	})
+
 	it('answers thirty levels of shared references against a thirty-node chain in bounded time', () => {
 		// The reported vector, kept in its reported form: no aliases in the
 		// declaration, no accessors in the value, two references per level.
@@ -357,6 +424,109 @@ describe('ContractCompiler', () => {
 
 		expect(accepted).toEqual([true, 0])
 		expect([guard(value), auditor(shape, value).length]).toEqual([false, 2])
+	})
+
+	it('holds no answer about an object across two calls of one compiled guard', () => {
+		// The root node of an object declaration is tracked, so one retained
+		// guard is the shortest path to the memo's lifetime: the answer the first
+		// call kept about this record must not reach the second call, which sees
+		// a record the caller has since made invalid.
+		const guard = compileGuard(objectShape({ inner: stringShape() }))
+		const record: Record<string, unknown> = { inner: 'x' }
+		const accepted = guard(record)
+		record.inner = 1
+
+		expect(accepted).toBe(true)
+		expect(guard(record)).toBe(false)
+	})
+
+	it('holds no report about an object across two calls of one retained auditor', () => {
+		// Every standalone `compileAuditor` call compiles its own compiler, so a
+		// RETAINED auditor is the one route that puts a single ledger in front of
+		// two calls. The diagnostic families keep only the clean report, and this
+		// is where that kept report would outlive its call: the emptiness the first
+		// call recorded about this record must not answer the second, which sees a
+		// record the caller has since made invalid.
+		const auditor = new ContractCompiler(objectShape({ inner: stringShape() })).auditor
+		const record: Record<string, unknown> = { inner: 'x' }
+		const clean = auditor(record).length
+		record.inner = 1
+
+		expect(clean).toBe(0)
+		expect(auditor(record).length).toBe(1)
+	})
+
+	it('builds no tracking ledger while a compiled family is assembled', async () => {
+		// A ledger built with the artifact would cost one map per tracked node, so
+		// the count taken across the getter read would rise with the tracked-node
+		// count. These two declarations differ only there. The build allocates
+		// working maps of its own, so the DELTA between the two reads is the
+		// discriminating figure and neither total is asserted. The call counts are
+		// the control, and the values they are taken over are chosen to FORCE the
+		// ledger to allocate: a tracked node serves one object from its inline slot
+		// and builds a map only when a second distinct object reaches it inside one
+		// call, so every member here holds two distinct records. The counts prove
+		// this counter registers a map the closure builds, and they rise with the
+		// tracked-node count as a per-node cost must.
+		const original = captured.descriptor(globalThis, 'WeakMap')
+		if (original === undefined) throw new Error('the WeakMap descriptor is absent')
+		let constructions = 0
+		class CountingWeakMap extends WeakMap<object, unknown> {
+			constructor(entries?: ReadonlyArray<readonly [object, unknown]> | null) {
+				super(entries)
+				constructions += 1
+			}
+		}
+		let buildDelta = 0
+		let calledFew = 0
+		let calledMany = 0
+		let answers: readonly unknown[] = []
+		try {
+			captured.define(globalThis, 'WeakMap', { ...original, value: CountingWeakMap })
+			vi.resetModules()
+			const loaded = await import('../../../src/core/index.js')
+			const few = loaded.objectShape({
+				items: loaded.arrayShape(loaded.objectShape({ name: loaded.stringShape() })),
+			})
+			const many = loaded.objectShape({
+				items: loaded.arrayShape(loaded.objectShape({ name: loaded.stringShape() })),
+				first: loaded.arrayShape(loaded.objectShape({ tag: loaded.stringShape() })),
+				second: loaded.arrayShape(loaded.objectShape({ tag: loaded.stringShape() })),
+				third: loaded.arrayShape(loaded.objectShape({ tag: loaded.stringShape() })),
+				fourth: loaded.arrayShape(loaded.objectShape({ tag: loaded.stringShape() })),
+			})
+			const compilerFew = new loaded.ContractCompiler(few)
+			const compilerMany = new loaded.ContractCompiler(many)
+
+			let opened = constructions
+			const guardFew = compilerFew.guard
+			const builtFew = constructions - opened
+			opened = constructions
+			const guardMany = compilerMany.guard
+			buildDelta = constructions - opened - builtFew
+
+			opened = constructions
+			const answeredFew = guardFew({ items: [{ name: 'leaf' }, { name: 'branch' }] })
+			calledFew = constructions - opened
+			opened = constructions
+			const answeredMany = guardMany({
+				items: [{ name: 'leaf' }, { name: 'branch' }],
+				first: [{ tag: 'a' }, { tag: 'b' }],
+				second: [{ tag: 'c' }, { tag: 'd' }],
+				third: [{ tag: 'e' }, { tag: 'f' }],
+				fourth: [{ tag: 'g' }, { tag: 'h' }],
+			})
+			calledMany = constructions - opened
+			answers = [answeredFew, answeredMany]
+		} finally {
+			captured.define(globalThis, 'WeakMap', original)
+			vi.resetModules()
+		}
+
+		expect(answers).toEqual([true, true])
+		expect(buildDelta).toBe(0)
+		expect(calledFew).toBeGreaterThan(0)
+		expect(calledMany).toBeGreaterThan(calledFew)
 	})
 
 	it('reports a shared faulted node at every path the walk reached it through', () => {

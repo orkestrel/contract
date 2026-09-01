@@ -2757,6 +2757,52 @@ export function buildCountedGraph(levels: number, shared: boolean): CountedGraph
 }
 
 /**
+ * Build a two-slot object graph over one authored child node and the tally of
+ * record reads the walk performs.
+ *
+ * @remarks
+ * The within-call companion to {@link buildCountedGraph}, which measures the
+ * same ledger down a chain of array levels. Here the declaration is one object
+ * node bound into BOTH slots of its parent, so a walk enters one compiled node
+ * twice in one call, and the value's record carries the same tallying accessor.
+ * `shared` chooses whether the two slots hold ONE record or two distinct ones,
+ * which is the control drawn from outside the population: two distinct records
+ * are two reads of real work no memo may skip, so a walk that reuses nothing
+ * reads the shared value twice as well and equalizes the pair.
+ *
+ * @param shared - Whether both slots hold the same record
+ * @returns The declaration, the value, and its read tally
+ *
+ * @example
+ * ```ts
+ * const slots = buildCountedSlots(true)
+ * compileGuard(slots.shape)(slots.value) // true
+ * slots.count() // 1 once a walk reads the one shared record once
+ * ```
+ */
+export function buildCountedSlots(shared: boolean): CountedGraphInterface {
+	let reads = 0
+	const left: Record<string, unknown> = {}
+	const right: Record<string, unknown> = shared ? left : {}
+	const records: ReadonlyArray<Record<string, unknown>> = shared ? [left] : [left, right]
+	for (const record of records) {
+		Object.defineProperty(record, 'inner', {
+			get: () => {
+				reads += 1
+				return 'leaf'
+			},
+			enumerable: true,
+		})
+	}
+	const child = objectShape({ inner: stringShape() })
+	return Object.freeze({
+		shape: objectShape({ left: child, right: child }),
+		value: { left, right },
+		count: (): number => reads,
+	})
+}
+
+/**
  * Create a plain record with one non-enumerable own property.
  *
  * @param key - The hidden property key

@@ -26,6 +26,7 @@ import {
 	ArrayRootSchema,
 	BlankBrandDeclaration,
 	buildCountedGraph,
+	buildCountedSlots,
 	buildCyclicArray,
 	buildCyclicRecord,
 	buildDeepNest,
@@ -961,6 +962,35 @@ describe('shape factories', () => {
 		if (!Array.isArray(separate))
 			throw new Error('buildCountedGraph: the value root must be an array')
 		expect(separate[0]).not.toBe(separate[1])
+	})
+
+	it('binds one child node into both slots and tallies a read per slot it fills', () => {
+		const shared = buildCountedSlots(true)
+		expect(shared.count()).toBe(0)
+		const root: unknown = shared.value
+		if (typeof root !== 'object' || root === null)
+			throw new Error('buildCountedSlots: the value root must be a record')
+		expect(captured.get(root, 'left')).toBe(captured.get(root, 'right'))
+		const declaration: ContractShape = shared.shape
+		if (declaration.type !== 'object')
+			throw new Error('buildCountedSlots: the root must be an object shape')
+		expect(captured.get(declaration.properties, 'left')).toBe(
+			captured.get(declaration.properties, 'right'),
+		)
+
+		const slot: unknown = captured.get(root, 'left')
+		if (typeof slot !== 'object' || slot === null)
+			throw new Error('buildCountedSlots: a slot must hold a record')
+		captured.get(slot, 'inner')
+		expect(shared.count()).toBe(1)
+		captured.get(slot, 'inner')
+		expect(shared.count()).toBe(2)
+
+		const distinct = buildCountedSlots(false)
+		const separate: unknown = distinct.value
+		if (typeof separate !== 'object' || separate === null)
+			throw new Error('buildCountedSlots: the value root must be a record')
+		expect(captured.get(separate, 'left')).not.toBe(captured.get(separate, 'right'))
 	})
 
 	it('combines every shape kind and wraps the previous level per depth', () => {

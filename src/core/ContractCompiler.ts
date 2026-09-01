@@ -19,7 +19,12 @@ import type {
 	SeederFunction,
 	StringShape,
 } from './types.js'
-import { FAULT_LIMIT, GENERATION_ATTEMPT_LIMIT, INTRINSICS } from './constants.js'
+import {
+	FAULT_LIMIT,
+	GENERATION_ATTEMPT_LIMIT,
+	INTRINSICS,
+	PRESENCE_MASK_LIMIT,
+} from './constants.js'
 import { ContractError, isContractError } from './errors.js'
 import {
 	admitMember,
@@ -133,6 +138,52 @@ export class ContractCompiler<
 	// answer, and nothing that outlives the walk that set them.
 	static #visits = 0
 	static #scope = 0
+	// The released state, shared by every compiler this class ever builds.
+	// `#release` assigns these in place of the working collections, so an instance
+	// allocates one collection per family instead of two and construction carries
+	// no empty peer of its own. Sharing them is safe because nothing MUTATES a
+	// released collection: every element write — `#discover`, `#schedule`, and the
+	// six family loops — runs behind `#prepare`, which refuses after `#release`
+	// clears `#source`; the constructor and `#release` assign the field and never
+	// touch a sentinel's elements. The static block beneath freezes them, so a
+	// write that did reach one fails at its own line rather than leaking a node of
+	// one compiler's graph into every other compiler's release — under the same
+	// qualification `#weakMap` carries earlier: `INTRINSICS.freeze` is captured
+	// while this module evaluates, so a consumer module ordered before
+	// `constants.ts` defeats it, and that limit is stated there rather than
+	// defended.
+	static readonly #emptyStack: Array<
+		| { readonly operation: 'enter'; readonly shape: ContractShape }
+		| { readonly operation: 'exit'; readonly index: number }
+	> = []
+	static readonly #emptyNodes: ContractShape[] = []
+	static readonly #emptyOrder: number[] = []
+	static readonly #emptySchemas: JSONSchema[] = []
+	static readonly #emptyGuards: Array<Guard<unknown>> = []
+	static readonly #emptyParsers: Array<Parser<unknown>> = []
+	static readonly #emptyAudits: Array<
+		(value: unknown, path: readonly string[]) => readonly AuditFault[]
+	> = []
+	static readonly #emptyReports: Array<
+		(value: unknown, path: readonly string[]) => readonly Fault[]
+	> = []
+	static readonly #emptySeeds: Array<(random: RandomFunction) => unknown> = []
+
+	static {
+		// Frozen in a statement of its own, and the result discarded: `Object.freeze`
+		// returns a readonly view, so binding it back would retype the peers and
+		// stop them satisfying the mutable working fields they are assigned to.
+		INTRINSICS.freeze(ContractCompiler.#emptyStack)
+		INTRINSICS.freeze(ContractCompiler.#emptyNodes)
+		INTRINSICS.freeze(ContractCompiler.#emptyOrder)
+		INTRINSICS.freeze(ContractCompiler.#emptySchemas)
+		INTRINSICS.freeze(ContractCompiler.#emptyGuards)
+		INTRINSICS.freeze(ContractCompiler.#emptyParsers)
+		INTRINSICS.freeze(ContractCompiler.#emptyAudits)
+		INTRINSICS.freeze(ContractCompiler.#emptyReports)
+		INTRINSICS.freeze(ContractCompiler.#emptySeeds)
+	}
+
 	#source: ContractShape | undefined
 	#state:
 		| { readonly phase: 'ready' }
@@ -146,9 +197,13 @@ export class ContractCompiler<
 	// The prepared index. `#nodes[0]` is the owned root by construction, `#index`
 	// answers "which node is this child" by identity, and `#order` lists every
 	// node with its children already listed before it — so a family solves any
-	// bottom-up fact by reading it forwards once.
+	// bottom-up fact by reading it forwards once. The index is the one working
+	// field with no shared peer: `Object.freeze` reaches an array's writes and not
+	// a `WeakMap`'s, so a shared empty map would be a class-lifetime cache that
+	// any write could fill with the caller's own shapes. Release drops the map
+	// instead, and absence is `undefined`.
 	#nodes: ContractShape[]
-	#index: WeakMap<ContractShape, number>
+	#index: WeakMap<ContractShape, number> | undefined
 	#order: number[]
 	// One plan per family, each indexed by the same node index. A plan entry is a
 	// self-contained artifact for that node: it closes over the CHILD entries it
@@ -328,22 +383,22 @@ export class ContractCompiler<
 		this.#release()
 	}
 
-	// Assignment of fresh empty collections only. An array literal reads no
-	// caller-reachable binding, and the captured `WeakMap` is the constructor this
-	// module captured while it evaluated, so nothing here calls a caller-mutable
-	// cleanup member and release cannot be redirected into leaving state behind.
+	// Assignment only: every working collection takes the class's shared frozen
+	// empty peer and the index is dropped outright. Nothing here calls a
+	// caller-mutable cleanup member and nothing here constructs a collection at
+	// all, so release cannot be redirected into leaving state behind.
 	#release(): void {
 		this.#source = undefined
-		this.#stack = []
-		this.#nodes = []
-		this.#index = new ContractCompiler.#weakMap()
-		this.#order = []
-		this.#schemas = []
-		this.#guards = []
-		this.#parsers = []
-		this.#audits = []
-		this.#reports = []
-		this.#seeds = []
+		this.#stack = ContractCompiler.#emptyStack
+		this.#nodes = ContractCompiler.#emptyNodes
+		this.#index = undefined
+		this.#order = ContractCompiler.#emptyOrder
+		this.#schemas = ContractCompiler.#emptySchemas
+		this.#guards = ContractCompiler.#emptyGuards
+		this.#parsers = ContractCompiler.#emptyParsers
+		this.#audits = ContractCompiler.#emptyAudits
+		this.#reports = ContractCompiler.#emptyReports
+		this.#seeds = ContractCompiler.#emptySeeds
 	}
 
 	// === Preparation
@@ -372,6 +427,18 @@ export class ContractCompiler<
 	}
 
 	#discover(root: ContractShape): void {
+		// Narrowed once at the door, because both dispatches below take their
+		// receiver type from this value. `#prepare` is the only caller and it
+		// refuses while the declaration is gone, so the walk always finds the map
+		// the constructor built; this refusal is what keeps that a statement the
+		// types carry rather than one a comment makes.
+		const known = this.#index
+		if (known === undefined) {
+			throw new ContractError('ContractCompiler: the prepared index is unavailable', {
+				code: 'structure',
+				context: { path: [], shape: 'contract' },
+			})
+		}
 		this.#stack[this.#stack.length] = { operation: 'enter', shape: root }
 		while (this.#stack.length > 0) {
 			// Popped by index and truncated by `length`, never through
@@ -392,10 +459,10 @@ export class ContractCompiler<
 			// A node reached a second time is already indexed, and the graph is
 			// acyclic by validation, so it is already finished too — which is exactly
 			// what makes one entry per unique node correct rather than merely cheap.
-			if (INTRINSICS.apply(INTRINSICS.recall, this.#index, [shape]) !== undefined) continue
+			if (INTRINSICS.apply(INTRINSICS.recall, known, [shape]) !== undefined) continue
 			const index = this.#nodes.length
 			this.#nodes[index] = shape
-			INTRINSICS.apply(INTRINSICS.retain, this.#index, [shape, index])
+			INTRINSICS.apply(INTRINSICS.retain, known, [shape, index])
 			this.#stack[this.#stack.length] = { operation: 'exit', index }
 			this.#schedule(shape)
 		}
@@ -441,7 +508,22 @@ export class ContractCompiler<
 	}
 
 	#locate(shape: ContractShape): number {
-		const index = INTRINSICS.apply(INTRINSICS.recall, this.#index, [shape])
+		// The receiver is narrowed BEFORE the dispatch. `INTRINSICS.apply` takes its
+		// receiver type from this argument rather than from the target, so a dropped
+		// index would leave `WeakMap.prototype.get` throwing a host `TypeError`
+		// through a door whose whole contract is that it publishes this package's
+		// error class. Defense in depth, not a live path: a released compiler holds
+		// all six roots, so every family returns its ready root before locating
+		// anything, and a failed one rethrows at `#enter` — which is why no
+		// reachable vector settles here and the guard still belongs.
+		const known = this.#index
+		if (known === undefined) {
+			throw new ContractError('ContractCompiler: the prepared index is unavailable', {
+				code: 'structure',
+				context: { path: [], shape: 'contract' },
+			})
+		}
+		const index = INTRINSICS.apply(INTRINSICS.recall, known, [shape])
 		if (index === undefined) {
 			throw new ContractError('ContractCompiler: a structural child is not in the prepared index', {
 				code: 'structure',
@@ -486,6 +568,17 @@ export class ContractCompiler<
 	// value the caller changes between two calls must be read again. It is the
 	// per-call identity memo `valueToSchema` and `schemaToShape` already carry,
 	// and it publishes nothing.
+	//
+	// The ledger a tracked node keeps is one inline SLOT — the object it last
+	// answered about and the answer it gave — because the call that reaches a
+	// tracked node with one object is the common one, and a slot costs a
+	// comparison where a map costs an allocation. A `WeakMap` is built only when
+	// a SECOND distinct object arrives inside one scope, and the slot's entry is
+	// carried into it as it is built, so the first object keeps its answer for
+	// every later path. `filled` starts below every scope the clock hands out —
+	// `#visits` rises before it names a scope, so no scope is 0 — and the first
+	// call therefore always refreshes. A refresh drops the map and empties the
+	// slot together, which is what keeps an answer from crossing calls.
 
 	// Only a node that descends into a child artifact can be reached twice through
 	// one value; a leaf answers about the value in front of it, so tracking one
@@ -499,7 +592,9 @@ export class ContractCompiler<
 
 	#trackGuard(plan: Guard<unknown>): Guard<unknown> {
 		let filled = 0
-		let memo: WeakMap<object, boolean> = new ContractCompiler.#weakMap()
+		let memo: WeakMap<object, boolean> | undefined
+		let slot: object | undefined
+		let kept = false
 		return (value: unknown): value is unknown => {
 			if (!isObject(value)) return plan(value)
 			const opened = ContractCompiler.#scope === 0
@@ -510,13 +605,27 @@ export class ContractCompiler<
 			try {
 				const scope = ContractCompiler.#scope
 				if (filled !== scope) {
-					memo = new ContractCompiler.#weakMap()
+					memo = undefined
+					slot = undefined
+					kept = false
 					filled = scope
 				}
-				const recalled = INTRINSICS.apply(INTRINSICS.recall, memo, [value])
-				if (recalled !== undefined) return recalled
+				if (slot === value) return kept
+				if (memo !== undefined) {
+					const recalled = INTRINSICS.apply(INTRINSICS.recall, memo, [value])
+					if (recalled !== undefined) return recalled
+				}
 				const answer = plan(value)
-				INTRINSICS.apply(INTRINSICS.retain, memo, [value, answer])
+				if (slot === undefined) {
+					slot = value
+					kept = answer
+				} else {
+					if (memo === undefined) {
+						memo = new ContractCompiler.#weakMap()
+						INTRINSICS.apply(INTRINSICS.retain, memo, [slot, kept])
+					}
+					INTRINSICS.apply(INTRINSICS.retain, memo, [value, answer])
+				}
 				return answer
 			} finally {
 				if (opened) ContractCompiler.#scope = 0
@@ -529,12 +638,17 @@ export class ContractCompiler<
 	// that reported no fault about an object reports none about it wherever else
 	// the walk arrives. A faulted node is re-walked at its new path, and stays
 	// bounded by `FAULT_LIMIT` — every collector stops once the cap is reached, so
-	// a value that faults everywhere saturates instead of expanding.
+	// a value that faults everywhere saturates instead of expanding. The slot
+	// carries that rule too: a faulted first value fills it with nothing kept, so
+	// the node holds that value in front of it and still re-walks every later
+	// arrival of it.
 	#trackFaults<T>(
 		plan: (value: unknown, path: readonly string[]) => readonly T[],
 	): (value: unknown, path: readonly string[]) => readonly T[] {
 		let filled = 0
-		let memo: WeakMap<object, readonly T[]> = new ContractCompiler.#weakMap()
+		let memo: WeakMap<object, readonly T[]> | undefined
+		let slot: object | undefined
+		let kept: readonly T[] | undefined
 		return (value: unknown, path: readonly string[]): readonly T[] => {
 			if (!isObject(value)) return plan(value, path)
 			const opened = ContractCompiler.#scope === 0
@@ -545,13 +659,27 @@ export class ContractCompiler<
 			try {
 				const scope = ContractCompiler.#scope
 				if (filled !== scope) {
-					memo = new ContractCompiler.#weakMap()
+					memo = undefined
+					slot = undefined
+					kept = undefined
 					filled = scope
 				}
-				const recalled = INTRINSICS.apply(INTRINSICS.recall, memo, [value])
-				if (recalled !== undefined) return recalled
+				if (slot === value && kept !== undefined) return kept
+				if (memo !== undefined) {
+					const recalled = INTRINSICS.apply(INTRINSICS.recall, memo, [value])
+					if (recalled !== undefined) return recalled
+				}
 				const answer = plan(value, path)
-				if (answer.length === 0) INTRINSICS.apply(INTRINSICS.retain, memo, [value, answer])
+				if (slot === undefined) {
+					slot = value
+					kept = answer.length === 0 ? answer : undefined
+				} else if (answer.length === 0) {
+					if (memo === undefined) {
+						memo = new ContractCompiler.#weakMap()
+						if (kept !== undefined) INTRINSICS.apply(INTRINSICS.retain, memo, [slot, kept])
+					}
+					INTRINSICS.apply(INTRINSICS.retain, memo, [value, answer])
+				}
 				return answer
 			} finally {
 				if (opened) ContractCompiler.#scope = 0
@@ -817,6 +945,24 @@ export class ContractCompiler<
 					}
 					if (!optional) required[required.length] = key
 				}
+				// The required keys are fixed here, so their presence question is
+				// answered by one integer rather than by a per-call vocabulary: each
+				// required key takes a bit position now, and a call ORs one bit per own
+				// key it recognizes and compares the result against the full mask. The
+				// record is null-prototype own data so a key literally named
+				// '__proto__' takes a position like any other. Past the mask's width
+				// the collected-vocabulary form below still answers.
+				const maskable = required.length <= PRESENCE_MASK_LIMIT
+				const positions: Record<string, number> = INTRINSICS.create(null)
+				let full = 0
+				if (maskable) {
+					for (let keyIndex = 0; keyIndex < required.length; keyIndex += 1) {
+						const key = required[keyIndex]
+						if (key === undefined) continue
+						positions[key] = keyIndex
+						full |= 1 << keyIndex
+					}
+				}
 				return (value: unknown): value is unknown => {
 					if (!isRecord(value)) return false
 					const keys = enumerableKeys(value)
@@ -825,11 +971,23 @@ export class ContractCompiler<
 					// getter on `value`, or a replaced `globalThis.Set` reached by the
 					// presence view, must yield `false`, never throw (AGENTS §14).
 					const outcome = attempt(() => {
-						const present = collectMembers(keys)
-						for (let keyIndex = 0; keyIndex < required.length; keyIndex += 1) {
-							const key = required[keyIndex]
-							if (key === undefined) continue
-							if (!matchesMember(present, key)) return false
+						if (maskable) {
+							let seen = 0
+							for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+								const key = keys[keyIndex]
+								if (key === undefined) continue
+								if (!INTRINSICS.own(positions, key)) continue
+								const position = positions[key]
+								if (position !== undefined) seen |= 1 << position
+							}
+							if (seen !== full) return false
+						} else {
+							const present = collectMembers(keys)
+							for (let keyIndex = 0; keyIndex < required.length; keyIndex += 1) {
+								const key = required[keyIndex]
+								if (key === undefined) continue
+								if (!matchesMember(present, key)) return false
+							}
 						}
 						for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
 							const key = keys[keyIndex]
@@ -1047,6 +1205,20 @@ export class ContractCompiler<
 						context: { shape: 'object' },
 					},
 				)
+				// One bit position per declared entry, assigned here because the entry
+				// list is fixed here: a call then reads presence as a bit test instead
+				// of a membership dispatch per entry. Null-prototype own data, so an
+				// entry named '__proto__' takes a position like any other. Past the
+				// mask's width the collected-vocabulary form still answers.
+				const maskable = entries.length <= PRESENCE_MASK_LIMIT
+				const positions: Record<string, number> = INTRINSICS.create(null)
+				if (maskable) {
+					for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+						const entry = entries[entryIndex]
+						if (entry === undefined) continue
+						positions[entry.key] = entryIndex
+					}
+				}
 				const extra = owned.additionalProperties
 				const additional =
 					extra === undefined || extra === false || extra === true
@@ -1070,7 +1242,17 @@ export class ContractCompiler<
 					// replaced `globalThis.Set` reached by the presence view, must yield
 					// `undefined`, never throw (AGENTS §14).
 					const outcome = attempt(() => {
-						const present = collectMembers(keys)
+						const present = maskable ? undefined : collectMembers(keys)
+						let seen = 0
+						if (present === undefined) {
+							for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+								const key = keys[keyIndex]
+								if (key === undefined) continue
+								if (!INTRINSICS.own(positions, key)) continue
+								const position = positions[key]
+								if (position !== undefined) seen |= 1 << position
+							}
+						}
 						// Honest typing: a null-prototype accumulator so an input own key
 						// literally named '__proto__' lands as an own data key instead of
 						// mutating the prototype (same pattern as `pickOf`).
@@ -1078,7 +1260,11 @@ export class ContractCompiler<
 						for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
 							const entry = entries[entryIndex]
 							if (entry === undefined) continue
-							if (!matchesMember(present, entry.key)) {
+							const absent =
+								present === undefined
+									? (seen & (1 << entryIndex)) === 0
+									: !matchesMember(present, entry.key)
+							if (absent) {
 								if (entry.optional) continue
 								return undefined
 							}
@@ -1229,23 +1415,34 @@ export class ContractCompiler<
 	#auditOf(index: number): (value: unknown, path: readonly string[]) => readonly AuditFault[] {
 		const owned = this.#node(index)
 		switch (owned.type) {
+			// A leaf's refinement fields are fixed when its plan is built, exactly as
+			// its `kind` is, so a declaration carrying none has no refinement report
+			// to build at all: the only question such a leaf asks is the type test
+			// above the gate, and its answer past that test is empty for every
+			// accepted value. The helper stays the single source for every REFINED
+			// leaf and is entered unchanged there — the gate decides whether the leaf
+			// has a refinement question, never how one is answered. Each clean answer
+			// is its own array, because a report's identity is the caller's.
 			case 'string': {
 				const node: StringShape = owned
+				const refined =
+					owned.min !== undefined || owned.max !== undefined || owned.pattern !== undefined
 				return (value, path) => {
 					if (!isString(value)) {
 						return [{ reason: 'type', path, expected: 'string', received: preview(value) }]
 					}
-					return createStringFaults(node, value, path)
+					return refined ? createStringFaults(node, value, path) : []
 				}
 			}
 			case 'number': {
 				const node: NumberShape = owned
 				const kind: FaultKind = owned.integer === true ? 'integer' : 'number'
+				const refined = owned.integer === true || owned.min !== undefined || owned.max !== undefined
 				return (value, path) => {
 					if (!isFiniteNumber(value)) {
 						return [{ reason: 'type', path, expected: kind, received: preview(value) }]
 					}
-					return createNumberFaults(node, value, path)
+					return refined ? createNumberFaults(node, value, path) : []
 				}
 			}
 			case 'boolean':
@@ -1330,6 +1527,29 @@ export class ContractCompiler<
 				const extra = owned.additionalProperties
 				const closed = extra === undefined || extra === false
 				const additional = closed || extra === true ? undefined : this.#auditAt(extra)
+				// The declared vocabulary is a compile-time constant, so it is built
+				// once here rather than rebuilt on every report. One bit position per
+				// declared entry answers the per-entry presence question the same way,
+				// with a bit test in place of a membership dispatch; past the mask's
+				// width the collected-vocabulary form still answers.
+				//
+				// Plan time is not a call, so it has no path to name and no refusal to
+				// publish: this build is contained by `attempt` and holds `undefined`
+				// when it fails. A `globalThis.Set` replaced before this module loaded,
+				// and so captured into `INTRINSICS`, is what makes it fail. The call
+				// rebuilds it inside the walk's own containment, where that failure
+				// reaches the coded refusal this door publishes, carrying the path.
+				const planned = attempt(() => collectMembers(declaredKeys))
+				const declared = planned.success ? planned.value : undefined
+				const maskable = entries.length <= PRESENCE_MASK_LIMIT
+				const positions: Record<string, number> = INTRINSICS.create(null)
+				if (maskable) {
+					for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+						const entry = entries[entryIndex]
+						if (entry === undefined) continue
+						positions[entry.key] = entryIndex
+					}
+				}
 				return (value, path) => {
 					if (isObject(value)) {
 						readValue(() => INTRINSICS.parent(value), 'compileAuditor', {
@@ -1347,17 +1567,33 @@ export class ContractCompiler<
 						{ subject: 'object', context: { path, shape: 'object' } },
 					)
 					const faults: AuditFault[] = []
-					// Both views are built inside the contained walk: a replaced
-					// `globalThis.Set` must reach the auditor's own containment rather than
-					// throw the caller's raw value out of a total report.
+					// The value-side presence view is built inside the contained walk, and
+					// the declared vocabulary rebuilt there whenever its plan-time build
+					// failed: a replaced `globalThis.Set` must reach the auditor's own
+					// containment rather than throw the caller's raw value out of a report
+					// this door answers.
 					const outcome = attempt(() => {
-						const present = collectMembers(keys)
-						const declared = collectMembers(declaredKeys)
+						const present = maskable ? undefined : collectMembers(keys)
+						const vocabulary = declared ?? collectMembers(declaredKeys)
+						let seen = 0
+						if (present === undefined) {
+							for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+								const key = keys[keyIndex]
+								if (key === undefined) continue
+								if (!INTRINSICS.own(positions, key)) continue
+								const position = positions[key]
+								if (position !== undefined) seen |= 1 << position
+							}
+						}
 						for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
 							const entry = entries[entryIndex]
 							if (entry === undefined) continue
 							if (faults.length >= FAULT_LIMIT) return
-							if (!matchesMember(present, entry.key)) {
+							const absent =
+								present === undefined
+									? (seen & (1 << entryIndex)) === 0
+									: !matchesMember(present, entry.key)
+							if (absent) {
 								if (!entry.optional) {
 									faults[faults.length] = {
 										reason: 'missing',
@@ -1373,7 +1609,7 @@ export class ContractCompiler<
 							const key = keys[keyIndex]
 							if (key === undefined) continue
 							if (faults.length >= FAULT_LIMIT) return
-							if (matchesMember(declared, key)) continue
+							if (matchesMember(vocabulary, key)) continue
 							if (closed) {
 								faults[faults.length] = { reason: 'extra', path: pathOf(path, key) }
 								continue
@@ -1416,14 +1652,22 @@ export class ContractCompiler<
 						const plan = plans[index2]
 						if (plan === undefined) continue
 						const variantFaults = plan(value, path)
+						if (variantFaults.length === 0) {
+							// An `anyOf` verdict is settled by the FIRST clean variant in
+							// declaration order, so no later variant plan runs for a value an
+							// earlier variant already accepted. That is the stop the compiled
+							// guard and parser already make, and joining it is what keeps a
+							// later object variant's prototype probe from publishing a coded
+							// refusal for a value `is` answers `true` for. A `oneOf` verdict is
+							// the match count over every variant, so it reads all of them.
+							if (!exclusive) return []
+							matched += 1
+						}
 						perVariant[perVariant.length] = variantFaults
-						if (variantFaults.length === 0) matched += 1
 					}
 					if (exclusive) {
 						if (matched === 1) return []
 						if (matched > 1) return [{ reason: 'oneOf', path, matched }]
-					} else if (matched > 0) {
-						return []
 					}
 					const closest = selectClosestFaults(perVariant)
 					const report: AuditFault[] = [
@@ -1490,25 +1734,31 @@ export class ContractCompiler<
 	#reportOf(index: number): (value: unknown, path: readonly string[]) => readonly Fault[] {
 		const owned = this.#node(index)
 		switch (owned.type) {
+			// The same compile-time gate the auditor's leaves carry, over the COERCED
+			// value: the two doors differ in how they obtain the primitive and not in
+			// what an unrefined declaration has to say about it.
 			case 'string': {
 				const node: StringShape = owned
+				const refined =
+					owned.min !== undefined || owned.max !== undefined || owned.pattern !== undefined
 				return (value, path) => {
 					const parsed = parseString(value)
 					if (parsed === undefined) {
 						return [{ reason: 'type', path, expected: 'string', received: preview(value) }]
 					}
-					return createStringFaults(node, parsed, path)
+					return refined ? createStringFaults(node, parsed, path) : []
 				}
 			}
 			case 'number': {
 				const node: NumberShape = owned
 				const kind: FaultKind = owned.integer === true ? 'integer' : 'number'
+				const refined = owned.integer === true || owned.min !== undefined || owned.max !== undefined
 				return (value, path) => {
 					const parsed = parseNumber(value)
 					if (parsed === undefined) {
 						return [{ reason: 'type', path, expected: kind, received: preview(value) }]
 					}
-					return createNumberFaults(node, parsed, path)
+					return refined ? createNumberFaults(node, parsed, path) : []
 				}
 			}
 			case 'boolean':
@@ -1563,6 +1813,7 @@ export class ContractCompiler<
 					optional: boolean
 					kind: FaultKind
 				}> = []
+				const names: string[] = []
 				const keyList = INTRINSICS.keys(owned.properties)
 				for (let keyIndex = 0; keyIndex < keyList.length; keyIndex += 1) {
 					const key = keyList[keyIndex]
@@ -1577,6 +1828,7 @@ export class ContractCompiler<
 						optional,
 						kind: shapeToKind(inner),
 					}
+					names[names.length] = key
 				}
 				const extra = owned.additionalProperties
 				const tail =
@@ -1584,6 +1836,30 @@ export class ContractCompiler<
 						? undefined
 						: this.#reportAt(extra)
 				const open = extra === true || tail !== undefined
+				// The declared vocabulary is a compile-time constant, so it is built
+				// once here over the entry key names rather than admitted key by key on
+				// every report. One bit position per declared entry answers the
+				// per-entry presence question the same way, with a bit test in place of
+				// a membership dispatch; past the mask's width the collected-vocabulary
+				// form still answers.
+				//
+				// Plan time is not a call, so it has no value to report on: this build
+				// is contained by `attempt` and holds `undefined` when it fails. A
+				// `globalThis.Set` replaced before this module loaded, and so captured
+				// into `INTRINSICS`, is what makes it fail. The call rebuilds it inside
+				// the walk's own containment, which keeps this door's answer a fault
+				// array in exactly the regime its totality promise names.
+				const planned = attempt(() => collectMembers(names))
+				const known = planned.success ? planned.value : undefined
+				const maskable = entries.length <= PRESENCE_MASK_LIMIT
+				const positions: Record<string, number> = INTRINSICS.create(null)
+				if (maskable) {
+					for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+						const entry = entries[entryIndex]
+						if (entry === undefined) continue
+						positions[entry.key] = entryIndex
+					}
+				}
 				return (value, path) => {
 					if (!isRecord(value)) {
 						return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
@@ -1594,22 +1870,37 @@ export class ContractCompiler<
 						return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
 					}
 					const faults: Fault[] = []
-					// Both views are built inside the contained walk: a replaced
-					// `globalThis.Set` must reach the reporter's own diagnostic containment
-					// rather than throw the caller's raw value out of a total report.
+					// The value-side presence view is built inside the contained walk, and
+					// the declared vocabulary rebuilt there whenever its plan-time build
+					// failed: a replaced `globalThis.Set` must reach the reporter's own
+					// diagnostic containment rather than throw the caller's raw value out
+					// of a total report.
 					const outcome = attempt(() => {
-						const present = collectMembers(keys)
-						const known = collectMembers([])
+						const present = maskable ? undefined : collectMembers(keys)
+						const vocabulary = known ?? collectMembers(names)
+						let seen = 0
+						if (present === undefined) {
+							for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+								const key = keys[keyIndex]
+								if (key === undefined) continue
+								if (!INTRINSICS.own(positions, key)) continue
+								const position = positions[key]
+								if (position !== undefined) seen |= 1 << position
+							}
+						}
 						for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
 							const entry = entries[entryIndex]
 							if (entry === undefined) continue
 							if (faults.length >= FAULT_LIMIT) return
-							admitMember(known, entry.key)
 							// Mirror the parser's presence gate exactly: only an own
 							// enumerable string key is present. A present key with an
 							// explicit `undefined` value is still treated like absence, so
 							// `explain` never faults where `parse` silently skips it.
-							if (!matchesMember(present, entry.key)) {
+							const absent =
+								present === undefined
+									? (seen & (1 << entryIndex)) === 0
+									: !matchesMember(present, entry.key)
+							if (absent) {
 								if (!entry.optional) {
 									faults[faults.length] = {
 										reason: 'missing',
@@ -1642,7 +1933,7 @@ export class ContractCompiler<
 								const key = keys[keyIndex]
 								if (key === undefined) continue
 								if (faults.length >= FAULT_LIMIT) return
-								if (matchesMember(known, key)) continue
+								if (matchesMember(vocabulary, key)) continue
 								const observed: unknown = record[key]
 								if (tail !== undefined) {
 									appendEntries(faults, tail(observed, pathOf(path, key)))
@@ -1672,7 +1963,14 @@ export class ContractCompiler<
 					for (let index2 = 0; index2 < plans.length; index2 += 1) {
 						const plan = plans[index2]
 						if (plan === undefined) continue
-						perVariant[perVariant.length] = plan(value, path)
+						const variantFaults = plan(value, path)
+						// The auditor's first-clean-variant stop, mirrored: an `anyOf` report
+						// is settled by the FIRST variant that reports nothing, in declaration
+						// order, and no later variant plan reads the value after it. A `oneOf`
+						// report is the guard-match count over every variant, so it reads all
+						// of them.
+						if (!exclusive && variantFaults.length === 0) return []
+						perVariant[perVariant.length] = variantFaults
 					}
 					const closest = selectClosestFaults(perVariant)
 					if (exclusive) {
@@ -1688,9 +1986,6 @@ export class ContractCompiler<
 							return limitEntries(report, FAULT_LIMIT)
 						}
 						return [{ reason: 'oneOf', path, matched }]
-					}
-					for (let index2 = 0; index2 < perVariant.length; index2 += 1) {
-						if (perVariant[index2]?.length === 0) return []
 					}
 					const report: Fault[] = [{ reason: 'variant', path, variants: count }]
 					appendEntries(report, closest)

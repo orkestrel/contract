@@ -20,6 +20,7 @@ import {
 import { readFileSync } from 'node:fs'
 import { requireValue } from '@orkestrel/test'
 import { readInventory } from '@orkestrel/test/server'
+import type { ContractCompilerInterface } from '@src/core'
 import * as barrel from '@src/core'
 import {
 	ContractCompiler,
@@ -28,6 +29,9 @@ import {
 	SchemaCloner,
 	ShapeCloner,
 	ShapeValidator,
+	createContract,
+	objectShape,
+	stringShape,
 } from '@src/core'
 import { DriftedMethods, SMUGGLED_KEY, SmuggledMember } from './setup.js'
 
@@ -271,5 +275,82 @@ describe('runtime parity', () => {
 		// name walk partitions name-keyed members correctly.
 		expect(readMembers(SmuggledMember.prototype).methods).toEqual([])
 		expect(Object.getOwnPropertySymbols(SmuggledMember.prototype)).toEqual([SMUGGLED_KEY])
+	})
+})
+
+// The EXECUTED half. Every preceding check reads a name — from source text or
+// from a prototype — and a name that resolves proves nothing about a sentence
+// beside it, so a fence whose comment claims a value the code contradicts
+// passes all of them. The cases here run the flagship fences and assert the
+// values their comments claim. Change a fence, change the transcription beside
+// it.
+describe('flagship fences', () => {
+	const guideText = requireValue(files[CORE_GUIDE], `Missing file: ${CORE_GUIDE}`)
+
+	it('answers from a compiled guard that no live compiler is behind', () => {
+		// Transcribed from the compiling-a-contract passage, which tells a reader
+		// wanting one artifact to keep the artifact and let the compiler go. That
+		// advice is worth nothing unless the guard still answers when the compiler
+		// it came from was never bound to a name, so this runs exactly that.
+		const isTicket = new ContractCompiler(objectShape({ id: stringShape({ min: 1 }) })).guard
+
+		expect(isTicket({ id: 'T-1' })).toBe(true)
+		expect(isTicket({ id: '' })).toBe(false)
+	})
+
+	it('carries the guard fence lines the transcription copies', () => {
+		// The presence guard beside the transcription: it proves the transcribed
+		// lines are still the documented ones, and nothing whatever about behavior.
+		// Binding the construction line alone leaves a comment free to claim the
+		// opposite value and stay green, so every line carrying a claim is bound.
+		expect(guideText).toContain(
+			'const isTicket = new ContractCompiler(objectShape({ id: stringShape({ min: 1 }) })).guard',
+		)
+		expect(guideText).toContain("isTicket({ id: 'T-1' }) // true")
+		expect(guideText).toContain("isTicket({ id: '' }) // false")
+	})
+
+	it('answers from a contract whose members disagree about one undeclared key', () => {
+		// The compiling-a-contract fence: one undeclared key, read by every member
+		// that can see it. Derived together is not the same as equal, and each
+		// expectation here is that fence's own comment, executed.
+		const contract = createContract(objectShape({ id: stringShape() }))
+		const value = { id: 'a', debug: true }
+
+		expect(contract.is(value)).toBe(false)
+		expect(contract.parse(value)).toEqual({ id: 'a' })
+		expect(contract.audit(value)).toEqual([{ reason: 'extra', path: ['debug'] }])
+		expect(contract.explain(value)).toEqual([])
+	})
+
+	it('carries the contract fence lines the transcription copies', () => {
+		expect(guideText).toContain(
+			'const contract = createContract(objectShape({ id: stringShape() }))',
+		)
+		expect(guideText).toContain('contract.is(value) // false')
+		expect(guideText).toContain("contract.parse(value) // { id: 'a' }")
+		expect(guideText).toContain("contract.audit(value) // [{ reason: 'extra', path: ['debug'] }]")
+		expect(guideText).toContain('contract.explain(value) // []')
+	})
+
+	it('replays one artifact per getter and hands the bundle those exact values', () => {
+		// The direct-compiler fence. The identity claims are the load-bearing part:
+		// a getter that recompiled on each read would satisfy every value assertion
+		// in this file and still break the contract this fence documents.
+		const shape = objectShape({ id: stringShape({ min: 1 }) })
+		const compiler: ContractCompilerInterface<typeof shape> = new ContractCompiler(shape)
+
+		expect(compiler.guard({ id: 'a' })).toBe(true)
+		expect(compiler.guard).toBe(compiler.guard)
+		expect(compiler.contract.is).toBe(compiler.guard)
+	})
+
+	it('carries the compiler fence lines the transcription copies', () => {
+		expect(guideText).toContain(
+			'const compiler: ContractCompilerInterface<typeof shape> = new ContractCompiler(shape)',
+		)
+		expect(guideText).toContain("compiler.guard({ id: 'a' }) // true")
+		expect(guideText).toContain('compiler.guard === compiler.guard // true')
+		expect(guideText).toContain('compiler.contract.is === compiler.guard // true')
 	})
 })

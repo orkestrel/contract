@@ -26,6 +26,20 @@ import { ContractCompiler } from './ContractCompiler.js'
  * longer re-walk and re-gate the declaration on every call the way they used
  * to; `contract.audit` and `compileAuditor` are the same compiled function
  * reached two ways.
+ * The bundle is eager by intent. Its members are plain data properties holding
+ * the compiled artifacts, so `const { is, parse } = createContract(shape)`
+ * destructures those exact values and a spread of the result copies them; a
+ * lazily compiled member would compile on either, which spends the laziness
+ * rather than saving it. A malformed declaration refuses at this call rather
+ * than at the first read of whichever member a caller happens to touch, so the
+ * failure arrives at the call the caller made — carrying the authoring door's
+ * own diagnosis, which this door adopts rather than rewraps. Every member is
+ * self-contained, and the compiler this call builds releases its working set
+ * before the call returns. The contract keeps part of the declaration even so:
+ * the auditor and reporter plans close over the owned leaf and array nodes they
+ * read their bounds from, so a kept contract retains those nodes and, through
+ * an array node's `items` field, the subgraph beneath them. Nothing the caller
+ * keeps reaches back into the compiler.
  *
  * @param shape - The shape to compile
  * @returns A contract bundling `schema` / `is` / `parse` / `audit` / `explain` / `generate`
