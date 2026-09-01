@@ -1415,23 +1415,34 @@ export class ContractCompiler<
 	#auditOf(index: number): (value: unknown, path: readonly string[]) => readonly AuditFault[] {
 		const owned = this.#node(index)
 		switch (owned.type) {
+			// A leaf's refinement fields are fixed when its plan is built, exactly as
+			// its `kind` is, so a declaration carrying none has no refinement report
+			// to build at all: the only question such a leaf asks is the type test
+			// above the gate, and its answer past that test is empty for every
+			// accepted value. The helper stays the single source for every REFINED
+			// leaf and is entered unchanged there — the gate decides whether the leaf
+			// has a refinement question, never how one is answered. Each clean answer
+			// is its own array, because a report's identity is the caller's.
 			case 'string': {
 				const node: StringShape = owned
+				const refined =
+					owned.min !== undefined || owned.max !== undefined || owned.pattern !== undefined
 				return (value, path) => {
 					if (!isString(value)) {
 						return [{ reason: 'type', path, expected: 'string', received: preview(value) }]
 					}
-					return createStringFaults(node, value, path)
+					return refined ? createStringFaults(node, value, path) : []
 				}
 			}
 			case 'number': {
 				const node: NumberShape = owned
 				const kind: FaultKind = owned.integer === true ? 'integer' : 'number'
+				const refined = owned.integer === true || owned.min !== undefined || owned.max !== undefined
 				return (value, path) => {
 					if (!isFiniteNumber(value)) {
 						return [{ reason: 'type', path, expected: kind, received: preview(value) }]
 					}
-					return createNumberFaults(node, value, path)
+					return refined ? createNumberFaults(node, value, path) : []
 				}
 			}
 			case 'boolean':
@@ -1707,25 +1718,31 @@ export class ContractCompiler<
 	#reportOf(index: number): (value: unknown, path: readonly string[]) => readonly Fault[] {
 		const owned = this.#node(index)
 		switch (owned.type) {
+			// The same compile-time gate the auditor's leaves carry, over the COERCED
+			// value: the two doors differ in how they obtain the primitive and not in
+			// what an unrefined declaration has to say about it.
 			case 'string': {
 				const node: StringShape = owned
+				const refined =
+					owned.min !== undefined || owned.max !== undefined || owned.pattern !== undefined
 				return (value, path) => {
 					const parsed = parseString(value)
 					if (parsed === undefined) {
 						return [{ reason: 'type', path, expected: 'string', received: preview(value) }]
 					}
-					return createStringFaults(node, parsed, path)
+					return refined ? createStringFaults(node, parsed, path) : []
 				}
 			}
 			case 'number': {
 				const node: NumberShape = owned
 				const kind: FaultKind = owned.integer === true ? 'integer' : 'number'
+				const refined = owned.integer === true || owned.min !== undefined || owned.max !== undefined
 				return (value, path) => {
 					const parsed = parseNumber(value)
 					if (parsed === undefined) {
 						return [{ reason: 'type', path, expected: kind, received: preview(value) }]
 					}
-					return createNumberFaults(node, parsed, path)
+					return refined ? createNumberFaults(node, parsed, path) : []
 				}
 			}
 			case 'boolean':
