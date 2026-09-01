@@ -520,8 +520,14 @@ export class ContractCompiler<
 	}
 
 	#trackGuard(plan: Guard<unknown>): Guard<unknown> {
+		// The map belongs to the first call that needs one, never to the build:
+		// `filled` starts before the first scope the clock hands out, so every
+		// call path replaces a build-time map before reading it, and one built
+		// here would ride unread inside every artifact this compiles — forever,
+		// in an artifact that only ever receives primitives. `#trackFaults`
+		// reads the same way.
 		let filled = 0
-		let memo: WeakMap<object, boolean> = new ContractCompiler.#weakMap()
+		let memo: WeakMap<object, boolean> | undefined
 		return (value: unknown): value is unknown => {
 			if (!isObject(value)) return plan(value)
 			const opened = ContractCompiler.#scope === 0
@@ -531,7 +537,7 @@ export class ContractCompiler<
 			}
 			try {
 				const scope = ContractCompiler.#scope
-				if (filled !== scope) {
+				if (memo === undefined || filled !== scope) {
 					memo = new ContractCompiler.#weakMap()
 					filled = scope
 				}
@@ -556,7 +562,7 @@ export class ContractCompiler<
 		plan: (value: unknown, path: readonly string[]) => readonly T[],
 	): (value: unknown, path: readonly string[]) => readonly T[] {
 		let filled = 0
-		let memo: WeakMap<object, readonly T[]> = new ContractCompiler.#weakMap()
+		let memo: WeakMap<object, readonly T[]> | undefined
 		return (value: unknown, path: readonly string[]): readonly T[] => {
 			if (!isObject(value)) return plan(value, path)
 			const opened = ContractCompiler.#scope === 0
@@ -566,7 +572,7 @@ export class ContractCompiler<
 			}
 			try {
 				const scope = ContractCompiler.#scope
-				if (filled !== scope) {
+				if (memo === undefined || filled !== scope) {
 					memo = new ContractCompiler.#weakMap()
 					filled = scope
 				}

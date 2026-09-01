@@ -324,6 +324,46 @@ describe('ContractCompiler', () => {
 		expect([guarded.count(), audited.count(), explained.count()]).toEqual([levels, levels, levels])
 	})
 
+	it('reads a shared object once per call where two slots of one node reach it', () => {
+		// One authored child node fills both slots, so a value holding ONE object
+		// in both must have that object's member read once. The control is the
+		// same declaration over two distinct objects, whose second read is real
+		// work no memo may skip — a walk carrying no memo reads both values
+		// twice and makes the two counts equal.
+		const child = objectShape({ inner: stringShape() })
+		const guard = compileGuard(objectShape({ left: child, right: child }))
+		let sharedReads = 0
+		let distinctReads = 0
+		const reused: Record<string, unknown> = {}
+		const first: Record<string, unknown> = {}
+		const second: Record<string, unknown> = {}
+		Object.defineProperty(reused, 'inner', {
+			enumerable: true,
+			get: () => {
+				sharedReads += 1
+				return 'leaf'
+			},
+		})
+		Object.defineProperty(first, 'inner', {
+			enumerable: true,
+			get: () => {
+				distinctReads += 1
+				return 'leaf'
+			},
+		})
+		Object.defineProperty(second, 'inner', {
+			enumerable: true,
+			get: () => {
+				distinctReads += 1
+				return 'leaf'
+			},
+		})
+		const answers = [guard({ left: reused, right: reused }), guard({ left: first, right: second })]
+
+		expect(answers).toEqual([true, true])
+		expect([sharedReads, distinctReads]).toEqual([1, 2])
+	})
+
 	it('answers thirty levels of shared references against a thirty-node chain in bounded time', () => {
 		// The reported vector, kept in its reported form: no aliases in the
 		// declaration, no accessors in the value, two references per level.
@@ -357,6 +397,20 @@ describe('ContractCompiler', () => {
 
 		expect(accepted).toEqual([true, 0])
 		expect([guard(value), auditor(shape, value).length]).toEqual([false, 2])
+	})
+
+	it('holds no answer about an object across two calls of one compiled guard', () => {
+		// The root node of an object declaration is tracked, so one retained
+		// guard is the shortest path to the memo's lifetime: the answer the first
+		// call kept about this record must not reach the second call, which sees
+		// a record the caller has since made invalid.
+		const guard = compileGuard(objectShape({ inner: stringShape() }))
+		const record: Record<string, unknown> = { inner: 'x' }
+		const accepted = guard(record)
+		record.inner = 1
+
+		expect(accepted).toBe(true)
+		expect(guard(record)).toBe(false)
 	})
 
 	it('reports a shared faulted node at every path the walk reached it through', () => {
