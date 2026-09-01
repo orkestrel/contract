@@ -16,6 +16,7 @@ import {
 	cloneJSONValue,
 	compileGenerator,
 	compileSchema,
+	ContractCompiler,
 	ContractError,
 	createContract,
 	enumOf,
@@ -55,6 +56,7 @@ import {
 	valueToSchema,
 	validateShapeDepth,
 } from '@src/core'
+import * as core from '@src/core'
 import type { TerminalIntrinsic, TerminalLie } from '../../setup.js'
 import {
 	buildTree,
@@ -959,18 +961,31 @@ describe('no caller-reachable member decides a membership answer', () => {
 		// `.prototype.constructor` is writable, so the corpus is one row per
 		// exported plain function and zero rows per exported class.
 		expect(OWNED_MEMBERS.length).toBeGreaterThan(0)
-		// The SIZE, not just the shape. `toBeGreaterThan(0)` survived eight new
-		// exports while the guide and this file both went on saying 205, which is
-		// the drift a shape-only assertion cannot see. This literal is the number
-		// `guides/src/contract.md` states; a new export moves it, and moving it
-		// must be a deliberate edit in both places rather than a silent one here.
-		expect(OWNED_MEMBERS.length).toBe(216)
+		// The COMPOSITION, not a remembered size. A literal here went stale for a
+		// round after further functions were exported, and the guide's copy of the
+		// same number drifted with it: a count nobody derives is a count that
+		// drifts. Derive it instead. Every exported plain function — every exported
+		// function that is not one of the package's classes — contributes exactly
+		// one row, so the corpus is as large as that set and no larger.
+		const owners = [
+			ContractCompiler,
+			JSONCloner,
+			SchemaCloner,
+			ShapeCloner,
+			ShapeValidator,
+			ContractError,
+		]
+		const plain = captured.names(core).filter((name) => {
+			const exported: unknown = captured.get(core, name)
+			return typeof exported === 'function' && !owners.some((owner) => owner === exported)
+		})
+		expect(OWNED_MEMBERS.length).toBe(plain.length)
 		expect(
 			OWNED_MEMBERS.filter((member) => !member.label.endsWith('.prototype.constructor')).map(
 				(member) => member.label,
 			),
 		).toEqual([])
-		for (const owner of [JSONCloner, SchemaCloner, ShapeCloner, ShapeValidator, ContractError]) {
+		for (const owner of owners) {
 			expect(OWNED_MEMBERS.some((member) => member.label.startsWith(`${owner.name}.`))).toBe(false)
 		}
 	})

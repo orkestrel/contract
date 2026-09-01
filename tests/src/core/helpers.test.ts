@@ -68,6 +68,7 @@ import {
 	matchesPattern,
 	matchesVisited,
 	omitVisited,
+	ownPattern,
 	pathOf,
 	pinMembers,
 	readMapEntries,
@@ -2975,6 +2976,35 @@ describe('captured pattern reads', () => {
 	})
 })
 
+describe('ownPattern', () => {
+	it("rebuilds a pattern statelessly and refuses through the reader's coded error when the pattern cannot be read", () => {
+		const caller = /^[a-z]+$/gy
+		const owned = ownPattern(caller, 'stringOf')
+
+		expect(owned.source).toBe('^[a-z]+$')
+		expect(matchesPattern(owned, 'abc')).toBe(true)
+		expect(matchesPattern(owned, 'abc')).toBe(true)
+		expect(matchesPattern(owned, 'ABC')).toBe(false)
+		expect(matchesPattern(owned, 'abc')).toBe(true)
+		expect(caller.lastIndex).toBe(0)
+		expect(owned.lastIndex).toBe(0)
+		// Controls: the caller really carried the stateful flags, and the rebuild
+		// really dropped them, so the preceding repeated answers are the strip rather
+		// than a caller that never advanced.
+		expect(caller.flags).toBe('gy')
+		expect(owned.flags).toBe('')
+
+		// A Proxy carries no pattern internal slots, so the captured `source`
+		// getter refuses the receiver and the reader's own name reaches the caller
+		// instead of the host's raw `TypeError`.
+		const refusal = captureContractError(() => ownPattern(new Proxy(/^a$/, {}), 'stringOf'))
+
+		expect(refusal.message).toBe('stringOf: pattern could not be read')
+		expect(refusal.code).toBe('pattern')
+		expect(refusal.context).toEqual({ shape: 'string' })
+	})
+})
+
 describe('pinned prototypes', () => {
 	it('pins every own prototype member and refuses when the pin cannot be verified', () => {
 		class Widget {
@@ -3179,6 +3209,148 @@ describe('createStringFaults', () => {
 		expect(createStringFaults(shape, 'abc', [])).toEqual([])
 		expect(pattern.lastIndex).toBe(0)
 		expect(pattern.global).toBe(true)
+	})
+
+	it('reports the same faults from a supplied rebuild as from the shape itself', () => {
+		// A contradictory declaration is the only one a single length can violate on
+		// every axis at once, so it is what pins the whole order in one report.
+		const shape: StringShape = { type: 'string', min: 4, max: 2, pattern: /^[0-9]+$/ }
+		const supplied = createStringFaults(shape, 'abc', ['items'], readPattern(/^[0-9]+$/))
+
+		expect(supplied).toEqual([
+			{
+				reason: 'constraint',
+				path: ['items'],
+				expected: 'string',
+				constraint: 'min',
+				limit: 4,
+				received: '"abc"',
+			},
+			{
+				reason: 'constraint',
+				path: ['items'],
+				expected: 'string',
+				constraint: 'max',
+				limit: 2,
+				received: '"abc"',
+			},
+			{
+				reason: 'constraint',
+				path: ['items'],
+				expected: 'string',
+				constraint: 'pattern',
+				limit: '^[0-9]+$',
+				received: '"abc"',
+			},
+		])
+		expect(createStringFaults(shape, 'abc', ['items'])).toEqual(supplied)
+	})
+
+	it("applies the supplied pattern rather than the shape's own to decide the match", () => {
+		const shape: StringShape = { type: 'string', pattern: /^a$/ }
+		expect(createStringFaults(shape, 'b', [], readPattern(/^b$/))).toEqual([])
+
+		// Control: the same value against the same shape without the supplied
+		// rebuild does fault, so the preceding empty report is the argument being
+		// applied rather than a value that was never checked at all.
+		expect(faultsToConstraints(createStringFaults(shape, 'b', []))).toEqual(['pattern'])
+	})
+
+	it('answers repeatedly from one rebuild of a global caller pattern without moving lastIndex', () => {
+		// The rebuild is what a caller holding one shape for many values supplies
+		// once, so it has to be reusable: `g` on the caller's own object advances
+		// `lastIndex` per `exec`, and stripping it is what makes a single shared
+		// pattern answer the same way on every call.
+		const caller = /^[a-z]+$/g
+		const shape: StringShape = { type: 'string', pattern: /^[a-z]+$/ }
+		const stateless = readPattern(caller)
+
+		expect(createStringFaults(shape, 'abc', [], stateless)).toEqual([])
+		expect(createStringFaults(shape, 'abc', [], stateless)).toEqual([])
+		expect(createStringFaults(shape, 'ABC', [], stateless)).toEqual([
+			{
+				reason: 'constraint',
+				path: [],
+				expected: 'string',
+				constraint: 'pattern',
+				limit: '^[a-z]+$',
+				received: '"ABC"',
+			},
+		])
+		expect(createStringFaults(shape, 'abc', [], stateless)).toEqual([])
+		expect(caller.lastIndex).toBe(0)
+		expect(stateless.lastIndex).toBe(0)
+		// Controls: the caller really carried `g`, and the rebuild really dropped it.
+		expect(caller.global).toBe(true)
+		expect(stateless.global).toBe(false)
+	})
+
+	it("reads a hand-rolled shape's pattern accessor twice per call when the shape declares one, for the presence test and for the rebuild that names the limit", () => {
+		// A hand-rolled declaration is what can count the reads at all: the
+		// package's own clone answers with a fresh frozen `RegExp` per read, and a
+		// plain literal observes nothing. The accessor answers with the same
+		// pattern every time, so a differing read count is the only thing this can
+		// report.
+		let reads = 0
+		const shape: StringShape = {
+			type: 'string',
+			get pattern() {
+				reads += 1
+				return /^[0-9]+$/
+			},
+		}
+		const first = createStringFaults(shape, 'abc', [])
+
+		expect(first).toEqual([
+			{
+				reason: 'constraint',
+				path: [],
+				expected: 'string',
+				constraint: 'pattern',
+				limit: '^[0-9]+$',
+				received: '"abc"',
+			},
+		])
+		// The rebuild that applied the pattern is also what the `limit` text is
+		// read from, so the accessor answers one read for it and one for the
+		// presence test that decides whether a pattern was declared at all.
+		expect(reads).toBe(2)
+
+		expect(createStringFaults(shape, 'abc', [])).toEqual(first)
+		expect(reads).toBe(4)
+	})
+
+	it('answers from a supplied rebuild without asking the shape for its pattern', () => {
+		// A counting accessor is the only instrument that separates applying the
+		// supplied rebuild from rebuilding out of the shape regardless: the reports
+		// are identical either way, so only the read count binds the promise.
+		let reads = 0
+		const shape: StringShape = {
+			type: 'string',
+			get pattern() {
+				reads += 1
+				return /^[0-9]+$/
+			},
+		}
+		const supplied = createStringFaults(shape, 'abc', [], readPattern(/^[0-9]+$/))
+
+		expect(supplied).toEqual([
+			{
+				reason: 'constraint',
+				path: [],
+				expected: 'string',
+				constraint: 'pattern',
+				limit: '^[0-9]+$',
+				received: '"abc"',
+			},
+		])
+		expect(reads).toBe(0)
+
+		// Control: the omitted form asks the same accessor, so a count that stayed
+		// at zero is the supplied rebuild being applied rather than an accessor
+		// that cannot count.
+		expect(createStringFaults(shape, 'abc', [])).toEqual(supplied)
+		expect(reads).toBe(2)
 	})
 
 	it('returns a fresh array per call and mutates neither the shape nor the path', () => {

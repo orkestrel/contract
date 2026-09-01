@@ -39,6 +39,7 @@ import {
 	enumerableKeys,
 	limitEntries,
 	matchesMember,
+	ownPattern,
 	pathOf,
 	pinMembers,
 	preview,
@@ -1425,13 +1426,23 @@ export class ContractCompiler<
 			// is its own array, because a report's identity is the caller's.
 			case 'string': {
 				const node: StringShape = owned
-				const refined =
-					owned.min !== undefined || owned.max !== undefined || owned.pattern !== undefined
+				// The clone's `pattern` is an ACCESSOR that mints a fresh frozen
+				// `RegExp` per read, so the plan reads it once and carries its
+				// stateless rebuild into every answer instead of rebuilding one per
+				// value. The rebuild is safe to share exactly because `readPattern`
+				// strips `g` and `y`: it holds no `lastIndex` an answer could move.
+				// `ownPattern` takes that read, and this door publishes only a
+				// `ContractError`, so an unreadable source or flags refuses with the
+				// same `pattern` code and `{ shape: 'string' }` context the schema leaf
+				// publishes.
+				const declared = owned.pattern
+				const refined = owned.min !== undefined || owned.max !== undefined || declared !== undefined
+				const pattern = declared === undefined ? undefined : ownPattern(declared, 'compileAuditor')
 				return (value, path) => {
 					if (!isString(value)) {
 						return [{ reason: 'type', path, expected: 'string', received: preview(value) }]
 					}
-					return refined ? createStringFaults(node, value, path) : []
+					return refined ? createStringFaults(node, value, path, pattern) : []
 				}
 			}
 			case 'number': {
@@ -1739,14 +1750,17 @@ export class ContractCompiler<
 			// what an unrefined declaration has to say about it.
 			case 'string': {
 				const node: StringShape = owned
-				const refined =
-					owned.min !== undefined || owned.max !== undefined || owned.pattern !== undefined
+				// The same one-time pattern read the auditor's leaf takes, for the same
+				// accessor and the same reason; see `#auditOf`.
+				const declared = owned.pattern
+				const refined = owned.min !== undefined || owned.max !== undefined || declared !== undefined
+				const pattern = declared === undefined ? undefined : ownPattern(declared, 'compileReporter')
 				return (value, path) => {
 					const parsed = parseString(value)
 					if (parsed === undefined) {
 						return [{ reason: 'type', path, expected: 'string', received: preview(value) }]
 					}
-					return refined ? createStringFaults(node, parsed, path) : []
+					return refined ? createStringFaults(node, parsed, path, pattern) : []
 				}
 			}
 			case 'number': {

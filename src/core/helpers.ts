@@ -627,6 +627,39 @@ export function readPattern(pattern: RegExp): RegExp {
 }
 
 /**
+ * Rebuilds a declaration's regular expression as a stateless pattern this
+ * package owns, and refuses an unreadable one under the reader's own name.
+ *
+ * @remarks
+ * The one construction the compiled string leaves and `stringOf` share.
+ * {@link readPattern} strips `g` and `y`, so the result carries no `lastIndex`
+ * an answer could move and one rebuild answers every value alike — which is
+ * what lets a compiled door take the read while the plan is built and hold the
+ * rebuild for the plan's life, instead of minting a `RegExp` per answered
+ * value. The read runs through {@link readValue}, so a source or flags that
+ * cannot be read refuses with this module's uniform `pattern` diagnostic under
+ * the reader that asked, rather than with the host's raw `TypeError`.
+ *
+ * @param pattern - The declaration's regular expression to rebuild
+ * @param reader - The public reader name the diagnostic carries
+ * @returns An owned, stateless equivalent of the declaration's pattern
+ * @throws {ContractError} Thrown when the pattern's source or flags cannot be
+ *         read, coded `pattern` as `<reader>: pattern could not be read`
+ *
+ * @example
+ * ```ts
+ * ownPattern(/^a+$/gy, 'stringOf') // /^a+$/
+ * ```
+ */
+export function ownPattern(pattern: RegExp, reader: string): RegExp {
+	return readValue(() => readPattern(pattern), reader, {
+		subject: 'pattern',
+		code: 'pattern',
+		context: { shape: 'string' },
+	})
+}
+
+/**
  * Pin every own member of a class prototype as a non-configurable member —
  * non-writable too when it is a data property — and verify the pin took.
  *
@@ -1886,10 +1919,18 @@ export function preview(value: unknown): string {
  * two contracts. Faults come out in declaration order — `min`, then `max`, then
  * `pattern` — because a report is read top to bottom and its order is public.
  *
- * The pattern is applied through an OWNED stateless rebuild
- * ({@link readPattern}) and asked through {@link matchesPattern}, so a caller's
- * `lastIndex` never moves and no caller-writable member decides whether the
- * value matched.
+ * The declaration's pattern is applied through an OWNED stateless rebuild
+ * ({@link readPattern}) asked through {@link matchesPattern}, so the shape's own
+ * pattern never moves a caller's `lastIndex` and no caller-writable member
+ * decides whether the value matched. The rebuild is stateless precisely because
+ * `g` and `y` are stripped, so one rebuilt pattern answers identically for every
+ * value and every call — which is what lets a compiled door build it once
+ * ({@link ownPattern}) and hand it down through `pattern` instead of rebuilding
+ * it on each answer. The `limit` text is read from the applied rebuild, so it
+ * names the pattern that decided the match. Left to rebuild, the helper asks
+ * the shape's `pattern` accessor once for the presence test that decides
+ * whether a pattern was declared at all, and once more for the rebuild that
+ * decides the match and names the `limit` when one was.
  *
  * The whole body reads the caller's SHAPE, so it runs through the same
  * {@link readValue} boundary {@link shapeToKind} uses and refuses an
@@ -1904,6 +1945,14 @@ export function preview(value: unknown): string {
  * @param shape - The string shape whose refinements are checked
  * @param value - The already-obtained string to check
  * @param path - The path every produced fault is rooted at
+ * @param pattern - The one-time stateless rebuild that decides the pattern
+ *                  refinement. Must be a {@link readPattern} result for this
+ *                  shape's own pattern; supplied, it decides the match, the
+ *                  `limit` text, and whether a pattern fault is reported at
+ *                  all, and `shape.pattern` is not read. A pattern carrying `g`
+ *                  or `y` moves the caller's `lastIndex` and makes repeated
+ *                  answers for one value disagree. Default: rebuilt from
+ *                  `shape.pattern` on every call, when the shape declares one
  * @returns A fresh array of faults, empty when the value satisfies every refinement
  * @throws {ContractError} When the shape's refinement fields cannot be read
  *
@@ -1917,6 +1966,7 @@ export function createStringFaults(
 	shape: StringShape,
 	value: string,
 	path: readonly string[],
+	pattern?: RegExp,
 ): readonly Fault[] {
 	return readValue(
 		() => {
@@ -1941,8 +1991,17 @@ export function createStringFaults(
 					received: preview(value),
 				}
 			}
-			if (shape.pattern !== undefined && !matchesPattern(readPattern(shape.pattern), value)) {
-				const limit = readPatternSource(shape.pattern)
+			// The bounds are read from the shape on every call because a number is
+			// what the fault carries. The pattern is not: rebuilding it allocates a
+			// `RegExp` per answer, so a caller holding the same shape for the life of
+			// a compiled door supplies the rebuild once and this reads it instead.
+			// Whatever arrives is what decides the match and names the fault's `limit`,
+			// so a rebuild of this shape's own pattern reports exactly what the
+			// shape's own read would: `readPattern` preserves `source` exactly.
+			const stateless =
+				pattern ?? (shape.pattern === undefined ? undefined : readPattern(shape.pattern))
+			if (stateless !== undefined && !matchesPattern(stateless, value)) {
+				const limit = readPatternSource(stateless)
 				faults[faults.length] = {
 					reason: 'constraint',
 					path,
