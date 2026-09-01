@@ -1074,6 +1074,14 @@ export interface ContractInterface<T> {
  * interrupted outer read, and every later read with one shared cause-free
  * error.
  *
+ * After every family exists, the compiler releases its working set — the owned
+ * graph, the node index, the order, and every family plan. A compiler read for
+ * one artifact and then kept holds that whole set for as long as you keep the
+ * compiler. A compiled artifact is the opposite: each one closes over the child
+ * entries its family needed while that family was built, so it answers on its
+ * own and outlives the compiler that produced it. When one artifact is what you
+ * want, keep the artifact and let the compiler go.
+ *
  * @example
  * ```ts
  * const compiler = new ContractCompiler(stringShape({ min: 1 }))
