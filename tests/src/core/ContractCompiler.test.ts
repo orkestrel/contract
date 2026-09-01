@@ -29,14 +29,16 @@ import {
 } from '@src/core'
 import {
 	buildCountedGraph,
+	buildCountedSlots,
 	buildDeepShape,
 	buildSharedDagShape,
 	buildStaircaseShape,
+	captured,
 	captureContractError,
 	ObservedShape,
 	ReentrantShape,
 } from '../../setup.js'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 describe('ContractCompiler', () => {
 	it('exposes exactly the seven ruled getters and pins them', () => {
@@ -325,43 +327,15 @@ describe('ContractCompiler', () => {
 	})
 
 	it('reads a shared object once per call where two slots of one node reach it', () => {
-		// One authored child node fills both slots, so a value holding ONE object
-		// in both must have that object's member read once. The control is the
-		// same declaration over two distinct objects, whose second read is real
-		// work no memo may skip — a walk carrying no memo reads both values
-		// twice and makes the two counts equal.
-		const child = objectShape({ inner: stringShape() })
-		const guard = compileGuard(objectShape({ left: child, right: child }))
-		let sharedReads = 0
-		let distinctReads = 0
-		const reused: Record<string, unknown> = {}
-		const first: Record<string, unknown> = {}
-		const second: Record<string, unknown> = {}
-		Object.defineProperty(reused, 'inner', {
-			enumerable: true,
-			get: () => {
-				sharedReads += 1
-				return 'leaf'
-			},
-		})
-		Object.defineProperty(first, 'inner', {
-			enumerable: true,
-			get: () => {
-				distinctReads += 1
-				return 'leaf'
-			},
-		})
-		Object.defineProperty(second, 'inner', {
-			enumerable: true,
-			get: () => {
-				distinctReads += 1
-				return 'leaf'
-			},
-		})
-		const answers = [guard({ left: reused, right: reused }), guard({ left: first, right: second })]
+		const shared = buildCountedSlots(true)
+		const distinct = buildCountedSlots(false)
+		const answers = [
+			compileGuard(shared.shape)(shared.value),
+			compileGuard(distinct.shape)(distinct.value),
+		]
 
 		expect(answers).toEqual([true, true])
-		expect([sharedReads, distinctReads]).toEqual([1, 2])
+		expect([shared.count(), distinct.count()]).toEqual([1, 2])
 	})
 
 	it('answers thirty levels of shared references against a thirty-node chain in bounded time', () => {
@@ -411,6 +385,75 @@ describe('ContractCompiler', () => {
 
 		expect(accepted).toBe(true)
 		expect(guard(record)).toBe(false)
+	})
+
+	it('builds no tracking ledger while a compiled family is assembled', async () => {
+		// A ledger built with the artifact would cost one map per tracked node, so
+		// the count taken across the getter read would rise with the tracked-node
+		// count. These two declarations differ only there. The build allocates
+		// working maps of its own, so the DELTA between the two reads is the
+		// discriminating figure and neither total is asserted. The call counts are
+		// the control: they prove this counter registers a map the closure builds,
+		// and they rise with the tracked-node count as a per-node cost must.
+		const original = captured.descriptor(globalThis, 'WeakMap')
+		if (original === undefined) throw new Error('the WeakMap descriptor is absent')
+		let constructions = 0
+		class CountingWeakMap extends WeakMap<object, unknown> {
+			constructor(entries?: ReadonlyArray<readonly [object, unknown]> | null) {
+				super(entries)
+				constructions += 1
+			}
+		}
+		let buildDelta = 0
+		let calledFew = 0
+		let calledMany = 0
+		let answers: readonly unknown[] = []
+		try {
+			captured.define(globalThis, 'WeakMap', { ...original, value: CountingWeakMap })
+			vi.resetModules()
+			const loaded = await import('../../../src/core/index.js')
+			const few = loaded.objectShape({
+				items: loaded.arrayShape(loaded.objectShape({ name: loaded.stringShape() })),
+			})
+			const many = loaded.objectShape({
+				items: loaded.arrayShape(loaded.objectShape({ name: loaded.stringShape() })),
+				first: loaded.objectShape({ tag: loaded.stringShape() }),
+				second: loaded.objectShape({ tag: loaded.stringShape() }),
+				third: loaded.objectShape({ tag: loaded.stringShape() }),
+				fourth: loaded.objectShape({ tag: loaded.stringShape() }),
+			})
+			const compilerFew = new loaded.ContractCompiler(few)
+			const compilerMany = new loaded.ContractCompiler(many)
+
+			let opened = constructions
+			const guardFew = compilerFew.guard
+			const builtFew = constructions - opened
+			opened = constructions
+			const guardMany = compilerMany.guard
+			buildDelta = constructions - opened - builtFew
+
+			opened = constructions
+			const answeredFew = guardFew({ items: [{ name: 'leaf' }] })
+			calledFew = constructions - opened
+			opened = constructions
+			const answeredMany = guardMany({
+				items: [{ name: 'leaf' }],
+				first: { tag: 'a' },
+				second: { tag: 'b' },
+				third: { tag: 'c' },
+				fourth: { tag: 'd' },
+			})
+			calledMany = constructions - opened
+			answers = [answeredFew, answeredMany]
+		} finally {
+			captured.define(globalThis, 'WeakMap', original)
+			vi.resetModules()
+		}
+
+		expect(answers).toEqual([true, true])
+		expect(buildDelta).toBe(0)
+		expect(calledFew).toBeGreaterThan(0)
+		expect(calledMany).toBeGreaterThan(calledFew)
 	})
 
 	it('reports a shared faulted node at every path the walk reached it through', () => {

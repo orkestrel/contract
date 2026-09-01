@@ -508,6 +508,18 @@ export class ContractCompiler<
 	// value the caller changes between two calls must be read again. It is the
 	// per-call identity memo `valueToSchema` and `schemaToShape` already carry,
 	// and it publishes nothing.
+	//
+	// A tracked node builds its ledger on the first call that hands it an
+	// object. `filled` starts below every scope the clock hands out — `#visits`
+	// rises before it names a scope, so no scope is 0 — and the first call
+	// therefore always refreshes. The `memo === undefined` half of the refresh
+	// condition is unreachable at runtime, because a refresh assigns the map and
+	// the scope together; it stays because `INTRINSICS.apply` takes its receiver
+	// type from the argument rather than from the target, so that half is what
+	// proves the receiver at the `recall` and `retain` dispatches. Narrow the
+	// condition to the scope alone and `undefined` reaches
+	// `WeakMap.prototype.get` as far as the types know, with `check` still
+	// exiting 0.
 
 	// Only a node that descends into a child artifact can be reached twice through
 	// one value; a leaf answers about the value in front of it, so tracking one
@@ -520,12 +532,6 @@ export class ContractCompiler<
 	}
 
 	#trackGuard(plan: Guard<unknown>): Guard<unknown> {
-		// The map belongs to the first call that needs one, never to the build:
-		// `filled` starts before the first scope the clock hands out, so every
-		// call path replaces a build-time map before reading it, and one built
-		// here would ride unread inside every artifact this compiles — forever,
-		// in an artifact that only ever receives primitives. `#trackFaults`
-		// reads the same way.
 		let filled = 0
 		let memo: WeakMap<object, boolean> | undefined
 		return (value: unknown): value is unknown => {
