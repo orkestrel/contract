@@ -569,17 +569,16 @@ export class ContractCompiler<
 	// per-call identity memo `valueToSchema` and `schemaToShape` already carry,
 	// and it publishes nothing.
 	//
-	// A tracked node builds its ledger on the first call that hands it an
-	// object. `filled` starts below every scope the clock hands out — `#visits`
-	// rises before it names a scope, so no scope is 0 — and the first call
-	// therefore always refreshes. The `memo === undefined` half of the refresh
-	// condition is unreachable at runtime, because a refresh assigns the map and
-	// the scope together; it stays because `INTRINSICS.apply` takes its receiver
-	// type from the argument rather than from the target, so that half is what
-	// proves the receiver at the `recall` and `retain` dispatches. Narrow the
-	// condition to the scope alone and `undefined` reaches
-	// `WeakMap.prototype.get` as far as the types know, with `check` still
-	// exiting 0.
+	// The ledger a tracked node keeps is one inline SLOT — the object it last
+	// answered about and the answer it gave — because the call that reaches a
+	// tracked node with one object is the common one, and a slot costs a
+	// comparison where a map costs an allocation. A `WeakMap` is built only when
+	// a SECOND distinct object arrives inside one scope, and the slot's entry is
+	// carried into it as it is built, so the first object keeps its answer for
+	// every later path. `filled` starts below every scope the clock hands out —
+	// `#visits` rises before it names a scope, so no scope is 0 — and the first
+	// call therefore always refreshes. A refresh drops the map and empties the
+	// slot together, which is what keeps an answer from crossing calls.
 
 	// Only a node that descends into a child artifact can be reached twice through
 	// one value; a leaf answers about the value in front of it, so tracking one
@@ -594,6 +593,8 @@ export class ContractCompiler<
 	#trackGuard(plan: Guard<unknown>): Guard<unknown> {
 		let filled = 0
 		let memo: WeakMap<object, boolean> | undefined
+		let slot: object | undefined
+		let kept = false
 		return (value: unknown): value is unknown => {
 			if (!isObject(value)) return plan(value)
 			const opened = ContractCompiler.#scope === 0
@@ -603,14 +604,28 @@ export class ContractCompiler<
 			}
 			try {
 				const scope = ContractCompiler.#scope
-				if (memo === undefined || filled !== scope) {
-					memo = new ContractCompiler.#weakMap()
+				if (filled !== scope) {
+					memo = undefined
+					slot = undefined
+					kept = false
 					filled = scope
 				}
-				const recalled = INTRINSICS.apply(INTRINSICS.recall, memo, [value])
-				if (recalled !== undefined) return recalled
+				if (slot === value) return kept
+				if (memo !== undefined) {
+					const recalled = INTRINSICS.apply(INTRINSICS.recall, memo, [value])
+					if (recalled !== undefined) return recalled
+				}
 				const answer = plan(value)
-				INTRINSICS.apply(INTRINSICS.retain, memo, [value, answer])
+				if (slot === undefined) {
+					slot = value
+					kept = answer
+				} else {
+					if (memo === undefined) {
+						memo = new ContractCompiler.#weakMap()
+						INTRINSICS.apply(INTRINSICS.retain, memo, [slot, kept])
+					}
+					INTRINSICS.apply(INTRINSICS.retain, memo, [value, answer])
+				}
 				return answer
 			} finally {
 				if (opened) ContractCompiler.#scope = 0
@@ -623,12 +638,17 @@ export class ContractCompiler<
 	// that reported no fault about an object reports none about it wherever else
 	// the walk arrives. A faulted node is re-walked at its new path, and stays
 	// bounded by `FAULT_LIMIT` — every collector stops once the cap is reached, so
-	// a value that faults everywhere saturates instead of expanding.
+	// a value that faults everywhere saturates instead of expanding. The slot
+	// carries that rule too: a faulted first value fills it with nothing kept, so
+	// the node holds that value in front of it and still re-walks every later
+	// arrival of it.
 	#trackFaults<T>(
 		plan: (value: unknown, path: readonly string[]) => readonly T[],
 	): (value: unknown, path: readonly string[]) => readonly T[] {
 		let filled = 0
 		let memo: WeakMap<object, readonly T[]> | undefined
+		let slot: object | undefined
+		let kept: readonly T[] | undefined
 		return (value: unknown, path: readonly string[]): readonly T[] => {
 			if (!isObject(value)) return plan(value, path)
 			const opened = ContractCompiler.#scope === 0
@@ -638,14 +658,28 @@ export class ContractCompiler<
 			}
 			try {
 				const scope = ContractCompiler.#scope
-				if (memo === undefined || filled !== scope) {
-					memo = new ContractCompiler.#weakMap()
+				if (filled !== scope) {
+					memo = undefined
+					slot = undefined
+					kept = undefined
 					filled = scope
 				}
-				const recalled = INTRINSICS.apply(INTRINSICS.recall, memo, [value])
-				if (recalled !== undefined) return recalled
+				if (slot === value && kept !== undefined) return kept
+				if (memo !== undefined) {
+					const recalled = INTRINSICS.apply(INTRINSICS.recall, memo, [value])
+					if (recalled !== undefined) return recalled
+				}
 				const answer = plan(value, path)
-				if (answer.length === 0) INTRINSICS.apply(INTRINSICS.retain, memo, [value, answer])
+				if (slot === undefined) {
+					slot = value
+					kept = answer.length === 0 ? answer : undefined
+				} else if (answer.length === 0) {
+					if (memo === undefined) {
+						memo = new ContractCompiler.#weakMap()
+						if (kept !== undefined) INTRINSICS.apply(INTRINSICS.retain, memo, [slot, kept])
+					}
+					INTRINSICS.apply(INTRINSICS.retain, memo, [value, answer])
+				}
 				return answer
 			} finally {
 				if (opened) ContractCompiler.#scope = 0

@@ -440,14 +440,34 @@ describe('ContractCompiler', () => {
 		expect(guard(record)).toBe(false)
 	})
 
+	it('holds no report about an object across two calls of one retained auditor', () => {
+		// Every standalone `compileAuditor` call compiles its own compiler, so a
+		// RETAINED auditor is the one route that puts a single ledger in front of
+		// two calls. The diagnostic families keep only the clean report, and this
+		// is where that kept report would outlive its call: the emptiness the first
+		// call recorded about this record must not answer the second, which sees a
+		// record the caller has since made invalid.
+		const auditor = new ContractCompiler(objectShape({ inner: stringShape() })).auditor
+		const record: Record<string, unknown> = { inner: 'x' }
+		const clean = auditor(record).length
+		record.inner = 1
+
+		expect(clean).toBe(0)
+		expect(auditor(record).length).toBe(1)
+	})
+
 	it('builds no tracking ledger while a compiled family is assembled', async () => {
 		// A ledger built with the artifact would cost one map per tracked node, so
 		// the count taken across the getter read would rise with the tracked-node
 		// count. These two declarations differ only there. The build allocates
 		// working maps of its own, so the DELTA between the two reads is the
 		// discriminating figure and neither total is asserted. The call counts are
-		// the control: they prove this counter registers a map the closure builds,
-		// and they rise with the tracked-node count as a per-node cost must.
+		// the control, and the values they are taken over are chosen to FORCE the
+		// ledger to allocate: a tracked node serves one object from its inline slot
+		// and builds a map only when a second distinct object reaches it inside one
+		// call, so every member here holds two distinct records. The counts prove
+		// this counter registers a map the closure builds, and they rise with the
+		// tracked-node count as a per-node cost must.
 		const original = captured.descriptor(globalThis, 'WeakMap')
 		if (original === undefined) throw new Error('the WeakMap descriptor is absent')
 		let constructions = 0
@@ -470,10 +490,10 @@ describe('ContractCompiler', () => {
 			})
 			const many = loaded.objectShape({
 				items: loaded.arrayShape(loaded.objectShape({ name: loaded.stringShape() })),
-				first: loaded.objectShape({ tag: loaded.stringShape() }),
-				second: loaded.objectShape({ tag: loaded.stringShape() }),
-				third: loaded.objectShape({ tag: loaded.stringShape() }),
-				fourth: loaded.objectShape({ tag: loaded.stringShape() }),
+				first: loaded.arrayShape(loaded.objectShape({ tag: loaded.stringShape() })),
+				second: loaded.arrayShape(loaded.objectShape({ tag: loaded.stringShape() })),
+				third: loaded.arrayShape(loaded.objectShape({ tag: loaded.stringShape() })),
+				fourth: loaded.arrayShape(loaded.objectShape({ tag: loaded.stringShape() })),
 			})
 			const compilerFew = new loaded.ContractCompiler(few)
 			const compilerMany = new loaded.ContractCompiler(many)
@@ -486,15 +506,15 @@ describe('ContractCompiler', () => {
 			buildDelta = constructions - opened - builtFew
 
 			opened = constructions
-			const answeredFew = guardFew({ items: [{ name: 'leaf' }] })
+			const answeredFew = guardFew({ items: [{ name: 'leaf' }, { name: 'branch' }] })
 			calledFew = constructions - opened
 			opened = constructions
 			const answeredMany = guardMany({
-				items: [{ name: 'leaf' }],
-				first: { tag: 'a' },
-				second: { tag: 'b' },
-				third: { tag: 'c' },
-				fourth: { tag: 'd' },
+				items: [{ name: 'leaf' }, { name: 'branch' }],
+				first: [{ tag: 'a' }, { tag: 'b' }],
+				second: [{ tag: 'c' }, { tag: 'd' }],
+				third: [{ tag: 'e' }, { tag: 'f' }],
+				fourth: [{ tag: 'g' }, { tag: 'h' }],
 			})
 			calledMany = constructions - opened
 			answers = [answeredFew, answeredMany]
