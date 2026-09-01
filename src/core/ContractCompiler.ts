@@ -1652,14 +1652,22 @@ export class ContractCompiler<
 						const plan = plans[index2]
 						if (plan === undefined) continue
 						const variantFaults = plan(value, path)
+						if (variantFaults.length === 0) {
+							// An `anyOf` verdict is settled by the FIRST clean variant in
+							// declaration order, so no later variant plan runs for a value an
+							// earlier variant already accepted. That is the stop the compiled
+							// guard and parser already make, and joining it is what keeps a
+							// later object variant's prototype probe from publishing a coded
+							// refusal for a value `is` answers `true` for. A `oneOf` verdict is
+							// the match count over every variant, so it reads all of them.
+							if (!exclusive) return []
+							matched += 1
+						}
 						perVariant[perVariant.length] = variantFaults
-						if (variantFaults.length === 0) matched += 1
 					}
 					if (exclusive) {
 						if (matched === 1) return []
 						if (matched > 1) return [{ reason: 'oneOf', path, matched }]
-					} else if (matched > 0) {
-						return []
 					}
 					const closest = selectClosestFaults(perVariant)
 					const report: AuditFault[] = [
@@ -1955,7 +1963,14 @@ export class ContractCompiler<
 					for (let index2 = 0; index2 < plans.length; index2 += 1) {
 						const plan = plans[index2]
 						if (plan === undefined) continue
-						perVariant[perVariant.length] = plan(value, path)
+						const variantFaults = plan(value, path)
+						// The auditor's first-clean-variant stop, mirrored: an `anyOf` report
+						// is settled by the FIRST variant that reports nothing, in declaration
+						// order, and no later variant plan reads the value after it. A `oneOf`
+						// report is the guard-match count over every variant, so it reads all
+						// of them.
+						if (!exclusive && variantFaults.length === 0) return []
+						perVariant[perVariant.length] = variantFaults
 					}
 					const closest = selectClosestFaults(perVariant)
 					if (exclusive) {
@@ -1971,9 +1986,6 @@ export class ContractCompiler<
 							return limitEntries(report, FAULT_LIMIT)
 						}
 						return [{ reason: 'oneOf', path, matched }]
-					}
-					for (let index2 = 0; index2 < perVariant.length; index2 += 1) {
-						if (perVariant[index2]?.length === 0) return []
 					}
 					const report: Fault[] = [{ reason: 'variant', path, variants: count }]
 					appendEntries(report, closest)

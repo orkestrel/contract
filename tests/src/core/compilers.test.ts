@@ -54,7 +54,9 @@ import {
 	createNonEnumerableRecord,
 	buildSparseArray,
 	createRevokedProxy,
+	createStatefulGetter,
 	createThrowingGetter,
+	createThrowingPrototype,
 	ForgedBrandDeclaration,
 	LateMutation,
 	leafShapeVariations,
@@ -3375,6 +3377,43 @@ describe('compileAuditor — strict unions', () => {
 		const overlapping = oneOfShape(stringShape(), stringShape({ min: 0 }))
 		expect(compileAuditor(overlapping, 'a')).toEqual([{ reason: 'oneOf', path: [], matched: 2 }])
 	})
+
+	it('anyOf accepts at the first clean variant, so a later variant raises no refusal', () => {
+		// An object variant probes the prototype before it reads anything, and this
+		// value's probe throws. Declared behind a variant that already accepts the
+		// value, that probe is never reached: `is` stops at the first accepting
+		// variant, and the diagnostic doors make the same stop rather than
+		// publishing a refusal for a value the guard calls valid.
+		const hostile = createThrowingPrototype(new Error('prototype read'))
+		const shape = unionShape(rawShape({ type: 'object' }), objectShape({ b: numberShape() }))
+
+		expect(compileGuard(shape)(hostile)).toBe(true)
+		expect(compileParser(shape)(hostile)).toBe(hostile)
+		expect(compileAuditor(shape, hostile)).toEqual([])
+		expect(compileReporter(shape, hostile)).toEqual([])
+
+		// The gate is non-exclusivity rather than the union: a `oneOf` verdict is
+		// the match count over every variant, not the first acceptance, so the same
+		// declaration still reaches the same coded refusal.
+		const exclusive = oneOfShape(rawShape({ type: 'object' }), objectShape({ b: numberShape() }))
+		const error = captureContractError(() => compileAuditor(exclusive, hostile))
+		expect(error.code).toBe('structure')
+		expect(error.context).toEqual({ path: [], shape: 'object' })
+	})
+
+	it('anyOf with no clean variant keeps the refusal and the report it publishes', () => {
+		const hostile = createThrowingPrototype(new Error('prototype read'))
+		const shape = unionShape(stringShape(), objectShape({ b: numberShape() }))
+
+		expect(compileGuard(shape)(hostile)).toBe(false)
+		const error = captureContractError(() => compileAuditor(shape, hostile))
+		expect(error.code).toBe('structure')
+		expect(error.context).toEqual({ path: [], shape: 'object' })
+		expect(compileReporter(shape, hostile)).toEqual([
+			{ reason: 'variant', path: [], variants: 2 },
+			{ reason: 'type', path: [], expected: 'string', received: 'object' },
+		])
+	})
 })
 
 describe('compileAuditor — totality and cap', () => {
@@ -3940,6 +3979,26 @@ describe('compileReporter — union / oneOf', () => {
 	it('oneOf: two-or-more matches reports matched >= 2 alone', () => {
 		const shape = oneOfShape(stringShape(), stringShape({ min: 0 }))
 		expect(compileReporter(shape, 'x')).toEqual([{ reason: 'oneOf', path: [], matched: 2 }])
+	})
+
+	it('anyOf: a clean variant leaves every later variant plan unrun', () => {
+		// The drifting getter answers `1` to its first read and `'drifted'` to
+		// every read after, so the value itself records whether a later variant's
+		// object plan read it. An empty report proves nothing on its own here,
+		// because the pre-short-circuit reporter published the same empty report
+		// after running every plan.
+		const shape = unionShape(rawShape({ type: 'object' }), objectShape({ value: numberShape() }))
+		const drifting = createStatefulGetter()
+
+		expect(compileReporter(shape, drifting)).toEqual([])
+		expect(drifting.value).toBe(1)
+
+		// The control sits outside the union population: the same object plan
+		// reached directly does read the value, so the assertion preceding it can
+		// fail.
+		const read = createStatefulGetter()
+		expect(compileReporter(objectShape({ value: numberShape() }), read)).toEqual([])
+		expect(read.value).toBe('drifted')
 	})
 })
 
