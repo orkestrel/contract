@@ -133,6 +133,46 @@ export class ContractCompiler<
 	// answer, and nothing that outlives the walk that set them.
 	static #visits = 0
 	static #scope = 0
+	// The released state, shared by every compiler this class ever builds.
+	// `#release` assigns these in place of the working collections, so an instance
+	// allocates one collection per family instead of two and construction carries
+	// no empty peer of its own. Sharing them is safe because nothing writes to a
+	// released collection: every writer runs behind `#prepare`, which refuses
+	// after `#release` clears `#source`. The static block beneath freezes them, so
+	// a write that did reach one fails loudly at its own line rather than leaking
+	// a node of one compiler's graph into every other compiler's release.
+	static readonly #emptyStack: Array<
+		| { readonly operation: 'enter'; readonly shape: ContractShape }
+		| { readonly operation: 'exit'; readonly index: number }
+	> = []
+	static readonly #emptyNodes: ContractShape[] = []
+	static readonly #emptyOrder: number[] = []
+	static readonly #emptySchemas: JSONSchema[] = []
+	static readonly #emptyGuards: Array<Guard<unknown>> = []
+	static readonly #emptyParsers: Array<Parser<unknown>> = []
+	static readonly #emptyAudits: Array<
+		(value: unknown, path: readonly string[]) => readonly AuditFault[]
+	> = []
+	static readonly #emptyReports: Array<
+		(value: unknown, path: readonly string[]) => readonly Fault[]
+	> = []
+	static readonly #emptySeeds: Array<(random: RandomFunction) => unknown> = []
+
+	static {
+		// Frozen in a statement of its own, and the result discarded: `Object.freeze`
+		// returns a readonly view, so binding it back would retype the peers and
+		// stop them satisfying the mutable working fields they are assigned to.
+		INTRINSICS.freeze(ContractCompiler.#emptyStack)
+		INTRINSICS.freeze(ContractCompiler.#emptyNodes)
+		INTRINSICS.freeze(ContractCompiler.#emptyOrder)
+		INTRINSICS.freeze(ContractCompiler.#emptySchemas)
+		INTRINSICS.freeze(ContractCompiler.#emptyGuards)
+		INTRINSICS.freeze(ContractCompiler.#emptyParsers)
+		INTRINSICS.freeze(ContractCompiler.#emptyAudits)
+		INTRINSICS.freeze(ContractCompiler.#emptyReports)
+		INTRINSICS.freeze(ContractCompiler.#emptySeeds)
+	}
+
 	#source: ContractShape | undefined
 	#state:
 		| { readonly phase: 'ready' }
@@ -143,36 +183,27 @@ export class ContractCompiler<
 		| { readonly operation: 'enter'; readonly shape: ContractShape }
 		| { readonly operation: 'exit'; readonly index: number }
 	>
-	readonly #emptyStack: Array<
-		| { readonly operation: 'enter'; readonly shape: ContractShape }
-		| { readonly operation: 'exit'; readonly index: number }
-	>
 	// The prepared index. `#nodes[0]` is the owned root by construction, `#index`
 	// answers "which node is this child" by identity, and `#order` lists every
 	// node with its children already listed before it — so a family solves any
-	// bottom-up fact by reading it forwards once.
+	// bottom-up fact by reading it forwards once. The index is the one working
+	// field with no shared peer: `Object.freeze` reaches an array's writes and not
+	// a `WeakMap`'s, so a shared empty map would be a class-lifetime cache that
+	// any write could fill with the caller's own shapes. Release drops the map
+	// instead, and absence is `undefined`.
 	#nodes: ContractShape[]
-	readonly #emptyNodes: ContractShape[]
-	#index: WeakMap<ContractShape, number>
-	readonly #emptyIndex: WeakMap<ContractShape, number>
+	#index: WeakMap<ContractShape, number> | undefined
 	#order: number[]
-	readonly #emptyOrder: number[]
 	// One plan per family, each indexed by the same node index. A plan entry is a
 	// self-contained artifact for that node: it closes over the CHILD entries it
 	// needs, resolved while the family is built, so nothing a compiled artifact
 	// does at call time reaches back into the index this class later releases.
 	#schemas: JSONSchema[]
-	readonly #emptySchemas: JSONSchema[]
 	#guards: Array<Guard<unknown>>
-	readonly #emptyGuards: Array<Guard<unknown>>
 	#parsers: Array<Parser<unknown>>
-	readonly #emptyParsers: Array<Parser<unknown>>
 	#audits: Array<(value: unknown, path: readonly string[]) => readonly AuditFault[]>
-	readonly #emptyAudits: Array<(value: unknown, path: readonly string[]) => readonly AuditFault[]>
 	#reports: Array<(value: unknown, path: readonly string[]) => readonly Fault[]>
-	readonly #emptyReports: Array<(value: unknown, path: readonly string[]) => readonly Fault[]>
 	#seeds: Array<(random: RandomFunction) => unknown>
-	readonly #emptySeeds: Array<(random: RandomFunction) => unknown>
 	#schema: JSONSchema | undefined
 	#guard: Guard<unknown> | undefined
 	#parser: Parser<unknown> | undefined
@@ -190,25 +221,15 @@ export class ContractCompiler<
 		this.#source = shape
 		this.#state = { phase: 'ready' }
 		this.#stack = []
-		this.#emptyStack = []
 		this.#nodes = []
-		this.#emptyNodes = []
 		this.#index = new ContractCompiler.#weakMap()
-		this.#emptyIndex = new ContractCompiler.#weakMap()
 		this.#order = []
-		this.#emptyOrder = []
 		this.#schemas = []
-		this.#emptySchemas = []
 		this.#guards = []
-		this.#emptyGuards = []
 		this.#parsers = []
-		this.#emptyParsers = []
 		this.#audits = []
-		this.#emptyAudits = []
 		this.#reports = []
-		this.#emptyReports = []
 		this.#seeds = []
-		this.#emptySeeds = []
 		this.#schema = undefined
 		this.#guard = undefined
 		this.#parser = undefined
@@ -351,21 +372,22 @@ export class ContractCompiler<
 		this.#release()
 	}
 
-	// Assignment of preconstructed peers only. Nothing here calls a caller-mutable
-	// cleanup member and nothing here constructs a collection after the source was
-	// observed, so release cannot be redirected into leaving state behind.
+	// Assignment only: every working collection takes the class's shared frozen
+	// empty peer and the index is dropped outright. Nothing here calls a
+	// caller-mutable cleanup member and nothing here constructs a collection at
+	// all, so release cannot be redirected into leaving state behind.
 	#release(): void {
 		this.#source = undefined
-		this.#stack = this.#emptyStack
-		this.#nodes = this.#emptyNodes
-		this.#index = this.#emptyIndex
-		this.#order = this.#emptyOrder
-		this.#schemas = this.#emptySchemas
-		this.#guards = this.#emptyGuards
-		this.#parsers = this.#emptyParsers
-		this.#audits = this.#emptyAudits
-		this.#reports = this.#emptyReports
-		this.#seeds = this.#emptySeeds
+		this.#stack = ContractCompiler.#emptyStack
+		this.#nodes = ContractCompiler.#emptyNodes
+		this.#index = undefined
+		this.#order = ContractCompiler.#emptyOrder
+		this.#schemas = ContractCompiler.#emptySchemas
+		this.#guards = ContractCompiler.#emptyGuards
+		this.#parsers = ContractCompiler.#emptyParsers
+		this.#audits = ContractCompiler.#emptyAudits
+		this.#reports = ContractCompiler.#emptyReports
+		this.#seeds = ContractCompiler.#emptySeeds
 	}
 
 	// === Preparation
@@ -394,6 +416,18 @@ export class ContractCompiler<
 	}
 
 	#discover(root: ContractShape): void {
+		// Narrowed once at the door, because both dispatches below take their
+		// receiver type from this value. `#prepare` is the only caller and it
+		// refuses while the declaration is gone, so the walk always finds the map
+		// the constructor built; this refusal is what keeps that a statement the
+		// types carry rather than one a comment makes.
+		const known = this.#index
+		if (known === undefined) {
+			throw new ContractError('ContractCompiler: the prepared index is unavailable', {
+				code: 'structure',
+				context: { path: [], shape: 'contract' },
+			})
+		}
 		this.#stack[this.#stack.length] = { operation: 'enter', shape: root }
 		while (this.#stack.length > 0) {
 			// Popped by index and truncated by `length`, never through
@@ -414,10 +448,10 @@ export class ContractCompiler<
 			// A node reached a second time is already indexed, and the graph is
 			// acyclic by validation, so it is already finished too — which is exactly
 			// what makes one entry per unique node correct rather than merely cheap.
-			if (INTRINSICS.apply(INTRINSICS.recall, this.#index, [shape]) !== undefined) continue
+			if (INTRINSICS.apply(INTRINSICS.recall, known, [shape]) !== undefined) continue
 			const index = this.#nodes.length
 			this.#nodes[index] = shape
-			INTRINSICS.apply(INTRINSICS.retain, this.#index, [shape, index])
+			INTRINSICS.apply(INTRINSICS.retain, known, [shape, index])
 			this.#stack[this.#stack.length] = { operation: 'exit', index }
 			this.#schedule(shape)
 		}
@@ -463,7 +497,22 @@ export class ContractCompiler<
 	}
 
 	#locate(shape: ContractShape): number {
-		const index = INTRINSICS.apply(INTRINSICS.recall, this.#index, [shape])
+		// The receiver is narrowed BEFORE the dispatch. `INTRINSICS.apply` takes its
+		// receiver type from this argument rather than from the target, so a dropped
+		// index would leave `WeakMap.prototype.get` throwing a host `TypeError`
+		// through a door whose whole contract is that it publishes this package's
+		// error class. Defense in depth, not a live path: a released compiler holds
+		// all six roots, so every family returns its ready root before locating
+		// anything, and a failed one rethrows at `#enter` — which is why no
+		// reachable vector settles here and the guard still belongs.
+		const known = this.#index
+		if (known === undefined) {
+			throw new ContractError('ContractCompiler: the prepared index is unavailable', {
+				code: 'structure',
+				context: { path: [], shape: 'contract' },
+			})
+		}
+		const index = INTRINSICS.apply(INTRINSICS.recall, known, [shape])
 		if (index === undefined) {
 			throw new ContractError('ContractCompiler: a structural child is not in the prepared index', {
 				code: 'structure',

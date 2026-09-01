@@ -137,6 +137,38 @@ describe('ContractCompiler', () => {
 		expect(compiler.generator).toBe(generator)
 	})
 
+	it('keeps two released compilers answering their own declaration and settles a later one alone', () => {
+		// Release hands every working collection to a peer the class owns rather
+		// than to one the instance built, so the question sharing raises is whether
+		// one compiler's release can reach another's answers. Two compilers driven
+		// past release through `contract` keep answering for their own declaration,
+		// and a third built afterwards refuses its own malformed declaration with
+		// its own coded error while leaving those answers intact.
+		const names = new ContractCompiler(objectShape({ name: stringShape({ min: 1 }) }))
+		const counts = new ContractCompiler(objectShape({ count: integerShape({ min: 0 }) }))
+
+		const named = names.contract
+		const counted = counts.contract
+
+		expect([named.is({ name: 'Ada' }), named.is({ count: 1 })]).toEqual([true, false])
+		expect([counted.is({ count: 1 }), counted.is({ name: 'Ada' })]).toEqual([true, false])
+		expect(named.parse({ name: 'Ada' })).toEqual({ name: 'Ada' })
+		expect(counted.parse({ count: 1 })).toEqual({ count: 1 })
+		expect(named.audit({ name: 1 })).toHaveLength(1)
+		expect(counted.audit({ count: 'x' })).toHaveLength(1)
+		expect(names.schema).not.toEqual(counts.schema)
+
+		const malformed: ContractShape = JSON.parse('{"type":"string","min":5,"max":1}')
+		const later = new ContractCompiler(malformed)
+		const error = captureContractError(() => later.contract)
+
+		expect(error.code).toBe('range')
+		expect(captureContractError(() => later.guard)).toBe(error)
+		expect([named.is({ name: 'Ada' }), counted.is({ count: 1 })]).toEqual([true, true])
+		expect(names.contract).toBe(named)
+		expect(counts.contract).toBe(counted)
+	})
+
 	it('compiles one entry per unique node, so a shared child emits one shared subschema', () => {
 		const child = objectShape({ id: stringShape() })
 		const shape = objectShape({
@@ -221,6 +253,26 @@ describe('ContractCompiler', () => {
 
 		expect(error.code).toBe('clone')
 		expect(error.message).toBe('cloneShape: failed to create an owned shape snapshot')
+		expect(captureContractError(() => compiler.guard)).toBe(error)
+		expect(captureContractError(() => compiler.parser)).toBe(error)
+		expect(captureContractError(() => compiler.auditor)).toBe(error)
+		expect(captureContractError(() => compiler.reporter)).toBe(error)
+		expect(captureContractError(() => compiler.generator)).toBe(error)
+		expect(captureContractError(() => compiler.contract)).toBe(error)
+	})
+
+	it('replays one settling refusal by identity from all seven getters, whichever one settled it', () => {
+		// Settlement belongs to the lifecycle rather than to the door that reached
+		// it. A refusal adopted at `reporter` is the refusal `schema` and every
+		// other getter rethrows — the settling getter included — and none of them
+		// retries preparation against a compiler whose working state is gone.
+		const malformed: ContractShape = JSON.parse('{"type":"number","min":5,"max":1}')
+		const compiler = new ContractCompiler(malformed)
+
+		const error = captureContractError(() => compiler.reporter)
+
+		expect(error.code).toBe('range')
+		expect(captureContractError(() => compiler.schema)).toBe(error)
 		expect(captureContractError(() => compiler.guard)).toBe(error)
 		expect(captureContractError(() => compiler.parser)).toBe(error)
 		expect(captureContractError(() => compiler.auditor)).toBe(error)
