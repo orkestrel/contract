@@ -53,7 +53,7 @@ import {
 // propagated throw.
 
 /**
- * Build a guard that accepts DENSE arrays whose every element satisfies
+ * Builds a guard that accepts DENSE arrays whose every element satisfies
  * `elementGuard`.
  *
  * @remarks
@@ -92,7 +92,7 @@ export function arrayOf(elementGuard: (value: unknown) => boolean): Guard<readon
 }
 
 /**
- * Build a guard that accepts fixed-arity DENSE tuples, testing each index with
+ * Builds a guard that accepts fixed-arity DENSE tuples, testing each index with
  * the corresponding guard.
  *
  * @param guards - One guard per tuple index, in declaration order
@@ -138,7 +138,7 @@ export function tupleOf(
 }
 
 /**
- * Build a guard that accepts a provided literal primitive using SameValueZero
+ * Builds a guard that accepts a provided literal primitive using SameValueZero
  * comparison.
  *
  * @remarks
@@ -235,7 +235,7 @@ export function literalOf(
 }
 
 /**
- * Build a guard that accepts instances of the provided constructor.
+ * Builds a guard that accepts instances of the provided constructor.
  *
  * @remarks
  * Verifies that `ctor` is a real constructor (via {@link isConstructor}) first,
@@ -265,7 +265,7 @@ export function instanceOf<C extends abstract new (...args: never) => object>(
 }
 
 /**
- * Build a guard from a native `enum` or any object whose values are strings or
+ * Builds a guard from a native `enum` or any object whose values are strings or
  * numbers.
  *
  * @param enumeration - The readable enumeration whose values the guard accepts
@@ -297,7 +297,7 @@ export function enumOf<const E extends Record<string, string | number>>(
 }
 
 /**
- * Build a guard that accepts `Set` instances whose every element satisfies
+ * Builds a guard that accepts `Set` instances whose every element satisfies
  * `elementGuard`.
  *
  * @param elementGuard - The guard each element must satisfy
@@ -336,7 +336,7 @@ export function setOf(elementGuard: (value: unknown) => boolean): Guard<Readonly
 }
 
 /**
- * Build a guard that accepts `Map` instances where every key satisfies
+ * Builds a guard that accepts `Map` instances where every key satisfies
  * `keyGuard` and every value satisfies `valueGuard`.
  *
  * @param keyGuard - The guard each key must satisfy
@@ -383,7 +383,7 @@ export function mapOf(
 }
 
 /**
- * Build a guard that accepts plain records matching a guard shape.
+ * Builds a guard that accepts plain records matching a guard shape.
  *
  * @remarks
  * Three calling modes depending on the `optional` argument:
@@ -476,7 +476,7 @@ export function recordOf<
 }
 
 /**
- * Build a guard that accepts non-array objects matching an open guard shape.
+ * Builds a guard that accepts non-array objects matching an open guard shape.
  *
  * @remarks
  * Three calling modes mirror {@link recordOf}:
@@ -559,7 +559,7 @@ export function objectOf<
 }
 
 /**
- * Build a guard that accepts values that are own keys of the provided object.
+ * Builds a guard that accepts values that are own keys of the provided object.
  *
  * @remarks
  * Membership is tested with `Object.hasOwn`, so inherited prototype-chain keys
@@ -594,7 +594,7 @@ export function keyOf<const O extends Readonly<Record<PropertyKey, unknown>>>(
 }
 
 /**
- * Build a new guard shape by keeping only the listed keys — the structural
+ * Builds a new guard shape by keeping only the listed keys — the structural
  * equivalent of `Pick<T, K>`. Produces a shape for {@link recordOf}, not a guard.
  *
  * @param shape - The guard shape to narrow
@@ -649,7 +649,7 @@ export function pickOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 }
 
 /**
- * Build a new guard shape by removing the listed keys — the structural
+ * Builds a new guard shape by removing the listed keys — the structural
  * equivalent of `Omit<T, K>`. Produces a shape for {@link recordOf}, not a guard.
  *
  * @param shape - The guard shape to narrow
@@ -705,7 +705,7 @@ export function omitOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 }
 
 /**
- * Combine two guards with logical AND — passes only when both pass.
+ * Combines two guards with logical AND — passes only when both pass.
  *
  * @remarks
  * Use {@link whereOf} when the right side refines an already-narrowed type; use
@@ -735,7 +735,7 @@ export function andOf(
 }
 
 /**
- * Combine two guards with logical OR — passes when at least one passes. For more
+ * Combines two guards with logical OR — passes when at least one passes. For more
  * than two variants prefer {@link unionOf}.
  *
  * @param left - The guard tested first
@@ -766,7 +766,7 @@ export function orOf(
 }
 
 /**
- * Negate a guard or predicate — passes when `guard` returns `false`.
+ * Negates a guard or predicate — passes when `guard` returns `false`.
  *
  * @remarks
  * Typed as `Guard<unknown>` because `Exclude<unknown, T>` is not useful; use
@@ -789,7 +789,7 @@ export function notOf(guard: (value: unknown) => boolean): Guard<unknown> {
 }
 
 /**
- * Build a guard for `Exclude<TBase, TExcluded>` — accepts values that pass
+ * Builds a guard for `Exclude<TBase, TExcluded>` — accepts values that pass
  * `base` but not `excluded`.
  *
  * @param base - The guard establishing the accepted domain
@@ -820,7 +820,7 @@ export function complementOf<TBase, TExcluded extends TBase>(
 }
 
 /**
- * Build a guard that accepts values matching at least one of the provided
+ * Builds a guard that accepts values matching at least one of the provided
  * guards — the variadic form of {@link orOf}.
  *
  * @param guards - The guards tried in order
@@ -849,7 +849,7 @@ export function unionOf(...guards: ReadonlyArray<(value: unknown) => boolean>): 
 }
 
 /**
- * Build a guard that accepts values matching ALL of the provided guards — the
+ * Builds a guard that accepts values matching ALL of the provided guards — the
  * variadic form of {@link andOf}.
  *
  * @param guards - The guards every accepted value must satisfy
@@ -886,7 +886,7 @@ export function intersectionOf(
 }
 
 /**
- * Refine a base guard with an additional predicate that runs only when the base
+ * Refines a base guard with an additional predicate that runs only when the base
  * passes.
  *
  * @remarks
@@ -920,7 +920,7 @@ export function whereOf<T>(base: Guard<T>, predicate: (value: T) => boolean): Gu
 }
 
 /**
- * Defer guard creation until first use by calling `thunk()` on every
+ * Defers guard creation until first use by calling `thunk()` on every
  * invocation.
  *
  * @remarks
@@ -958,7 +958,7 @@ export function lazyOf<T>(thunk: () => Guard<T>): Guard<T> {
 }
 
 /**
- * Build a guard that passes when the base passes AND the projection of the value
+ * Builds a guard that passes when the base passes AND the projection of the value
  * satisfies the target guard. Still narrows to `T` (the base type) — the target
  * check is a validity constraint on a derived view, not a type transformation.
  *
@@ -1004,7 +1004,7 @@ export function transformOf<T>(
 }
 
 /**
- * Build a guard that accepts finite numbers within an inclusive `[min, max]`
+ * Builds a guard that accepts finite numbers within an inclusive `[min, max]`
  * range.
  *
  * @remarks
@@ -1037,7 +1037,7 @@ export function boundsOf(min?: number, max?: number): Guard<number> {
 }
 
 /**
- * Build a guard that accepts strings matching a regular expression.
+ * Builds a guard that accepts strings matching a regular expression.
  *
  * @remarks
  * Clones the pattern for the guard and strips the stateful `g` / `y` flags, so
@@ -1067,7 +1067,7 @@ export function matchOf(pattern: RegExp): Guard<string> {
 }
 
 /**
- * Build a guard that accepts strings satisfying optional length and pattern
+ * Builds a guard that accepts strings satisfying optional length and pattern
  * refinements — `min` / `max` length and a `pattern`.
  *
  * @remarks
@@ -1115,7 +1115,7 @@ export function stringOf(options?: StringGuardOptions): Guard<string> {
 }
 
 /**
- * Extend a guard to also allow `null`.
+ * Extends a guard to also allow `null`.
  *
  * @param guard - The guard to extend
  * @returns A guard accepting `null` and every value `guard` accepts
@@ -1133,7 +1133,7 @@ export function nullableOf<T>(guard: Guard<T>): Guard<T | null> {
 }
 
 /**
- * Extend a guard to also allow `undefined` — the optional counterpart of
+ * Extends a guard to also allow `undefined` — the optional counterpart of
  * {@link nullableOf}.
  *
  * @param guard - The guard to extend

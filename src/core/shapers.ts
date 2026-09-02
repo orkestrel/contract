@@ -55,7 +55,7 @@ import { isLiteralValue, isObject, isRegExp } from './validators.js'
 // === Primitives
 
 /**
- * Build a string {@link StringShape}.
+ * Builds a string {@link StringShape}.
  *
  * @remarks
  * A supplied pattern is captured by source and flags. The shape exposes a fresh
@@ -150,7 +150,7 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 }
 
 /**
- * Build a numeric {@link NumberShape}.
+ * Builds a numeric {@link NumberShape}.
  *
  * @param options - Optional bounds (`min` / `max`), `integer`, and `description`
  * @returns A number shape
@@ -195,7 +195,7 @@ export function numberShape(options?: NumberShapeOptions): NumberShape {
 }
 
 /**
- * Build an integer {@link NumberShape} — forces `integer: true`.
+ * Builds an integer {@link NumberShape} — forces `integer: true`.
  *
  * @remarks
  * The emitted JSON Schema uses `"type": "integer"` and the guard rejects
@@ -213,7 +213,7 @@ export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): Num
 }
 
 /**
- * Build a {@link BooleanShape}.
+ * Builds a {@link BooleanShape}.
  *
  * @param options - Optional `description`
  * @returns A boolean shape
@@ -236,7 +236,7 @@ export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
 }
 
 /**
- * Build a {@link NullShape}.
+ * Builds a {@link NullShape}.
  *
  * @param options - Optional `description`
  * @returns A null shape
@@ -259,7 +259,7 @@ export function nullShape(options?: NullShapeOptions): NullShape {
 }
 
 /**
- * Build a literal shape from a fixed set of primitive values.
+ * Builds a literal shape from a fixed set of primitive values.
  *
  * @param values - The permitted literals
  * @param options - Optional `description`
@@ -334,7 +334,7 @@ export function literalShape(
 // === Collections
 
 /**
- * Build an {@link ArrayShape} from an element shape.
+ * Builds an {@link ArrayShape} from an element shape.
  *
  * @param items - The element shape
  * @param options - Optional length bounds and `description`
@@ -385,7 +385,7 @@ export function arrayShape<S extends ContractShape>(
 }
 
 /**
- * Build an {@link ObjectShape} from a property map.
+ * Builds an {@link ObjectShape} from a property map.
  *
  * @remarks
  * Wrap any property in {@link optionalShape} to allow its absence. By default
@@ -463,7 +463,7 @@ export function objectShape<
 }
 
 /**
- * Build an open {@link ObjectShape} with no fixed properties — a dictionary.
+ * Builds an open {@link ObjectShape} with no fixed properties — a dictionary.
  *
  * @remarks
  * Every value is validated against `values`; keys are unconstrained. Equivalent
@@ -506,7 +506,7 @@ export function recordShape<S extends ContractShape>(
 // === Composition
 
 /**
- * Build a {@link UnionShape} from a list of variant shapes (`anyOf` in JSON Schema).
+ * Builds a {@link UnionShape} from a list of variant shapes (`anyOf` in JSON Schema).
  *
  * @param variants - The candidate shapes; the first match wins at runtime
  * @returns A union shape whose `Infer` is the union of the variants
@@ -528,7 +528,7 @@ export function unionShape<V extends readonly ContractShape[]>(
 }
 
 /**
- * Build a {@link UnionShape} that emits `oneOf` (exactly one match) in JSON Schema.
+ * Builds a {@link UnionShape} that emits `oneOf` (exactly one match) in JSON Schema.
  *
  * @remarks
  * Unlike {@link unionShape} (`anyOf` — at least one variant matches),
@@ -574,7 +574,7 @@ export function oneOfShape<V extends readonly ContractShape[]>(
 }
 
 /**
- * Wrap a shape so it may be absent (`undefined`).
+ * Wraps a shape so it may be absent (`undefined`).
  *
  * @remarks
  * As an {@link objectShape} property, the field becomes a true optional property
@@ -592,7 +592,7 @@ export function optionalShape<S extends ContractShape>(inner: S): OptionalShape<
 }
 
 /**
- * Wrap a shape so it may be `null`.
+ * Wraps a shape so it may be `null`.
  *
  * @param inner - The wrapped shape
  * @returns A nullable shape
@@ -614,7 +614,7 @@ export function nullableShape<S extends ContractShape>(inner: S): NullableShape<
 // === Escape hatch
 
 /**
- * Build a {@link JSONShape}.
+ * Builds a {@link JSONShape}.
  *
  * @remarks
  * The sound counterpart of {@link rawShape}: `rawShape` embeds an arbitrary
@@ -645,7 +645,7 @@ export function jsonShape(options?: JSONShapeOptions): JSONShape {
 }
 
 /**
- * Build a {@link RawShape} from a supported JSON Schema fragment.
+ * Builds a {@link RawShape} from a supported JSON Schema fragment.
  *
  * @remarks
  * For values the shape DSL can't express. The fragment is recursively checked
@@ -714,7 +714,7 @@ export function rawShape(schema: JSONSchema): RawShape {
 // user AUTHORS to mean "any JSON value"; it is never inferred.
 
 /**
- * Convert a runtime `JSONSchema` value into a validating {@link ContractShape}
+ * Converts a runtime `JSONSchema` value into a validating {@link ContractShape}
  * — the inverse of {@link compileSchema}. Unlike direct {@link rawShape}
  * construction, which rejects malformed supported-vocabulary keywords, this
  * conversion is total and widens an inexpressible input to a valid raw `{}`.

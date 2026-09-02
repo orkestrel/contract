@@ -9,7 +9,7 @@ import { ShapeValidator } from './ShapeValidator.js'
 import { ShapeCloner } from './ShapeCloner.js'
 
 /**
- * Deep-clone exact JSON data into an owned frozen snapshot.
+ * Deep-clones exact JSON data into an owned frozen snapshot.
  *
  * @remarks
  * Traverses iteratively so deeply nested input cannot exhaust the call stack.
@@ -44,7 +44,7 @@ export function cloneJSONValue(value: unknown): JSONValue {
 }
 
 /**
- * Deep-clone an exact JSON object record into an owned frozen snapshot.
+ * Deep-clones an exact JSON object record into an owned frozen snapshot.
  *
  * @remarks
  * Adds a record-root boundary to {@link cloneJSONValue}. The output is a
@@ -80,7 +80,7 @@ export function cloneJSONRecord(value: unknown): JSONRecord {
 }
 
 /**
- * Deep-clone a JSON Schema graph into an owned frozen snapshot.
+ * Deep-clones a JSON Schema graph into an owned frozen snapshot.
  *
  * @remarks
  * Walks arrays and records iteratively with a memo, preserving shared
@@ -110,7 +110,7 @@ export function cloneSchema(schema: JSONSchema): JSONSchema {
 }
 
 /**
- * Deep-clone a contract shape graph into an owned frozen snapshot.
+ * Deep-clones a contract shape graph into an owned frozen snapshot.
  *
  * @remarks
  * A fresh public {@link ShapeCloner} preserves shared-child identity while
@@ -154,7 +154,7 @@ export function cloneShape(shape: ContractShape): ContractShape {
 }
 
 /**
- * Take ownership of a contract shape node as an independent {@link cloneShape}
+ * Takes ownership of a contract shape node as an independent {@link cloneShape}
  * snapshot of its graph.
  *
  * @remarks

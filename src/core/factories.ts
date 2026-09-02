@@ -8,7 +8,7 @@ import { ContractCompiler } from './ContractCompiler.js'
 // projection, so it sits in the factory kind file its `create*` form names.
 
 /**
- * Compile a {@link ContractShape} into a {@link ContractInterface} — the six
+ * Compiles a {@link ContractShape} into a {@link ContractInterface} — the six
  * lockstep outputs from one declaration, lockstep meaning derived from one
  * owned snapshot rather than accepting the same values.
  *

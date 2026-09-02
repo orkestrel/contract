@@ -31,7 +31,7 @@ import { ValueInferer } from './ValueInferer.js'
 // documented; failed traversal is a coded refusal, never a permissive schema.
 
 /**
- * Unify a list of inferred `JSONSchema` fragments into one schema.
+ * Unifies a list of inferred `JSONSchema` fragments into one schema.
  *
  * @remarks
  * De-duplicates by {@link canonicalStringify}, then applies the one
@@ -134,7 +134,7 @@ export function unifySchemas(schemas: readonly JSONSchema[]): JSONSchema {
 // === Format inference
 
 /**
- * Classify a string against the {@link SchemaFormat} vocabulary.
+ * Classifies a string against the {@link SchemaFormat} vocabulary.
  *
  * @remarks
  * Total, pure, and deterministic. Fixed precedence, most specific first:
@@ -169,7 +169,7 @@ export function stringToFormat(value: string): SchemaFormat | undefined {
 }
 
 /**
- * Classify a list of sample values against the {@link SchemaFormat}
+ * Classifies a list of sample values against the {@link SchemaFormat}
  * vocabulary, requiring unanimity.
  *
  * @remarks
@@ -221,7 +221,7 @@ export function samplesToFormat(values: readonly unknown[]): SchemaFormat | unde
 // === Enum inference
 
 /**
- * Infer an `{ enum: [...] }` fragment for a low-cardinality, repeated
+ * Infers an `{ enum: [...] }` fragment for a low-cardinality, repeated
  * primitive slot — the multi-sample-only counterpart to
  * {@link stringToFormat} ({@link valueToSchema} never emits `enum`).
  *
@@ -316,7 +316,7 @@ export function inferPrimitiveEnum(
 // === Single-value inference
 
 /**
- * Infer a `JSONSchema` for one unknown value — the reverse direction of
+ * Infers a `JSONSchema` for one unknown value — the reverse direction of
  * {@link compileSchema}.
  *
  * @remarks
@@ -394,7 +394,7 @@ export function valueToSchema(value: unknown, options?: ValueToSchemaOptions): J
 // === Multi-sample inference
 
 /**
- * Infer a `JSONSchema` from a set of example values — the multi-example
+ * Infers a `JSONSchema` from a set of example values — the multi-example
  * counterpart of {@link valueToSchema} (e.g. inferring one schema from
  * several database rows).
  *

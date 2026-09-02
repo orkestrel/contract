@@ -80,7 +80,7 @@ import { cloneSchema, ownShape } from './cloners.js'
 import { ShapeValidator } from './ShapeValidator.js'
 
 /**
- * Lazy compiler owning one contract shape's six artifacts and their bundle.
+ * Owns one contract shape's six artifacts and their bundle, compiled lazily.
  *
  * @remarks
  * The engine every standalone `compile*` function and `createContract` now runs
@@ -225,7 +225,7 @@ export class ContractCompiler<
 	#bundle: ContractInterface<unknown> | undefined
 
 	/**
-	 * Retain a shape declaration without observing it.
+	 * Retains a shape declaration without observing it.
 	 *
 	 * @param shape - The live declaration the first getter read will own
 	 */
@@ -252,7 +252,7 @@ export class ContractCompiler<
 	}
 
 	/**
-	 * The emitted JSON Schema for the owned declaration.
+	 * Returns the emitted JSON Schema for the owned declaration.
 	 *
 	 * @remarks
 	 * A deeply frozen graph that preserves shared declaration identity: two
@@ -265,35 +265,35 @@ export class ContractCompiler<
 		return this.#enter(() => this.#buildSchema())
 	}
 
-	/** The compiled strict guard for the owned declaration. */
+	/** Returns the compiled strict guard for the owned declaration. */
 	get guard(): Guard<Infer<S>> {
 		const ready = this.#guard
 		if (ready !== undefined && this.#state.phase === 'ready') return this.#publish(ready)
 		return this.#publish(this.#enter(() => this.#buildGuard()))
 	}
 
-	/** The compiled coercive parser for the owned declaration. */
+	/** Returns the compiled coercive parser for the owned declaration. */
 	get parser(): Parser<Infer<S>> {
 		const ready = this.#parser
 		if (ready !== undefined && this.#state.phase === 'ready') return this.#publish(ready)
 		return this.#publish(this.#enter(() => this.#buildParser()))
 	}
 
-	/** The compiled strict-domain diagnostic for the owned declaration. */
+	/** Returns the compiled strict-domain diagnostic for the owned declaration. */
 	get auditor(): AuditorFunction {
 		const ready = this.#auditor
 		if (ready !== undefined && this.#state.phase === 'ready') return ready
 		return this.#enter(() => this.#buildAuditor())
 	}
 
-	/** The compiled coercive-domain diagnostic for the owned declaration. */
+	/** Returns the compiled coercive-domain diagnostic for the owned declaration. */
 	get reporter(): ReporterFunction {
 		const ready = this.#reporter
 		if (ready !== undefined && this.#state.phase === 'ready') return ready
 		return this.#enter(() => this.#buildReporter())
 	}
 
-	/** The compiled seed-data source for the owned declaration. */
+	/** Returns the compiled seed-data source for the owned declaration. */
 	get generator(): SeederFunction<Infer<S>> {
 		const ready = this.#generator
 		if (ready !== undefined && this.#state.phase === 'ready') return this.#publish(ready)
@@ -301,7 +301,7 @@ export class ContractCompiler<
 	}
 
 	/**
-	 * The frozen six-member bundle of this compiler's artifacts.
+	 * Returns the frozen six-member bundle of this compiler's artifacts.
 	 *
 	 * @remarks
 	 * Own enumerable keys `schema`, `is`, `parse`, `audit`, `explain`,

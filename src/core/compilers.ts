@@ -82,7 +82,7 @@ export function validateShape(shape: ContractShape): void {
 // === Schema
 
 /**
- * Compile a {@link ContractShape} into a JSON Schema document.
+ * Compiles a {@link ContractShape} into a JSON Schema document.
  *
  * @remarks
  * Object shapes emit `additionalProperties: false` (unless opened) and list only
@@ -110,7 +110,7 @@ export function compileSchema(shape: ContractShape): JSONSchema {
 // === Guard
 
 /**
- * Compile a {@link ContractShape} into a runtime type guard.
+ * Compiles a {@link ContractShape} into a runtime type guard.
  *
  * @remarks
  * Reuses the combinators for structural and refined shapes, including
@@ -144,7 +144,7 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
 // === Parser
 
 /**
- * Compile a {@link ContractShape} into an input parser.
+ * Compiles a {@link ContractShape} into an input parser.
  *
  * @remarks
  * Reuses the leaf parsers (`parseString` / `parseInteger` / `parseNumber` /
@@ -187,7 +187,7 @@ export function compileParser(shape: ContractShape): Parser<unknown> {
 // === Generator
 
 /**
- * Compile a {@link ContractShape} into a deterministic seed value.
+ * Compiles a {@link ContractShape} into a deterministic seed value.
  *
  * @remarks
  * The same shape and the same `random` source always produce the same value, so
@@ -230,7 +230,7 @@ export function compileGenerator(shape: ContractShape, random?: RandomFunction):
 // === Reporter
 
 /**
- * Compile a {@link ContractShape} into a structured fault report for a value —
+ * Compiles a {@link ContractShape} into a structured fault report for a value —
  * the diagnostic counterpart of {@link compileGuard} / {@link compileParser}.
  *
  * @remarks
@@ -286,7 +286,7 @@ export function compileReporter(
 }
 
 /**
- * Audit a value against the strict acceptance domain of a {@link ContractShape}.
+ * Audits a value against the strict acceptance domain of a {@link ContractShape}.
  *
  * @remarks
  * The diagnostic for the domain {@link compileGuard} and {@link compileSchema}

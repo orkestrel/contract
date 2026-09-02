@@ -13,7 +13,7 @@ import {
 import { isObject, isRecord } from './validators.js'
 
 /**
- * Stateful owner of one exact JSON snapshot operation.
+ * Owns the state of one exact JSON snapshot operation.
  *
  * @remarks
  * Construction retains the source without observing it. The first
@@ -97,7 +97,7 @@ export class JSONCloner implements JSONClonerInterface {
 	}
 
 	/**
-	 * Clone the retained source into exact, deeply frozen JSON data.
+	 * Clones the retained source into exact, deeply frozen JSON data.
 	 *
 	 * @returns The settled JSON snapshot
 	 * @throws {ContractError} When the source is inexact, cyclic, unreadable, or cloning is reentered

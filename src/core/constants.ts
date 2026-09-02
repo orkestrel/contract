@@ -1,8 +1,8 @@
 import type { ContractCode, JSONSchemaType } from './types.js'
 
 /**
- * The registry-global key used to recognize {@link ContractError} values across
- * package copies.
+ * Holds the registry-global key used to recognize {@link ContractError} values
+ * across package copies.
  *
  * @remarks
  * The descriptor stores the branded value itself. Recognition compares that
@@ -15,7 +15,7 @@ export const CONTRACT_ERROR_BRAND = Symbol.for('@orkestrel/contract.error')
 // === Captured host operations
 
 /**
- * Every host operation this package dispatches through, captured while this
+ * Captures every host operation this package dispatches through, while this
  * module evaluates.
  *
  * @remarks
@@ -81,32 +81,32 @@ export const CONTRACT_ERROR_BRAND = Symbol.for('@orkestrel/contract.error')
  * ```
  */
 export const INTRINSICS = Object.freeze({
-	/** `Object.freeze` — the operation the ownership guarantee is made of. */
+	/** Captures `Object.freeze` — the operation the ownership guarantee is made of. */
 	freeze: Object.freeze,
-	/** `Object.isFrozen` — the independent check that the guarantee actually held. */
+	/** Captures `Object.isFrozen` — the independent check that the guarantee actually held. */
 	frozen: Object.isFrozen,
-	/** `Object.keys` — the own enumerable string-key population of a snapshot. */
+	/** Captures `Object.keys` — the own enumerable string-key population of a snapshot. */
 	keys: Object.keys,
-	/** `Object.values` — the own enumerable value population of a snapshot. */
+	/** Captures `Object.values` — the own enumerable value population of a snapshot. */
 	values: Object.values,
-	/** `Object.hasOwn` — own presence, so no read leaves a container for its prototype. */
+	/** Captures `Object.hasOwn` — own presence, so no read leaves a container for its prototype. */
 	own: Object.hasOwn,
-	/** `Object.is` — `SameValue`, so a `NaN` or signed-zero comparison stays exact. */
+	/** Captures `Object.is` — `SameValue`, so a `NaN` or signed-zero comparison stays exact. */
 	same: Object.is,
-	/** `Object.create` — the null-prototype and prototype-pinned accumulators. */
+	/** Captures `Object.create` — the null-prototype and prototype-pinned accumulators. */
 	create: Object.create,
-	/** `Object.getOwnPropertyDescriptor` — value observation that runs no accessor. */
+	/** Captures `Object.getOwnPropertyDescriptor` — value observation that runs no accessor. */
 	describe: Object.getOwnPropertyDescriptor,
-	/** `Object.defineProperty` — exact placement of an own data property. */
+	/** Captures `Object.defineProperty` — exact placement of an own data property. */
 	define: Object.defineProperty,
-	/** `Object.getPrototypeOf` — the record-brand observation. */
+	/** Captures `Object.getPrototypeOf` — the record-brand observation. */
 	prototype: Object.getPrototypeOf,
-	/** `Object.getOwnPropertySymbols` — the own-symbol population. */
+	/** Captures `Object.getOwnPropertySymbols` — the own-symbol population. */
 	symbols: Object.getOwnPropertySymbols,
-	/** `Object.prototype` — the realm-local plain-record prototype identity. */
+	/** Captures `Object.prototype` — the realm-local plain-record prototype identity. */
 	base: Object.prototype,
 	/**
-	 * The proxy-visible operations, grouped because that is what separates them:
+	 * Captures the proxy-visible operations, grouped because that is what separates them:
 	 * each reports the trap's exact answer where `Object`'s flat peer above
 	 * reports the target's.
 	 *
@@ -117,57 +117,57 @@ export const INTRINSICS = Object.freeze({
 	 * call site asked for.
 	 */
 	reflect: Object.freeze({
-		/** `Reflect.get` — a proxy-visible read that reports the trap's exact answer. */
+		/** Captures `Reflect.get` — a proxy-visible read that reports the trap's exact answer. */
 		read: Reflect.get,
-		/** `Reflect.set` — a proxy-visible write. */
+		/** Captures `Reflect.set` — a proxy-visible write. */
 		write: Reflect.set,
-		/** `Reflect.ownKeys` — the complete own-key population, strings and symbols. */
+		/** Captures `Reflect.ownKeys` — the complete own-key population, strings and symbols. */
 		members: Reflect.ownKeys,
-		/** `Reflect.has` — a proxy-visible presence observation. */
+		/** Captures `Reflect.has` — a proxy-visible presence observation. */
 		present: Reflect.has,
-		/** `Reflect.getOwnPropertyDescriptor` — the reflective descriptor observation. */
+		/** Captures `Reflect.getOwnPropertyDescriptor` — the reflective descriptor observation. */
 		describe: Reflect.getOwnPropertyDescriptor,
-		/** `Reflect.defineProperty` — placement that answers instead of throwing. */
+		/** Captures `Reflect.defineProperty` — placement that answers instead of throwing. */
 		define: Reflect.defineProperty,
-		/** `Reflect.getPrototypeOf` — the reflective prototype observation. */
+		/** Captures `Reflect.getPrototypeOf` — the reflective prototype observation. */
 		prototype: Reflect.getPrototypeOf,
-		/** `Reflect.apply` — dispatch of a captured method onto its receiver. */
+		/** Captures `Reflect.apply` — dispatch of a captured method onto its receiver. */
 		apply: Reflect.apply,
-		/** `Reflect.construct` — construction with an explicit new target. */
+		/** Captures `Reflect.construct` — construction with an explicit new target. */
 		construct: Reflect.construct,
 	}),
-	/** `Number.isFinite` — the finite-bound test every numeric shape refuses on. */
+	/** Captures `Number.isFinite` — the finite-bound test every numeric shape refuses on. */
 	finite: Number.isFinite,
-	/** `Number.isInteger` — the integer-budget test the inference caps refuse on. */
+	/** Captures `Number.isInteger` — the integer-budget test the inference caps refuse on. */
 	integer: Number.isInteger,
-	/** `Number.isSafeInteger` — the safe-integer test every length bound refuses on. */
+	/** Captures `Number.isSafeInteger` — the safe-integer test every length bound refuses on. */
 	safe: Number.isSafeInteger,
-	/** `Number.isNaN` — the calendar-validity test for a parsed instant. */
+	/** Captures `Number.isNaN` — the calendar-validity test for a parsed instant. */
 	nan: Number.isNaN,
-	/** `Array.isArray` — array identity across realms. */
+	/** Captures `Array.isArray` — array identity across realms. */
 	array: Array.isArray,
-	/** `JSON.stringify` — the escaping used by previews and canonical text. */
+	/** Captures `JSON.stringify` — the escaping used by previews and canonical text. */
 	stringify: JSON.stringify,
-	/** `JSON.parse` — document decoding. */
+	/** Captures `JSON.parse` — document decoding. */
 	decode: JSON.parse,
-	/** `Math.floor` — index and quantity flooring. */
+	/** Captures `Math.floor` — index and quantity flooring. */
 	floor: Math.floor,
-	/** `Math.ceil` — index and quantity ceiling. */
+	/** Captures `Math.ceil` — index and quantity ceiling. */
 	ceil: Math.ceil,
-	/** `Math.max` — bound selection. */
+	/** Captures `Math.max` — bound selection. */
 	max: Math.max,
-	/** `Math.min` — bound selection. */
+	/** Captures `Math.min` — bound selection. */
 	min: Math.min,
-	/** `Math.imul` — the seeded generator's mixing step. */
+	/** Captures `Math.imul` — the seeded generator's mixing step. */
 	imul: Math.imul,
-	/** `String` — primitive text coercion. */
+	/** Captures `String` — primitive text coercion. */
 	text: String,
-	/** `Number` — primitive numeric coercion. */
+	/** Captures `Number` — primitive numeric coercion. */
 	numeric: Number,
-	/** `RegExp` — pattern construction from captured source and flags. */
+	/** Captures `RegExp` — pattern construction from captured source and flags. */
 	pattern: RegExp,
 	/**
-	 * `RegExp.prototype.exec` — THE pattern membership answer, dispatched through
+	 * Captures `RegExp.prototype.exec` — THE pattern membership answer, dispatched through
 	 * `apply`.
 	 *
 	 * @remarks
@@ -180,53 +180,53 @@ export const INTRINSICS = Object.freeze({
 	 * through the replaced member is not a capture.
 	 */
 	captures: RegExp.prototype.exec,
-	/** The `RegExp.prototype.source` getter — the pattern text a published schema embeds, dispatched through `apply`. */
+	/** Captures the `RegExp.prototype.source` getter — the pattern text a published schema embeds, dispatched through `apply`. */
 	expression: Object.getOwnPropertyDescriptor(RegExp.prototype, 'source')?.get,
-	/** The `RegExp.prototype.flags` getter — the flag text an owned pattern is rebuilt from, dispatched through `apply`. */
+	/** Captures the `RegExp.prototype.flags` getter — the flag text an owned pattern is rebuilt from, dispatched through `apply`. */
 	modifiers: Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags')?.get,
-	/** `Array` — array construction. */
+	/** Captures `Array` — array construction. */
 	list: Array,
-	/** `Array.prototype.sort` — the deterministic ordering every published schema is emitted in, dispatched through `apply`. */
+	/** Captures `Array.prototype.sort` — the deterministic ordering every published schema is emitted in, dispatched through `apply`. */
 	order: Array.prototype.sort,
-	/** `Map` — keyed working state. */
+	/** Captures `Map` — keyed working state. */
 	map: Map,
-	/** `Map.prototype.get` — a memo read whose answer a published graph embeds, dispatched through `apply`. */
+	/** Captures `Map.prototype.get` — a memo read whose answer a published graph embeds, dispatched through `apply`. */
 	fetch: Map.prototype.get,
-	/** `Map.prototype.set` — a memo write a published graph is later assembled from, dispatched through `apply`. */
+	/** Captures `Map.prototype.set` — a memo write a published graph is later assembled from, dispatched through `apply`. */
 	store: Map.prototype.set,
-	/** `Map.prototype.has` — a memo presence answer that decides whether a node is captured, dispatched through `apply`. */
+	/** Captures `Map.prototype.has` — a memo presence answer that decides whether a node is captured, dispatched through `apply`. */
 	keyed: Map.prototype.has,
-	/** `Map.prototype.forEach` — the only full view of a caller's `Map` that runs no iterator, dispatched through `apply`. */
+	/** Captures `Map.prototype.forEach` — the only full view of a caller's `Map` that runs no iterator, dispatched through `apply`. */
 	pairs: Map.prototype.forEach,
-	/** `Set` — membership working state. */
+	/** Captures `Set` — membership working state. */
 	set: Set,
-	/** `Set.prototype.has` — THE membership answer every published verdict rests on, dispatched through `apply`. */
+	/** Captures `Set.prototype.has` — THE membership answer every published verdict rests on, dispatched through `apply`. */
 	member: Set.prototype.has,
-	/** `Set.prototype.add` — collection of one more member, dispatched through `apply`. */
+	/** Captures `Set.prototype.add` — collection of one more member, dispatched through `apply`. */
 	admit: Set.prototype.add,
-	/** `Set.prototype.forEach` — the only full view of a caller's `Set` that runs no iterator, dispatched through `apply`. */
+	/** Captures `Set.prototype.forEach` — the only full view of a caller's `Set` that runs no iterator, dispatched through `apply`. */
 	sweep: Set.prototype.forEach,
-	/** `WeakMap` — object-keyed working state. */
+	/** Captures `WeakMap` — object-keyed working state. */
 	weakMap: WeakMap,
-	/** `WeakMap.prototype.get` — an object-keyed memo read a published graph embeds, dispatched through `apply`. */
+	/** Captures `WeakMap.prototype.get` — an object-keyed memo read a published graph embeds, dispatched through `apply`. */
 	recall: WeakMap.prototype.get,
-	/** `WeakMap.prototype.set` — an object-keyed memo write, dispatched through `apply`. */
+	/** Captures `WeakMap.prototype.set` — an object-keyed memo write, dispatched through `apply`. */
 	retain: WeakMap.prototype.set,
-	/** `WeakSet` — object-membership working state. */
+	/** Captures `WeakSet` — object-membership working state. */
 	weakSet: WeakSet,
-	/** `WeakSet.prototype.has` — the visitation answer every traversal's termination rests on, dispatched through `apply`. */
+	/** Captures `WeakSet.prototype.has` — the visitation answer every traversal's termination rests on, dispatched through `apply`. */
 	tracked: WeakSet.prototype.has,
-	/** `WeakSet.prototype.add` — entry onto the active path, dispatched through `apply`. */
+	/** Captures `WeakSet.prototype.add` — entry onto the active path, dispatched through `apply`. */
 	track: WeakSet.prototype.add,
-	/** `WeakSet.prototype.delete` — exit from the active path, dispatched through `apply`. */
+	/** Captures `WeakSet.prototype.delete` — exit from the active path, dispatched through `apply`. */
 	untrack: WeakSet.prototype.delete,
-	/** `Error` — the internal marker an engine throws into its own contained walk. */
+	/** Captures `Error` — the internal marker an engine throws into its own contained walk. */
 	error: Error,
-	/** `Date` — calendar validation of an ISO instant. */
+	/** Captures `Date` — calendar validation of an ISO instant. */
 	date: Date,
-	/** `Date.prototype.getTime` — the calendar verdict a published `format` rests on, dispatched through `apply`. */
+	/** Captures `Date.prototype.getTime` — the calendar verdict a published `format` rests on, dispatched through `apply`. */
 	instant: Date.prototype.getTime,
-	/** `Date.now` — the wall-clock reading a default generator seed is drawn from. */
+	/** Captures `Date.now` — the wall-clock reading a default generator seed is drawn from. */
 	now: Date.now,
 })
 
@@ -236,7 +236,7 @@ export const INTRINSICS = Object.freeze({
 // design).
 
 /**
- * The seven standard JSON Schema `type` names, frozen.
+ * Lists the seven standard JSON Schema `type` names, frozen.
  *
  * @remarks
  * The runtime source of truth for the {@link JSONSchemaType} vocabulary. Compose
@@ -264,7 +264,7 @@ export const JSON_SCHEMA_TYPES: readonly JSONSchemaType[] = Object.freeze([
 ])
 
 /**
- * Every declared {@link ContractCode} refusal category, frozen.
+ * Lists every declared {@link ContractCode} refusal category, frozen.
  *
  * @remarks
  * The runtime source of truth for the {@link ContractCode} vocabulary, and the
@@ -301,7 +301,7 @@ export const CONTRACT_CODES: readonly ContractCode[] = Object.freeze([
 // `ContractInterface.explain` / `ContractInterface.audit`).
 
 /**
- * The maximum number of {@link Fault} / {@link AuditFault} entries a single
+ * Caps the number of {@link Fault} / {@link AuditFault} entries a single
  * `explain` or `audit` report ever returns, frozen.
  *
  * @remarks
@@ -316,7 +316,7 @@ export const CONTRACT_CODES: readonly ContractCode[] = Object.freeze([
 export const FAULT_LIMIT = 64
 
 /**
- * The maximum character length of a {@link preview}-rendered string, frozen.
+ * Caps the character length of a {@link preview}-rendered string, frozen.
  *
  * @remarks
  * A previewed string longer than this is clipped with a trailing `…` so a
@@ -328,8 +328,7 @@ export const PREVIEW_LIMIT = 64
 // Runtime recursion and generation bounds.
 
 /**
- * The maximum active recursion or JSON container depth for runtime guards,
- * frozen.
+ * Caps the active recursion or JSON container depth for runtime guards, frozen.
  *
  * @remarks
  * Bounds explicitly recursive guards before the JavaScript call stack becomes
@@ -346,7 +345,7 @@ export const PREVIEW_LIMIT = 64
 export const GUARD_DEPTH_LIMIT = 512
 
 /**
- * The maximum supported nesting depth of a compiled contract shape, frozen.
+ * Caps the supported nesting depth of a compiled contract shape, frozen.
  *
  * @remarks
  * {@link validateShape} rejects the next level
@@ -362,8 +361,7 @@ export const GUARD_DEPTH_LIMIT = 512
 export const COMPILE_DEPTH_LIMIT = 512
 
 /**
- * The maximum number of nodes a compiled artifact may expand a shape into,
- * frozen.
+ * Caps the number of nodes a compiled artifact may expand a shape into, frozen.
  *
  * @remarks
  * A shape graph is a DAG; every compiled artifact is a TREE. A declaration may
@@ -400,7 +398,7 @@ export const COMPILE_DEPTH_LIMIT = 512
 export const COMPILE_NODE_LIMIT = 16_384
 
 /**
- * The maximum number of object keys one compiled presence mask carries, frozen.
+ * Caps the number of object keys one compiled presence mask carries, frozen.
  *
  * @remarks
  * A compiled object plan decides which declared keys a value carries. The keys
@@ -425,7 +423,7 @@ export const COMPILE_NODE_LIMIT = 16_384
 export const PRESENCE_MASK_LIMIT = 31
 
 /**
- * The maximum number of nodes one JSON snapshot may produce, frozen.
+ * Caps the number of nodes one JSON snapshot may produce, frozen.
  *
  * @remarks
  * JSON persistence is a TREE, so `cloneJSONValue` / `cloneJSONRecord`
@@ -453,7 +451,7 @@ export const PRESENCE_MASK_LIMIT = 31
 export const CLONE_NODE_LIMIT = 262_144
 
 /**
- * The maximum number of candidate-generation attempts for a constrained
+ * Caps the number of candidate-generation attempts for a constrained
  * generated value, frozen.
  *
  * @remarks
@@ -470,7 +468,7 @@ export const GENERATION_ATTEMPT_LIMIT = 32
 // Value-to-schema inference bounds (`valueToSchema` / `samplesToSchema`).
 
 /**
- * The maximum object/array nesting depth {@link valueToSchema} walks, frozen.
+ * Caps the object/array nesting depth {@link valueToSchema} walks, frozen.
  *
  * @remarks
  * Bounds inference against adversarial or cyclic runtime input — once the
@@ -489,7 +487,7 @@ export const GENERATION_ATTEMPT_LIMIT = 32
 export const INFER_DEPTH_LIMIT = 32
 
 /**
- * The default maximum number of object properties / array elements
+ * Caps by default the number of object properties / array elements
  * {@link valueToSchema} samples per container, frozen.
  *
  * @remarks
@@ -500,7 +498,7 @@ export const INFER_DEPTH_LIMIT = 32
 export const INFER_BREADTH_LIMIT = 256
 
 /**
- * The default maximum number of distinct values a multi-sample slot may hold
+ * Caps by default the number of distinct values a multi-sample slot may hold
  * before enum inference gives up and falls back to a bare `type`, frozen.
  *
  * @remarks
@@ -512,8 +510,7 @@ export const INFER_BREADTH_LIMIT = 256
 export const INFER_ENUM_LIMIT = 12
 
 /**
- * The maximum string length {@link stringToFormat} attempts to classify,
- * frozen.
+ * Caps the string length {@link stringToFormat} attempts to classify, frozen.
  *
  * @remarks
  * Bounds per-string format-detection work: a value longer than this returns
@@ -526,8 +523,8 @@ export const INFER_ENUM_LIMIT = 12
 export const FORMAT_MAX_LENGTH = 128
 
 /**
- * Pure-regex matchers backing {@link stringToFormat}'s pattern-only formats
- * (`uuid` / `email` / `uri`), frozen as data.
+ * Holds the pure-regex matchers backing {@link stringToFormat}'s pattern-only
+ * formats (`uuid` / `email` / `uri`), frozen as data.
  *
  * @remarks
  * The ISO-8601 date/time formats are NOT listed here — they additionally

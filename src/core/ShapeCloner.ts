@@ -36,7 +36,7 @@ import { SchemaCloner } from './SchemaCloner.js'
 import { ShapeValidator } from './ShapeValidator.js'
 
 /**
- * Stateful owner of one contract-shape snapshot operation.
+ * Owns the state of one contract-shape snapshot operation.
  *
  * @remarks
  * Construction retains the source without observing it. The first
@@ -133,7 +133,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 	}
 
 	/**
-	 * Clone the retained declaration into an owned, validated frozen graph.
+	 * Clones the retained declaration into an owned, validated frozen graph.
 	 *
 	 * @returns The settled contract-shape snapshot
 	 * @throws {ContractError} When the declaration is malformed, unreadable, cyclic, too deep, or cloning is reentered

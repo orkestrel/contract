@@ -2,8 +2,8 @@ import type { ContractErrorContext, ContractErrorOptions } from './types.js'
 import { CONTRACT_CODES, CONTRACT_ERROR_BRAND, INTRINSICS } from './constants.js'
 
 /**
- * Error carrying a machine-readable contract category, optional context, and
- * an exact optional cause. Omitting `cause` omits the own property; explicitly
+ * Carries a machine-readable contract category, optional context, and an exact
+ * optional cause. Omitting `cause` omits the own property; explicitly
  * supplying `cause: undefined` retains an own property with that value. Both
  * optional options are read as OWN properties, so a construction never consults
  * the caller-writable prototype chain of the container it was handed.
@@ -22,7 +22,7 @@ export class ContractError extends Error {
 	readonly context: ContractErrorContext | undefined
 
 	/**
-	 * Create a contract error.
+	 * Creates a contract error.
 	 *
 	 * @param message - Human-readable error description
 	 * @param options - Machine-readable category, optional context, and optional cause
@@ -75,7 +75,7 @@ export class ContractError extends Error {
  * property-only lookalike.
  *
  * @param value - The value to inspect
- * @returns True only for a `ContractError` instance; false otherwise
+ * @returns True if the value is a `ContractError` instance; false otherwise
  *
  * @example
  * ```ts

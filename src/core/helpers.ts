@@ -49,7 +49,7 @@ import {
 } from './validators.js'
 
 /**
- * Build a diagnostic path from an existing path and further segments, without
+ * Builds a diagnostic path from an existing path and further segments, without
  * dispatching through array iteration.
  *
  * @remarks
@@ -93,7 +93,7 @@ export function pathOf(
 }
 
 /**
- * Append every element of one array onto another, by index.
+ * Appends every element of one array onto another, by index.
  *
  * @remarks
  * The sibling of {@link pathOf}, for the other shape the same defect takes.
@@ -124,7 +124,7 @@ export function appendEntries<T>(target: T[], source: readonly T[]): void {
 }
 
 /**
- * Take at most `limit` leading elements of an array, by index.
+ * Takes at most `limit` leading elements of an array, by index.
  *
  * @remarks
  * `Array.prototype.slice` is a caller-writable member on every path that bounds
@@ -153,7 +153,7 @@ export function limitEntries<T>(entries: readonly T[], limit: number): readonly 
 }
 
 /**
- * Order two primitive keys or indices ascending.
+ * Orders two primitive keys or indices ascending.
  *
  * @remarks
  * The comparison {@link sortValues} hands to the captured sort, extracted rather
@@ -181,7 +181,7 @@ export function compareValues<T extends string | number>(left: T, right: T): num
 }
 
 /**
- * Order primitive keys or indices deterministically, on an owned copy, through
+ * Orders primitive keys or indices deterministically, on an owned copy, through
  * the captured sort.
  *
  * @remarks
@@ -216,7 +216,7 @@ export function sortValues<T extends string | number>(values: readonly T[]): rea
 // === Captured membership, visitation, and pattern reads
 
 /**
- * Collect an array's entries into a membership collection this package owns.
+ * Collects an array's entries into a membership collection this package owns.
  *
  * @remarks
  * THE builder behind every declared vocabulary, and the first half of the answer
@@ -253,12 +253,12 @@ export function collectMembers(values: readonly unknown[]): Set<unknown> {
 }
 
 /**
- * Determine whether a value is a member of a collected vocabulary, by
+ * Determines whether a value is a member of a collected vocabulary, by
  * SameValueZero.
  *
  * @param members - The vocabulary to ask, built by {@link collectMembers}
  * @param value - The value to test for membership
- * @returns `true` only when the value was collected
+ * @returns True if the value was collected; false otherwise
  *
  * @example
  * ```ts
@@ -270,7 +270,7 @@ export function matchesMember(members: ReadonlySet<unknown>, value: unknown): bo
 }
 
 /**
- * Collect one more member into a vocabulary that grows as a walk proceeds.
+ * Collects one more member into a vocabulary that grows as a walk proceeds.
  *
  * @param members - The vocabulary to extend
  * @param value - The value to admit
@@ -287,7 +287,7 @@ export function admitMember(members: Set<unknown>, value: unknown): void {
 }
 
 /**
- * Determine whether an object is already on a traversal's active path.
+ * Determines whether an object is already on a traversal's active path.
  *
  * @remarks
  * The visitation half, and the one an earlier ruling wrongly excused as safe
@@ -300,7 +300,7 @@ export function admitMember(members: Set<unknown>, value: unknown): void {
  *
  * @param visited - The active-path set this traversal owns
  * @param value - The object to test
- * @returns `true` only when the object is already on the active path
+ * @returns True if the object is already on the active path; false otherwise
  *
  * @example
  * ```ts
@@ -314,7 +314,7 @@ export function matchesVisited(visited: WeakSet<object>, value: object): boolean
 }
 
 /**
- * Record an object as entered on a traversal's active path.
+ * Records an object as entered on a traversal's active path.
  *
  * @param visited - The active-path set this traversal owns
  * @param value - The object being entered
@@ -329,7 +329,7 @@ export function admitVisited(visited: WeakSet<object>, value: object): void {
 }
 
 /**
- * Record an object as exited from a traversal's active path.
+ * Records an object as exited from a traversal's active path.
  *
  * @param visited - The active-path set this traversal owns
  * @param value - The object being exited
@@ -344,7 +344,7 @@ export function omitVisited(visited: WeakSet<object>, value: object): void {
 }
 
 /**
- * Record one node's answer at one remaining-depth allowance in a shared memo.
+ * Records one node's answer at one remaining-depth allowance in a shared memo.
  *
  * @remarks
  * A depth-bounded walk answers the same node differently depending on how much
@@ -381,7 +381,7 @@ export function retainDepth<T>(
 }
 
 /**
- * Build one empty {@link SampleMemo} node.
+ * Builds one empty {@link SampleMemo} node.
  *
  * @remarks
  * The root a multi-sample walk starts from and the node every further row
@@ -402,7 +402,7 @@ export function buildSampleMemo(): SampleMemo {
 }
 
 /**
- * Check that a value really is a {@link SampleMemo} before a walk stores a
+ * Checks that a value really is a {@link SampleMemo} before a walk stores a
  * published schema in it.
  *
  * @remarks
@@ -433,7 +433,7 @@ export function readSampleMemo(memo: SampleMemo, reader: string): SampleMemo {
 }
 
 /**
- * Build the collector a captured `forEach` sweep appends through.
+ * Builds the collector a captured `forEach` sweep appends through.
  *
  * @remarks
  * Extracted rather than written inline for the same reason
@@ -460,7 +460,7 @@ export function collectEntries(target: unknown[][]): EntryCollectorFunction {
 }
 
 /**
- * Snapshot the genuine contents of a caller's `Set` without running an iterator.
+ * Snapshots the genuine contents of a caller's `Set` without running an iterator.
  *
  * @remarks
  * `Set.prototype[Symbol.iterator]` is a caller-writable member, and every other
@@ -495,7 +495,7 @@ export function readSetEntries(value: ReadonlySet<unknown>): Result<readonly unk
 }
 
 /**
- * Snapshot the genuine entries of a caller's `Map` without running an iterator.
+ * Snapshots the genuine entries of a caller's `Map` without running an iterator.
  *
  * @remarks
  * The `Map` half of {@link readSetEntries}, with one further replaceable
@@ -524,7 +524,7 @@ export function readMapEntries(
 }
 
 /**
- * Read a regular expression's source text through the captured accessor.
+ * Reads a regular expression's source text through the captured accessor.
  *
  * @remarks
  * `RegExp.prototype.source` is an ACCESSOR on a shared prototype, so replacing
@@ -551,7 +551,7 @@ export function readPatternSource(pattern: unknown): string | undefined {
 }
 
 /**
- * Read a regular expression's flag text through the captured accessor.
+ * Reads a regular expression's flag text through the captured accessor.
  *
  * @param pattern - The candidate regular expression to read
  * @returns The pattern's flag text, or `undefined` when it cannot be read as a string
@@ -570,7 +570,7 @@ export function readPatternFlags(pattern: unknown): string | undefined {
 }
 
 /**
- * Determine whether a string is in the language of a pattern this package owns.
+ * Determines whether a string is in the language of a pattern this package owns.
  *
  * @remarks
  * The pattern-membership answer, asked exactly as {@link matchesMember} asks the
@@ -584,7 +584,7 @@ export function readPatternFlags(pattern: unknown): string | undefined {
  *
  * @param pattern - The owned pattern to apply
  * @param value - The string to test
- * @returns `true` only when the pattern genuinely matches
+ * @returns True if the pattern genuinely matches; false otherwise
  *
  * @example
  * ```ts
@@ -596,7 +596,7 @@ export function matchesPattern(pattern: RegExp, value: string): boolean {
 }
 
 /**
- * Rebuild a caller's regular expression as a stateless pattern this package
+ * Rebuilds a caller's regular expression as a stateless pattern this package
  * owns.
  *
  * @remarks
@@ -664,7 +664,7 @@ export function ownPattern(pattern: RegExp, reader: string): RegExp {
 }
 
 /**
- * Pin every own member of a class prototype as a non-configurable member —
+ * Pins every own member of a class prototype as a non-configurable member —
  * non-writable too when it is a data property — and verify the pin took.
  *
  * @remarks
@@ -737,7 +737,7 @@ export function pinMembers(prototype: object, owner: string): void {
 // === Result helpers
 
 /**
- * Invoke a callback once and synchronously capture its exact outcome as a
+ * Invokes a callback once and synchronously captures its exact outcome as a
  * {@link Result}.
  *
  * @remarks
@@ -777,7 +777,7 @@ export function attempt<T>(callback: () => T): Result<T> {
 }
 
 /**
- * Read a value through the shared containment boundary or refuse it with the
+ * Reads a value through the shared containment boundary or refuses it with the
  * contract module's uniform read diagnostic.
  *
  * @remarks
@@ -876,7 +876,7 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 }
 
 /**
- * Run a public door's whole body and publish only this package's error class.
+ * Runs a public door's whole body and publishes only this package's error class.
  *
  * @remarks
  * The other half of the answer {@link INTRINSICS} gives, and the half that does
@@ -931,10 +931,10 @@ export function contain<T>(callback: () => T, door: string, options?: ContainOpt
 }
 
 /**
- * Invoke a predicate through the sanctioned never-throw boundary.
+ * Invokes a predicate through the sanctioned never-throw boundary.
  *
  * @param callback - The predicate to invoke with no arguments
- * @returns `true` only when the callback returns the boolean value `true`
+ * @returns True if the callback returns the boolean value `true`; false otherwise
  *
  * @example
  * ```ts
@@ -947,7 +947,7 @@ export function holds(callback: () => boolean): boolean {
 }
 
 /**
- * Determine whether a value carries the plain-record brand, raising a hostile
+ * Determines whether a value carries the plain-record brand, raising a hostile
  * prototype observation instead of answering it.
  *
  * @remarks
@@ -1001,7 +1001,7 @@ export function holds(callback: () => boolean): boolean {
  * every guard consumer and contains that throw as `false`.
  *
  * @param value - The value whose record brand to inspect
- * @returns `true` only when the value is a plain record
+ * @returns True if the value is a plain record; false otherwise
  * @throws The exact value thrown by a hostile brand observation
  *
  * @example
@@ -1044,7 +1044,7 @@ export function matchesRecordBrand(value: unknown): boolean {
 }
 
 /**
- * Snapshot an array through its reflected own-index population.
+ * Snapshots an array through its reflected own-index population.
  *
  * @remarks
  * Reads `length` once and one reflected own-key population, then corroborates
@@ -1139,7 +1139,7 @@ export function readArrayEntries<T>(value: readonly T[]): Result<ArrayRead<T>> {
 }
 
 /**
- * Snapshot a guard shape and its optional-key mode for a shape combinator.
+ * Snapshots a guard shape and its optional-key mode for a shape combinator.
  *
  * @remarks
  * A null-prototype record plus its own key list is used instead of a `Map`.
@@ -1206,7 +1206,7 @@ export function readGuardShape(
 }
 
 /**
- * Snapshot an object's own enumerable string keys through a total boundary.
+ * Snapshots an object's own enumerable string keys through a total boundary.
  *
  * @remarks
  * This is the package-wide runtime property view used by compiled object
@@ -1235,7 +1235,7 @@ export function enumerableKeys(value: object): readonly string[] | undefined {
 }
 
 /**
- * Validate and snapshot a shape-builder options record through every reflective
+ * Validates and snapshots a shape-builder options record through every reflective
  * operation the builder relies on.
  *
  * @remarks
@@ -1322,7 +1322,7 @@ export function readOptions<T extends object>(
 }
 
 /**
- * Draw and validate one generator random sample.
+ * Draws and validates one generator random sample.
  *
  * @param random - The caller-supplied random source
  * @param shape - The shape category consuming the sample
@@ -1359,7 +1359,7 @@ export function drawRandom(random: RandomFunction, shape: string): number {
 // === Record-field access
 
 /**
- * Resolve a (possibly nested) field value from a record by a key or key path.
+ * Resolves a (possibly nested) field value from a record by a key or key path.
  *
  * @remarks
  * A single `string` is ONE key (never split on `.`, so dotted keys are safe); a
@@ -1401,7 +1401,7 @@ export function resolveField(record: Readonly<Record<string, unknown>>, path: Fi
 }
 
 /**
- * Determine whether a readable value stays within the fixed JSON container-depth limit.
+ * Determines whether a readable value stays within the fixed JSON container-depth limit.
  *
  * @remarks
  * Counts array and plain-record containers on each active root-to-value path.
@@ -1420,7 +1420,7 @@ export function resolveField(record: Readonly<Record<string, unknown>>, path: Fi
  * visits through a public guard.
  *
  * @param value - The value whose readable container depth to inspect
- * @returns `true` when no active path exceeds {@link GUARD_DEPTH_LIMIT}
+ * @returns True if no active path exceeds {@link GUARD_DEPTH_LIMIT}; false otherwise
  *
  * @example
  * ```ts
@@ -1489,7 +1489,7 @@ export function matchesJSONDepth(value: unknown): boolean {
 }
 
 /**
- * Match an unknown value against the recursive JSON value structure.
+ * Matches an unknown value against the recursive JSON value structure.
  *
  * @remarks
  * The caller-owned ancestor set tracks only the active traversal path, so
@@ -1520,7 +1520,7 @@ export function matchesJSONDepth(value: unknown): boolean {
  *
  * @param entry - The value to inspect
  * @param ancestors - Objects on the active traversal path
- * @returns `true` when the value is a cycle-free JSON value
+ * @returns True if the value is a cycle-free JSON value; false otherwise
  *
  * @example
  * ```ts
@@ -1591,7 +1591,7 @@ export function matchesJSONValue(entry: unknown, ancestors: WeakSet<object>): en
 // === Random
 
 /**
- * Build a deterministic pseudo-random source seeded from a single number.
+ * Builds a deterministic pseudo-random source seeded from a single number.
  *
  * @remarks
  * A mulberry32 generator — the same seed always yields the same sequence, so
@@ -1626,7 +1626,7 @@ export function seededRandom(seed: number): RandomFunction {
 }
 
 /**
- * Count the enumerable own-symbol keys on a value.
+ * Counts the enumerable own-symbol keys on a value.
  *
  * @remarks
  * String keys are ignored — only `Object.getOwnPropertySymbols` entries whose
@@ -1667,7 +1667,7 @@ export function enumerableSymbolCount(value: object): number {
 }
 
 /**
- * Narrow a compiled {@link JSONSchema} down to the open `Readonly<Record<string, unknown>>` shape
+ * Narrows a compiled {@link JSONSchema} down to the open `Readonly<Record<string, unknown>>` shape
  * tool definitions advertise as `parameters` — through the {@link isRecord} boundary guard, never
  * an assertion (AGENTS §14).
  *
@@ -1704,7 +1704,7 @@ export function schemaToParameters(
 }
 
 /**
- * Wrap a non-object `JSONSchema` root in a single-property object schema, so
+ * Wraps a non-object `JSONSchema` root in a single-property object schema, so
  * an inferred primitive/array/union schema can flow into {@link schemaToParameters}
  * as an MCP-compatible `inputSchema`.
  *
@@ -1750,7 +1750,7 @@ export function schemaToObject(schema: JSONSchema): JSONSchema {
 // === Canonicalization
 
 /**
- * Encode one non-container value the way JSON encodes it, or `undefined` when
+ * Encodes one non-container value the way JSON encodes it, or `undefined` when
  * JSON cannot encode it at all.
  *
  * @remarks
@@ -1776,7 +1776,7 @@ export function encodeLeaf(value: unknown): string | undefined {
 }
 
 /**
- * Render a value as a deterministic, key-sorted JSON string — or `undefined`
+ * Renders a value as a deterministic, key-sorted JSON string — or `undefined`
  * when it has no faithful JSON encoding.
  *
  * @remarks
@@ -1972,7 +1972,7 @@ export function matchesISOInstant(value: string): boolean {
 }
 
 /**
- * Classify an already-bounded string against the pattern-only and
+ * Classifies an already-bounded string against the pattern-only and
  * calendar-checked {@link SchemaFormat} vocabulary.
  *
  * @remarks
@@ -2015,7 +2015,7 @@ export function classifyFormat(value: string): SchemaFormat | undefined {
 // === Schema keyword derivation
 
 /**
- * Derive `min`/`max` shape bounds from a pair of non-negative-integer JSON
+ * Derives `min`/`max` shape bounds from a pair of non-negative-integer JSON
  * Schema length keywords (`minLength`/`maxLength`, `minItems`/`maxItems`).
  *
  * @remarks
@@ -2050,7 +2050,7 @@ export function deriveLengthBounds(min: unknown, max: unknown): BoundsRead {
 }
 
 /**
- * Derive `min`/`max` shape bounds from a pair of finite-number JSON Schema
+ * Derives `min`/`max` shape bounds from a pair of finite-number JSON Schema
  * range keywords (`minimum`/`maximum`).
  *
  * @remarks
@@ -2127,7 +2127,7 @@ export function sanitizeBudget(value: number | undefined, fallback: number): num
 }
 
 /**
- * Resolve a caller's depth budget to one the traversal can actually survive.
+ * Resolves a caller's depth budget to one the traversal can actually survive.
  *
  * @remarks
  * {@link sanitizeBudget} decides the SHAPE of a budget and deliberately lets any
@@ -2159,7 +2159,7 @@ export function sanitizeDepth(value: number | undefined): number {
 // === Reporting
 
 /**
- * Render a short, safe, TOTAL preview of an unknown value for a {@link Fault}'s
+ * Renders a short, safe, TOTAL preview of an unknown value for a {@link Fault}'s
  * `received` field.
  *
  * @remarks
@@ -2486,7 +2486,7 @@ export function buildArrayFaults(
 }
 
 /**
- * Select the report of the variant that came closest to matching.
+ * Selects the report of the variant that came closest to matching.
  *
  * @remarks
  * The union summary both diagnostic doors append their closest variant's faults
@@ -2524,7 +2524,7 @@ export function selectClosestFaults<T extends AuditFault>(
 }
 
 /**
- * Project a {@link ContractShape} to the {@link FaultKind} it describes.
+ * Projects a {@link ContractShape} to the {@link FaultKind} it describes.
  *
  * @remarks
  * A structural mapping used by {@link compileReporter} to fill a `Fault`'s
@@ -2589,7 +2589,7 @@ export function shapeToKind(shape: ContractShape): FaultKind {
 }
 
 /**
- * Refuse a validated declaration whose compiled expansion exceeds
+ * Refuses a validated declaration whose compiled expansion exceeds
  * {@link COMPILE_NODE_LIMIT}.
  *
  * @remarks

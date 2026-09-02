@@ -25,7 +25,7 @@ import {
 import { stringToFormat, unifySchemas } from './inferers.js'
 
 /**
- * Stateful owner of one single-value inference walk.
+ * Owns the state of one single-value inference walk.
  *
  * @remarks
  * The engine behind `valueToSchema`, and the per-sample classifier
@@ -68,7 +68,7 @@ export class ValueInferer {
 	}
 
 	/**
-	 * Infer a JSON Schema fragment for the retained value.
+	 * Infers a JSON Schema fragment for the retained value.
 	 *
 	 * @returns The inferred schema fragment
 	 * @throws When a traversed container cannot be read

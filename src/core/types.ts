@@ -1,7 +1,7 @@
 // === Result
 
 /**
- * Discriminated success branch of a {@link Result}.
+ * Represents the discriminated success branch of a {@link Result}.
  *
  * @remarks
  * Used for operations that can succeed or fail without throwing.
@@ -12,7 +12,7 @@ export interface Success<T> {
 }
 
 /**
- * Discriminated failure branch of a {@link Result}.
+ * Represents the discriminated failure branch of a {@link Result}.
  *
  * @remarks
  * Carries the error value when an operation does not succeed.
@@ -23,7 +23,8 @@ export interface Failure<E> {
 }
 
 /**
- * Discriminated union for operations that can succeed or fail without throwing.
+ * Represents a discriminated union for operations that can succeed or fail
+ * without throwing.
  *
  * @remarks
  * The failure channel defaults to `unknown`. Operations with a guaranteed
@@ -34,7 +35,7 @@ export type Result<T, E = unknown> = Success<T> | Failure<E>
 // === Record access
 
 /**
- * A field path into a record: a single key, or an ordered list of keys to
+ * Addresses one field in a record: a single key, or an ordered list of keys to
  * descend through nested objects.
  *
  * @remarks
@@ -45,7 +46,7 @@ export type FieldPath = string | readonly string[]
 
 // === Errors
 
-/** Machine-readable category carried by a {@link ContractError}. */
+/** Names the machine-readable category carried by a {@link ContractError}. */
 export type ContractCode =
 	/** Identifies a bound contract error. */
 	| 'bound'
@@ -74,40 +75,40 @@ export type ContractCode =
 	/** Identifies a shape whose compiled expansion exceeds the emitted-node limit. */
 	| 'expansion'
 
-/** Optional structured details carried by a {@link ContractError}. */
+/** Represents the optional structured details carried by a {@link ContractError}. */
 export interface ContractErrorContext {
-	/** Location associated with the error. */
+	/** Holds the location associated with the error. */
 	readonly path?: FieldPath
-	/** Shape label associated with the error. */
+	/** Holds the shape label associated with the error. */
 	readonly shape?: string
-	/** Numeric or textual limit associated with the error. */
+	/** Holds the numeric or textual limit associated with the error. */
 	readonly limit?: number | string
-	/** Received-value description associated with the error. */
+	/** Holds the received-value description associated with the error. */
 	readonly received?: string
 }
 
-/** Construction options for a {@link ContractError}. */
+/** Represents the construction options for a {@link ContractError}. */
 export interface ContractErrorOptions {
-	/** Machine-readable error category. */
+	/** Names the machine-readable error category. */
 	readonly code: ContractCode
-	/** Optional structured error details. */
+	/** Holds optional structured error details. */
 	readonly context?: ContractErrorContext
-	/** Optional originating thrown value. */
+	/** Holds the optional originating thrown value. */
 	readonly cause?: unknown
 }
 
-/** Optional diagnostic metadata for a required read. */
+/** Represents optional diagnostic metadata for a required read. */
 export interface ReadValueOptions {
-	/** Argument/domain noun used in the refusal message. */
+	/** Names the argument/domain noun used in the refusal message. */
 	readonly subject?: string
-	/** Machine-readable refusal category. */
+	/** Names the machine-readable refusal category. */
 	readonly code?: ContractCode
-	/** Structured location and domain details retained by the refusal. */
+	/** Holds the structured location and domain details retained by the refusal. */
 	readonly context?: ContractErrorContext
 }
 
 /**
- * Optional diagnostic metadata for a public door's containment boundary.
+ * Represents optional diagnostic metadata for a public door's containment boundary.
  *
  * @remarks
  * Deliberately narrower than {@link ReadValueOptions}: a contained door's
@@ -116,14 +117,14 @@ export interface ReadValueOptions {
  * the caller a lie the type checker will not catch.
  */
 export interface ContainOptions {
-	/** Machine-readable refusal category. */
+	/** Names the machine-readable refusal category. */
 	readonly code?: ContractCode
-	/** Structured location and domain details retained by the refusal. */
+	/** Holds the structured location and domain details retained by the refusal. */
 	readonly context?: ContractErrorContext
 }
 
 /**
- * Owned result of reading one array through its reflected own-index lens.
+ * Represents the owned result of reading one array through its reflected own-index lens.
  *
  * @remarks
  * {@link entries} is a frozen native array with actual holes: reading a hole
@@ -131,14 +132,14 @@ export interface ContainOptions {
  * consumer must first require {@link dense} or carry an independent work bound.
  */
 export interface ArrayRead<T = unknown> {
-	/** Frozen native entries in index order, retaining sparse positions as holes. */
+	/** Holds the frozen native entries in index order, retaining sparse positions as holes. */
 	readonly entries: ReadonlyArray<T | undefined>
-	/** Whether every index from zero through length minus one was reflected. */
+	/** Reports whether every index from zero through length minus one was reflected. */
 	readonly dense: boolean
 }
 
 /**
- * Owned result of reading one guard shape and its optional-key mode.
+ * Represents the owned result of reading one guard shape and its optional-key mode.
  *
  * @remarks
  * A null-prototype record plus its own key list, never a `Map`: the declared-key
@@ -146,18 +147,18 @@ export interface ArrayRead<T = unknown> {
  * iteration are caller-writable members on that path.
  */
 export interface GuardShapeRead {
-	/** The owned guards, keyed by their own string declaration name. */
+	/** Holds the owned guards, keyed by their own string declaration name. */
 	readonly guards: Readonly<Record<string, Guard<unknown> | undefined>>
-	/** The declared names in own-key order. */
+	/** Lists the declared names in own-key order. */
 	readonly names: readonly string[]
-	/** Membership of the keys the combinator treats as optional. */
+	/** Holds the membership of the keys the combinator treats as optional. */
 	readonly optional: ReadonlySet<unknown>
-	/** Membership of every declared key, for exactness checks. */
+	/** Holds the membership of every declared key, for exactness checks. */
 	readonly vocabulary: ReadonlySet<unknown>
 }
 
 /**
- * Derived numeric bounds pair, either member absent.
+ * Represents a derived numeric bounds pair, either member absent.
  *
  * @remarks
  * The reduced result of a JSON Schema length or range keyword pair. A malformed
@@ -165,14 +166,14 @@ export interface GuardShapeRead {
  * so an absent member always widens rather than narrows.
  */
 export interface BoundsRead {
-	/** The derived lower bound, absent when the keyword was malformed or contradictory. */
+	/** Holds the derived lower bound, absent when the keyword was malformed or contradictory. */
 	readonly min?: number
-	/** The derived upper bound, absent when the keyword was malformed or contradictory. */
+	/** Holds the derived upper bound, absent when the keyword was malformed or contradictory. */
 	readonly max?: number
 }
 
 /**
- * The collector a captured `forEach` sweep invokes per entry.
+ * Represents the collector a captured `forEach` sweep invokes per entry.
  *
  * @remarks
  * Both the `Set` and `Map` sweeps hand the callback `(value, key)`; a `Set`
@@ -182,25 +183,25 @@ export type EntryCollectorFunction = (value: unknown, key: unknown) => void
 
 // === Guards
 
-/** A runtime type guard: returns `true` when `value` satisfies `T` and narrows it. */
+/** Represents a runtime type guard: returns `true` when `value` satisfies `T` and narrows it. */
 export type Guard<T> = (value: unknown) => value is T
 
-/** Extract the guarded type `T` from a `Guard<T>`. */
+/** Extracts the guarded type `T` from a `Guard<T>`. */
 export type GuardType<G> = G extends Guard<infer T> ? T : never
 
 /**
- * A mapping of string keys to guards.
+ * Represents a mapping of string keys to guards.
  *
  * @remarks
  * The shape parameter for the `recordOf`, `pickOf`, and `omitOf` combinators.
  */
 export type GuardsShape = Readonly<Record<string, Guard<unknown>>>
 
-/** Resolve a {@link GuardsShape} to a readonly object type of its guarded property types. */
+/** Resolves a {@link GuardsShape} to a readonly object type of its guarded property types. */
 export type FromGuards<G extends GuardsShape> = Readonly<{ [K in keyof G]: GuardType<G[K]> }>
 
 /**
- * Like {@link FromGuards}, but every key listed in `K` becomes a true optional
+ * Mirrors {@link FromGuards}, but every key listed in `K` becomes a true optional
  * member (`?`) rather than a required key widened with `| undefined`.
  *
  * @remarks
@@ -217,19 +218,19 @@ export type OptionalFromGuards<S extends GuardsShape, K extends ReadonlyArray<ke
 	}
 >
 
-/** Map a tuple of element guards to a readonly tuple of their guarded types. */
+/** Maps a tuple of element guards to a readonly tuple of their guarded types. */
 export type TupleFromGuards<Ts extends ReadonlyArray<Guard<unknown>>> = Readonly<{
 	[K in keyof Ts]: GuardType<Ts[K]>
 }>
 
-/** Convert a union type to an intersection type. */
+/** Converts a union type to an intersection type. */
 export type UnionToIntersection<U> = (U extends unknown ? (k: U) => void : never) extends (
 	k: infer I,
 ) => void
 	? I
 	: never
 
-/** Intersection of the types guarded by a tuple of guards — backs `intersectionOf`. */
+/** Intersects the types guarded by a tuple of guards — backs `intersectionOf`. */
 export type IntersectionFromGuards<Gs extends ReadonlyArray<Guard<unknown>>> = UnionToIntersection<
 	GuardType<Gs[number]>
 >
@@ -237,7 +238,7 @@ export type IntersectionFromGuards<Gs extends ReadonlyArray<Guard<unknown>>> = U
 // === Parsers
 
 /**
- * A parser: coerces an unknown value to `T`, or returns `undefined`.
+ * Coerces an unknown value to `T`, or returns `undefined`.
  *
  * @remarks
  * The runtime parallel of {@link Guard}. A parser pairs soundly with the guard
@@ -249,7 +250,7 @@ export type Parser<T> = (value: unknown) => T | undefined
 // === Constructors
 
 /**
- * Any constructor signature that produces instances of `T`.
+ * Represents a constructor signature that produces instances of `T`.
  *
  * @remarks
  * Uses `unknown[]` parameters to stay maximally assignable from specific
@@ -259,27 +260,27 @@ export type AnyConstructor<T = unknown> = new (...args: unknown[]) => T
 
 // === Functions
 
-/** A function accepting any arguments and returning `unknown`. */
+/** Represents a function accepting any arguments and returning `unknown`. */
 export type AnyFunction = (...args: unknown[]) => unknown
 
-/** An async function accepting any arguments and returning a `Promise`. */
+/** Represents an async function accepting any arguments and returning a `Promise`. */
 export type AnyAsyncFunction = (...args: unknown[]) => Promise<unknown>
 
-/** A function accepting zero arguments and returning `unknown`. */
+/** Represents a function accepting zero arguments and returning `unknown`. */
 export type ZeroArgFunction = () => unknown
 
-/** An async function accepting zero arguments and returning a `Promise`. */
+/** Represents an async function accepting zero arguments and returning a `Promise`. */
 export type ZeroArgAsyncFunction = () => Promise<unknown>
 
 // === Literal values
 
-/** A string, number, or boolean literal value. */
+/** Represents a string, number, or boolean literal. */
 export type LiteralValue = string | number | boolean
 
 // === JSON
 
 /**
- * A primitive JSON value — the flat leaf of any JSON document.
+ * Represents a primitive JSON value — the flat leaf of any JSON document.
  *
  * @remarks
  * The recursive {@link JSONValue} tree type is shipped for consumers that need a
@@ -291,7 +292,7 @@ export type LiteralValue = string | number | boolean
 export type JSONPrimitive = string | number | boolean | null
 
 /**
- * A readonly string-keyed JSON object record.
+ * Represents a readonly string-keyed JSON object record.
  *
  * @remarks
  * Runtime ownership through
@@ -306,7 +307,7 @@ export type JSONPrimitive = string | number | boolean | null
 export type JSONRecord = { readonly [key: string]: JSONValue }
 
 /**
- * A recursive JSON value — primitives, arrays, and object records.
+ * Represents a recursive JSON value — primitives, arrays, and object records.
  *
  * @remarks
  * The static type admits any `number` because TypeScript cannot express
@@ -321,7 +322,7 @@ export type JSONRecord = { readonly [key: string]: JSONValue }
 export type JSONValue = JSONPrimitive | readonly JSONValue[] | JSONRecord
 
 /**
- * Stateful owner of one exact JSON snapshot operation.
+ * Owns the state of one exact JSON snapshot operation.
  *
  * @remarks
  * Construction retains the source without observing it. The first
@@ -331,7 +332,7 @@ export type JSONValue = JSONPrimitive | readonly JSONValue[] | JSONRecord
  */
 export interface JSONClonerInterface {
 	/**
-	 * Clone the retained source into exact, deeply frozen JSON data.
+	 * Clones the retained source into exact, deeply frozen JSON data.
 	 *
 	 * @returns The settled JSON snapshot
 	 * @throws {ContractError} When the source is inexact, cyclic, unreadable, or cloning is reentered
@@ -340,7 +341,7 @@ export interface JSONClonerInterface {
 }
 
 /**
- * Stateful owner of one JSON Schema snapshot operation.
+ * Owns the state of one JSON Schema snapshot operation.
  *
  * @remarks
  * Construction retains the schema without observing it. The first
@@ -351,7 +352,7 @@ export interface JSONClonerInterface {
  */
 export interface SchemaClonerInterface {
 	/**
-	 * Clone the retained schema into a deeply frozen identity-preserving graph.
+	 * Clones the retained schema into a deeply frozen identity-preserving graph.
 	 *
 	 * @returns The settled JSON Schema snapshot
 	 * @throws {ContractError} When traversal is unreadable or cloning is reentered
@@ -360,8 +361,8 @@ export interface SchemaClonerInterface {
 }
 
 /**
- * One captured property of an object shape, held as an ordered entry rather
- * than as a `Map` pair.
+ * Represents one captured property of an object shape, held as an ordered entry
+ * rather than as a `Map` pair.
  *
  * @remarks
  * The published property population of a cloned object shape is decided by
@@ -372,14 +373,14 @@ export interface SchemaClonerInterface {
  * property inside a snapshot the package publishes as exact.
  */
 export interface ShapeProperty {
-	/** The own enumerable key the property was captured under. */
+	/** Holds the own enumerable key the property was captured under. */
 	readonly key: string
-	/** The captured child shape, absent when the declaration held no shape. */
+	/** Holds the captured child shape, absent when the declaration held no shape. */
 	readonly child: ContractShape | undefined
 }
 
 /**
- * Stateful owner of one contract-shape snapshot operation.
+ * Owns the state of one contract-shape snapshot operation.
  *
  * @remarks
  * Construction retains the shape without observing it. The first
@@ -391,7 +392,7 @@ export interface ShapeProperty {
  */
 export interface ShapeClonerInterface {
 	/**
-	 * Clone the retained shape into a deeply frozen identity-preserving graph.
+	 * Clones the retained shape into a deeply frozen identity-preserving graph.
 	 *
 	 * @returns The settled contract-shape snapshot
 	 * @throws {ContractError} When the declaration is malformed, unreadable, cyclic, too deep, or cloning is reentered
@@ -399,7 +400,7 @@ export interface ShapeClonerInterface {
 	clone(): ContractShape
 }
 
-/** The seven standard JSON Schema `type` names. */
+/** Lists the seven standard JSON Schema `type` names. */
 export type JSONSchemaType =
 	| 'null'
 	| 'boolean'
@@ -410,8 +411,8 @@ export type JSONSchemaType =
 	| 'string'
 
 /**
- * A JSON Schema fragment — the supported keyword vocabulary the contract
- * compiler emits and {@link RawShape} validates before embedding.
+ * Represents a JSON Schema fragment — the supported keyword vocabulary the
+ * contract compiler emits and {@link RawShape} validates before embedding.
  *
  * @remarks
  * Intentionally lean (not the full ~50-keyword vocabulary): it carries only the
@@ -444,7 +445,7 @@ export interface JSONSchema {
 }
 
 /**
- * The closed set of string formats {@link stringToFormat} recognizes.
+ * Lists the closed set of string formats {@link stringToFormat} recognizes.
  *
  * @remarks
  * Lowercase spec literals, matching the JSON Schema `format` vocabulary for
@@ -456,7 +457,7 @@ export interface JSONSchema {
 export type SchemaFormat = 'date-time' | 'date' | 'time' | 'uuid' | 'email' | 'uri'
 
 /**
- * The per-walk budgets {@link ValueToSchemaOptions} groups under `limits`.
+ * Holds the per-walk budgets {@link ValueToSchemaOptions} groups under `limits`.
  *
  * @remarks
  * `depth` is held at {@link INFER_DEPTH_LIMIT} through {@link sanitizeDepth},
@@ -471,7 +472,7 @@ export interface ValueToSchemaLimits {
 }
 
 /**
- * Options for {@link valueToSchema} / {@link samplesToSchema}.
+ * Groups the options for {@link valueToSchema} / {@link samplesToSchema}.
  *
  * @remarks
  * The reverse direction of {@link compileSchema}: instead of emitting a
@@ -495,8 +496,8 @@ export interface ValueToSchemaOptions {
 }
 
 /**
- * The per-walk memo the multi-sample walk behind {@link samplesToSchema} owns,
- * keyed by the ORDERED identities of the rows a slot collected.
+ * Holds the per-walk memo the multi-sample walk behind {@link samplesToSchema}
+ * owns, keyed by the ORDERED identities of the rows a slot collected.
  *
  * @remarks
  * `rows` is one step of a prefix chain: following the slot's rows in order
@@ -526,8 +527,8 @@ export interface SampleMemo {
 // === Contract shapes
 
 /**
- * A contract shape — a declarative description of a value, built with the shape
- * builders and compiled into a guard, a parser, a JSON Schema, and a generator.
+ * Describes a value declaratively — a declaration the shape builders build and
+ * the compilers turn into a guard, a parser, a JSON Schema, and a generator.
  *
  * @remarks
  * A discriminated union keyed on `type`. Shapes nest (an `ArrayShape` holds an
@@ -548,20 +549,20 @@ export type ContractShape =
 	| JSONShape
 	| RawShape
 
-/** A string shape with optional length and pattern constraints. */
+/** Describes a string with optional length and pattern constraints. */
 export interface StringShape {
 	readonly type: 'string'
 	readonly min?: number
 	readonly max?: number
 	/**
-	 * An unflagged pattern constraint; use inline pattern constructs for flag-like behavior.
+	 * Holds an unflagged pattern constraint; use inline pattern constructs for flag-like behavior.
 	 * Builders and cloners expose an owned fresh frozen zero-state copy per read.
 	 */
 	readonly pattern?: RegExp
 	readonly description?: string
 }
 
-/** A numeric shape with optional bounds; `integer` restricts to whole numbers. */
+/** Describes a number with optional bounds; `integer` restricts to whole numbers. */
 export interface NumberShape {
 	readonly type: 'number'
 	readonly min?: number
@@ -570,26 +571,26 @@ export interface NumberShape {
 	readonly description?: string
 }
 
-/** A boolean shape — accepts only `true` or `false`. */
+/** Describes a boolean — accepts only `true` or `false`. */
 export interface BooleanShape {
 	readonly type: 'boolean'
 	readonly description?: string
 }
 
-/** A null shape — accepts only `null`. */
+/** Describes a null value — accepts only `null`. */
 export interface NullShape {
 	readonly type: 'null'
 	readonly description?: string
 }
 
-/** A literal shape — accepts exactly one of a fixed set of primitive values. */
+/** Describes a literal — accepts exactly one of a fixed set of primitive values. */
 export interface LiteralShape<T extends readonly LiteralValue[] = readonly LiteralValue[]> {
 	readonly type: 'literal'
 	readonly values: T
 	readonly description?: string
 }
 
-/** An array shape with an element shape and optional length bounds. */
+/** Describes an array with an element shape and optional length bounds. */
 export interface ArrayShape<S extends ContractShape = ContractShape> {
 	readonly type: 'array'
 	readonly items: S
@@ -599,7 +600,7 @@ export interface ArrayShape<S extends ContractShape = ContractShape> {
 }
 
 /**
- * An object shape — a map of property names to child shapes.
+ * Describes an object — a map of property names to child shapes.
  *
  * @remarks
  * A property whose shape is an {@link OptionalShape} may be absent; all others
@@ -622,7 +623,7 @@ export interface ObjectShape<
 }
 
 /**
- * A union shape — accepts a value matching any one variant (first match wins).
+ * Describes a union — accepts a value matching any one variant (first match wins).
  *
  * @remarks
  * `mode` selects the emitted JSON Schema keyword and runtime matching rule:
@@ -636,20 +637,20 @@ export interface UnionShape<V extends readonly ContractShape[] = readonly Contra
 	readonly description?: string
 }
 
-/** An optional wrapper — the inner shape may be absent (`undefined`). */
+/** Wraps an inner shape that may be absent (`undefined`). */
 export interface OptionalShape<S extends ContractShape = ContractShape> {
 	readonly type: 'optional'
 	readonly inner: S
 }
 
-/** A nullable wrapper — the inner shape may be `null`. */
+/** Wraps an inner shape that may be `null`. */
 export interface NullableShape<S extends ContractShape = ContractShape> {
 	readonly type: 'nullable'
 	readonly inner: S
 }
 
 /**
- * A JSON passthrough shape — accepts any JSON value.
+ * Describes a JSON passthrough — accepts any JSON value.
  *
  * @remarks
  * The compiled guard is a sound {@link isJSONValue} check (rejecting cycles,
@@ -664,7 +665,7 @@ export interface JSONShape {
 }
 
 /**
- * A validated raw JSON Schema passthrough — embeds a supported schema fragment directly.
+ * Describes a validated raw JSON Schema passthrough — embeds a supported schema fragment directly.
  *
  * @remarks
  * For values the shape DSL can't express. The fragment is checked recursively
@@ -685,7 +686,7 @@ export interface RawShape {
 }
 
 /**
- * Infer the static TypeScript type a {@link ContractShape} describes.
+ * Resolves the static TypeScript type a {@link ContractShape} describes.
  *
  * @remarks
  * Structural and recursive: optional object fields surface as optional
@@ -750,7 +751,7 @@ export type Infer<S extends ContractShape> = [ContractShape] extends [S]
 												: unknown
 
 /**
- * {@link Infer} of an object shape's `properties` — the required keys, plus the
+ * Resolves {@link Infer} of an object shape's `properties` — the required keys, plus the
  * `optional`-wrapped keys as optional members, plus the index-signature
  * contribution of `additionalProperties` (see {@link InferIndex}).
  *
@@ -789,7 +790,7 @@ export type InferObject<
 			InferOpenIndex<A>
 
 /**
- * The index-signature contribution of a pure record shape's `additionalProperties`
+ * Computes the index-signature contribution of a pure record shape's `additionalProperties`
  * — the `recordShape` case, where `properties` is empty.
  *
  * @remarks
@@ -815,7 +816,7 @@ export type InferIndex<A extends boolean | ContractShape> = [A] extends [false]
 			: unknown
 
 /**
- * The index-signature contribution of a MIXED object shape's
+ * Computes the index-signature contribution of a MIXED object shape's
  * `additionalProperties` — one with both fixed `properties` and an open tail.
  *
  * @remarks
@@ -842,16 +843,16 @@ export type InferOpenIndex<A extends boolean | ContractShape> = [A] extends [fal
 			? { readonly [k: string]: unknown }
 			: unknown
 
-/** {@link Infer} of a union shape's `variants` — the union of each variant's inferred type. */
+/** Resolves {@link Infer} of a union shape's `variants` — the union of each variant's inferred type. */
 export type InferUnion<V extends readonly ContractShape[]> =
 	V extends ReadonlyArray<infer U> ? (U extends ContractShape ? Infer<U> : never) : never
 
-/** {@link Infer} with its TOP-LEVEL `readonly` modifiers stripped (a shallow strip — nested object/array properties stay readonly) — for consumers writing the parsed value's own fields. */
+/** Strips the TOP-LEVEL `readonly` modifiers from {@link Infer} (a shallow strip — nested object/array properties stay readonly) — for consumers writing the parsed value's own fields. */
 export type InferMutable<S extends ContractShape> = { -readonly [K in keyof Infer<S>]: Infer<S>[K] }
 
 // === Shape builder options
 
-/** Options for {@link StringShape} (via `stringShape`). */
+/** Groups the options for {@link StringShape} (via `stringShape`). */
 export interface StringShapeOptions {
 	readonly min?: number
 	readonly max?: number
@@ -860,7 +861,7 @@ export interface StringShapeOptions {
 }
 
 /**
- * Options for the `stringOf` guard builder.
+ * Groups the options for the `stringOf` guard builder.
  *
  * @remarks
  * The refinement half of {@link StringShapeOptions}: the same `min`, `max`, and
@@ -874,7 +875,7 @@ export interface StringGuardOptions {
 	readonly pattern?: RegExp
 }
 
-/** Options for {@link NumberShape} (via `numberShape` / `integerShape`). */
+/** Groups the options for {@link NumberShape} (via `numberShape` / `integerShape`). */
 export interface NumberShapeOptions {
 	readonly min?: number
 	readonly max?: number
@@ -882,47 +883,47 @@ export interface NumberShapeOptions {
 	readonly description?: string
 }
 
-/** Options for {@link BooleanShape} (via `booleanShape`). */
+/** Groups the options for {@link BooleanShape} (via `booleanShape`). */
 export interface BooleanShapeOptions {
 	readonly description?: string
 }
 
-/** Options for {@link NullShape} (via `nullShape`). */
+/** Groups the options for {@link NullShape} (via `nullShape`). */
 export interface NullShapeOptions {
 	readonly description?: string
 }
 
-/** Options for {@link JSONShape} (via `jsonShape`). */
+/** Groups the options for {@link JSONShape} (via `jsonShape`). */
 export interface JSONShapeOptions {
 	readonly description?: string
 }
 
-/** Options for {@link LiteralShape} (via `literalShape`). */
+/** Groups the options for {@link LiteralShape} (via `literalShape`). */
 export interface LiteralShapeOptions {
 	readonly description?: string
 }
 
-/** Options for {@link ArrayShape} (via `arrayShape`). */
+/** Groups the options for {@link ArrayShape} (via `arrayShape`). */
 export interface ArrayShapeOptions {
 	readonly min?: number
 	readonly max?: number
 	readonly description?: string
 }
 
-/** Options for {@link ObjectShape} (via `objectShape`). */
+/** Groups the options for {@link ObjectShape} (via `objectShape`). */
 export interface ObjectShapeOptions<A extends boolean | ContractShape = boolean | ContractShape> {
 	readonly additionalProperties?: A
 	readonly description?: string
 }
 
-/** Options for record shapes (via `recordShape`). */
+/** Groups the options for record shapes (via `recordShape`). */
 export interface RecordShapeOptions {
 	readonly description?: string
 }
 
 // === Contract reporting
 
-/** The kind of value a {@link Fault} expected — the shape-projected counterpart of a `ContractShape`'s `type`. */
+/** Names the kind of value a {@link Fault} expected — the shape-projected counterpart of a `ContractShape`'s `type`. */
 export type FaultKind =
 	| 'string'
 	| 'number'
@@ -935,11 +936,11 @@ export type FaultKind =
 	| 'union'
 	| 'json'
 
-/** The refinement a {@link Fault} of reason `'constraint'` violates. */
+/** Names the refinement a {@link Fault} of reason `'constraint'` violates. */
 export type FaultConstraint = 'min' | 'max' | 'pattern' | 'integer'
 
 /**
- * A single structured parse-failure diagnostic — one entry of an
+ * Represents a single structured parse-failure diagnostic — one entry of an
  * {@link ContractInterface.explain} report.
  *
  * @remarks
@@ -973,23 +974,23 @@ export type Fault =
 	| { readonly reason: 'variant'; readonly path: FieldPath; readonly variants: number }
 	| { readonly reason: 'oneOf'; readonly path: FieldPath; readonly matched: number }
 
-/** A key present on a value that its closed object shape does not declare. */
+/** Represents a key present on a value that its closed object shape does not declare. */
 export interface ExtraFault {
 	readonly reason: 'extra'
 	readonly path: FieldPath
 }
 
-/** Every fault an audit reports — the parse faults plus undeclared keys. */
+/** Covers every fault an audit reports — the parse faults plus undeclared keys. */
 export type AuditFault = Fault | ExtraFault
 
 // === Contract compilation
 
-/** A deterministic random source returning a value in `[0, 1)`. */
+/** Represents a deterministic random source returning a value in `[0, 1)`. */
 export type RandomFunction = () => number
 
 /**
- * A compiled strict-domain diagnostic — the shape of `compileAuditor` bound to
- * one shape.
+ * Represents a compiled strict-domain diagnostic — the shape of `compileAuditor`
+ * bound to one shape.
  *
  * @remarks
  * The optional `path` is the prefix every fault this call reports is rooted at,
@@ -1001,8 +1002,8 @@ export type RandomFunction = () => number
 export type AuditorFunction = (value: unknown, path?: readonly string[]) => readonly AuditFault[]
 
 /**
- * A compiled coercive-domain diagnostic — the shape of `compileReporter` bound
- * to one shape.
+ * Represents a compiled coercive-domain diagnostic — the shape of
+ * `compileReporter` bound to one shape.
  *
  * @remarks
  * The counterpart of {@link AuditorFunction} for the wider preimage `parse`
@@ -1012,8 +1013,8 @@ export type AuditorFunction = (value: unknown, path?: readonly string[]) => read
 export type ReporterFunction = (value: unknown, path?: readonly string[]) => readonly Fault[]
 
 /**
- * A compiled seed-data source — the shape of `compileGenerator` bound to one
- * shape.
+ * Represents a compiled seed-data source — the shape of `compileGenerator` bound
+ * to one shape.
  *
  * @remarks
  * An absent `random` selects the invocation's own wall-clock-seeded source, so
@@ -1041,16 +1042,17 @@ export type SeederFunction<T> = (random?: RandomFunction) => T
  */
 export interface ShapeValidatorInterface {
 	/**
-	 * The number of nodes the last successful {@link validate} found the retained
-	 * declaration expands into, counting one per node per incoming edge — the
-	 * size of the TREE every compiled artifact would build from this DAG.
+	 * Reports the number of nodes the last successful {@link validate} found the
+	 * retained declaration expands into, counting one per node per incoming
+	 * edge — the size of the TREE every compiled artifact would build from this
+	 * DAG.
 	 * `undefined` before the first successful pass and after a failed one, because
 	 * no pass measured one.
 	 */
 	readonly expansion: number | undefined
 
 	/**
-	 * Validate the retained shape declaration.
+	 * Validates the retained shape declaration.
 	 *
 	 * @returns Nothing when the declaration is valid
 	 * @throws {ContractError} When the declaration is malformed, cyclic, or too deep
@@ -1059,7 +1061,7 @@ export interface ShapeValidatorInterface {
 }
 
 /**
- * A compiled contract — the six lockstep outputs derived from one shape.
+ * Represents a compiled contract — the six lockstep outputs derived from one shape.
  *
  * @remarks
  * Built by `createContract`: `is` narrows, `audit` diagnoses strict rejection,
@@ -1093,7 +1095,7 @@ export interface ContractInterface<T> {
 	readonly is: Guard<T>
 	parse(value: unknown): T | undefined
 	/**
-	 * Report every strict fault a value has against this contract.
+	 * Reports every strict fault a value has against this contract.
 	 *
 	 * @remarks
 	 * An empty report means the value is strictly valid. Soundness invariant:
@@ -1108,7 +1110,7 @@ export interface ContractInterface<T> {
 	 */
 	audit(value: unknown): readonly AuditFault[]
 	/**
-	 * Report every structured parse fault a value has against this contract.
+	 * Reports every structured parse fault a value has against this contract.
 	 *
 	 * @remarks
 	 * An empty report means the value is valid. Soundness invariant:
@@ -1126,7 +1128,7 @@ export interface ContractInterface<T> {
 }
 
 /**
- * Lazy owner of one contract shape's six compiled artifacts plus their bundle.
+ * Owns one contract shape's six compiled artifacts plus their bundle, lazily.
  *
  * @remarks
  * Construction observes nothing. The FIRST getter read owns the declaration
@@ -1163,18 +1165,18 @@ export interface ContractInterface<T> {
  * ```
  */
 export interface ContractCompilerInterface<S extends ContractShape> {
-	/** The emitted JSON Schema, deeply frozen and shared-identity preserving. */
+	/** Returns the emitted JSON Schema, deeply frozen and shared-identity preserving. */
 	readonly schema: JSONSchema
-	/** The compiled strict guard. */
+	/** Returns the compiled strict guard. */
 	readonly guard: Guard<Infer<S>>
-	/** The compiled coercive parser. */
+	/** Returns the compiled coercive parser. */
 	readonly parser: Parser<Infer<S>>
-	/** The compiled strict-domain diagnostic. */
+	/** Returns the compiled strict-domain diagnostic. */
 	readonly auditor: AuditorFunction
-	/** The compiled coercive-domain diagnostic. */
+	/** Returns the compiled coercive-domain diagnostic. */
 	readonly reporter: ReporterFunction
-	/** The compiled seed-data source. */
+	/** Returns the compiled seed-data source. */
 	readonly generator: SeederFunction<Infer<S>>
-	/** The frozen six-member bundle whose values are the six artifacts above. */
+	/** Returns the frozen six-member bundle whose values are the six artifacts above. */
 	readonly contract: ContractInterface<Infer<S>>
 }

@@ -63,7 +63,7 @@ import {
 // === Primitive parsers
 
 /**
- * Parse an unknown value to a string.
+ * Parses an unknown value to a string.
  *
  * @remarks
  * A string is returned unchanged; a finite number is coerced to its decimal
@@ -86,7 +86,7 @@ export function parseString(value: unknown): string | undefined {
 }
 
 /**
- * Parse an unknown value to a finite number.
+ * Parses an unknown value to a finite number.
  *
  * @remarks
  * A finite number is returned unchanged; a non-blank numeric string is parsed
@@ -122,7 +122,7 @@ export function parseNumber(value: unknown): number | undefined {
 }
 
 /**
- * Parse an unknown value to a finite integer.
+ * Parses an unknown value to a finite integer.
  *
  * @remarks
  * Accepts whatever {@link parseNumber} accepts, then requires the result to have
@@ -144,7 +144,7 @@ export function parseInteger(value: unknown): number | undefined {
 }
 
 /**
- * Parse an unknown value to a boolean.
+ * Parses an unknown value to a boolean.
  *
  * @remarks
  * A boolean is returned unchanged. The strings `'true'` / `'false'` / `'1'` /
@@ -169,7 +169,7 @@ export function parseBoolean(value: unknown): boolean | undefined {
 }
 
 /**
- * Parse an unknown value to `null`.
+ * Parses an unknown value to `null`.
  *
  * @remarks
  * A successful parse returns `null` itself — distinct from the `undefined`
@@ -192,7 +192,7 @@ export function parseNull(value: unknown): null | undefined {
 // === Structural parsers
 
 /**
- * Parse an unknown value to a plain record — the input reference, never cloned.
+ * Parses an unknown value to a plain record — the input reference, never cloned.
  *
  * @param value - The value to parse
  * @returns The record, or `undefined`
@@ -206,7 +206,7 @@ export function parseRecord(value: unknown): Record<string, unknown> | undefined
 }
 
 /**
- * Parse an unknown value to an array — the input reference, never cloned —
+ * Parses an unknown value to an array — the input reference, never cloned —
  * optionally guarding every element.
  *
  * @remarks
@@ -249,7 +249,7 @@ export function parseArray<T = unknown>(
 }
 
 /**
- * Parse an unknown value to a cycle-safe JSON value — the input reference,
+ * Parses an unknown value to a cycle-safe JSON value — the input reference,
  * never cloned.
  *
  * @remarks
@@ -283,7 +283,7 @@ export function parseJSONValue(value: unknown): JSONValue | undefined {
 // === Enum parser
 
 /**
- * Parse an unknown value as one of the allowed literal primitives.
+ * Parses an unknown value as one of the allowed literal primitives.
  *
  * @remarks
  * Pairs with {@link literalOf} — both match by SameValueZero, so the
@@ -331,7 +331,7 @@ export function parseEnum(
 // === Record-field parsers
 
 /**
- * Read and parse a string field from a record by key or nested key path.
+ * Reads and parses a string field from a record by key or nested key path.
  *
  * @param record - The source record
  * @param path - A property key, or a key path descending into nested objects
@@ -345,7 +345,7 @@ export function parseStringField(
 }
 
 /**
- * Read and parse a finite-number field from a record by key or nested key path.
+ * Reads and parses a finite-number field from a record by key or nested key path.
  *
  * @param record - The source record
  * @param path - A property key, or a key path descending into nested objects
@@ -365,7 +365,7 @@ export function parseNumberField(
 }
 
 /**
- * Read and parse a finite-integer field from a record by key or nested key path.
+ * Reads and parses a finite-integer field from a record by key or nested key path.
  *
  * @param record - The source record
  * @param path - A property key, or a key path descending into nested objects
@@ -379,7 +379,7 @@ export function parseIntegerField(
 }
 
 /**
- * Read and parse a boolean field from a record by key or nested key path.
+ * Reads and parses a boolean field from a record by key or nested key path.
  *
  * @param record - The source record
  * @param path - A property key, or a key path descending into nested objects
@@ -399,7 +399,7 @@ export function parseBooleanField(
 }
 
 /**
- * Read and parse a `null` field from a record by key or nested key path.
+ * Reads and parses a `null` field from a record by key or nested key path.
  *
  * @remarks
  * A successful parse returns `null` itself — distinct from the `undefined`
@@ -420,7 +420,7 @@ export function parseNullField(record: Record<string, unknown>, path: FieldPath)
 }
 
 /**
- * Read and parse a nested record field from a record by key or nested key path.
+ * Reads and parses a nested record field from a record by key or nested key path.
  *
  * @param record - The source record
  * @param path - A property key, or a key path descending into nested objects
@@ -434,7 +434,7 @@ export function parseRecordField(
 }
 
 /**
- * Read and parse an array field from a record by key or nested key path,
+ * Reads and parses an array field from a record by key or nested key path,
  * optionally guarding elements.
  *
  * @param record - The source record
@@ -457,7 +457,7 @@ export function parseArrayField<T = unknown>(
 }
 
 /**
- * Read and parse an enum field from a record by key or nested key path.
+ * Reads and parses an enum field from a record by key or nested key path.
  *
  * @param record - The source record
  * @param path - A property key, or a key path descending into nested objects
@@ -473,7 +473,7 @@ export function parseEnumField<const T extends LiteralValue>(
 }
 
 /**
- * Read and parse a JSON-value field from a record by key or nested key path.
+ * Reads and parses a JSON-value field from a record by key or nested key path.
  *
  * @remarks
  * Deep-gates the field's whole subtree via {@link parseJSONValue} — see that
@@ -500,7 +500,7 @@ export function parseJSONValueField(
 // === JSON
 
 /**
- * Parse a JSON string, returning `undefined` instead of throwing.
+ * Parses a JSON string, returning `undefined` instead of throwing.
  *
  * @remarks
  * The safe boundary for untrusted JSON text: a malformed string yields
@@ -521,7 +521,7 @@ export function parseJSON(value: string): unknown {
 }
 
 /**
- * Parse a JSON string and validate the result against a guard.
+ * Parses a JSON string and validates the result against a guard.
  *
  * @remarks
  * The lazy, safe path from an untrusted string to a typed `T`: parse, then check

@@ -16,7 +16,7 @@ import { inferPrimitiveEnum, samplesToFormat, unifySchemas } from './inferers.js
 import { ValueInferer } from './ValueInferer.js'
 
 /**
- * Stateful owner of one multi-sample inference walk.
+ * Owns the state of one multi-sample inference walk.
  *
  * @remarks
  * The engine behind `samplesToSchema`, which is the only door that constructs
@@ -62,7 +62,7 @@ export class SampleInferer {
 	}
 
 	/**
-	 * Infer one JSON Schema over the retained sample list.
+	 * Infers one JSON Schema over the retained sample list.
 	 *
 	 * @returns The inferred schema
 	 * @throws When a sample row cannot be read

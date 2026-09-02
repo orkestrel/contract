@@ -18,7 +18,7 @@ import {
 import { isLiteralValue, isRecord, isRegExp } from './validators.js'
 
 /**
- * A reusable live validator for one retained contract-shape source.
+ * Validates one retained contract-shape source live on every call.
  *
  * @remarks
  * Construction performs no source observation. Every non-overlapping
@@ -110,7 +110,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	#domain: ContractError | undefined
 
 	/**
-	 * Retain a shape source without observing it.
+	 * Retains a shape source without observing it.
 	 *
 	 * @param shape - The live shape source validated by each call
 	 */
@@ -119,8 +119,8 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	}
 
 	/**
-	 * The number of nodes the last successful {@link validate} found the source
-	 * expands into.
+	 * Reports the number of nodes the last successful {@link validate} found the
+	 * source expands into.
 	 *
 	 * @remarks
 	 * One per node per INCOMING EDGE, summed bottom-up — the size of the tree a
@@ -134,7 +134,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	}
 
 	/**
-	 * Validate the retained source's current declaration.
+	 * Validates the retained source's current declaration.
 	 *
 	 * @remarks
 	 * The whole traversal is contained, and a failure this class did not author

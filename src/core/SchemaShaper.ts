@@ -29,7 +29,7 @@ import {
 } from './shapers.js'
 
 /**
- * Stateful owner of one schema-inversion walk.
+ * Owns the state of one schema-inversion walk.
  *
  * @remarks
  * The engine behind `schemaToShape`, which is the only door that constructs it.
@@ -67,7 +67,7 @@ export class SchemaShaper {
 	}
 
 	/**
-	 * Convert the retained schema into a validating contract shape.
+	 * Converts the retained schema into a validating contract shape.
 	 *
 	 * @returns The built shape, widened wherever the schema is inexpressible
 	 * @throws {ContractError} When schema traversal fails

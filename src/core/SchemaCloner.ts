@@ -12,7 +12,7 @@ import {
 import { isObject } from './validators.js'
 
 /**
- * Stateful owner of one JSON Schema snapshot operation.
+ * Owns the state of one JSON Schema snapshot operation.
  *
  * @remarks
  * Construction retains the source without observing it. The first
@@ -95,7 +95,7 @@ export class SchemaCloner implements SchemaClonerInterface {
 	}
 
 	/**
-	 * Clone the retained schema into an identity-preserving frozen graph.
+	 * Clones the retained schema into an identity-preserving frozen graph.
 	 *
 	 * @returns The settled JSON Schema snapshot
 	 * @throws {ContractError} When traversal is unreadable or cloning is reentered
