@@ -93,7 +93,7 @@ export class SampleInferer {
 			if (isRecord(sample)) records[records.length] = sample
 		}
 		if (records.length === samples.length) {
-			return this.#inferRecords(records, depth, memo)
+			return this.#walkRecords(records, depth, memo)
 		}
 		if (this.#enumerated) {
 			const enumSchema = inferPrimitiveEnum(samples, INFER_ENUM_LIMIT)
@@ -135,7 +135,7 @@ export class SampleInferer {
 	// exists for — re-inferring a shared child once per path: two rows sharing one
 	// `{ a: child, b: child }` detail cost `2^depth` inferences, the identical
 	// denial of service the one-row memo was added to remove.
-	#inferRecords(
+	#walkRecords(
 		samples: ReadonlyArray<Record<string, unknown>>,
 		depth: number,
 		memo: SampleMemo,
@@ -172,11 +172,11 @@ export class SampleInferer {
 			// caller's own list was already read into an owned dense snapshot, so an
 			// absent row here is unreachable and the refusal states the invariant.
 			if (sample === undefined) {
-				throw new INTRINSICS.error('SampleInferer: every sample must be a record')
+				throw new INTRINSICS.error('samplesToSchema: every sample must be a record')
 			}
 			const sampleKeys = enumerableKeys(sample)
 			if (sampleKeys === undefined) {
-				throw new INTRINSICS.error('SampleInferer: property enumeration failed')
+				throw new INTRINSICS.error('samplesToSchema: property enumeration failed')
 			}
 			for (let keyIndex = 0; keyIndex < sampleKeys.length; keyIndex += 1) {
 				const key = sampleKeys[keyIndex]
@@ -208,7 +208,7 @@ export class SampleInferer {
 				for (let sampleIndex = 0; sampleIndex < samples.length; sampleIndex += 1) {
 					const sample = samples[sampleIndex]
 					if (sample === undefined) {
-						throw new INTRINSICS.error('SampleInferer: every sample must be a record')
+						throw new INTRINSICS.error('samplesToSchema: every sample must be a record')
 					}
 					const propertyValue = sample[key]
 					if (propertyValue === undefined) {

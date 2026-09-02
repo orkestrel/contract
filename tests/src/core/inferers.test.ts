@@ -13,8 +13,9 @@ import {
 	INFER_DEPTH_LIMIT,
 	INFER_ENUM_LIMIT,
 	isContractError,
-	matchesISOInstant,
+	isError,
 	literalShape,
+	matchesISOInstant,
 	objectShape,
 	samplesToFormat,
 	samplesToSchema,
@@ -299,6 +300,23 @@ describe('valueToSchema — hostile input', () => {
 		expect(error.code).toBe('structure')
 		expect(error.message).toBe('valueToSchema: value could not be read')
 	})
+
+	it('names the door in the refusal the walk retains as cause', () => {
+		const hostile = new Proxy(
+			{},
+			{
+				ownKeys() {
+					throw new Error('hostile')
+				},
+			},
+		)
+		const error = captureContractError(() => valueToSchema(hostile))
+		expect(isError(error.cause)).toBe(true)
+		if (!isError(error.cause)) throw new Error('expected the walk refusal as the cause')
+		// The walk is interned, so nothing a caller can reach carries its class
+		// name; the cause names the door the refusal came out of.
+		expect(error.cause.message).toBe('valueToSchema: property enumeration failed')
+	})
 })
 
 describe('valueToSchema — depth and breadth caps', () => {
@@ -386,6 +404,23 @@ describe('samplesToSchema — records', () => {
 		const error = captureContractError(() => samplesToSchema([hostile]))
 		expect(error.code).toBe('structure')
 		expect(error.message).toBe('samplesToSchema: samples could not be read')
+	})
+
+	it('names the door in the refusal the walk retains as cause', () => {
+		const hostile = new Proxy(
+			{},
+			{
+				ownKeys() {
+					throw new Error('hostile')
+				},
+			},
+		)
+		const error = captureContractError(() => samplesToSchema([hostile]))
+		expect(isError(error.cause)).toBe(true)
+		if (!isError(error.cause)) throw new Error('expected the walk refusal as the cause')
+		// The walk is interned, so nothing a caller can reach carries its class
+		// name; the cause names the door the refusal came out of.
+		expect(error.cause.message).toBe('samplesToSchema: property enumeration failed')
 	})
 
 	it('terminates on a cyclic sample row, bounded by depth alone', () => {
