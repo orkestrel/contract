@@ -96,7 +96,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	// build from this DAG, which is what actually bounds compilation.
 	#counts: number[] = []
 	#schemas = new ShapeValidator.#weakMap<object, number>()
-	#expansion = 0
+	#expansion: number | undefined = undefined
 	#children: Array<{
 		readonly shape: ContractShape | undefined
 		readonly optional: boolean
@@ -125,10 +125,11 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	 * @remarks
 	 * One per node per INCOMING EDGE, summed bottom-up — the size of the tree a
 	 * compiler would build from this DAG, which a node count of the declaration
-	 * itself does not describe. `0` before the first successful pass and after a
-	 * failed one, because a failed pass has no expansion to report.
+	 * itself does not describe. `undefined` before the first successful pass and
+	 * after a failed one, because a failed pass has no expansion to report and
+	 * `0` is a measurement no declaration produces.
 	 */
-	get expansion(): number {
+	get expansion(): number | undefined {
 		return this.#expansion
 	}
 
@@ -137,7 +138,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	 *
 	 * @remarks
 	 * The whole traversal is contained, and a failure this class did not author
-	 * is translated into `validateShapeDepth: shape reflection failed` carrying
+	 * is translated into `validateShape: shape reflection failed` carrying
 	 * the exact thrown value. Containment is what makes that claim hold for
 	 * dispatch nobody enumerated — including the recognition of an authored error,
 	 * which is why that recognition is no longer answerable by any member a caller
@@ -171,7 +172,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 		// a polluted diagnostic read — and rethrowing it verbatim would put the
 		// caller's raw value through a door whose contract is a `ContractError`.
 		if (isContractError(outcome.error)) throw outcome.error
-		throw new ContractError('validateShapeDepth: shape reflection failed', {
+		throw new ContractError('validateShape: shape reflection failed', {
 			code: 'structure',
 			context: { path: [] },
 			cause: outcome.error,
@@ -200,7 +201,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	}
 
 	#execute(): void {
-		this.#expansion = 0
+		this.#expansion = undefined
 		this.#stack[this.#stack.length] = {
 			operation: 'enter',
 			shape: this.#source,
@@ -237,7 +238,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 		const current = frame.shape
 		if (typeof current !== 'object' || current === null || !isRecord(current)) {
 			this.#structure ??= new ContractError(
-				'validateShapeDepth: every structural child must be a shape',
+				'validateShape: every structural child must be a shape',
 				{
 					code: 'structure',
 					context: { path: pathOf(this.#path) },
@@ -247,13 +248,10 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			return
 		}
 		if (matchesVisited(this.#active, current)) {
-			this.#cycle ??= new ContractError(
-				'validateShapeDepth: a shape graph may not contain a cycle',
-				{
-					code: 'cycle',
-					context: { path: pathOf(this.#path) },
-				},
-			)
+			this.#cycle ??= new ContractError('validateShape: a shape graph may not contain a cycle', {
+				code: 'cycle',
+				context: { path: pathOf(this.#path) },
+			})
 			this.#path.length -= segments
 			return
 		}
@@ -268,7 +266,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 		// node's embedded schema alike — is measured over the whole captured graph in
 		// `#measure`, which is why its diagnostics are spelled from the deepest
 		// occurrence rather than from whichever edge discovery arrived on.
-		const seen = INTRINSICS.apply(INTRINSICS.recall, this.#index, [current])
+		const seen = INTRINSICS.reflect.apply(INTRINSICS.recall, this.#index, [current])
 		if (seen !== undefined) {
 			this.#place(seen, frame.optional)
 			this.#path.length -= segments
@@ -281,7 +279,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 		const outcome = attempt(() => this.#observe(current, frame.depth))
 		if (!outcome.success || !outcome.value) {
 			this.#structure ??= new ContractError(
-				'validateShapeDepth: every node must be a recognized shape',
+				'validateShape: every node must be a recognized shape',
 				{
 					code: 'structure',
 					context: { path: pathOf(this.#path) },
@@ -301,15 +299,15 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	#observe(current: ContractShape, depth: number): boolean {
 		const descriptor = INTRINSICS.describe(current, 'type')
 		if (descriptor === undefined || !INTRINSICS.own(descriptor, 'value')) {
-			return this.#refuse('validateShapeDepth: every node must be a recognized shape')
+			return this.#refuse('validateShape: every node must be a recognized shape')
 		}
 		const category = current.type
 		if (current.type !== category || descriptor.value !== category) {
-			return this.#refuse('validateShapeDepth: every node must be a recognized shape')
+			return this.#refuse('validateShape: every node must be a recognized shape')
 		}
 		const fields = this.#recognize(category)
 		if (fields === undefined) {
-			return this.#refuse('validateShapeDepth: every node must be a recognized shape')
+			return this.#refuse('validateShape: every node must be a recognized shape')
 		}
 		this.#category = category
 		if (!this.#scan(current, fields)) return false
@@ -318,7 +316,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			const schema = current.schema
 			const outcome = attempt(() => this.#inspect(schema))
 			if (!outcome.success) {
-				return this.#refuse('validateShapeDepth: every node must be a recognized shape', 'schema')
+				return this.#refuse('validateShape: every node must be a recognized shape', 'schema')
 			}
 			if (!outcome.value) return false
 			// The embedded schema's own nesting is measured once per unique record
@@ -327,7 +325,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			// it. The deeper-occurrence case is re-asked in `#measure`.
 			if (depth + this.#raw > COMPILE_DEPTH_LIMIT) {
 				return this.#refuse(
-					'validateShapeDepth: raw schema exceeds the compilation depth limit',
+					'validateShape: raw schema exceeds the compilation depth limit',
 					'schema',
 				)
 			}
@@ -335,24 +333,21 @@ export class ShapeValidator implements ShapeValidatorInterface {
 		if (category === 'object') {
 			const outcome = attempt(() => this.#populate(current))
 			if (!outcome.success) {
-				return this.#refuse(
-					'validateShapeDepth: every node must be a recognized shape',
-					'properties',
-				)
+				return this.#refuse('validateShape: every node must be a recognized shape', 'properties')
 			}
 			return outcome.value
 		}
 		if (category === 'union') {
 			const outcome = attempt(() => this.#populate(current))
 			if (!outcome.success) {
-				return this.#refuse('validateShapeDepth: every node must be a recognized shape', 'variants')
+				return this.#refuse('validateShape: every node must be a recognized shape', 'variants')
 			}
 			return outcome.value
 		}
 		if (category === 'literal') {
 			const outcome = attempt(() => this.#populate(current))
 			if (!outcome.success) {
-				return this.#refuse('validateShapeDepth: every node must be a recognized shape', 'values')
+				return this.#refuse('validateShape: every node must be a recognized shape', 'values')
 			}
 			return outcome.value
 		}
@@ -398,8 +393,8 @@ export class ShapeValidator implements ShapeValidatorInterface {
 				) {
 					return false
 				}
-				const first: unknown = INTRINSICS.read(current, field)
-				const second: unknown = INTRINSICS.read(current, field)
+				const first: unknown = INTRINSICS.reflect.read(current, field)
+				const second: unknown = INTRINSICS.reflect.read(current, field)
 				if (descriptor === undefined) return first === undefined && second === undefined
 				if (INTRINSICS.own(descriptor, 'value')) {
 					const described: unknown = descriptor.value
@@ -416,7 +411,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 				)
 			})
 			if (!outcome.success || !outcome.value) {
-				return this.#refuse('validateShapeDepth: every node must be a recognized shape', field)
+				return this.#refuse('validateShape: every node must be a recognized shape', field)
 			}
 		}
 		return true
@@ -430,19 +425,19 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			current.description !== undefined &&
 			typeof current.description !== 'string'
 		) {
-			return this.#refuse('validateShapeDepth: description must be a string', 'description')
+			return this.#refuse('validateShape: description must be a string', 'description')
 		}
 		if (current.type === 'string') {
 			if (current.min !== undefined && typeof current.min !== 'number') {
-				return this.#refuse('validateShapeDepth: string min must be a number', 'min')
+				return this.#refuse('validateShape: string min must be a number', 'min')
 			}
 			if (current.max !== undefined && typeof current.max !== 'number') {
-				return this.#refuse('validateShapeDepth: string max must be a number', 'max')
+				return this.#refuse('validateShape: string max must be a number', 'max')
 			}
 			if (current.pattern !== undefined) {
 				const pattern = current.pattern
 				if (!isRegExp(pattern)) {
-					return this.#refuse('validateShapeDepth: string pattern must be a RegExp', 'pattern')
+					return this.#refuse('validateShape: string pattern must be a RegExp', 'pattern')
 				}
 				// Both observations go through the CAPTURED accessors: a replaced
 				// `source` getter reports for every pattern in the realm, so the
@@ -456,7 +451,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 					readPatternSource(pattern) !== source ||
 					readPatternFlags(pattern) !== flags
 				) {
-					return this.#refuse('validateShapeDepth: string pattern must be stable', 'pattern')
+					return this.#refuse('validateShape: string pattern must be stable', 'pattern')
 				}
 				this.#restrict(current, source, flags)
 			} else {
@@ -465,13 +460,13 @@ export class ShapeValidator implements ShapeValidatorInterface {
 		}
 		if (current.type === 'number') {
 			if (current.min !== undefined && typeof current.min !== 'number') {
-				return this.#refuse('validateShapeDepth: number min must be a number', 'min')
+				return this.#refuse('validateShape: number min must be a number', 'min')
 			}
 			if (current.max !== undefined && typeof current.max !== 'number') {
-				return this.#refuse('validateShapeDepth: number max must be a number', 'max')
+				return this.#refuse('validateShape: number max must be a number', 'max')
 			}
 			if (current.integer !== undefined && typeof current.integer !== 'boolean') {
-				return this.#refuse('validateShapeDepth: number integer must be a boolean', 'integer')
+				return this.#refuse('validateShape: number integer must be a boolean', 'integer')
 			}
 			const shape = current.integer === true ? 'integer' : 'number'
 			if (
@@ -479,7 +474,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 				current.min !== undefined &&
 				!INTRINSICS.finite(current.min)
 			) {
-				this.#domain = new ContractError('validateShapeDepth: a number shape min must be finite', {
+				this.#domain = new ContractError('validateShape: a number shape min must be finite', {
 					code: 'bound',
 					context: {
 						path: pathOf(this.#path),
@@ -494,7 +489,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 				current.max !== undefined &&
 				!INTRINSICS.finite(current.max)
 			) {
-				this.#domain = new ContractError('validateShapeDepth: a number shape max must be finite', {
+				this.#domain = new ContractError('validateShape: a number shape max must be finite', {
 					code: 'bound',
 					context: {
 						path: pathOf(this.#path),
@@ -510,17 +505,17 @@ export class ShapeValidator implements ShapeValidatorInterface {
 				current.max !== undefined &&
 				current.min > current.max
 			) {
-				this.#domain = new ContractError(
-					'validateShapeDepth: a number shape has min greater than max',
-					{ code: 'range', context: { path: pathOf(this.#path), shape } },
-				)
+				this.#domain = new ContractError('validateShape: a number shape has min greater than max', {
+					code: 'range',
+					context: { path: pathOf(this.#path), shape },
+				})
 			}
 			if (this.#domain === undefined && current.integer === true) {
 				const lo = INTRINSICS.ceil(current.min ?? Number.NEGATIVE_INFINITY)
 				const hi = INTRINSICS.floor(current.max ?? Number.POSITIVE_INFINITY)
 				if (lo > hi) {
 					this.#domain = new ContractError(
-						'validateShapeDepth: an integer number shape has an empty integer range',
+						'validateShape: an integer number shape has an empty integer range',
 						{
 							code: 'range',
 							context: { path: pathOf(this.#path), shape: 'integer' },
@@ -530,10 +525,10 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			}
 		}
 		if (current.type === 'array' && current.min !== undefined && typeof current.min !== 'number') {
-			return this.#refuse('validateShapeDepth: array min must be a number', 'min')
+			return this.#refuse('validateShape: array min must be a number', 'min')
 		}
 		if (current.type === 'array' && current.max !== undefined && typeof current.max !== 'number') {
-			return this.#refuse('validateShapeDepth: array max must be a number', 'max')
+			return this.#refuse('validateShape: array max must be a number', 'max')
 		}
 		if (
 			current.type === 'array' &&
@@ -542,7 +537,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			(!INTRINSICS.safe(current.min) || current.min < 0)
 		) {
 			this.#domain = new ContractError(
-				'validateShapeDepth: an array shape min must be a non-negative safe integer',
+				'validateShape: an array shape min must be a non-negative safe integer',
 				{
 					code: 'bound',
 					context: {
@@ -561,7 +556,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			(!INTRINSICS.safe(current.max) || current.max < 0)
 		) {
 			this.#domain = new ContractError(
-				'validateShapeDepth: an array shape max must be a non-negative safe integer',
+				'validateShape: an array shape max must be a non-negative safe integer',
 				{
 					code: 'bound',
 					context: {
@@ -580,13 +575,10 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			current.max !== undefined &&
 			current.min > current.max
 		) {
-			this.#domain = new ContractError(
-				'validateShapeDepth: an array shape has min greater than max',
-				{
-					code: 'range',
-					context: { path: pathOf(this.#path), shape: 'array' },
-				},
-			)
+			this.#domain = new ContractError('validateShape: an array shape has min greater than max', {
+				code: 'range',
+				context: { path: pathOf(this.#path), shape: 'array' },
+			})
 		}
 		if (
 			current.type === 'union' &&
@@ -594,7 +586,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			current.mode !== 'anyOf' &&
 			current.mode !== 'oneOf'
 		) {
-			return this.#refuse('validateShapeDepth: union mode must be anyOf or oneOf', 'mode')
+			return this.#refuse('validateShape: union mode must be anyOf or oneOf', 'mode')
 		}
 		return true
 	}
@@ -608,7 +600,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 		if (optional || this.#domain !== undefined) return
 		if (this.#captures[index]?.category !== 'optional') return
 		this.#domain = new ContractError(
-			'validateShapeDepth: an optional shape may only appear as a direct object-property value',
+			'validateShape: an optional shape may only appear as a direct object-property value',
 			{
 				code: 'placement',
 				context: { path: pathOf(this.#path), shape: 'optional' },
@@ -623,7 +615,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			(!INTRINSICS.safe(current.min) || current.min < 0)
 		) {
 			this.#domain = new ContractError(
-				'validateShapeDepth: a string shape min must be a non-negative safe integer',
+				'validateShape: a string shape min must be a non-negative safe integer',
 				{
 					code: 'bound',
 					context: {
@@ -641,7 +633,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			(!INTRINSICS.safe(current.max) || current.max < 0)
 		) {
 			this.#domain = new ContractError(
-				'validateShapeDepth: a string shape max must be a non-negative safe integer',
+				'validateShape: a string shape max must be a non-negative safe integer',
 				{
 					code: 'bound',
 					context: {
@@ -655,7 +647,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 		}
 		if (this.#domain === undefined && flags.length > 0) {
 			this.#domain = new ContractError(
-				'validateShapeDepth: a string shape pattern must not use flags; use inline pattern constructs instead',
+				'validateShape: a string shape pattern must not use flags; use inline pattern constructs instead',
 				{
 					code: 'pattern',
 					context: {
@@ -672,13 +664,10 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			current.max !== undefined &&
 			current.min > current.max
 		) {
-			this.#domain = new ContractError(
-				'validateShapeDepth: a string shape has min greater than max',
-				{
-					code: 'range',
-					context: { path: pathOf(this.#path), shape: 'string' },
-				},
-			)
+			this.#domain = new ContractError('validateShape: a string shape has min greater than max', {
+				code: 'range',
+				context: { path: pathOf(this.#path), shape: 'string' },
+			})
 		}
 	}
 
@@ -691,7 +680,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	// node's position, and only the second one varies per occurrence.
 	#inspect(source: unknown): boolean {
 		if (!isRecord(source)) {
-			return this.#refuse('validateShapeDepth: raw schema must be a plain record', 'schema')
+			return this.#refuse('validateShape: raw schema must be a plain record', 'schema')
 		}
 		const active = new ShapeValidator.#weakSet<object>()
 		const stack: Array<
@@ -710,14 +699,15 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			const schema = frame.schema
 			if (!isRecord(schema)) {
 				return this.#refuse(
-					'validateShapeDepth: every raw schema child must be a plain record',
+					'validateShape: every raw schema child must be a plain record',
 					'schema',
 				)
 			}
 			if (matchesVisited(active, schema)) {
-				return this.#refuse('validateShapeDepth: a raw schema may not contain a cycle', 'schema')
+				return this.#refuse('validateShape: a raw schema may not contain a cycle', 'schema')
 			}
-			if (INTRINSICS.apply(INTRINSICS.recall, this.#schemas, [schema]) !== undefined) continue
+			if (INTRINSICS.reflect.apply(INTRINSICS.recall, this.#schemas, [schema]) !== undefined)
+				continue
 			admitVisited(active, schema)
 
 			const keyList = INTRINSICS.keys(schema)
@@ -743,10 +733,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 					key !== 'anyOf' &&
 					key !== 'oneOf'
 				) {
-					return this.#refuse(
-						'validateShapeDepth: raw schema contains an unsupported keyword',
-						'schema',
-					)
+					return this.#refuse('validateShape: raw schema contains an unsupported keyword', 'schema')
 				}
 			}
 
@@ -762,28 +749,28 @@ export class ShapeValidator implements ShapeValidatorInterface {
 				category !== 'string'
 			) {
 				return this.#refuse(
-					'validateShapeDepth: raw schema type is outside the supported vocabulary',
+					'validateShape: raw schema type is outside the supported vocabulary',
 					'schema',
 				)
 			}
 			if (schema.description !== undefined && typeof schema.description !== 'string') {
-				return this.#refuse('validateShapeDepth: raw schema description must be a string', 'schema')
+				return this.#refuse('validateShape: raw schema description must be a string', 'schema')
 			}
 			if (schema.format !== undefined && typeof schema.format !== 'string') {
-				return this.#refuse('validateShapeDepth: raw schema format must be a string', 'schema')
+				return this.#refuse('validateShape: raw schema format must be a string', 'schema')
 			}
 			if (schema.pattern !== undefined) {
 				if (typeof schema.pattern !== 'string') {
-					return this.#refuse('validateShapeDepth: raw schema pattern must be a string', 'schema')
+					return this.#refuse('validateShape: raw schema pattern must be a string', 'schema')
 				}
 				// The CAPTURED `RegExp`, not the live global: the result of this read is
 				// the refusal `rawShape` documents, and a caller who installed a
 				// non-throwing stub made a malformed pattern compile clean.
 				const pattern = attempt(() =>
-					INTRINSICS.apply(INTRINSICS.pattern, undefined, [schema.pattern]),
+					INTRINSICS.reflect.apply(INTRINSICS.pattern, undefined, [schema.pattern]),
 				)
 				if (!pattern.success) {
-					return this.#refuse('validateShapeDepth: raw schema pattern must be valid', 'schema')
+					return this.#refuse('validateShape: raw schema pattern must be valid', 'schema')
 				}
 			}
 
@@ -794,7 +781,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 				const value = schema[key]
 				if (value !== undefined && (!INTRINSICS.safe(value) || INTRINSICS.numeric(value) < 0)) {
 					return this.#refuse(
-						'validateShapeDepth: raw schema length bounds must be non-negative safe integers',
+						'validateShape: raw schema length bounds must be non-negative safe integers',
 						'schema',
 					)
 				}
@@ -806,7 +793,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 				const value = schema[key]
 				if (value !== undefined && (typeof value !== 'number' || !INTRINSICS.finite(value))) {
 					return this.#refuse(
-						'validateShapeDepth: raw schema numeric bounds must be finite numbers',
+						'validateShape: raw schema numeric bounds must be finite numbers',
 						'schema',
 					)
 				}
@@ -814,20 +801,14 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			const population = schema.enum
 			if (population !== undefined) {
 				if (!INTRINSICS.array(population)) {
-					return this.#refuse(
-						'validateShapeDepth: raw schema enum must be a non-empty array',
-						'schema',
-					)
+					return this.#refuse('validateShape: raw schema enum must be a non-empty array', 'schema')
 				}
 				const snapshot = readArrayEntries(population)
 				if (!snapshot.success || snapshot.value.entries.length === 0) {
-					return this.#refuse(
-						'validateShapeDepth: raw schema enum must be a non-empty array',
-						'schema',
-					)
+					return this.#refuse('validateShape: raw schema enum must be a non-empty array', 'schema')
 				}
 				if (!snapshot.value.dense) {
-					return this.#refuse('validateShapeDepth: raw schema enum must be dense', 'schema')
+					return this.#refuse('validateShape: raw schema enum must be dense', 'schema')
 				}
 				// A module-scope membership question, not `set.has(value)`: this
 				// uniqueness test decides whether the door accepts or refuses, so
@@ -844,7 +825,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 						matchesMember(values, value)
 					) {
 						return this.#refuse(
-							'validateShapeDepth: raw schema enum values must be finite unique primitives',
+							'validateShape: raw schema enum values must be finite unique primitives',
 							'schema',
 						)
 					}
@@ -855,14 +836,14 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			const names = schema.required
 			if (names !== undefined) {
 				if (!INTRINSICS.array(names)) {
-					return this.#refuse('validateShapeDepth: raw schema required must be an array', 'schema')
+					return this.#refuse('validateShape: raw schema required must be an array', 'schema')
 				}
 				const snapshot = readArrayEntries(names)
 				if (!snapshot.success) {
-					return this.#refuse('validateShapeDepth: raw schema required must be an array', 'schema')
+					return this.#refuse('validateShape: raw schema required must be an array', 'schema')
 				}
 				if (!snapshot.value.dense) {
-					return this.#refuse('validateShapeDepth: raw schema required must be dense', 'schema')
+					return this.#refuse('validateShape: raw schema required must be dense', 'schema')
 				}
 				const required = collectMembers([])
 				for (let valueIndex = 0; valueIndex < snapshot.value.entries.length; valueIndex += 1) {
@@ -870,7 +851,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 					if (value === undefined) continue
 					if (typeof value !== 'string' || matchesMember(required, value)) {
 						return this.#refuse(
-							'validateShapeDepth: raw schema required values must be unique strings',
+							'validateShape: raw schema required values must be unique strings',
 							'schema',
 						)
 					}
@@ -883,7 +864,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			if (schema.properties !== undefined) {
 				if (!isRecord(schema.properties)) {
 					return this.#refuse(
-						'validateShapeDepth: raw schema properties must be a plain record',
+						'validateShape: raw schema properties must be a plain record',
 						'schema',
 					)
 				}
@@ -908,23 +889,14 @@ export class ShapeValidator implements ShapeValidatorInterface {
 				const variants = schema[key]
 				if (variants === undefined) continue
 				if (!INTRINSICS.array(variants)) {
-					return this.#refuse(
-						'validateShapeDepth: raw schema unions must be non-empty arrays',
-						'schema',
-					)
+					return this.#refuse('validateShape: raw schema unions must be non-empty arrays', 'schema')
 				}
 				const snapshot = readArrayEntries(variants)
 				if (!snapshot.success || snapshot.value.entries.length === 0) {
-					return this.#refuse(
-						'validateShapeDepth: raw schema unions must be non-empty arrays',
-						'schema',
-					)
+					return this.#refuse('validateShape: raw schema unions must be non-empty arrays', 'schema')
 				}
 				if (!snapshot.value.dense) {
-					return this.#refuse(
-						'validateShapeDepth: raw schema unions must be dense arrays',
-						'schema',
-					)
+					return this.#refuse('validateShape: raw schema unions must be dense arrays', 'schema')
 				}
 				for (
 					let variantIndex = 0;
@@ -942,7 +914,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 				stack[stack.length] = { operation: 'enter', schema: nested[index] }
 			}
 		}
-		this.#raw = INTRINSICS.apply(INTRINSICS.recall, this.#schemas, [source]) ?? 0
+		this.#raw = INTRINSICS.reflect.apply(INTRINSICS.recall, this.#schemas, [source]) ?? 0
 		return true
 	}
 
@@ -955,10 +927,10 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			const recorded =
 				typeof child !== 'object' || child === null
 					? 0
-					: (INTRINSICS.apply(INTRINSICS.recall, this.#schemas, [child]) ?? 0)
+					: (INTRINSICS.reflect.apply(INTRINSICS.recall, this.#schemas, [child]) ?? 0)
 			if (recorded + 1 > height) height = recorded + 1
 		}
-		INTRINSICS.apply(INTRINSICS.retain, this.#schemas, [schema, height])
+		INTRINSICS.reflect.apply(INTRINSICS.retain, this.#schemas, [schema, height])
 	}
 
 	#populate(current: ContractShape): boolean {
@@ -974,7 +946,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 				const properties = current.properties
 				if (!isRecord(properties)) {
 					return this.#refuse(
-						'validateShapeDepth: properties must be a plain property map',
+						'validateShape: properties must be a plain property map',
 						'properties',
 					)
 				}
@@ -985,7 +957,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 					const descriptorOutcome = attempt(() => INTRINSICS.describe(properties, key))
 					if (!descriptorOutcome.success) {
 						return this.#refuse(
-							'validateShapeDepth: every node must be a recognized shape',
+							'validateShape: every node must be a recognized shape',
 							'properties',
 							key,
 						)
@@ -1003,7 +975,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 					const childOutcome = attempt(() => current.properties[key])
 					if (!childOutcome.success) {
 						return this.#refuse(
-							'validateShapeDepth: every node must be a recognized shape',
+							'validateShape: every node must be a recognized shape',
 							'properties',
 							key,
 						)
@@ -1016,7 +988,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 					)
 					if (!stable.success) {
 						return this.#refuse(
-							'validateShapeDepth: every node must be a recognized shape',
+							'validateShape: every node must be a recognized shape',
 							'properties',
 							key,
 						)
@@ -1049,20 +1021,20 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			}
 			case 'union': {
 				if (!INTRINSICS.array(current.variants)) {
-					return this.#refuse('validateShapeDepth: variants must be a finite array', 'variants')
+					return this.#refuse('validateShape: variants must be a finite array', 'variants')
 				}
 				const snapshot = readArrayEntries(current.variants)
 				if (!snapshot.success) {
-					return this.#refuse('validateShapeDepth: variants must be a finite array', 'variants')
+					return this.#refuse('validateShape: variants must be a finite array', 'variants')
 				}
 				if (!snapshot.value.dense) {
-					return this.#refuse('validateShapeDepth: variants must be a dense data array', 'variants')
+					return this.#refuse('validateShape: variants must be a dense data array', 'variants')
 				}
 				const variants = snapshot.value.entries
 				const length = variants.length
 				if (this.#domain === undefined && length === 0) {
 					this.#domain = new ContractError(
-						'validateShapeDepth: a union shape needs at least one variant',
+						'validateShape: a union shape needs at least one variant',
 						{
 							code: 'empty',
 							context: { path: pathOf(this.#path), shape: 'union' },
@@ -1074,7 +1046,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 					const descriptorOutcome = attempt(() => INTRINSICS.describe(current.variants, key))
 					if (!descriptorOutcome.success) {
 						return this.#refuse(
-							'validateShapeDepth: every node must be a recognized shape',
+							'validateShape: every node must be a recognized shape',
 							'variants',
 							key,
 						)
@@ -1097,7 +1069,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 					)
 					if (!stable.success) {
 						return this.#refuse(
-							'validateShapeDepth: every node must be a recognized shape',
+							'validateShape: every node must be a recognized shape',
 							'variants',
 							key,
 						)
@@ -1122,20 +1094,20 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			}
 			case 'literal': {
 				if (!INTRINSICS.array(current.values)) {
-					return this.#refuse('validateShapeDepth: values must be a finite literal array', 'values')
+					return this.#refuse('validateShape: values must be a finite literal array', 'values')
 				}
 				const snapshot = readArrayEntries(current.values)
 				if (!snapshot.success) {
-					return this.#refuse('validateShapeDepth: values must be a finite literal array', 'values')
+					return this.#refuse('validateShape: values must be a finite literal array', 'values')
 				}
 				if (!snapshot.value.dense) {
-					return this.#refuse('validateShapeDepth: values must be a dense data array', 'values')
+					return this.#refuse('validateShape: values must be a dense data array', 'values')
 				}
 				const literals = snapshot.value.entries
 				const length = literals.length
 				if (this.#domain === undefined && length === 0) {
 					this.#domain = new ContractError(
-						'validateShapeDepth: a literal shape needs at least one value',
+						'validateShape: a literal shape needs at least one value',
 						{
 							code: 'empty',
 							context: { path: pathOf(this.#path), shape: 'literal' },
@@ -1152,18 +1124,14 @@ export class ShapeValidator implements ShapeValidatorInterface {
 					const descriptorOutcome = attempt(() => INTRINSICS.describe(current.values, key))
 					if (!descriptorOutcome.success) {
 						return this.#refuse(
-							'validateShapeDepth: every node must be a recognized shape',
+							'validateShape: every node must be a recognized shape',
 							'values',
 							key,
 						)
 					}
 					const descriptor = descriptorOutcome.value
 					if (descriptor === undefined || !INTRINSICS.own(descriptor, 'value')) {
-						return this.#refuse(
-							'validateShapeDepth: values must be a dense data array',
-							'values',
-							key,
-						)
+						return this.#refuse('validateShape: values must be a dense data array', 'values', key)
 					}
 					const value = literals[index]
 					const stable = attempt(
@@ -1173,27 +1141,23 @@ export class ShapeValidator implements ShapeValidatorInterface {
 					)
 					if (!stable.success) {
 						return this.#refuse(
-							'validateShapeDepth: every node must be a recognized shape',
+							'validateShape: every node must be a recognized shape',
 							'values',
 							key,
 						)
 					}
 					if (!stable.value) {
-						return this.#refuse(
-							'validateShapeDepth: values must be a stable data array',
-							'values',
-							key,
-						)
+						return this.#refuse('validateShape: values must be a stable data array', 'values', key)
 					}
 					if (!isLiteralValue(value)) {
 						return this.#refuse(
-							'validateShapeDepth: every literal value must be a string, number, or boolean',
+							'validateShape: every literal value must be a string, number, or boolean',
 							'values',
 							key,
 						)
 					}
 					if (matchesMember(values, value)) {
-						return this.#refuse('validateShapeDepth: literal values must be unique', 'values', key)
+						return this.#refuse('validateShape: literal values must be unique', 'values', key)
 					}
 					admitMember(values, value)
 					if (
@@ -1202,7 +1166,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 						!INTRINSICS.finite(value)
 					) {
 						this.#domain = new ContractError(
-							'validateShapeDepth: a literal shape may not contain non-finite number values',
+							'validateShape: a literal shape may not contain non-finite number values',
 							{
 								code: 'literal',
 								context: {
@@ -1276,13 +1240,13 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	): number {
 		const index = this.#captures.length
 		this.#captures[index] = { shape, category: this.#category, children, raw: this.#raw }
-		INTRINSICS.apply(INTRINSICS.retain, this.#index, [shape, index])
+		INTRINSICS.reflect.apply(INTRINSICS.retain, this.#index, [shape, index])
 		return index
 	}
 
 	#locate(shape: ContractShape | undefined): number | undefined {
 		if (shape === undefined) return undefined
-		return INTRINSICS.apply(INTRINSICS.recall, this.#index, [shape])
+		return INTRINSICS.reflect.apply(INTRINSICS.recall, this.#index, [shape])
 	}
 
 	// Everything the walk used to answer by walking again. Reading the discovery
@@ -1351,7 +1315,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			if (capture === undefined || capture.raw === 0) continue
 			if ((this.#reach[index] ?? 0) + capture.raw <= COMPILE_DEPTH_LIMIT) continue
 			this.#structure ??= new ContractError(
-				'validateShapeDepth: raw schema exceeds the compilation depth limit',
+				'validateShape: raw schema exceeds the compilation depth limit',
 				{ code: 'structure', context: { path: pathOf(this.#ascend(index), 'schema') } },
 			)
 		}
@@ -1413,7 +1377,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			if (chosen.second !== undefined) path[path.length] = chosen.second
 			depth += 1
 		}
-		throw new ContractError('validateShapeDepth: a shape exceeds the compilation depth limit', {
+		throw new ContractError('validateShape: a shape exceeds the compilation depth limit', {
 			code: 'depth',
 			context: { path: pathOf(path), limit: COMPILE_DEPTH_LIMIT },
 		})
@@ -1489,7 +1453,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 				segments += 1
 			}
 			if (frame.depth > COMPILE_DEPTH_LIMIT) {
-				throw new ContractError('validateShapeDepth: a shape exceeds the compilation depth limit', {
+				throw new ContractError('validateShape: a shape exceeds the compilation depth limit', {
 					code: 'depth',
 					context: { path: pathOf(path), limit: COMPILE_DEPTH_LIMIT },
 				})
@@ -1555,7 +1519,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 
 	static {
 		// Pinned while this class is DEFINED: `ShapeCloner`'s `#validateShape` and
-		// `validateShapeDepth` reach it through `ShapeValidator.prototype.validate`,
+		// `validateShape` reach it through `ShapeValidator.prototype.validate`,
 		// so an assignment there decides whether a shape gate the caller never
 		// touched ever runs.
 		pinMembers(ShapeValidator.prototype, 'ShapeValidator')

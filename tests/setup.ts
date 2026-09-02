@@ -23,7 +23,6 @@ import {
 	attempt,
 	booleanShape,
 	boundsOf,
-	canonicalizeValue,
 	canonicalStringify,
 	cloneJSONRecord,
 	cloneJSONValue,
@@ -67,7 +66,7 @@ import {
 	isRecord,
 	isRegExp,
 	isString,
-	isValidISOInstant,
+	matchesISOInstant,
 	jsonShape,
 	JSONCloner,
 	keyOf,
@@ -132,7 +131,7 @@ import {
 	unifySchemas,
 	unionOf,
 	unionShape,
-	validateShapeDepth,
+	validateShape,
 	valueToSchema,
 	whereOf,
 } from '@src/core'
@@ -1490,7 +1489,6 @@ export function publicDoors(): readonly PublicDoor[] {
 	// INSTRUMENT dispatching through the member under attack, and it reports the
 	// probe's own construction as the package's escape.
 	const instant = new Date()
-	const ancestors = new WeakSet<object>()
 	const coded: ReadonlyArray<readonly [string, () => unknown]> = [
 		['new ShapeCloner', () => new ShapeCloner(shape)],
 		['ShapeCloner.clone', () => new ShapeCloner(shape).clone()],
@@ -1505,7 +1503,7 @@ export function publicDoors(): readonly PublicDoor[] {
 		['cloneSchema', () => cloneSchema(schema)],
 		['cloneJSONValue', () => cloneJSONValue(record)],
 		['cloneJSONRecord', () => cloneJSONRecord(record)],
-		['validateShapeDepth', () => validateShapeDepth(shape)],
+		['validateShape', () => validateShape(shape)],
 		['compileSchema', () => compileSchema(shape)],
 		['compileGuard', () => compileGuard(shape)(record)],
 		['compileParser', () => compileParser(shape)(record)],
@@ -1555,7 +1553,6 @@ export function publicDoors(): readonly PublicDoor[] {
 		['valueToSchema', () => valueToSchema(record)],
 		['samplesToSchema', () => samplesToSchema([record, record])],
 		['canonicalStringify', () => canonicalStringify(record)],
-		['canonicalizeValue', () => canonicalizeValue(record, ancestors)],
 		// Documented `@throws {ContractError} When the JSON tree cannot be read`, so
 		// its refusal contract is coded rather than total.
 		['parseJSONValue', () => parseJSONValue(record)],
@@ -1628,7 +1625,7 @@ export function publicDoors(): readonly PublicDoor[] {
 		['resolveField', () => resolveField(record, 'name')],
 		['preview', () => preview(record)],
 		['stringToFormat', () => stringToFormat('a@b.co')],
-		['isValidISOInstant', () => isValidISOInstant('2024-01-15')],
+		['matchesISOInstant', () => matchesISOInstant('2024-01-15')],
 		['parseArray', () => parseArray(record.tags)],
 		['parseEnum', () => parseEnum('a', ['a', 'b'])],
 		['parseEnum/stranger', () => parseEnum('zzz', ['a', 'b'])],

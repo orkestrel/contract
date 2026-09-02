@@ -39,13 +39,13 @@ export class ContractError extends Error {
 		// records: `helpers.ts` imports this module, so calling it here would invert
 		// the dependency. It stays aligned with that helper, accessor branch and
 		// answering `declare` included, so the two copies cannot pin differently.
-		const members = INTRINSICS.members(this.prototype)
+		const members = INTRINSICS.reflect.members(this.prototype)
 		for (let index = 0; index < members.length; index += 1) {
 			const key = members[index]
 			if (key === undefined) continue
 			const declared = INTRINSICS.describe(this.prototype, key)
 			const accessor = declared !== undefined && !INTRINSICS.own(declared, 'value')
-			INTRINSICS.declare(
+			INTRINSICS.reflect.define(
 				this.prototype,
 				key,
 				accessor ? { configurable: false } : { writable: false, configurable: false },

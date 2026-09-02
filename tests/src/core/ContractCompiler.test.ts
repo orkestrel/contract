@@ -209,9 +209,7 @@ describe('ContractCompiler', () => {
 
 		expect(cost).toBeLessThan(1_000)
 		expect(error.code).toBe('expansion')
-		expect(error.message).toBe(
-			'validateShapeDepth: a shape expands past the compilation node limit',
-		)
+		expect(error.message).toBe('validateShape: a shape expands past the compilation node limit')
 		// Every later getter replays that exact terminal error rather than retrying.
 		expect(captureContractError(() => compiler.guard)).toBe(error)
 		expect(captureContractError(() => compiler.contract)).toBe(error)

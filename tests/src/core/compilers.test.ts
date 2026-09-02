@@ -38,7 +38,7 @@ import {
 	ShapeValidator,
 	stringShape,
 	unionShape,
-	validateShapeDepth,
+	validateShape,
 } from '@src/core'
 import {
 	buildDeepShape,
@@ -150,37 +150,39 @@ describe('validator consolidation (R6-A)', () => {
 		const surface: object = core
 
 		expect(Object.hasOwn(surface, 'ShapeValidator')).toBe(true)
-		expect(Object.hasOwn(surface, 'validateShapeDepth')).toBe(true)
-		// The deprecated second door is gone, with no alias behind it. Its whole
-		// body re-ran rules the shared gate already enforces, and a second name for
-		// one rule set is a second contract waiting to drift apart from the first.
-		expect(Object.hasOwn(surface, 'validateShape')).toBe(false)
+		expect(Object.hasOwn(surface, 'validateShape')).toBe(true)
+		// ONE door, asked as a population rather than as a list of names a removed
+		// spelling could fall off. A second name for one rule set is a second
+		// contract waiting to drift apart from the first, so any further export
+		// whose name opens with `validate` fails this row.
+		expect(Object.keys(surface).filter((name) => name.startsWith('validate'))).toEqual([
+			'validateShape',
+		])
 	})
 
 	it('keeps every rule the removed prepass rechecked, at the remaining door', () => {
 		// The three the removed body walked the graph a second time for.
 		expect(
-			captureContractError(() => validateShapeDepth(buildDeepShape(COMPILE_DEPTH_LIMIT + 1))),
+			captureContractError(() => validateShape(buildDeepShape(COMPILE_DEPTH_LIMIT + 1))),
 		).toMatchObject({
 			code: 'depth',
-			message: 'validateShapeDepth: a shape exceeds the compilation depth limit',
+			message: 'validateShape: a shape exceeds the compilation depth limit',
 		})
 		expect(
 			captureContractError(() =>
-				validateShapeDepth({ type: 'number', integer: true, min: 2.5, max: 2.6 }),
+				validateShape({ type: 'number', integer: true, min: 2.5, max: 2.6 }),
 			),
 		).toMatchObject({
 			code: 'range',
-			message: 'validateShapeDepth: an integer number shape has an empty integer range',
+			message: 'validateShape: an integer number shape has an empty integer range',
 		})
 		expect(
 			captureContractError(() =>
-				validateShapeDepth({ type: 'array', items: optionalShape(stringShape()) }),
+				validateShape({ type: 'array', items: optionalShape(stringShape()) }),
 			),
 		).toMatchObject({
 			code: 'placement',
-			message:
-				'validateShapeDepth: an optional shape may only appear as a direct object-property value',
+			message: 'validateShape: an optional shape may only appear as a direct object-property value',
 		})
 	})
 
@@ -206,57 +208,57 @@ describe('validator consolidation (R6-A)', () => {
 	})
 })
 
-describe('validateShapeDepth', () => {
+describe('validateShape', () => {
 	it.each([
 		[
 			'cloneShape',
 			(shape: ContractShape) => cloneShape(shape),
-			'validateShapeDepth: every structural child must be a shape',
+			'validateShape: every structural child must be a shape',
 		],
 		[
 			'ownShape',
 			(shape: ContractShape) => ownShape(shape),
-			'validateShapeDepth: every structural child must be a shape',
+			'validateShape: every structural child must be a shape',
 		],
 		[
-			'validateShapeDepth',
-			(shape: ContractShape) => validateShapeDepth(shape),
-			'validateShapeDepth: every structural child must be a shape',
+			'validateShape',
+			(shape: ContractShape) => validateShape(shape),
+			'validateShape: every structural child must be a shape',
 		],
 		[
 			'compileSchema',
 			(shape: ContractShape) => compileSchema(shape),
-			'validateShapeDepth: every structural child must be a shape',
+			'validateShape: every structural child must be a shape',
 		],
 		[
 			'compileGuard',
 			(shape: ContractShape) => compileGuard(shape),
-			'validateShapeDepth: every structural child must be a shape',
+			'validateShape: every structural child must be a shape',
 		],
 		[
 			'compileParser',
 			(shape: ContractShape) => compileParser(shape),
-			'validateShapeDepth: every structural child must be a shape',
+			'validateShape: every structural child must be a shape',
 		],
 		[
 			'compileGenerator',
 			(shape: ContractShape) => compileGenerator(shape, () => 0),
-			'validateShapeDepth: every structural child must be a shape',
+			'validateShape: every structural child must be a shape',
 		],
 		[
 			'compileReporter',
 			(shape: ContractShape) => compileReporter(shape, undefined),
-			'validateShapeDepth: every structural child must be a shape',
+			'validateShape: every structural child must be a shape',
 		],
 		[
 			'compileAuditor',
 			(shape: ContractShape) => compileAuditor(shape, undefined),
-			'validateShapeDepth: every structural child must be a shape',
+			'validateShape: every structural child must be a shape',
 		],
 		[
 			'createContract',
 			(shape: ContractShape) => createContract(shape),
-			'validateShapeDepth: every structural child must be a shape',
+			'validateShape: every structural child must be a shape',
 		],
 	] satisfies ReadonlyArray<readonly [string, (shape: ContractShape) => unknown, string]>)(
 		'%s refuses an accessor-backed property entry without invoking it',
@@ -282,7 +284,7 @@ describe('validateShapeDepth', () => {
 	it.each([
 		['cloneShape', (shape: ContractShape) => cloneShape(shape), true],
 		['ownShape', (shape: ContractShape) => ownShape(shape), true],
-		['validateShapeDepth', (shape: ContractShape) => validateShapeDepth(shape), false],
+		['validateShape', (shape: ContractShape) => validateShape(shape), false],
 		['compileSchema', (shape: ContractShape) => compileSchema(shape), true],
 		['compileGuard', (shape: ContractShape) => compileGuard(shape), true],
 		['compileParser', (shape: ContractShape) => compileParser(shape), true],
@@ -335,10 +337,10 @@ describe('validateShapeDepth', () => {
 						field === 'type'
 							? ownership
 								? 'cloneShape: every node needs an own data discriminant'
-								: 'validateShapeDepth: every node must be a recognized shape'
+								: 'validateShape: every node must be a recognized shape'
 							: ownership
 								? 'cloneShape: shape accessors cannot be owned faithfully'
-								: 'validateShapeDepth: every node must be a recognized shape'
+								: 'validateShape: every node must be a recognized shape'
 					expect(outcome.error.code, `${category}.${field}`).toBe('structure')
 					expect(outcome.error.message, `${category}.${field}`).toBe(message)
 					expect(outcome.error.context?.path, `${category}.${field}`).toEqual(path)
@@ -498,7 +500,7 @@ describe('validateShapeDepth', () => {
 
 		expect(reads).toBe(2)
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('validateShapeDepth: string min must be a number')
+		expect(error.message).toBe('validateShape: string min must be a number')
 		expect(error.context?.path).toEqual(['properties', 'value', 'min'])
 	})
 
@@ -769,21 +771,21 @@ describe('validateShapeDepth', () => {
 			{
 				name: 'raw properties undefined',
 				shape: { type: 'raw', schema: { properties } },
-				message: 'validateShapeDepth: every raw schema child must be a plain record',
+				message: 'validateShape: every raw schema child must be a plain record',
 				code: 'structure',
 				context: { path: ['schema'] },
 			},
 			{
 				name: 'raw anyOf undefined',
 				shape: { type: 'raw', schema: { anyOf } },
-				message: 'validateShapeDepth: every raw schema child must be a plain record',
+				message: 'validateShape: every raw schema child must be a plain record',
 				code: 'structure',
 				context: { path: ['schema'] },
 			},
 			{
 				name: 'raw oneOf undefined',
 				shape: { type: 'raw', schema: { oneOf } },
-				message: 'validateShapeDepth: every raw schema child must be a plain record',
+				message: 'validateShape: every raw schema child must be a plain record',
 				code: 'structure',
 				context: { path: ['schema'] },
 			},
@@ -791,7 +793,7 @@ describe('validateShapeDepth', () => {
 				name: 'flagged string',
 				shape: { type: 'string', pattern: /a/i },
 				message:
-					'validateShapeDepth: a string shape pattern must not use flags; use inline pattern constructs instead',
+					'validateShape: a string shape pattern must not use flags; use inline pattern constructs instead',
 				code: 'pattern',
 				context: { path: [], shape: 'string', received: '/a/i' },
 			},
@@ -807,8 +809,8 @@ describe('validateShapeDepth', () => {
 					outcome: attempt(() => new ShapeValidator(entry.shape).validate()),
 				},
 				{
-					name: 'validateShapeDepth',
-					outcome: attempt(() => validateShapeDepth(entry.shape)),
+					name: 'validateShape',
+					outcome: attempt(() => validateShape(entry.shape)),
 				},
 				{ name: 'compileSchema', outcome: attempt(() => compileSchema(entry.shape)) },
 				{ name: 'compileGuard', outcome: attempt(() => compileGuard(entry.shape)) },
@@ -836,7 +838,7 @@ describe('validateShapeDepth', () => {
 				'ownShape',
 				'cloneShape',
 				'ShapeValidator.validate',
-				'validateShapeDepth',
+				'validateShape',
 				'compileSchema',
 				'compileGuard',
 				'compileParser',
@@ -904,7 +906,7 @@ describe('validateShapeDepth', () => {
 			const outcomes = [
 				attempt(() => ownShape(shape)),
 				attempt(() => cloneShape(shape)),
-				attempt(() => validateShapeDepth(shape)),
+				attempt(() => validateShape(shape)),
 				attempt(() => compileSchema(shape)),
 				attempt(() => compileGuard(shape)),
 				attempt(() => compileParser(shape)),
@@ -920,9 +922,7 @@ describe('validateShapeDepth', () => {
 				expect(isContractError(outcome.error)).toBe(true)
 				if (!isContractError(outcome.error)) continue
 				expect(outcome.error.code).toBe('structure')
-				expect(outcome.error.message).toBe(
-					'validateShapeDepth: every node must be a recognized shape',
-				)
+				expect(outcome.error.message).toBe('validateShape: every node must be a recognized shape')
 			}
 		}
 	})
@@ -982,7 +982,7 @@ describe('validateShapeDepth', () => {
 			const malformed = [
 				attempt(() => ownShape(entry.malformed)),
 				attempt(() => cloneShape(entry.malformed)),
-				attempt(() => validateShapeDepth(entry.malformed)),
+				attempt(() => validateShape(entry.malformed)),
 				attempt(() => compileSchema(entry.malformed)),
 				attempt(() => compileGuard(entry.malformed)),
 				attempt(() => compileParser(entry.malformed)),
@@ -994,7 +994,7 @@ describe('validateShapeDepth', () => {
 			const controls = [
 				attempt(() => ownShape(entry.control)),
 				attempt(() => cloneShape(entry.control)),
-				attempt(() => validateShapeDepth(entry.control)),
+				attempt(() => validateShape(entry.control)),
 				attempt(() => compileSchema(entry.control)),
 				attempt(() => compileGuard(entry.control)),
 				attempt(() => compileParser(entry.control)),
@@ -1028,8 +1028,8 @@ describe('validateShapeDepth', () => {
 				{ name: 'ownShape', outcome: attempt(() => ownShape(entry.shape)) },
 				{ name: 'cloneShape', outcome: attempt(() => cloneShape(entry.shape)) },
 				{
-					name: 'validateShapeDepth',
-					outcome: attempt(() => validateShapeDepth(entry.shape)),
+					name: 'validateShape',
+					outcome: attempt(() => validateShape(entry.shape)),
 				},
 				{ name: 'compileSchema', outcome: attempt(() => compileSchema(entry.shape)) },
 				{ name: 'compileGuard', outcome: attempt(() => compileGuard(entry.shape)) },
@@ -1052,7 +1052,7 @@ describe('validateShapeDepth', () => {
 			expect(outcomes.map((result) => result.name)).toEqual([
 				'ownShape',
 				'cloneShape',
-				'validateShapeDepth',
+				'validateShape',
 				'compileSchema',
 				'compileGuard',
 				'compileParser',
@@ -1078,7 +1078,7 @@ describe('validateShapeDepth', () => {
 			const outcomes = [
 				attempt(() => ownShape(control)),
 				attempt(() => cloneShape(control)),
-				attempt(() => validateShapeDepth(control)),
+				attempt(() => validateShape(control)),
 				attempt(() => compileSchema(control)),
 				attempt(() => compileGuard(control)),
 				attempt(() => compileParser(control)),
@@ -1198,8 +1198,8 @@ describe('validateShapeDepth', () => {
 		]
 
 		for (const entry of cases) {
-			expect(() => validateShapeDepth(entry.shape)).toThrow(ContractError)
-			const error = captureContractError(() => validateShapeDepth(entry.shape))
+			expect(() => validateShape(entry.shape)).toThrow(ContractError)
+			const error = captureContractError(() => validateShape(entry.shape))
 			expect(isContractError(error)).toBe(true)
 			expect(error.code).toBe(entry.code)
 		}
@@ -1210,11 +1210,11 @@ describe('validateShapeDepth', () => {
 		raw.items = raw
 		const shape: ContractShape = raw
 
-		expect(() => validateShapeDepth(shape)).toThrow(ContractError)
-		const error = captureContractError(() => validateShapeDepth(shape))
+		expect(() => validateShape(shape)).toThrow(ContractError)
+		const error = captureContractError(() => validateShape(shape))
 		expect(error).toBeInstanceOf(ContractError)
 		expect(error.code).toBe('cycle')
-		expect(error.message).toBe('validateShapeDepth: a shape graph may not contain a cycle')
+		expect(error.message).toBe('validateShape: a shape graph may not contain a cycle')
 		expect(error.context?.path).toEqual(['items'])
 	})
 
@@ -1223,8 +1223,8 @@ describe('validateShapeDepth', () => {
 		raw.properties.self = raw
 		const shape: ContractShape = raw
 
-		expect(() => validateShapeDepth(shape)).toThrow(ContractError)
-		const error = captureContractError(() => validateShapeDepth(shape))
+		expect(() => validateShape(shape)).toThrow(ContractError)
+		const error = captureContractError(() => validateShape(shape))
 		expect(error).toBeInstanceOf(ContractError)
 		expect(error.code).toBe('cycle')
 		expect(error.context?.path).toEqual(['properties', 'self'])
@@ -1235,8 +1235,8 @@ describe('validateShapeDepth', () => {
 		raw.variants.push(raw)
 		const shape: ContractShape = raw
 
-		expect(() => validateShapeDepth(shape)).toThrow(ContractError)
-		const error = captureContractError(() => validateShapeDepth(shape))
+		expect(() => validateShape(shape)).toThrow(ContractError)
+		const error = captureContractError(() => validateShape(shape))
 		expect(error).toBeInstanceOf(ContractError)
 		expect(error.code).toBe('cycle')
 		expect(error.context?.path).toEqual(['variants', '0'])
@@ -1244,58 +1244,54 @@ describe('validateShapeDepth', () => {
 
 	it('allows a shared child reached through separate non-cyclic paths', () => {
 		const child = objectShape({ value: stringShape() })
-		expect(() => validateShapeDepth(objectShape({ first: child, second: child }))).not.toThrow()
+		expect(() => validateShape(objectShape({ first: child, second: child }))).not.toThrow()
 	})
 
 	it('throws on an optional shape used as an array item', () => {
-		expect(() => validateShapeDepth(arrayShape(optionalShape(stringShape())))).toThrow(
-			'validateShapeDepth: an optional shape may only appear as a direct object-property value',
+		expect(() => validateShape(arrayShape(optionalShape(stringShape())))).toThrow(
+			'validateShape: an optional shape may only appear as a direct object-property value',
 		)
 	})
 
 	it('throws on an optional shape used as a union variant', () => {
-		expect(() =>
-			validateShapeDepth(unionShape(optionalShape(stringShape()), integerShape())),
-		).toThrow(
-			'validateShapeDepth: an optional shape may only appear as a direct object-property value',
+		expect(() => validateShape(unionShape(optionalShape(stringShape()), integerShape()))).toThrow(
+			'validateShape: an optional shape may only appear as a direct object-property value',
 		)
 	})
 
 	it('throws on an optional shape used as a nullable inner', () => {
-		expect(() => validateShapeDepth(nullableShape(optionalShape(stringShape())))).toThrow(
-			'validateShapeDepth: an optional shape may only appear as a direct object-property value',
+		expect(() => validateShape(nullableShape(optionalShape(stringShape())))).toThrow(
+			'validateShape: an optional shape may only appear as a direct object-property value',
 		)
 	})
 
 	it('throws on an optional shape used as another optional inner', () => {
-		expect(() => validateShapeDepth(optionalShape(optionalShape(stringShape())))).toThrow(
-			'validateShapeDepth: an optional shape may only appear as a direct object-property value',
+		expect(() => validateShape(optionalShape(optionalShape(stringShape())))).toThrow(
+			'validateShape: an optional shape may only appear as a direct object-property value',
 		)
 	})
 
 	it('throws on an optional shape used as additionalProperties', () => {
 		expect(() =>
-			validateShapeDepth(objectShape({}, { additionalProperties: optionalShape(stringShape()) })),
-		).toThrow(
-			'validateShapeDepth: an optional shape may only appear as a direct object-property value',
-		)
+			validateShape(objectShape({}, { additionalProperties: optionalShape(stringShape()) })),
+		).toThrow('validateShape: an optional shape may only appear as a direct object-property value')
 	})
 
 	it('throws on a top-level optional shape', () => {
-		expect(() => validateShapeDepth(optionalShape(stringShape()))).toThrow(
-			'validateShapeDepth: an optional shape may only appear as a direct object-property value',
+		expect(() => validateShape(optionalShape(stringShape()))).toThrow(
+			'validateShape: an optional shape may only appear as a direct object-property value',
 		)
 	})
 
 	it('throws on an empty union', () => {
-		expect(() => validateShapeDepth(unionShape())).toThrow(
-			'validateShapeDepth: a union shape needs at least one variant',
+		expect(() => validateShape(unionShape())).toThrow(
+			'validateShape: a union shape needs at least one variant',
 		)
 	})
 
 	it('throws on an empty literal', () => {
-		expect(() => validateShapeDepth(literalShape([]))).toThrow(
-			'validateShapeDepth: a literal shape needs at least one value',
+		expect(() => validateShape(literalShape([]))).toThrow(
+			'validateShape: a literal shape needs at least one value',
 		)
 	})
 
@@ -1316,10 +1312,10 @@ describe('validateShapeDepth', () => {
 		})
 		const shape: ContractShape = { type: 'literal', values }
 
-		const error = captureContractError(() => validateShapeDepth(shape))
+		const error = captureContractError(() => validateShape(shape))
 
 		expect(error.code).toBe('structure')
-		expect(error.message).toContain('validateShapeDepth: values must be a finite literal array')
+		expect(error.message).toContain('validateShape: values must be a finite literal array')
 		expect(reads).toBe(0)
 	})
 
@@ -1340,10 +1336,10 @@ describe('validateShapeDepth', () => {
 		})
 		const shape: ContractShape = { type: 'union', variants }
 
-		const error = captureContractError(() => validateShapeDepth(shape))
+		const error = captureContractError(() => validateShape(shape))
 
 		expect(error.code).toBe('structure')
-		expect(error.message).toContain('validateShapeDepth: variants must be a finite array')
+		expect(error.message).toContain('validateShape: variants must be a finite array')
 		expect(reads).toBe(0)
 	})
 
@@ -1351,42 +1347,42 @@ describe('validateShapeDepth', () => {
 		const values: LiteralValue[] = []
 		values.length = 2
 		values[0] = 'present'
-		const literalError = captureContractError(() => validateShapeDepth({ type: 'literal', values }))
+		const literalError = captureContractError(() => validateShape({ type: 'literal', values }))
 		expect(literalError.code).toBe('structure')
-		expect(literalError.message).toBe('validateShapeDepth: values must be a dense data array')
+		expect(literalError.message).toBe('validateShape: values must be a dense data array')
 
 		const variants: ContractShape[] = []
 		variants.length = 2
 		variants[0] = stringShape()
-		const unionError = captureContractError(() => validateShapeDepth({ type: 'union', variants }))
+		const unionError = captureContractError(() => validateShape({ type: 'union', variants }))
 		expect(unionError.code).toBe('structure')
-		expect(unionError.message).toBe('validateShapeDepth: variants must be a dense data array')
+		expect(unionError.message).toBe('validateShape: variants must be a dense data array')
 		expect(unionError.context?.path).toEqual(['variants'])
 	})
 
 	it('throws on a literal shape containing a non-finite number value', () => {
-		expect(() => validateShapeDepth(literalShape([Number.NaN]))).toThrow(
-			'validateShapeDepth: a literal shape may not contain non-finite number values',
+		expect(() => validateShape(literalShape([Number.NaN]))).toThrow(
+			'validateShape: a literal shape may not contain non-finite number values',
 		)
-		expect(() => validateShapeDepth(literalShape([Number.POSITIVE_INFINITY]))).toThrow(
-			'validateShapeDepth: a literal shape may not contain non-finite number values',
+		expect(() => validateShape(literalShape([Number.POSITIVE_INFINITY]))).toThrow(
+			'validateShape: a literal shape may not contain non-finite number values',
 		)
-		expect(() => validateShapeDepth(literalShape([Number.NEGATIVE_INFINITY]))).toThrow(
-			'validateShapeDepth: a literal shape may not contain non-finite number values',
+		expect(() => validateShape(literalShape([Number.NEGATIVE_INFINITY]))).toThrow(
+			'validateShape: a literal shape may not contain non-finite number values',
 		)
 		// A finite number literal alongside other values still passes.
-		expect(() => validateShapeDepth(literalShape([1, 'a', 2.5]))).not.toThrow()
+		expect(() => validateShape(literalShape([1, 'a', 2.5]))).not.toThrow()
 	})
 
 	it('throws on a string shape with min greater than max', () => {
-		expect(() => validateShapeDepth({ type: 'string', min: 5, max: 1 })).toThrow(
-			'validateShapeDepth: a string shape has min greater than max',
+		expect(() => validateShape({ type: 'string', min: 5, max: 1 })).toThrow(
+			'validateShape: a string shape has min greater than max',
 		)
 	})
 
 	it('throws on a number shape with min greater than max', () => {
-		expect(() => validateShapeDepth(numberShape({ min: 5, max: 1 }))).toThrow(
-			'validateShapeDepth: a number shape has min greater than max',
+		expect(() => validateShape(numberShape({ min: 5, max: 1 }))).toThrow(
+			'validateShape: a number shape has min greater than max',
 		)
 	})
 
@@ -1397,7 +1393,7 @@ describe('validateShapeDepth', () => {
 		]
 
 		for (const shape of shapes) {
-			const error = captureContractError(() => validateShapeDepth(shape))
+			const error = captureContractError(() => validateShape(shape))
 			expect(error.code).toBe('bound')
 			expect(error.context?.limit).toBe('finite number')
 		}
@@ -1418,13 +1414,11 @@ describe('validateShapeDepth', () => {
 		expect(COMPILE_DEPTH_LIMIT).toBe(512)
 	})
 
-	it('reports depth from the structural gate before validateShapeDepth reaches its duplicate branch', () => {
-		const error = captureContractError(() =>
-			validateShapeDepth(buildDeepShape(COMPILE_DEPTH_LIMIT + 1)),
-		)
+	it('reports depth from the structural gate before validateShape reaches its duplicate branch', () => {
+		const error = captureContractError(() => validateShape(buildDeepShape(COMPILE_DEPTH_LIMIT + 1)))
 
 		expect(error.code).toBe('depth')
-		expect(error.message).toBe('validateShapeDepth: a shape exceeds the compilation depth limit')
+		expect(error.message).toBe('validateShape: a shape exceeds the compilation depth limit')
 	})
 
 	it('rejects excessive depth at every standalone compiler entry before recursion', () => {
@@ -1467,16 +1461,14 @@ describe('validateShapeDepth', () => {
 			() => compileGenerator(refused, () => 0),
 			() => compileReporter(refused, undefined),
 			() => compileAuditor(refused, undefined),
-			() => validateShapeDepth(refused),
-			() => validateShapeDepth(refused),
+			() => validateShape(refused),
+			() => validateShape(refused),
 			() => createContract(refused),
 		]
 		for (const door of doors) {
 			const error = captureContractError(door)
 			expect(error.code).toBe('expansion')
-			expect(error.message).toBe(
-				'validateShapeDepth: a shape expands past the compilation node limit',
-			)
+			expect(error.message).toBe('validateShape: a shape expands past the compilation node limit')
 			expect(error.context?.limit).toBe(COMPILE_NODE_LIMIT)
 			expect(error.context?.received).toBe('32767')
 			expect(error.context?.path).toEqual([])
@@ -1499,35 +1491,33 @@ describe('validateShapeDepth', () => {
 	})
 
 	it('throws on an array shape with min greater than max', () => {
-		expect(() => validateShapeDepth(arrayShape(stringShape(), { min: 5, max: 1 }))).toThrow(
-			'validateShapeDepth: an array shape has min greater than max',
+		expect(() => validateShape(arrayShape(stringShape(), { min: 5, max: 1 }))).toThrow(
+			'validateShape: an array shape has min greater than max',
 		)
 	})
 
 	it('throws on an integer shape with an empty integer range', () => {
-		expect(() => validateShapeDepth(integerShape({ min: 2.5, max: 2.6 }))).toThrow(
-			'validateShapeDepth: an integer number shape has an empty integer range',
+		expect(() => validateShape(integerShape({ min: 2.5, max: 2.6 }))).toThrow(
+			'validateShape: an integer number shape has an empty integer range',
 		)
 	})
 
 	it('does not throw on legal placements', () => {
 		// optional as a direct object property
-		expect(() =>
-			validateShapeDepth(objectShape({ bio: optionalShape(stringShape()) })),
-		).not.toThrow()
+		expect(() => validateShape(objectShape({ bio: optionalShape(stringShape()) }))).not.toThrow()
 		// bounds where min === max
-		expect(() => validateShapeDepth(stringShape({ min: 3, max: 3 }))).not.toThrow()
-		expect(() => validateShapeDepth(numberShape({ min: 3, max: 3 }))).not.toThrow()
-		expect(() => validateShapeDepth(arrayShape(stringShape(), { min: 2, max: 2 }))).not.toThrow()
-		expect(() => validateShapeDepth(integerShape({ min: 2, max: 3 }))).not.toThrow()
+		expect(() => validateShape(stringShape({ min: 3, max: 3 }))).not.toThrow()
+		expect(() => validateShape(numberShape({ min: 3, max: 3 }))).not.toThrow()
+		expect(() => validateShape(arrayShape(stringShape(), { min: 2, max: 2 }))).not.toThrow()
+		expect(() => validateShape(integerShape({ min: 2, max: 3 }))).not.toThrow()
 		// null / json / raw / boolean leaves
-		expect(() => validateShapeDepth(nullShape())).not.toThrow()
-		expect(() => validateShapeDepth(jsonShape())).not.toThrow()
-		expect(() => validateShapeDepth(rawShape({}))).not.toThrow()
-		expect(() => validateShapeDepth(booleanShape())).not.toThrow()
+		expect(() => validateShape(nullShape())).not.toThrow()
+		expect(() => validateShape(jsonShape())).not.toThrow()
+		expect(() => validateShape(rawShape({}))).not.toThrow()
+		expect(() => validateShape(booleanShape())).not.toThrow()
 		// nested legal composites
 		expect(() =>
-			validateShapeDepth(
+			validateShape(
 				objectShape({
 					tags: arrayShape(
 						objectShape({
@@ -1583,8 +1573,8 @@ describe('malformed shape children', () => {
 		const revokedCodes = [
 			() => ownShape(revokedSource.shape),
 			() => cloneShape(revokedSource.shape),
-			() => validateShapeDepth(revokedSource.shape),
-			() => validateShapeDepth(revokedSource.shape),
+			() => validateShape(revokedSource.shape),
+			() => validateShape(revokedSource.shape),
 		].map((operation) => captureContractError(operation).code)
 
 		expect(revokedCodes).toEqual(['clone', 'clone', 'structure', 'structure'])
@@ -1592,8 +1582,8 @@ describe('malformed shape children', () => {
 		const throwingCodes = [
 			() => ownShape(throwing),
 			() => cloneShape(throwing),
-			() => validateShapeDepth(throwing),
-			() => validateShapeDepth(throwing),
+			() => validateShape(throwing),
+			() => validateShape(throwing),
 			() => compileSchema(throwing),
 			() => compileGuard(throwing),
 			() => compileParser(throwing),
@@ -1627,7 +1617,7 @@ describe('malformed shape children', () => {
 		const outcomes = [
 			attempt(() => ownShape(primitive)),
 			attempt(() => cloneShape(primitive)),
-			attempt(() => validateShapeDepth(primitive)),
+			attempt(() => validateShape(primitive)),
 			attempt(() => compileSchema(primitive)),
 			attempt(() => compileGuard(primitive)),
 			attempt(() => compileParser(primitive)),
@@ -1750,7 +1740,7 @@ describe('malformed shape children', () => {
 			})
 			Object.freeze(entry.shape)
 			const errors = [
-				captureContractError(() => validateShapeDepth(entry.shape)),
+				captureContractError(() => validateShape(entry.shape)),
 				captureContractError(() => compileSchema(entry.shape)),
 				captureContractError(() => compileGuard(entry.shape)),
 				captureContractError(() => compileParser(entry.shape)),
@@ -1774,7 +1764,7 @@ describe('malformed shape children', () => {
 		Object.freeze(literal.values)
 		Object.freeze(literal)
 		for (const error of [
-			captureContractError(() => validateShapeDepth(literal)),
+			captureContractError(() => validateShape(literal)),
 			captureContractError(() => compileSchema(literal)),
 			captureContractError(() => compileGuard(literal)),
 			captureContractError(() => compileParser(literal)),
@@ -1796,24 +1786,24 @@ describe('malformed shape children', () => {
 		}> = [
 			{
 				shape: JSON.parse('{}'),
-				message: 'validateShapeDepth: every node must be a recognized shape',
+				message: 'validateShape: every node must be a recognized shape',
 			},
 			{
 				shape: { type: 'array', items: missing.child },
-				message: 'validateShapeDepth: every structural child must be a shape',
+				message: 'validateShape: every structural child must be a shape',
 			},
 			{
 				shape: JSON.parse('{"type":"object"}'),
-				message: 'validateShapeDepth: properties must be a plain property map',
+				message: 'validateShape: properties must be a plain property map',
 			},
 			{
 				shape: JSON.parse('{"type":"union"}'),
-				message: 'validateShapeDepth: variants must be a finite array',
+				message: 'validateShape: variants must be a finite array',
 			},
 		]
 
 		for (const entry of cases) {
-			const error = captureContractError(() => validateShapeDepth(entry.shape))
+			const error = captureContractError(() => validateShape(entry.shape))
 			expect(error.code).toBe('structure')
 			expect(error.message).toBe(entry.message)
 		}
@@ -1848,7 +1838,7 @@ describe('malformed shape children', () => {
 
 		for (const shape of cases) {
 			const errors = [
-				captureContractError(() => validateShapeDepth(shape)),
+				captureContractError(() => validateShape(shape)),
 				captureContractError(() => compileSchema(shape)),
 				captureContractError(() => compileGuard(shape)),
 				captureContractError(() => compileParser(shape)),
@@ -1962,7 +1952,7 @@ describe('malformed shape children', () => {
 
 		for (const shape of cases) {
 			for (const error of [
-				captureContractError(() => validateShapeDepth(shape)),
+				captureContractError(() => validateShape(shape)),
 				captureContractError(() => compileSchema(shape)),
 				captureContractError(() => compileGuard(shape)),
 				captureContractError(() => compileParser(shape)),
@@ -1987,7 +1977,7 @@ describe('malformed shape children', () => {
 		})
 		Object.defineProperty(shape, 'variants', { value: variants })
 
-		const error = captureContractError(() => validateShapeDepth(shape))
+		const error = captureContractError(() => validateShape(shape))
 		expect(error.code).toBe('structure')
 		expect(error.context?.path).toEqual(['variants'])
 	})
@@ -2003,7 +1993,7 @@ describe('malformed shape children', () => {
 			const properties: Record<string, ContractShape> = Object.create(null)
 			const missing: { readonly child: ContractShape } = JSON.parse('{}')
 			for (const key of order) properties[key] = key === 'cycle' ? cycle : missing.child
-			const error = captureContractError(() => validateShapeDepth({ type: 'object', properties }))
+			const error = captureContractError(() => validateShape({ type: 'object', properties }))
 			codes.push(error.code)
 		}
 
@@ -2035,7 +2025,7 @@ describe('malformed shape children', () => {
 		]
 
 		for (const entry of cases) {
-			const depth = captureContractError(() => validateShapeDepth(entry.shape))
+			const depth = captureContractError(() => validateShape(entry.shape))
 			const schema = captureContractError(() => compileSchema(entry.shape))
 			const guard = captureContractError(() => compileGuard(entry.shape))
 			const parser = captureContractError(() => compileParser(entry.shape))
@@ -2096,7 +2086,7 @@ describe('malformed shape children', () => {
 			const errors = [
 				captureContractError(() => cloneShape(entry.shape)),
 				captureContractError(() => ownShape(entry.shape)),
-				captureContractError(() => validateShapeDepth(entry.shape)),
+				captureContractError(() => validateShape(entry.shape)),
 				captureContractError(() => compileSchema(entry.shape)),
 				captureContractError(() => compileGuard(entry.shape)),
 				captureContractError(() => compileParser(entry.shape)),
@@ -2156,7 +2146,7 @@ describe('malformed shape children', () => {
 			const errors = [
 				captureContractError(() => cloneShape(entry.shape)),
 				captureContractError(() => ownShape(entry.shape)),
-				captureContractError(() => validateShapeDepth(entry.shape)),
+				captureContractError(() => validateShape(entry.shape)),
 				captureContractError(() => compileSchema(entry.shape)),
 				captureContractError(() => compileGuard(entry.shape)),
 				captureContractError(() => compileParser(entry.shape)),
@@ -2184,7 +2174,7 @@ describe('malformed shape children', () => {
 			const errors = [
 				captureContractError(() => cloneShape(entry.shape)),
 				captureContractError(() => ownShape(entry.shape)),
-				captureContractError(() => validateShapeDepth(entry.shape)),
+				captureContractError(() => validateShape(entry.shape)),
 				captureContractError(() => compileSchema(entry.shape)),
 				captureContractError(() => compileGuard(entry.shape)),
 				captureContractError(() => compileParser(entry.shape)),
@@ -2242,7 +2232,7 @@ describe('malformed shape children', () => {
 			const doors = [
 				{ name: 'cloneShape', outcome: attempt(() => cloneShape(entry.shape)) },
 				{ name: 'ownShape', outcome: attempt(() => ownShape(entry.shape)) },
-				{ name: 'validateShapeDepth', outcome: attempt(() => validateShapeDepth(entry.shape)) },
+				{ name: 'validateShape', outcome: attempt(() => validateShape(entry.shape)) },
 				{
 					name: 'ShapeValidator.validate',
 					outcome: attempt(() => new ShapeValidator(entry.shape).validate()),
@@ -2270,7 +2260,7 @@ describe('malformed shape children', () => {
 			}
 			// The prefix names the boundary that OWNS the rule: every case here is a
 			// declaration rule the shared gate enforces.
-			if (!rule.includes('validateShapeDepth: ')) {
+			if (!rule.includes('validateShape: ')) {
 				disobedient.push(`${entry.name} — wrong owner: ${rule}`)
 			}
 		}
@@ -2328,17 +2318,17 @@ describe('malformed shape children', () => {
 				walks: 2,
 				code: 'placement',
 				message:
-					'validateShapeDepth: an optional shape may only appear as a direct object-property value',
+					'validateShape: an optional shape may only appear as a direct object-property value',
 			},
 			{
 				walks: 2,
 				code: 'cycle',
-				message: 'validateShapeDepth: a shape graph may not contain a cycle',
+				message: 'validateShape: a shape graph may not contain a cycle',
 			},
 			{
 				walks: 2,
 				code: 'range',
-				message: 'validateShapeDepth: an integer number shape has an empty integer range',
+				message: 'validateShape: an integer number shape has an empty integer range',
 			},
 			// The one whose rewrite lands where the capture cannot copy it: the
 			// refusal belongs to ownership and says so, rather than borrowing the
@@ -2350,7 +2340,7 @@ describe('malformed shape children', () => {
 			{
 				walks: 3,
 				code: 'depth',
-				message: 'validateShapeDepth: a shape exceeds the compilation depth limit',
+				message: 'validateShape: a shape exceeds the compilation depth limit',
 			},
 		])
 
@@ -2407,25 +2397,25 @@ describe('malformed shape children', () => {
 				name: 'class root',
 				shape: new StringDeclaration(),
 				path: [],
-				message: 'validateShapeDepth: every structural child must be a shape',
+				message: 'validateShape: every structural child must be a shape',
 			},
 			{
 				name: 'class child',
 				shape: { type: 'array', items: new StringDeclaration() },
 				path: ['items'],
-				message: 'validateShapeDepth: every structural child must be a shape',
+				message: 'validateShape: every structural child must be a shape',
 			},
 			{
 				name: 'reparented class root',
 				shape: new NullBaseDeclaration(),
 				path: [],
-				message: 'validateShapeDepth: every structural child must be a shape',
+				message: 'validateShape: every structural child must be a shape',
 			},
 			{
 				name: 'reparented class child',
 				shape: { type: 'array', items: new NullBaseDeclaration() },
 				path: ['items'],
-				message: 'validateShapeDepth: every structural child must be a shape',
+				message: 'validateShape: every structural child must be a shape',
 			},
 		]
 		// The four RegExp-scalar decoys are no longer launderable declarations,
@@ -2444,8 +2434,8 @@ describe('malformed shape children', () => {
 				{ name: 'cloneShape', outcome: attempt(() => cloneShape(entry.shape)) },
 				{ name: 'ownShape', outcome: attempt(() => ownShape(entry.shape)) },
 				{
-					name: 'validateShapeDepth',
-					outcome: attempt(() => validateShapeDepth(entry.shape)),
+					name: 'validateShape',
+					outcome: attempt(() => validateShape(entry.shape)),
 				},
 				{ name: 'compileSchema', outcome: attempt(() => compileSchema(entry.shape)) },
 				{ name: 'compileGuard', outcome: attempt(() => compileGuard(entry.shape)) },
@@ -2468,7 +2458,7 @@ describe('malformed shape children', () => {
 			expect(outcomes.map((outcome) => outcome.name)).toEqual([
 				'cloneShape',
 				'ownShape',
-				'validateShapeDepth',
+				'validateShape',
 				'compileSchema',
 				'compileGuard',
 				'compileParser',
@@ -2517,7 +2507,7 @@ describe('malformed shape children', () => {
 			const controls = [
 				attempt(() => Reflect.apply(cloneShape, undefined, [control])),
 				attempt(() => Reflect.apply(ownShape, undefined, [control])),
-				attempt(() => Reflect.apply(validateShapeDepth, undefined, [control])),
+				attempt(() => Reflect.apply(validateShape, undefined, [control])),
 				attempt(() => Reflect.apply(compileSchema, undefined, [control])),
 				attempt(() => Reflect.apply(compileGuard, undefined, [control])),
 				attempt(() => Reflect.apply(compileParser, undefined, [control])),
@@ -2579,7 +2569,7 @@ describe('malformed shape children', () => {
 				return [
 					{ name: 'cloneShape', outcome: attempt(() => cloneShape(malformed)) },
 					{ name: 'ownShape', outcome: attempt(() => ownShape(malformed)) },
-					{ name: 'validateShapeDepth', outcome: attempt(() => validateShapeDepth(malformed)) },
+					{ name: 'validateShape', outcome: attempt(() => validateShape(malformed)) },
 					{
 						name: 'ShapeValidator',
 						outcome: attempt(() => new ShapeValidator(malformed).validate()),
@@ -2630,8 +2620,8 @@ describe('malformed shape children', () => {
 				},
 				{ name: 'ownShape', outcome: attempt(() => Reflect.apply(ownShape, undefined, [shape])) },
 				{
-					name: 'validateShapeDepth',
-					outcome: attempt(() => Reflect.apply(validateShapeDepth, undefined, [shape])),
+					name: 'validateShape',
+					outcome: attempt(() => Reflect.apply(validateShape, undefined, [shape])),
 				},
 				{
 					name: 'compileSchema',
@@ -2684,7 +2674,7 @@ describe('malformed shape children', () => {
 		if (!isRegExp(pattern)) throw new Error('expected a genuine foreign RegExp')
 		const shape: ContractShape = { type: 'string', pattern }
 
-		expect(() => validateShapeDepth(shape)).not.toThrow()
+		expect(() => validateShape(shape)).not.toThrow()
 		const schema = compileSchema(shape)
 		const guard = compileGuard(shape)
 		const parser = compileParser(shape)
@@ -2735,19 +2725,19 @@ describe('malformed shape children', () => {
 		]) {
 			const shape: ContractShape = JSON.parse('{"type":"string"}')
 			Object.defineProperty(shape, 'pattern', { value: pattern, enumerable: true })
-			const validation = captureContractError(() => validateShapeDepth(shape))
+			const validation = captureContractError(() => validateShape(shape))
 			const clone = captureContractError(() => cloneShape(shape))
 			const compiler = captureContractError(() => compileSchema(shape))
 			const contract = captureContractError(() => createContract(shape))
 
 			expect(validation.code).toBe('structure')
-			expect(validation.message).toBe('validateShapeDepth: string pattern must be a RegExp')
+			expect(validation.message).toBe('validateShape: string pattern must be a RegExp')
 			expect(clone.code).toBe('structure')
-			expect(clone.message).toBe('validateShapeDepth: string pattern must be a RegExp')
+			expect(clone.message).toBe('validateShape: string pattern must be a RegExp')
 			expect(compiler.code).toBe('structure')
-			expect(compiler.message).toBe('validateShapeDepth: string pattern must be a RegExp')
+			expect(compiler.message).toBe('validateShape: string pattern must be a RegExp')
 			expect(contract.code).toBe('structure')
-			expect(contract.message).toBe('validateShapeDepth: string pattern must be a RegExp')
+			expect(contract.message).toBe('validateShape: string pattern must be a RegExp')
 		}
 		expect(reads).toBe(0)
 	})
@@ -2773,7 +2763,7 @@ describe('malformed shape children', () => {
 			const outcomes = [
 				attempt(() => cloneShape(shape)),
 				attempt(() => ownShape(shape)),
-				attempt(() => validateShapeDepth(shape)),
+				attempt(() => validateShape(shape)),
 				attempt(() => compileSchema(shape)),
 				attempt(() => compileGuard(shape)),
 				attempt(() => compileParser(shape)),
@@ -2788,7 +2778,7 @@ describe('malformed shape children', () => {
 		const errors = [
 			captureContractError(() => cloneShape(unownedAccessor)),
 			captureContractError(() => ownShape(unownedAccessor)),
-			captureContractError(() => validateShapeDepth(unownedAccessor)),
+			captureContractError(() => validateShape(unownedAccessor)),
 			captureContractError(() => compileSchema(unownedAccessor)),
 			captureContractError(() => compileGuard(unownedAccessor)),
 			captureContractError(() => compileParser(unownedAccessor)),
@@ -2847,7 +2837,7 @@ describe('malformed shape children', () => {
 		const undefinedAdditional = captureContractError(() => recordShape(missing))
 		expect(undefinedAdditional.code).toBe('structure')
 		expect(undefinedAdditional.context?.path).toEqual(['additionalProperties'])
-		expect(() => validateShapeDepth(objectShape({}))).not.toThrow()
+		expect(() => validateShape(objectShape({}))).not.toThrow()
 	})
 })
 
@@ -2867,7 +2857,7 @@ describe('JSON Schema vocabulary safety', () => {
 
 		for (const entry of cases) {
 			const errors = [
-				captureContractError(() => validateShapeDepth(entry.shape)),
+				captureContractError(() => validateShape(entry.shape)),
 				captureContractError(() => compileSchema(entry.shape)),
 				captureContractError(() => compileGuard(entry.shape)),
 				captureContractError(() => compileParser(entry.shape)),
@@ -4609,19 +4599,19 @@ describe('compileGenerator', () => {
 describe('createContract fail-fast', () => {
 	it('throws at creation time for a degenerate shape, not at use', () => {
 		expect(() => createContract({ type: 'string', min: 5, max: 1 })).toThrow(
-			'validateShapeDepth: a string shape has min greater than max',
+			'validateShape: a string shape has min greater than max',
 		)
 		expect(() => createContract(JSON.parse('{"type":"union","variants":[]}'))).toThrow(
-			'validateShapeDepth: a union shape needs at least one variant',
+			'validateShape: a union shape needs at least one variant',
 		)
 		expect(() => createContract(JSON.parse('{"type":"literal","values":[]}'))).toThrow(
-			'validateShapeDepth: a literal shape needs at least one value',
+			'validateShape: a literal shape needs at least one value',
 		)
 		expect(() => createContract(integerShape({ min: 2.5, max: 2.6 }))).toThrow(
-			'validateShapeDepth: an integer number shape has an empty integer range',
+			'validateShape: an integer number shape has an empty integer range',
 		)
 		expect(() => createContract(arrayShape(optionalShape(stringShape())))).toThrow(
-			'validateShapeDepth: an optional shape may only appear as a direct object-property value',
+			'validateShape: an optional shape may only appear as a direct object-property value',
 		)
 	})
 })
@@ -4796,8 +4786,8 @@ describe('shape separation registry', () => {
 	it('validates and compiles representatives for all twelve shape kinds', () => {
 		expect(Object.keys(SHAPE_SEPARATIONS)).toHaveLength(12)
 		for (const separation of Object.values(SHAPE_SEPARATIONS)) {
-			expect(() => validateShapeDepth(separation.shape)).not.toThrow()
-			expect(() => validateShapeDepth(separation.shape)).not.toThrow()
+			expect(() => validateShape(separation.shape)).not.toThrow()
+			expect(() => validateShape(separation.shape)).not.toThrow()
 			const schema = compileSchema(separation.shape)
 			const guard = compileGuard(separation.shape)
 			const parse = compileParser(separation.shape)
@@ -5300,7 +5290,7 @@ describe('R3 — the canonical door matrix', () => {
 		const messages: string[] = []
 		for (const root of roots) {
 			const errors = [
-				captureContractError(() => validateShapeDepth(root)),
+				captureContractError(() => validateShape(root)),
 				captureContractError(() => compileSchema(root)),
 				captureContractError(() => compileGuard(root)),
 				captureContractError(() => compileParser(root)),
@@ -5324,12 +5314,12 @@ describe('R3 — the canonical door matrix', () => {
 		}
 
 		expect(messages).toEqual([
-			'validateShapeDepth: every structural child must be a shape',
-			'validateShapeDepth: every structural child must be a shape',
-			'validateShapeDepth: every structural child must be a shape',
-			'validateShapeDepth: every structural child must be a shape',
-			'validateShapeDepth: every structural child must be a shape',
-			'validateShapeDepth: every structural child must be a shape',
+			'validateShape: every structural child must be a shape',
+			'validateShape: every structural child must be a shape',
+			'validateShape: every structural child must be a shape',
+			'validateShape: every structural child must be a shape',
+			'validateShape: every structural child must be a shape',
+			'validateShape: every structural child must be a shape',
 		])
 	})
 

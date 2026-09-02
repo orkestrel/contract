@@ -49,7 +49,11 @@ const MODULES = Object.freeze({ '@orkestrel/contract': 'src/core', '@src/core': 
  * intentional rather than forgotten — and the second assertion below fails when a name
  * here stops being stranded, so the list cannot rot.
  */
-const INTERNAL: readonly string[] = Object.freeze([])
+const INTERNAL: readonly string[] = Object.freeze([
+	'class SampleInferer',
+	'class SchemaShaper',
+	'class ValueInferer',
+])
 
 /** Root-level files this package's guides link to. `readInventory` walks directories only. */
 const ROOT_FILES = Object.freeze(['AGENTS.md'])

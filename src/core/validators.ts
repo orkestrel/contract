@@ -487,9 +487,9 @@ export function isPromiseLike<T = unknown>(
 		if (!isObject(value)) {
 			return false
 		}
-		const thenValue = INTRINSICS.read(value, 'then')
-		const catchValue = INTRINSICS.read(value, 'catch')
-		const finallyValue = INTRINSICS.read(value, 'finally')
+		const thenValue = INTRINSICS.reflect.read(value, 'then')
+		const catchValue = INTRINSICS.reflect.read(value, 'catch')
+		const finallyValue = INTRINSICS.reflect.read(value, 'finally')
 		return isFunction(thenValue) && isFunction(catchValue) && isFunction(finallyValue)
 	})
 }
@@ -553,7 +553,7 @@ export function isIterable<T = unknown>(value: unknown): value is Iterable<T> {
 		if (isString(value)) {
 			return true
 		}
-		return isObject(value) && isFunction(INTRINSICS.read(value, Symbol.iterator))
+		return isObject(value) && isFunction(INTRINSICS.reflect.read(value, Symbol.iterator))
 	})
 }
 
@@ -569,7 +569,9 @@ export function isIterable<T = unknown>(value: unknown): value is Iterable<T> {
  * ```
  */
 export function isAsyncIterable<T = unknown>(value: unknown): value is AsyncIterable<T> {
-	return holds(() => isObject(value) && isFunction(INTRINSICS.read(value, Symbol.asyncIterator)))
+	return holds(
+		() => isObject(value) && isFunction(INTRINSICS.reflect.read(value, Symbol.asyncIterator)),
+	)
 }
 
 // === Object & collection guards
@@ -960,7 +962,7 @@ export function isEmptyArray(value: unknown): value is readonly [] {
  * ```
  */
 export function isEmptyObject(value: unknown): value is Record<string | symbol, never> {
-	return holds(() => isRecord(value) && INTRINSICS.members(value).length === 0)
+	return holds(() => isRecord(value) && INTRINSICS.reflect.members(value).length === 0)
 }
 
 /** Determine whether a value is an empty `Map`.
@@ -1040,7 +1042,7 @@ export function isNonEmptyArray<T = unknown>(value: unknown): value is readonly 
  * ```
  */
 export function isNonEmptyObject(value: unknown): value is Record<string | symbol, unknown> {
-	return holds(() => isRecord(value) && INTRINSICS.members(value).length > 0)
+	return holds(() => isRecord(value) && INTRINSICS.reflect.members(value).length > 0)
 }
 
 /** Determine whether a value is a non-empty `Map` (at least one entry).
@@ -1218,7 +1220,7 @@ export function isConstructor(value: unknown): value is AnyConstructor<object> {
 		if (!isFunction(value)) {
 			return false
 		}
-		INTRINSICS.construct(String, [], value)
+		INTRINSICS.reflect.construct(String, [], value)
 		return true
 	})
 }

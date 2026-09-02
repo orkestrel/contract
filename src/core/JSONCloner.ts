@@ -53,10 +53,26 @@ export class JSONCloner implements JSONClonerInterface {
 	// no refusal, no return, and no instrument in the corpus able to report it.
 	// Both sets are read through the captured visitation operations.
 	static readonly #weakSet = WeakSet
+	// The released state, shared by every cloner this class ever builds. `#fail`
+	// assigns it in place of the working list, so a failed clone releases its
+	// frames to collection instead of retaining an emptied array's capacity for
+	// the instance's life. Sharing is safe because nothing writes to a released
+	// list: every writer runs inside the walk, and a failed clone has already set
+	// `#terminal`, which every later call answers from. The static block at the
+	// foot of the class freezes it, so a write that did reach it fails loudly at
+	// its own line rather than leaking one cloner's frame into every other
+	// cloner's release.
+	static readonly #emptyPending: Array<{
+		readonly source: object
+		readonly clone: JSONValue[] | JSONRecord
+		readonly array: boolean
+		entries: ReadonlyArray<readonly [key: string, value: unknown]> | undefined
+		index: number
+	}> = []
 	readonly #source: unknown
 	readonly #owned: WeakSet<object>
 	readonly #active: WeakSet<object>
-	readonly #pending: Array<{
+	#pending: Array<{
 		readonly source: object
 		readonly clone: JSONValue[] | JSONRecord
 		readonly array: boolean
@@ -117,9 +133,13 @@ export class JSONCloner implements JSONClonerInterface {
 		this.#fail(error)
 	}
 
+	// Assignment only: the working list takes the class's shared frozen empty peer
+	// rather than being truncated in place, so the abandoned frames are released
+	// instead of held by an emptied array. `length` is a caller-reachable write on
+	// the instance's own array; an assignment reaches no member at all.
 	#fail(error: ContractError): never {
 		this.#terminal = { success: false, error }
-		this.#pending.length = 0
+		this.#pending = JSONCloner.#emptyPending
 		throw error
 	}
 
@@ -203,9 +223,9 @@ export class JSONCloner implements JSONClonerInterface {
 	}
 
 	#captureArray(source: object): ReadonlyArray<readonly [key: string, value: unknown]> {
-		const keysOutcome = attempt(() => INTRINSICS.members(source))
+		const keysOutcome = attempt(() => INTRINSICS.reflect.members(source))
 		if (!keysOutcome.success) this.#refuse('cloneJSONValue: own keys could not be inspected')
-		const lengthOutcome = attempt(() => INTRINSICS.reveal(source, 'length'))
+		const lengthOutcome = attempt(() => INTRINSICS.reflect.describe(source, 'length'))
 		if (!lengthOutcome.success) this.#refuse('cloneJSONValue: array length could not be inspected')
 		const lengthDescriptor = lengthOutcome.value
 		if (
@@ -241,7 +261,7 @@ export class JSONCloner implements JSONClonerInterface {
 			if (!matchesMember(owned, key)) {
 				this.#refuse('cloneJSONValue: array own keys are not exact')
 			}
-			const descriptorOutcome = attempt(() => INTRINSICS.reveal(source, key))
+			const descriptorOutcome = attempt(() => INTRINSICS.reflect.describe(source, key))
 			if (!descriptorOutcome.success) {
 				this.#refuse('cloneJSONValue: array index could not be inspected')
 			}
@@ -255,7 +275,7 @@ export class JSONCloner implements JSONClonerInterface {
 	}
 
 	#captureRecord(source: object): ReadonlyArray<readonly [key: string, value: unknown]> {
-		const keysOutcome = attempt(() => INTRINSICS.members(source))
+		const keysOutcome = attempt(() => INTRINSICS.reflect.members(source))
 		if (!keysOutcome.success) this.#refuse('cloneJSONValue: own keys could not be inspected')
 		const entries: Array<[key: string, value: unknown]> = []
 		const names = keysOutcome.value
@@ -265,7 +285,7 @@ export class JSONCloner implements JSONClonerInterface {
 		for (let index = 0; index < names.length; index += 1) {
 			const key = names[index]
 			if (typeof key !== 'string') this.#refuse('cloneJSONValue: record has a symbol property')
-			const descriptorOutcome = attempt(() => INTRINSICS.reveal(source, key))
+			const descriptorOutcome = attempt(() => INTRINSICS.reflect.describe(source, key))
 			if (!descriptorOutcome.success) {
 				this.#refuse('cloneJSONValue: record property could not be inspected')
 			}
@@ -298,6 +318,10 @@ export class JSONCloner implements JSONClonerInterface {
 	}
 
 	static {
+		// Frozen in a statement of its own, and the result discarded: `Object.freeze`
+		// returns a readonly view, so binding it back would retype the peer and stop
+		// it satisfying the mutable working field it is assigned to.
+		INTRINSICS.freeze(JSONCloner.#emptyPending)
 		// Pinned while this class is DEFINED. `cloneJSONValue` reaches this class
 		// through `JSONCloner.prototype.clone`, so one assignment there decided what
 		// a door the caller never touched published — the same defect as a replaced

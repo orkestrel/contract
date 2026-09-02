@@ -456,6 +456,21 @@ export interface JSONSchema {
 export type SchemaFormat = 'date-time' | 'date' | 'time' | 'uuid' | 'email' | 'uri'
 
 /**
+ * The per-walk budgets {@link ValueToSchemaOptions} groups under `limits`.
+ *
+ * @remarks
+ * `depth` is held at {@link INFER_DEPTH_LIMIT} through {@link sanitizeDepth},
+ * so it NARROWS the walk and cannot widen it. `properties` caps the keys and
+ * elements sampled per container and defaults to {@link INFER_BREADTH_LIMIT}
+ * through {@link sanitizeBudget}, so a non-finite, negative, or fractional
+ * value falls back to that default rather than flowing through.
+ */
+export interface ValueToSchemaLimits {
+	readonly depth?: number
+	readonly properties?: number
+}
+
+/**
  * Options for {@link valueToSchema} / {@link samplesToSchema}.
  *
  * @remarks
@@ -465,6 +480,7 @@ export type SchemaFormat = 'date-time' | 'date' | 'time' | 'uuid' | 'email' | 'u
  * — unlike a shape tree — may be arbitrarily deep, wide, or cyclic.
  *
  * @remarks
+ * `limits` groups the two walk budgets; see {@link ValueToSchemaLimits}.
  * `format` (default `false`) emits a `format` keyword on a string leaf whose
  * value(s) unanimously match one {@link SchemaFormat} via {@link stringToFormat}
  * / {@link samplesToFormat}. `enum` (default `false`, multi-sample paths only)
@@ -472,15 +488,14 @@ export type SchemaFormat = 'date-time' | 'date' | 'time' | 'uuid' | 'email' | 'u
  * instead of a bare `type`.
  */
 export interface ValueToSchemaOptions {
-	readonly maxDepth?: number
-	readonly maxProperties?: number
+	readonly limits?: ValueToSchemaLimits
 	readonly closed?: boolean
 	readonly format?: boolean
 	readonly enum?: boolean
 }
 
 /**
- * The per-walk memo {@link inferSamples} and {@link inferRecordSamples} share,
+ * The per-walk memo the multi-sample walk behind {@link samplesToSchema} owns,
  * keyed by the ORDERED identities of the rows a slot collected.
  *
  * @remarks
@@ -500,7 +515,7 @@ export interface ValueToSchemaOptions {
  * @example
  * ```ts
  * const memo = buildSampleMemo()
- * inferSamples([{ id: 1 }], 32, 256, true, false, false, memo)
+ * memo.rows.has({}) // false — a fresh node records nothing
  * ```
  */
 export interface SampleMemo {
@@ -516,7 +531,7 @@ export interface SampleMemo {
  *
  * @remarks
  * A discriminated union keyed on `type`. Shapes nest (an `ArrayShape` holds an
- * element shape, an `ObjectShape` a map of them). {@link validateShapeDepth}
+ * element shape, an `ObjectShape` a map of them). {@link validateShape}
  * enforces an acyclic graph within {@link COMPILE_DEPTH_LIMIT}.
  */
 export type ContractShape =
@@ -1028,10 +1043,11 @@ export interface ShapeValidatorInterface {
 	/**
 	 * The number of nodes the last successful {@link validate} found the retained
 	 * declaration expands into, counting one per node per incoming edge — the
-	 * size of the TREE every compiled artifact would build from this DAG. `0`
-	 * before the first successful pass and after a failed one.
+	 * size of the TREE every compiled artifact would build from this DAG.
+	 * `undefined` before the first successful pass and after a failed one, because
+	 * no pass measured one.
 	 */
-	readonly expansion: number
+	readonly expansion: number | undefined
 
 	/**
 	 * Validate the retained shape declaration.

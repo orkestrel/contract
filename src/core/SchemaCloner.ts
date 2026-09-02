@@ -53,17 +53,28 @@ export class SchemaCloner implements SchemaClonerInterface {
 	static readonly #map = Map
 	static readonly #weakSet = WeakSet
 	static readonly #hasOwn = Object.hasOwn
-	readonly #source: JSONSchema
-	readonly #owned: WeakSet<object>
-	#memo: Map<object, object>
-	readonly #emptyMemo: Map<object, object>
-	#pending: Array<{
+	// The released state, shared by every cloner this class ever builds. `#settle`
+	// assigns it in place of the working list, so an instance allocates one
+	// collection instead of two and construction carries no empty peer of its own.
+	// Sharing is safe because nothing writes to a released list: every writer runs
+	// inside the walk and `#settle` is the walk's last step. The static block at
+	// the foot of the class freezes it, so a write that did reach it fails loudly
+	// at its own line rather than leaking one cloner's frame into every other
+	// cloner's release.
+	static readonly #emptyPending: Array<{
 		readonly source: object
 		readonly clone: object
 		readonly path: readonly string[]
 		readonly depth: number
-	}>
-	readonly #emptyPending: Array<{
+	}> = []
+	readonly #source: JSONSchema
+	readonly #owned: WeakSet<object>
+	// The working map is the field with no shared peer: `Object.freeze` reaches an
+	// array's writes and not a `Map`'s, so a shared empty map would be a
+	// class-lifetime cache any write could fill with one cloner's nodes. `#settle`
+	// drops it instead, and absence is `undefined`.
+	#memo: Map<object, object> | undefined
+	#pending: Array<{
 		readonly source: object
 		readonly clone: object
 		readonly path: readonly string[]
@@ -79,9 +90,7 @@ export class SchemaCloner implements SchemaClonerInterface {
 		this.#source = schema
 		this.#owned = new SchemaCloner.#weakSet()
 		this.#memo = new SchemaCloner.#map()
-		this.#emptyMemo = new SchemaCloner.#map()
 		this.#pending = []
-		this.#emptyPending = []
 		this.#state = { phase: 'ready' }
 	}
 
@@ -137,8 +146,14 @@ export class SchemaCloner implements SchemaClonerInterface {
 		if (INTRINSICS.array(this.#source)) {
 			this.#refuse('cloneSchema: a schema root must be a record, not an array', 'structure', [])
 		}
+		// Narrowed once at the door, because the dispatch below takes its receiver
+		// type from this value. The walk runs before `#settle` drops the map, so it
+		// always finds the one the constructor built; this refusal is what keeps
+		// that a statement the types carry rather than one a comment makes.
+		const memo = this.#memo
+		if (memo === undefined) throw this.#unavailable()
 		const root: JSONSchema = INTRINSICS.create(null)
-		INTRINSICS.apply(INTRINSICS.store, this.#memo, [this.#source, root])
+		INTRINSICS.reflect.apply(INTRINSICS.store, memo, [this.#source, root])
 		this.#pending[this.#pending.length] = {
 			source: this.#source,
 			clone: root,
@@ -190,25 +205,36 @@ export class SchemaCloner implements SchemaClonerInterface {
 
 	#capture(value: unknown, path: readonly string[], depth: number): unknown {
 		if (typeof value !== 'object' || value === null) return value
-		const existing = INTRINSICS.apply(INTRINSICS.fetch, this.#memo, [value])
+		const memo = this.#memo
+		if (memo === undefined) throw this.#unavailable()
+		const existing = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [value])
 		if (existing !== undefined) return existing
 		return this.#schedule(value, path, depth)
 	}
 
 	#schedule(source: object, path: readonly string[], depth: number): object {
+		const memo = this.#memo
+		if (memo === undefined) throw this.#unavailable()
 		const clone: object = INTRINSICS.array(source) ? [] : INTRINSICS.create(null)
-		INTRINSICS.apply(INTRINSICS.store, this.#memo, [source, clone])
+		INTRINSICS.reflect.apply(INTRINSICS.store, memo, [source, clone])
 		this.#pending[this.#pending.length] = { source, clone, path, depth }
 		return clone
 	}
 
 	#read(source: object, key: string, path: readonly string[]): unknown {
-		const outcome = attempt(() => INTRINSICS.read(source, key))
+		const outcome = attempt(() => INTRINSICS.reflect.read(source, key))
 		if (outcome.success) return outcome.value
 		throw this.#create('cloneSchema: property access failed', {
 			path,
 			cause: outcome.error,
 		})
+	}
+
+	// One refusal for the dropped working map, because a settled cloner replays
+	// from `#state` and re-enters no walk method: nothing reachable settles here,
+	// and every guard that says so must say it the same way.
+	#unavailable(): ContractError {
+		return this.#create('SchemaCloner.clone: the capture state is unavailable')
 	}
 
 	#create(
@@ -249,15 +275,23 @@ export class SchemaCloner implements SchemaClonerInterface {
 		return isObject(error) && matchesVisited(this.#owned, error)
 	}
 
+	// Assignment only: the working list takes the class's shared frozen empty peer
+	// and the working map is dropped outright. Nothing here calls a
+	// caller-mutable cleanup member and nothing here constructs a collection, so
+	// settlement cannot be redirected into leaving state behind.
 	#settle(result: Result<JSONSchema, ContractError>): JSONSchema {
-		this.#pending = this.#emptyPending
-		this.#memo = this.#emptyMemo
+		this.#pending = SchemaCloner.#emptyPending
+		this.#memo = undefined
 		this.#state = { phase: 'settled', result }
 		if (result.success) return result.value
 		throw result.error
 	}
 
 	static {
+		// Frozen in a statement of its own, and the result discarded: `Object.freeze`
+		// returns a readonly view, so binding it back would retype the peer and stop
+		// it satisfying the mutable working field it is assigned to.
+		INTRINSICS.freeze(SchemaCloner.#emptyPending)
 		// Pinned while this class is DEFINED: `cloneSchema` reaches it through
 		// `SchemaCloner.prototype.clone`, so an assignment there decides what a door
 		// the caller never touched publishes.

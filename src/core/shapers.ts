@@ -25,39 +25,22 @@ import type {
 	UnionShape,
 } from './types.js'
 import { cloneSchema, cloneShape } from './cloners.js'
+import { SchemaShaper } from './SchemaShaper.js'
 import { ShapeValidator } from './ShapeValidator.js'
-import { INFER_BREADTH_LIMIT, INFER_DEPTH_LIMIT, INTRINSICS } from './constants.js'
+import { INTRINSICS } from './constants.js'
 import { ContractError } from './errors.js'
 import {
-	admitMember,
-	admitVisited,
 	attempt,
-	collectMembers,
 	contain,
-	deriveLengthBounds,
-	deriveRangeBounds,
-	limitEntries,
-	matchesMember,
 	matchesRecordBrand,
-	matchesVisited,
-	omitVisited,
 	preview,
 	readArrayEntries,
 	readOptions,
 	readPatternFlags,
 	readPatternSource,
 	readValue,
-	retainDepth,
 } from './helpers.js'
-import {
-	isArray,
-	isFiniteNumber,
-	isLiteralValue,
-	isObject,
-	isRecord,
-	isRegExp,
-	isString,
-} from './validators.js'
+import { isLiteralValue, isObject, isRegExp } from './validators.js'
 
 // The builders return the parameterized types.ts interfaces (e.g. `ArrayShape<S>`,
 // `ObjectShape<P>`), never inline object literals — the generic parameter keeps
@@ -318,7 +301,7 @@ export function literalShape(
 			})
 		}
 		if (!snapshot.value.dense) {
-			throw new ContractError('validateShapeDepth: values must be a dense data array', {
+			throw new ContractError('validateShape: values must be a dense data array', {
 				code: 'structure',
 				context: { path: ['values'], shape: 'literal' },
 			})
@@ -328,7 +311,7 @@ export function literalShape(
 			const value = snapshot.value.entries[index]
 			if (!isLiteralValue(value)) {
 				throw new ContractError(
-					'validateShapeDepth: every literal value must be a string, number, or boolean',
+					'validateShape: every literal value must be a string, number, or boolean',
 					{
 						code: 'structure',
 						context: { path: ['values', INTRINSICS.text(index)], shape: 'literal' },
@@ -448,8 +431,8 @@ export function objectShape<
 				for (let keyIndex = 0; keyIndex < keyList.length; keyIndex += 1) {
 					const key = keyList[keyIndex]
 					if (key === undefined) continue
-					INTRINSICS.declare(snapshot, key, {
-						value: INTRINSICS.read(input, key),
+					INTRINSICS.reflect.define(snapshot, key, {
+						value: INTRINSICS.reflect.read(input, key),
 						enumerable: true,
 						configurable: true,
 						writable: true,
@@ -713,12 +696,12 @@ export function rawShape(schema: JSONSchema): RawShape {
 // through to the next rule, never thrown. `format` and `pattern` are NEVER
 // asserted — `format` is annotation-only, and compiling an attacker-supplied
 // `pattern` into a `RegExp` is a ReDoS vector — so neither keyword narrows the
-// compiled guard; the returned shape is always one `validateShapeDepth` accepts.
+// compiled guard; the returned shape is always one `validateShape` accepts.
 //
 // Every widening — an empty/unrecognized node, an exhausted budget, a cycle —
 // lands on `rawShape`, NOT `jsonShape`. A hostile throw is NOT a widening: a
 // keyword access, enumeration, or recursive traversal that throws is not
-// malformed schema vocabulary, so `schemaNodeToShape` wraps its whole body in
+// malformed schema vocabulary, so `schemaToShape` runs the whole walk inside
 // `readValue` and refuses it as `ContractError { code: 'structure', context: {
 // shape: 'schema' } }` instead of inventing an accept-anything node for a
 // schema nobody could read. `{}` is JSON Schema's
@@ -731,396 +714,6 @@ export function rawShape(schema: JSONSchema): RawShape {
 // user AUTHORS to mean "any JSON value"; it is never inferred.
 
 /**
- * Build an {@link ObjectShape} from a JSON Schema object node's `properties` /
- * `required` / `additionalProperties` keywords — the object-specialized branch
- * of {@link buildShapeFromNode}.
- *
- * @remarks
- * `properties` (when a record) contributes one child shape per own key, capped
- * at {@link INFER_BREADTH_LIMIT}; a key is wrapped in {@link optionalShape}
- * unless it appears as a string entry of `required`. A property whose value is
- * not itself a record widens to {@link rawShape}. `additionalProperties`:
- * `false` closes the object; a record value recurses into it (`objectShape`
- * validates extras against that shape); anything else — `true`, absent, or
- * malformed — leaves the object OPEN (`true`), matching JSON Schema's own
- * absent-means-open default and the fact that {@link valueToSchema} /
- * {@link samplesToSchema} always emit the keyword explicitly, so an absent
- * value only arises from a hand-written schema. When `properties` has MORE
- * keys than {@link INFER_BREADTH_LIMIT}, the schema's own
- * `additionalProperties` is OVERRIDDEN and forced to `true` (fully open) —
- * a dropped key's value could otherwise fail a `false` or record-valued rest
- * shape it was never checked against — mirroring {@link inferObject}'s
- * partial-key handling in `inferers.ts`. The accumulator uses a
- * null-prototype record so a property literally named `__proto__` becomes an
- * own data key rather than mutating the prototype, mirroring
- * {@link inferObject} (inferers.ts).
- *
- * @param schema - The object schema node
- * @param depth - Remaining descent budget passed to child properties
- * @param visited - The ancestor set guarding against cycles — recursion
- *   state owned by the {@link schemaToShape} entry point; passing a shared or
- *   pre-populated `WeakSet` changes cycle-detection behavior and is not
- *   supported usage
- * @param memo - A per-call `(schema node, remaining depth) → shape` cache —
- *   recursion state owned by the {@link schemaToShape} entry point; passing
- *   a shared or pre-populated `WeakMap` changes caching behavior and is not
- *   supported usage
- * @param description - The node's already-extracted `description`, if any
- * @returns The built object shape
- *
- * @example
- * ```ts
- * buildObjectShape(
- * 	{ type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] },
- * 	INFER_DEPTH_LIMIT,
- * 	new WeakSet(),
- * 	new WeakMap(),
- * 	undefined,
- * )
- * // objectShape({ id: integerShape() }, { additionalProperties: true })
- * ```
- */
-export function buildObjectShape(
-	schema: JSONSchema,
-	depth: number,
-	visited: WeakSet<object>,
-	memo: WeakMap<object, Map<number, ContractShape>>,
-	description: string | undefined,
-): ContractShape {
-	return contain(() => {
-		return readValue(
-			() => {
-				const propertiesSource = isRecord(schema.properties) ? schema.properties : undefined
-				// Indexed rather than `filter` / `includes`: this list decides which
-				// properties the published shape marks required, and both are
-				// caller-writable members.
-				const requiredSource = collectMembers([])
-				if (isArray(schema.required)) {
-					for (let index = 0; index < schema.required.length; index += 1) {
-						const entry = schema.required[index]
-						if (isString(entry)) admitMember(requiredSource, entry)
-					}
-				}
-				// Honest typing: a null-prototype accumulator so a property literally
-				// named '__proto__' becomes an own data key instead of mutating the
-				// prototype — the same pattern inferObject uses (inferers.ts).
-				const properties: Record<string, ContractShape> = INTRINSICS.create(null)
-				let truncated = false
-				if (propertiesSource) {
-					const allKeys = INTRINSICS.keys(propertiesSource)
-					truncated = allKeys.length > INFER_BREADTH_LIMIT
-					const keys = limitEntries(allKeys, INFER_BREADTH_LIMIT)
-					for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
-						const key = keys[keyIndex]
-						if (key === undefined) continue
-						const child = propertiesSource[key]
-						const childShape = isRecord(child)
-							? schemaNodeToShape(child, depth - 1, visited, memo)
-							: rawShape({})
-						properties[key] = matchesMember(requiredSource, key)
-							? childShape
-							: optionalShape(childShape)
-					}
-				}
-				const extra = schema.additionalProperties
-				const additionalProperties: boolean | ContractShape = truncated
-					? true
-					: extra === false
-						? false
-						: isRecord(extra)
-							? schemaNodeToShape(extra, depth - 1, visited, memo)
-							: true
-				return INTRINSICS.freeze({
-					type: 'object',
-					properties: INTRINSICS.freeze(properties),
-					additionalProperties,
-					...(description === undefined ? {} : { description }),
-				})
-			},
-			'buildObjectShape',
-			{ subject: 'schema', context: { shape: 'schema' } },
-		)
-	}, 'buildObjectShape')
-}
-
-/**
- * Build a {@link ContractShape} for one JSON Schema node — the recursive
- * spine of {@link schemaToShape}, shared with per-child recursion via
- * {@link schemaNodeToShape}.
- *
- * @remarks
- * Every keyword is read defensively (the node's static `JSONSchema` type is
- * NOT trusted at runtime — a caller-supplied node may be adversarial), so a
- * malformed keyword falls through to the next rule instead of throwing.
- * Precedence, top-down:
- *
- * 1. `enum` — an array with at least one string/number/boolean entry (finite
- *    numbers only) becomes a {@link literalShape} over the filtered entries.
- *    Non-primitive / non-finite entries are dropped; an empty result falls
- *    through.
- * 2. `oneOf` — an array with at least one record entry becomes an
- *    {@link oneOfShape} over the recursively-built variants, provided the
- *    record-entry count is at or under {@link INFER_BREADTH_LIMIT}; OVER the
- *    limit, building a subset union would be strictly narrower than the
- *    schema's full union (a value matching only a dropped variant would be
- *    wrongly rejected), so the whole node widens to {@link rawShape} instead
- *    of sampling a subset.
- * 3. `anyOf` — identically, via {@link unionShape}.
- * 4. `type: 'string'` / `'number'` / `'integer'` / `'boolean'` / `'null'` —
- *    the matching primitive shape, with length/range bounds derived via
- *    {@link deriveLengthBounds} / {@link deriveRangeBounds}. An integer node
- *    additionally drops its bounds when they describe an EMPTY integer range
- *    (e.g. `minimum: 1.5, maximum: 1.6`) — the same emptiness `validateShapeDepth`
- *    rejects — so the result is always a valid shape.
- * 5. `type: 'array'` — an {@link arrayShape} whose element shape recurses into
- *    a record-valued `items` (widening to {@link rawShape} otherwise), with
- *    bounds from `minItems` / `maxItems`.
- * 6. `type: 'object'`, OR no `type` / `enum` / `oneOf` / `anyOf` but a
- *    record-valued `properties` — delegates to {@link buildObjectShape}.
- * 7. Everything else — an empty schema, an unrecognized/absent `type`, or
- *    exhausted depth/breadth — widens to
- *    {@link rawShape}, whose guard accepts every defined value and whose
- *    emitted schema is the same `{}` (plus `description`) the node carried.
- *    This is the exact inverse of `{}`, JSON Schema's accept-anything schema,
- *    and where the inferers themselves bottom out at their own limits.
- *
- * `format` and `pattern` are NEVER read into the compiled shape — `format` is
- * annotation-only and `pattern` compiling an attacker-supplied string into a
- * `RegExp` is a ReDoS vector. `description`, when a string, carries through to
- * the produced shape's `description` option.
- *
- * @param schema - The schema node to convert
- * @param depth - Remaining descent budget (0 halts recursion with `rawShape({})`)
- * @param visited - The ancestor set guarding against cycles — recursion
- *   state owned by the {@link schemaToShape} entry point; passing a shared or
- *   pre-populated `WeakSet` changes cycle-detection behavior and is not
- *   supported usage
- * @param memo - A per-call `(schema node, remaining depth) → shape` cache
- *               guarding against exponential re-conversion of a
- *               shared-reference schema DAG — recursion state owned by the
- *               {@link schemaToShape} entry point; passing a shared or
- *               pre-populated `WeakMap` changes caching behavior and is not
- *               supported usage
- * @returns The built shape for `schema`
- *
- * @example
- * ```ts
- * buildShapeFromNode({ type: 'string', minLength: 1 }, INFER_DEPTH_LIMIT, new WeakSet(), new WeakMap())
- * // stringShape({ min: 1 })
- * ```
- */
-export function buildShapeFromNode(
-	schema: JSONSchema,
-	depth: number,
-	visited: WeakSet<object>,
-	memo: WeakMap<object, Map<number, ContractShape>>,
-): ContractShape {
-	return contain(() => {
-		return readValue(
-			() => {
-				const description = isString(schema.description) ? schema.description : undefined
-
-				if (isArray(schema.enum)) {
-					const literals: LiteralValue[] = []
-					// De-duplicated in the same pass that already drops non-literal and
-					// non-finite entries, by the package's own SameValueZero membership.
-					// `literalShape` refuses a repeated vocabulary, and that refusal was
-					// republished as `schema could not be read` — a data defect reported as
-					// unreadability, for a schema every keyword of which was read. JSON
-					// Schema requires `enum` members to be unique, so a repeat is malformed
-					// vocabulary, and this conversion's stated rule for malformed vocabulary
-					// is to ignore it and widen, never to throw. First occurrence wins, so
-					// the emitted order still follows the source.
-					const seen = collectMembers([])
-					for (let index = 0; index < schema.enum.length; index += 1) {
-						const entry = schema.enum[index]
-						if (isLiteralValue(entry) && (typeof entry !== 'number' || isFiniteNumber(entry))) {
-							if (matchesMember(seen, entry)) continue
-							admitMember(seen, entry)
-							literals[literals.length] = entry
-						}
-					}
-					if (literals.length > 0) {
-						return literalShape(literals, description === undefined ? undefined : { description })
-					}
-				}
-
-				if (isArray(schema.oneOf)) {
-					const records: JSONSchema[] = []
-					for (let index = 0; index < schema.oneOf.length; index += 1) {
-						const entry = schema.oneOf[index]
-						if (isRecord(entry)) records[records.length] = entry
-					}
-					if (records.length > INFER_BREADTH_LIMIT) {
-						return rawShape(description === undefined ? {} : { description })
-					}
-					const variants: ContractShape[] = []
-					for (let index = 0; index < records.length; index += 1) {
-						const entry = records[index]
-						if (entry === undefined) continue
-						variants[variants.length] = schemaNodeToShape(entry, depth - 1, visited, memo)
-					}
-					// `Reflect.apply` reads its argument list by index, where a spread call
-					// would dispatch through the caller-writable array iterator.
-					if (variants.length > 0) return INTRINSICS.apply(oneOfShape, undefined, variants)
-				}
-
-				if (isArray(schema.anyOf)) {
-					const records: JSONSchema[] = []
-					for (let index = 0; index < schema.anyOf.length; index += 1) {
-						const entry = schema.anyOf[index]
-						if (isRecord(entry)) records[records.length] = entry
-					}
-					if (records.length > INFER_BREADTH_LIMIT) {
-						return rawShape(description === undefined ? {} : { description })
-					}
-					const variants: ContractShape[] = []
-					for (let index = 0; index < records.length; index += 1) {
-						const entry = records[index]
-						if (entry === undefined) continue
-						variants[variants.length] = schemaNodeToShape(entry, depth - 1, visited, memo)
-					}
-					if (variants.length > 0) return INTRINSICS.apply(unionShape, undefined, variants)
-				}
-
-				const type = isString(schema.type) ? schema.type : undefined
-
-				if (type === 'string') {
-					const bounds = deriveLengthBounds(schema.minLength, schema.maxLength)
-					return stringShape({
-						...bounds,
-						...(description === undefined ? {} : { description }),
-					})
-				}
-				if (type === 'number') {
-					const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
-					return numberShape({
-						...bounds,
-						...(description === undefined ? {} : { description }),
-					})
-				}
-				if (type === 'integer') {
-					const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
-					const emptyRange =
-						INTRINSICS.ceil(bounds.min ?? Number.NEGATIVE_INFINITY) >
-						INTRINSICS.floor(bounds.max ?? Number.POSITIVE_INFINITY)
-					return integerShape(
-						emptyRange
-							? description === undefined
-								? undefined
-								: { description }
-							: {
-									...bounds,
-									...(description === undefined ? {} : { description }),
-								},
-					)
-				}
-				if (type === 'boolean') {
-					return booleanShape(description === undefined ? undefined : { description })
-				}
-				if (type === 'null') {
-					return nullShape(description === undefined ? undefined : { description })
-				}
-
-				if (type === 'array') {
-					const items = isRecord(schema.items)
-						? schemaNodeToShape(schema.items, depth - 1, visited, memo)
-						: rawShape({})
-					const bounds = deriveLengthBounds(schema.minItems, schema.maxItems)
-					return arrayShape(items, {
-						...bounds,
-						...(description === undefined ? {} : { description }),
-					})
-				}
-
-				if (type === 'object' || (type === undefined && isRecord(schema.properties))) {
-					return buildObjectShape(schema, depth, visited, memo, description)
-				}
-
-				return rawShape(description === undefined ? {} : { description })
-			},
-			'buildShapeFromNode',
-			{ subject: 'schema', context: { shape: 'schema' } },
-		)
-	}, 'buildShapeFromNode')
-}
-
-/**
- * Convert one JSON Schema node into a {@link ContractShape} — the recursion
- * entry point {@link schemaToShape} and {@link buildShapeFromNode} share for
- * every child (`items`, `properties` values, `additionalProperties`,
- * `oneOf` / `anyOf` variants).
- *
- * @remarks
- * Guards depth exhaustion, a readable non-record node (the node's static
- * `JSONSchema` type is not trusted at runtime), and a cyclic re-encounter of
- * `schema` — all three widen to {@link rawShape}. The
- * ancestor set is added to and removed from around the WHOLE subtree
- * conversion (not permanently), so a DAG-shaped schema reached twice via two
- * different, non-cyclic paths does not false-positive as a cycle. The
- * subtree conversion itself runs through {@link readValue}, so a hostile
- * throwing getter/Proxy anywhere in `schema` raises a coded read refusal
- * instead of degrading to an accept-anything shape. A same-node re-conversion at
- * the same remaining `depth` is served from `memo` (guards a
- * shared-reference schema DAG against exponential blowup), mirroring
- * {@link inferObject} / {@link inferArray} (inferers.ts).
- *
- * @param schema - The schema node to convert
- * @param depth - Remaining descent budget
- * @param visited - The ancestor set guarding against cycles — recursion
- *   state owned by the {@link schemaToShape} entry point; passing a shared or
- *   pre-populated `WeakSet` changes cycle-detection behavior and is not
- *   supported usage
- * @param memo - A per-call `(schema node, remaining depth) → shape` cache —
- *   recursion state owned by the {@link schemaToShape} entry point; passing
- *   a shared or pre-populated `WeakMap` changes caching behavior and is not
- *   supported usage
- * @returns The built shape for `schema`, or {@link rawShape} for readable widening cases
- * @throws {ContractError} When schema traversal fails
- *
- * @example
- * ```ts
- * schemaNodeToShape({ type: 'boolean' }, INFER_DEPTH_LIMIT, new WeakSet(), new WeakMap())
- * // booleanShape()
- * ```
- */
-export function schemaNodeToShape(
-	schema: JSONSchema,
-	depth: number,
-	visited: WeakSet<object>,
-	memo: WeakMap<object, Map<number, ContractShape>>,
-): ContractShape {
-	return contain(() => {
-		return readValue(
-			() => {
-				if (!(depth > 0)) return rawShape({})
-				if (!matchesRecordBrand(schema)) return rawShape({})
-				if (matchesVisited(visited, schema)) return rawShape({})
-				// The memo read is dispatched through the captured `Map.prototype.get`
-				// too: a substitute answering a decoy would put a shape this package
-				// never built into one it publishes as its own.
-				const depthMemo = INTRINSICS.apply(INTRINSICS.recall, memo, [schema])
-				const cached =
-					depthMemo === undefined
-						? undefined
-						: INTRINSICS.apply(INTRINSICS.fetch, depthMemo, [depth])
-				if (cached) return cached
-				admitVisited(visited, schema)
-				try {
-					const shape = buildShapeFromNode(schema, depth, visited, memo)
-					retainDepth(memo, schema, depth, shape)
-					return shape
-				} finally {
-					omitVisited(visited, schema)
-				}
-			},
-			'schemaNodeToShape',
-			{ subject: 'schema', context: { shape: 'schema' } },
-		)
-	}, 'schemaNodeToShape')
-}
-
-/**
  * Convert a runtime `JSONSchema` value into a validating {@link ContractShape}
  * — the inverse of {@link compileSchema}. Unlike direct {@link rawShape}
  * construction, which rejects malformed supported-vocabulary keywords, this
@@ -1130,8 +723,9 @@ export function schemaNodeToShape(
  * Readable malformed, cyclic, or deeply nested schema nodes widen to
  * {@link rawShape}; a failed traversal raises the shared coded refusal because
  * an unreadable value is not a schema. `createContract(schemaToShape(x))`
- * therefore remains safe for every readable `x`. See
- * {@link buildShapeFromNode} for the exact per-keyword precedence.
+ * therefore remains safe for every readable `x`. The per-keyword precedence is
+ * `enum`, then `oneOf`, then `anyOf`, then `type`, then a record-valued
+ * `properties`, then the accept-anything widening.
  *
  * `format` and `pattern` are NEVER asserted by the compiled shape — `format`
  * is annotation-only (per the JSON Schema spec, it never narrows validation
@@ -1188,21 +782,17 @@ export function schemaNodeToShape(
  */
 export function schemaToShape(schema: JSONSchema): ContractShape {
 	return contain(() => {
-		// The traversal state is built INSIDE the shared read boundary. A module
-		// function cannot capture an intrinsic at evaluation the way an engine class
-		// can, so containment is the equivalent: a caller who replaces
-		// `globalThis.WeakSet` or `globalThis.WeakMap` before this call would
-		// otherwise have the constructor throw the caller's raw value out of a door
-		// documented to refuse with a `ContractError`, before any traversal exists to
-		// contain it.
-		const traversal = readValue(
-			() => ({
-				visited: new INTRINSICS.weakSet<object>(),
-				memo: new INTRINSICS.weakMap<object, Map<number, ContractShape>>(),
-			}),
-			'schemaToShape',
-			{ subject: 'schema' },
-		)
-		return schemaNodeToShape(schema, INFER_DEPTH_LIMIT, traversal.visited, traversal.memo)
+		// The whole walk runs inside this door's own read boundary, so a hostile
+		// keyword, enumeration, or recursion anywhere below it is published under
+		// this door's name rather than under the name of an engine method no
+		// consumer can call. The engine captures its own collection constructors
+		// while ITS module evaluates — a module function cannot — so a caller who
+		// replaces `globalThis.WeakSet` or `globalThis.WeakMap` can no longer make
+		// construction throw a raw value out of a door documented to refuse with a
+		// `ContractError`.
+		return readValue(() => new SchemaShaper(schema).shape(), 'schemaToShape', {
+			subject: 'schema',
+			context: { shape: 'schema' },
+		})
 	}, 'schemaToShape')
 }

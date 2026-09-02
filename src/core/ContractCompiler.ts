@@ -32,9 +32,9 @@ import {
 	attempt,
 	collectMembers,
 	contain,
-	createArrayFaults,
-	createNumberFaults,
-	createStringFaults,
+	buildArrayFaults,
+	buildNumberFaults,
+	buildStringFaults,
 	drawRandom,
 	enumerableKeys,
 	limitEntries,
@@ -459,10 +459,10 @@ export class ContractCompiler<
 			// A node reached a second time is already indexed, and the graph is
 			// acyclic by validation, so it is already finished too — which is exactly
 			// what makes one entry per unique node correct rather than merely cheap.
-			if (INTRINSICS.apply(INTRINSICS.recall, known, [shape]) !== undefined) continue
+			if (INTRINSICS.reflect.apply(INTRINSICS.recall, known, [shape]) !== undefined) continue
 			const index = this.#nodes.length
 			this.#nodes[index] = shape
-			INTRINSICS.apply(INTRINSICS.retain, known, [shape, index])
+			INTRINSICS.reflect.apply(INTRINSICS.retain, known, [shape, index])
 			this.#stack[this.#stack.length] = { operation: 'exit', index }
 			this.#schedule(shape)
 		}
@@ -508,7 +508,7 @@ export class ContractCompiler<
 	}
 
 	#locate(shape: ContractShape): number {
-		// The receiver is narrowed BEFORE the dispatch. `INTRINSICS.apply` takes its
+		// The receiver is narrowed BEFORE the dispatch. `INTRINSICS.reflect.apply` takes its
 		// receiver type from this argument rather than from the target, so a dropped
 		// index would leave `WeakMap.prototype.get` throwing a host `TypeError`
 		// through a door whose whole contract is that it publishes this package's
@@ -523,7 +523,7 @@ export class ContractCompiler<
 				context: { path: [], shape: 'contract' },
 			})
 		}
-		const index = INTRINSICS.apply(INTRINSICS.recall, known, [shape])
+		const index = INTRINSICS.reflect.apply(INTRINSICS.recall, known, [shape])
 		if (index === undefined) {
 			throw new ContractError('ContractCompiler: a structural child is not in the prepared index', {
 				code: 'structure',
@@ -612,7 +612,7 @@ export class ContractCompiler<
 				}
 				if (slot === value) return kept
 				if (memo !== undefined) {
-					const recalled = INTRINSICS.apply(INTRINSICS.recall, memo, [value])
+					const recalled = INTRINSICS.reflect.apply(INTRINSICS.recall, memo, [value])
 					if (recalled !== undefined) return recalled
 				}
 				const answer = plan(value)
@@ -622,9 +622,9 @@ export class ContractCompiler<
 				} else {
 					if (memo === undefined) {
 						memo = new ContractCompiler.#weakMap()
-						INTRINSICS.apply(INTRINSICS.retain, memo, [slot, kept])
+						INTRINSICS.reflect.apply(INTRINSICS.retain, memo, [slot, kept])
 					}
-					INTRINSICS.apply(INTRINSICS.retain, memo, [value, answer])
+					INTRINSICS.reflect.apply(INTRINSICS.retain, memo, [value, answer])
 				}
 				return answer
 			} finally {
@@ -666,7 +666,7 @@ export class ContractCompiler<
 				}
 				if (slot === value && kept !== undefined) return kept
 				if (memo !== undefined) {
-					const recalled = INTRINSICS.apply(INTRINSICS.recall, memo, [value])
+					const recalled = INTRINSICS.reflect.apply(INTRINSICS.recall, memo, [value])
 					if (recalled !== undefined) return recalled
 				}
 				const answer = plan(value, path)
@@ -676,9 +676,9 @@ export class ContractCompiler<
 				} else if (answer.length === 0) {
 					if (memo === undefined) {
 						memo = new ContractCompiler.#weakMap()
-						if (kept !== undefined) INTRINSICS.apply(INTRINSICS.retain, memo, [slot, kept])
+						if (kept !== undefined) INTRINSICS.reflect.apply(INTRINSICS.retain, memo, [slot, kept])
 					}
-					INTRINSICS.apply(INTRINSICS.retain, memo, [value, answer])
+					INTRINSICS.reflect.apply(INTRINSICS.retain, memo, [value, answer])
 				}
 				return answer
 			} finally {
@@ -1036,7 +1036,7 @@ export class ContractCompiler<
 				}
 				// `Reflect.apply` reads its argument list by index (CreateListFromArrayLike),
 				// where `unionOf(...guards)` would spread through the array iterator.
-				return INTRINSICS.apply(unionOf, undefined, guards)
+				return INTRINSICS.reflect.apply(unionOf, undefined, guards)
 			}
 			case 'optional':
 				return orOf(isUndefined, this.#guardAt(owned.inner))
@@ -1431,7 +1431,7 @@ export class ContractCompiler<
 					if (!isString(value)) {
 						return [{ reason: 'type', path, expected: 'string', received: preview(value) }]
 					}
-					return refined ? createStringFaults(node, value, path) : []
+					return refined ? buildStringFaults(node, value, path) : []
 				}
 			}
 			case 'number': {
@@ -1442,7 +1442,7 @@ export class ContractCompiler<
 					if (!isFiniteNumber(value)) {
 						return [{ reason: 'type', path, expected: kind, received: preview(value) }]
 					}
-					return refined ? createNumberFaults(node, value, path) : []
+					return refined ? buildNumberFaults(node, value, path) : []
 				}
 			}
 			case 'boolean':
@@ -1498,7 +1498,7 @@ export class ContractCompiler<
 							item(entries.value.entries[entryIndex], pathOf(path, INTRINSICS.text(entryIndex))),
 						)
 					}
-					appendEntries(faults, createArrayFaults(node, entries.value.entries.length, path))
+					appendEntries(faults, buildArrayFaults(node, entries.value.entries.length, path))
 					return limitEntries(faults, FAULT_LIMIT)
 				}
 			}
@@ -1552,7 +1552,7 @@ export class ContractCompiler<
 				}
 				return (value, path) => {
 					if (isObject(value)) {
-						readValue(() => INTRINSICS.parent(value), 'compileAuditor', {
+						readValue(() => INTRINSICS.reflect.prototype(value), 'compileAuditor', {
 							subject: 'object',
 							context: { path, shape: 'object' },
 						})
@@ -1746,7 +1746,7 @@ export class ContractCompiler<
 					if (parsed === undefined) {
 						return [{ reason: 'type', path, expected: 'string', received: preview(value) }]
 					}
-					return refined ? createStringFaults(node, parsed, path) : []
+					return refined ? buildStringFaults(node, parsed, path) : []
 				}
 			}
 			case 'number': {
@@ -1758,7 +1758,7 @@ export class ContractCompiler<
 					if (parsed === undefined) {
 						return [{ reason: 'type', path, expected: kind, received: preview(value) }]
 					}
-					return refined ? createNumberFaults(node, parsed, path) : []
+					return refined ? buildNumberFaults(node, parsed, path) : []
 				}
 			}
 			case 'boolean':
@@ -1802,7 +1802,7 @@ export class ContractCompiler<
 							item(entries.value.entries[entryIndex], pathOf(path, INTRINSICS.text(entryIndex))),
 						)
 					}
-					appendEntries(faults, createArrayFaults(node, entries.value.entries.length, path))
+					appendEntries(faults, buildArrayFaults(node, entries.value.entries.length, path))
 					return limitEntries(faults, FAULT_LIMIT)
 				}
 			}

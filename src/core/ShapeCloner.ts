@@ -74,12 +74,27 @@ export class ShapeCloner implements ShapeClonerInterface {
 	// containment this class has.
 	static readonly #map = Map
 	static readonly #weakSet = WeakSet
+	// The released state, shared by every cloner this class ever builds. `#settle`
+	// assigns these in place of the working lists, so an instance allocates one
+	// collection per family instead of two and construction carries no empty peer
+	// of its own. Sharing them is safe because nothing writes to a released list:
+	// every writer runs inside the walk and `#settle` is the walk's last step. The
+	// static block at the foot of the class freezes them, so a write that did
+	// reach one fails loudly at its own line rather than leaking one cloner's node
+	// into every other cloner's release.
+	static readonly #emptyPending: Array<{
+		readonly shape: ContractShape
+		readonly depth: number
+	}> = []
+	static readonly #emptySources: ContractShape[] = []
 	readonly #source: ContractShape
 	readonly #owned: WeakSet<object>
-	#memo: Map<ContractShape, ContractShape>
-	readonly #emptyMemo: Map<ContractShape, ContractShape>
-	#paths: Map<ContractShape, readonly string[]>
-	readonly #emptyPaths: Map<ContractShape, readonly string[]>
+	// The working maps are the fields with no shared peer: `Object.freeze` reaches
+	// an array's writes and not a `Map`'s, so a shared empty map would be a
+	// class-lifetime cache any write could fill with one cloner's nodes. `#settle`
+	// drops them instead, and absence is `undefined`.
+	#memo: Map<ContractShape, ContractShape> | undefined
+	#paths: Map<ContractShape, readonly string[]> | undefined
 	// An ordered ENTRY LIST rather than a `Map`: every consumer of this snapshot
 	// walks it to decide the published property population, and iterating a `Map`
 	// dispatches through `Map.prototype[Symbol.iterator]` while destructuring each
@@ -88,19 +103,15 @@ export class ShapeCloner implements ShapeClonerInterface {
 	// two-element entry — same arity, so every downstream structural check still
 	// passes — published a frozen shape whose property was RENAMED to the
 	// caller's text.
-	#properties: Map<ContractShape, readonly ShapeProperty[]>
-	readonly #emptyProperties: Map<ContractShape, readonly ShapeProperty[]>
-	#variants: Map<ContractShape, ReadonlyArray<ContractShape | undefined>>
-	readonly #emptyVariants: Map<ContractShape, ReadonlyArray<ContractShape | undefined>>
+	#properties: Map<ContractShape, readonly ShapeProperty[]> | undefined
+	#variants: Map<ContractShape, ReadonlyArray<ContractShape | undefined>> | undefined
 	// FIFO, walked with a read cursor rather than `pop()`. A LIFO drain captured
 	// siblings in REVERSE declaration order, so the first refusal this class threw
 	// named the LAST offending sibling while the shared gate named the first — one
 	// declaration, two different codes, messages and `context.path` values from
 	// doors the guide names in one sentence as agreeing.
 	#pending: Array<{ readonly shape: ContractShape; readonly depth: number }>
-	readonly #emptyPending: Array<{ readonly shape: ContractShape; readonly depth: number }>
 	#sources: ContractShape[]
-	readonly #emptySources: ContractShape[]
 	#fidelity: ContractError | undefined
 	#state:
 		| { readonly phase: 'ready' }
@@ -112,17 +123,11 @@ export class ShapeCloner implements ShapeClonerInterface {
 		this.#source = shape
 		this.#owned = new ShapeCloner.#weakSet()
 		this.#memo = new ShapeCloner.#map()
-		this.#emptyMemo = new ShapeCloner.#map()
 		this.#paths = new ShapeCloner.#map()
-		this.#emptyPaths = new ShapeCloner.#map()
 		this.#properties = new ShapeCloner.#map()
-		this.#emptyProperties = new ShapeCloner.#map()
 		this.#variants = new ShapeCloner.#map()
-		this.#emptyVariants = new ShapeCloner.#map()
 		this.#pending = []
-		this.#emptyPending = []
 		this.#sources = []
-		this.#emptySources = []
 		this.#fidelity = undefined
 		this.#state = { phase: 'ready' }
 	}
@@ -170,11 +175,19 @@ export class ShapeCloner implements ShapeClonerInterface {
 	}
 
 	#execute(): ContractShape {
-		INTRINSICS.apply(INTRINSICS.store, this.#paths, [this.#source, []])
+		// Narrowed once at the door, because both dispatches below take their
+		// receiver type from these values. The walk runs before `#settle` drops
+		// them, so it always finds the maps the constructor built; this refusal is
+		// what keeps that a statement the types carry rather than one a comment
+		// makes.
+		const paths = this.#paths
+		const memo = this.#memo
+		if (paths === undefined || memo === undefined) throw this.#unavailable()
+		INTRINSICS.reflect.apply(INTRINSICS.store, paths, [this.#source, []])
 		this.#pending[this.#pending.length] = { shape: this.#source, depth: 0 }
 		this.#drain()
 		this.#wireNodes()
-		const root = INTRINSICS.apply(INTRINSICS.fetch, this.#memo, [this.#source])
+		const root = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [this.#source])
 		if (root === undefined) {
 			throw this.#create('ShapeCloner.clone: captured root is unavailable', {
 				code: 'clone',
@@ -192,16 +205,18 @@ export class ShapeCloner implements ShapeClonerInterface {
 		// cursor also makes the level a node was reached at meaningful: it is the
 		// SHORTEST path to that node, so this bound never refuses a graph the
 		// validator would accept.
+		const memo = this.#memo
+		if (memo === undefined) throw this.#unavailable()
 		let cursor = 0
 		while (cursor < this.#pending.length) {
 			const entry = this.#pending[cursor]
 			cursor += 1
 			if (entry === undefined) continue
-			if (INTRINSICS.apply(INTRINSICS.keyed, this.#memo, [entry.shape])) continue
+			if (INTRINSICS.reflect.apply(INTRINSICS.keyed, memo, [entry.shape])) continue
 			// The depth verdict is reached in time proportional to the LIMIT rather
 			// than to the caller's declaration. Capturing, wiring and freezing a
 			// 4,000-level chain that is CERTAIN to be refused cost 120 ms against
-			// `validateShapeDepth`'s 1 ms for the identical verdict, and the cost is
+			// `validateShape`'s 1 ms for the identical verdict, and the cost is
 			// quadratic because every child registration copies its whole path.
 			if (entry.depth > COMPILE_DEPTH_LIMIT) this.#refuseDepth()
 			this.#captureNode(entry.shape, entry.depth)
@@ -209,11 +224,11 @@ export class ShapeCloner implements ShapeClonerInterface {
 	}
 
 	// The gate that OWNS the depth rule authors the diagnosis, on the same source
-	// `validateShapeDepth` would be handed, so the two doors cannot disagree about
+	// `validateShape` would be handed, so the two doors cannot disagree about
 	// which node exceeded the limit or what the refusal says.
 	#refuseDepth(): never {
 		this.#validateShape(this.#source)
-		throw this.#create('validateShapeDepth: a shape exceeds the compilation depth limit', {
+		throw this.#create('validateShape: a shape exceeds the compilation depth limit', {
 			code: 'depth',
 			context: { path: [], limit: COMPILE_DEPTH_LIMIT },
 		})
@@ -221,7 +236,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 
 	#captureShell(source: ContractShape, path: readonly string[]): ContractShape {
 		if (!matchesRecordBrand(source)) {
-			throw this.#create('validateShapeDepth: every structural child must be a shape', {
+			throw this.#create('validateShape: every structural child must be a shape', {
 				code: 'structure',
 				context: { path },
 			})
@@ -268,7 +283,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 			case 'raw':
 				return this.#captureRaw(source, path)
 			default:
-				throw this.#create('validateShapeDepth: every node must be a recognized shape', {
+				throw this.#create('validateShape: every node must be a recognized shape', {
 					code: 'structure',
 					context: { path },
 				})
@@ -282,7 +297,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 	): S[K] | undefined {
 		const descriptor = INTRINSICS.describe(source, field)
 		if (descriptor === undefined) {
-			if (INTRINSICS.present(source, field)) {
+			if (INTRINSICS.reflect.present(source, field)) {
 				throw this.#create('cloneShape: inherited shape fields cannot be owned', {
 					code: 'structure',
 					context: { path: pathOf(path, field) },
@@ -313,7 +328,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 	): { readonly source: string; readonly flags: string } | undefined {
 		const descriptor = INTRINSICS.describe(source, 'pattern')
 		if (descriptor === undefined) {
-			if (INTRINSICS.present(source, 'pattern')) {
+			if (INTRINSICS.reflect.present(source, 'pattern')) {
 				throw this.#create('cloneShape: inherited shape fields cannot be owned', {
 					code: 'structure',
 					context: { path: pathOf(path, 'pattern') },
@@ -372,7 +387,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 	): { readonly source: string; readonly flags: string } | undefined {
 		if (pattern === undefined) return undefined
 		if (!isRegExp(pattern)) {
-			throw this.#create('validateShapeDepth: string pattern must be a RegExp', {
+			throw this.#create('validateShape: string pattern must be a RegExp', {
 				code: 'structure',
 				context: { path: pathOf(path, 'pattern') },
 			})
@@ -399,7 +414,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 			repeated.value.source !== sourceText ||
 			repeated.value.flags !== flags
 		) {
-			this.#fidelity ??= this.#create('validateShapeDepth: string pattern must be stable', {
+			this.#fidelity ??= this.#create('validateShape: string pattern must be stable', {
 				code: 'structure',
 				context: { path: pathOf(path, 'pattern') },
 			})
@@ -409,10 +424,13 @@ export class ShapeCloner implements ShapeClonerInterface {
 	}
 
 	#captureNode(source: ContractShape, depth: number): void {
-		const path = INTRINSICS.apply(INTRINSICS.fetch, this.#paths, [source]) ?? []
+		const paths = this.#paths
+		const memo = this.#memo
+		if (paths === undefined || memo === undefined) throw this.#unavailable()
+		const path = INTRINSICS.reflect.apply(INTRINSICS.fetch, paths, [source]) ?? []
 		const clone = this.#captureShell(source, path)
 
-		INTRINSICS.apply(INTRINSICS.store, this.#memo, [source, clone])
+		INTRINSICS.reflect.apply(INTRINSICS.store, memo, [source, clone])
 		this.#sources[this.#sources.length] = source
 		this.#scheduleNode(source, clone, path, depth)
 	}
@@ -498,7 +516,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		// cannot be BUILT without it — so that refusal stays here, and it is
 		// `structure`, the family the validator itself ranks first.
 		if (items === undefined) {
-			throw this.#create('validateShapeDepth: every structural child must be a shape', {
+			throw this.#create('validateShape: every structural child must be a shape', {
 				code: 'structure',
 				context: { path: pathOf(path, 'items') },
 			})
@@ -517,7 +535,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		const additional = this.#captureField(source, 'additionalProperties', path)
 		const description = this.#captureField(source, 'description', path)
 		if (!isRecord(propertySource)) {
-			throw this.#create('validateShapeDepth: properties must be a plain property map', {
+			throw this.#create('validateShape: properties must be a plain property map', {
 				code: 'structure',
 				context: { path: pathOf(path, 'properties') },
 			})
@@ -552,7 +570,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 	): OptionalShape | NullableShape {
 		const inner = this.#captureField(source, 'inner', path)
 		if (inner === undefined) {
-			throw this.#create('validateShapeDepth: every structural child must be a shape', {
+			throw this.#create('validateShape: every structural child must be a shape', {
 				code: 'structure',
 				context: { path: pathOf(path, 'inner') },
 			})
@@ -563,7 +581,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 	#captureRaw(source: RawShape, path: readonly string[]): RawShape {
 		const schema = this.#captureField(source, 'schema', path)
 		if (!isRecord(schema)) {
-			throw this.#create('validateShapeDepth: raw schema must be a plain record', {
+			throw this.#create('validateShape: raw schema must be a plain record', {
 				code: 'structure',
 				context: { path: pathOf(path, 'schema') },
 			})
@@ -584,20 +602,20 @@ export class ShapeCloner implements ShapeClonerInterface {
 		path: readonly string[],
 	): readonly LiteralValue[] {
 		if (!INTRINSICS.array(values)) {
-			throw this.#create('validateShapeDepth: values must be a finite literal array', {
+			throw this.#create('validateShape: values must be a finite literal array', {
 				code: 'structure',
 				context: { path: pathOf(path, 'values') },
 			})
 		}
 		const snapshot = readArrayEntries(values)
 		if (!snapshot.success) {
-			throw this.#create('validateShapeDepth: values must be a finite literal array', {
+			throw this.#create('validateShape: values must be a finite literal array', {
 				code: 'structure',
 				context: { path: pathOf(path, 'values') },
 			})
 		}
 		if (!snapshot.value.dense) {
-			throw this.#create('validateShapeDepth: values must be a dense data array', {
+			throw this.#create('validateShape: values must be a dense data array', {
 				code: 'structure',
 				context: { path: pathOf(path, 'values') },
 			})
@@ -623,7 +641,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 			descriptor.value === undefined ||
 			!INTRINSICS.own(descriptor.value, 'value')
 		) {
-			this.#fidelity ??= this.#create('validateShapeDepth: values must be a dense data array', {
+			this.#fidelity ??= this.#create('validateShape: values must be a dense data array', {
 				code: 'structure',
 				context: { path: pathOf(path, 'values', key) },
 			})
@@ -632,14 +650,14 @@ export class ShapeCloner implements ShapeClonerInterface {
 			!INTRINSICS.same(repeated.value, value) ||
 			!INTRINSICS.same(descriptor.value.value, value)
 		) {
-			this.#fidelity ??= this.#create('validateShapeDepth: values must be a stable data array', {
+			this.#fidelity ??= this.#create('validateShape: values must be a stable data array', {
 				code: 'structure',
 				context: { path: pathOf(path, 'values', key) },
 			})
 		}
 		if (!isLiteralValue(value)) {
 			throw this.#create(
-				'validateShapeDepth: every literal value must be a string, number, or boolean',
+				'validateShape: every literal value must be a string, number, or boolean',
 				{
 					code: 'structure',
 					context: { path: pathOf(path, 'values', key) },
@@ -663,7 +681,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 			if (key === undefined) continue
 			const descriptor = INTRINSICS.describe(properties, key)
 			if (descriptor === undefined || !INTRINSICS.own(descriptor, 'value')) {
-				throw this.#create('validateShapeDepth: every structural child must be a shape', {
+				throw this.#create('validateShape: every structural child must be a shape', {
 					code: 'structure',
 					context: { path: pathOf(path, 'properties', key) },
 				})
@@ -672,7 +690,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 			const repeated = properties[key]
 			const described: unknown = descriptor.value
 			if (!INTRINSICS.same(described, child) || !INTRINSICS.same(child, repeated)) {
-				throw this.#create('validateShapeDepth: every structural child must be a shape', {
+				throw this.#create('validateShape: every structural child must be a shape', {
 					code: 'structure',
 					context: { path: pathOf(path, 'properties', key) },
 				})
@@ -690,7 +708,9 @@ export class ShapeCloner implements ShapeClonerInterface {
 				context: { path: pathOf(path, 'properties') },
 			})
 		}
-		INTRINSICS.apply(INTRINSICS.store, this.#properties, [source, snapshot])
+		const captured = this.#properties
+		if (captured === undefined) throw this.#unavailable()
+		INTRINSICS.reflect.apply(INTRINSICS.store, captured, [source, snapshot])
 	}
 
 	#captureVariants(
@@ -699,26 +719,28 @@ export class ShapeCloner implements ShapeClonerInterface {
 		path: readonly string[],
 	): void {
 		if (!INTRINSICS.array(variants)) {
-			throw this.#create('validateShapeDepth: variants must be a finite array', {
+			throw this.#create('validateShape: variants must be a finite array', {
 				code: 'structure',
 				context: { path: pathOf(path, 'variants') },
 			})
 		}
 		const snapshot = readArrayEntries(variants)
 		if (!snapshot.success) {
-			throw this.#create('validateShapeDepth: variants must be a finite array', {
+			throw this.#create('validateShape: variants must be a finite array', {
 				code: 'structure',
 				context: { path: pathOf(path, 'variants') },
 			})
 		}
 		if (!snapshot.value.dense) {
-			throw this.#create('validateShapeDepth: variants must be a dense data array', {
+			throw this.#create('validateShape: variants must be a dense data array', {
 				code: 'structure',
 				context: { path: pathOf(path, 'variants') },
 			})
 		}
 		const entries = snapshot.value.entries
-		INTRINSICS.apply(INTRINSICS.store, this.#variants, [source, entries])
+		const captured = this.#variants
+		if (captured === undefined) throw this.#unavailable()
+		INTRINSICS.reflect.apply(INTRINSICS.store, captured, [source, entries])
 		for (let index = 0; index < entries.length; index += 1) {
 			const variant = entries[index]
 			const key = INTRINSICS.text(index)
@@ -732,13 +754,10 @@ export class ShapeCloner implements ShapeClonerInterface {
 				!INTRINSICS.same(repeated.value, variant) ||
 				!INTRINSICS.same(descriptor.value.value, variant)
 			) {
-				this.#fidelity ??= this.#create(
-					'validateShapeDepth: every structural child must be a shape',
-					{
-						code: 'structure',
-						context: { path: pathOf(path, 'variants', key) },
-					},
-				)
+				this.#fidelity ??= this.#create('validateShape: every structural child must be a shape', {
+					code: 'structure',
+					context: { path: pathOf(path, 'variants', key) },
+				})
 			}
 		}
 	}
@@ -754,7 +773,9 @@ export class ShapeCloner implements ShapeClonerInterface {
 				this.#registerChild(clone.items, pathOf(path, 'items'), depth)
 				break
 			case 'object': {
-				const properties = INTRINSICS.apply(INTRINSICS.fetch, this.#properties, [source])
+				const captured = this.#properties
+				if (captured === undefined) throw this.#unavailable()
+				const properties = INTRINSICS.reflect.apply(INTRINSICS.fetch, captured, [source])
 				if (properties === undefined) {
 					throw this.#create('cloneShape: properties could not be read', {
 						code: 'clone',
@@ -773,9 +794,11 @@ export class ShapeCloner implements ShapeClonerInterface {
 				break
 			}
 			case 'union': {
-				const variants = INTRINSICS.apply(INTRINSICS.fetch, this.#variants, [source])
+				const captured = this.#variants
+				if (captured === undefined) throw this.#unavailable()
+				const variants = INTRINSICS.reflect.apply(INTRINSICS.fetch, captured, [source])
 				if (variants === undefined) {
-					throw this.#create('validateShapeDepth: variants must be a finite array', {
+					throw this.#create('validateShape: variants must be a finite array', {
 						code: 'structure',
 						context: { path: pathOf(path, 'variants') },
 					})
@@ -798,17 +821,22 @@ export class ShapeCloner implements ShapeClonerInterface {
 	}
 
 	#registerChild(child: ContractShape, path: readonly string[], depth: number): void {
-		INTRINSICS.apply(INTRINSICS.store, this.#paths, [child, path])
+		const paths = this.#paths
+		if (paths === undefined) throw this.#unavailable()
+		INTRINSICS.reflect.apply(INTRINSICS.store, paths, [child, path])
 		this.#pending[this.#pending.length] = { shape: child, depth: depth + 1 }
 	}
 
 	#wireNodes(): void {
+		const memo = this.#memo
+		const paths = this.#paths
+		if (memo === undefined || paths === undefined) throw this.#unavailable()
 		for (let sourceIndex = 0; sourceIndex < this.#sources.length; sourceIndex += 1) {
 			const source = this.#sources[sourceIndex]
 			if (source === undefined) continue
-			const clone = INTRINSICS.apply(INTRINSICS.fetch, this.#memo, [source])
+			const clone = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [source])
 			if (clone === undefined) continue
-			const path = INTRINSICS.apply(INTRINSICS.fetch, this.#paths, [source]) ?? []
+			const path = INTRINSICS.reflect.apply(INTRINSICS.fetch, paths, [source]) ?? []
 			switch (clone.type) {
 				case 'array':
 					this.#wireArray(clone, path)
@@ -830,18 +858,23 @@ export class ShapeCloner implements ShapeClonerInterface {
 	}
 
 	#wireArray(clone: ArrayShape, path: readonly string[]): void {
-		const items = INTRINSICS.apply(INTRINSICS.fetch, this.#memo, [clone.items])
+		const memo = this.#memo
+		if (memo === undefined) throw this.#unavailable()
+		const items = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [clone.items])
 		if (items === undefined) {
-			throw this.#create('validateShapeDepth: every structural child must be a shape', {
+			throw this.#create('validateShape: every structural child must be a shape', {
 				code: 'structure',
 				context: { path: pathOf(path, 'items') },
 			})
 		}
-		INTRINSICS.write(clone, 'items', items)
+		INTRINSICS.reflect.write(clone, 'items', items)
 	}
 
 	#wireObject(source: ContractShape, clone: ObjectShape, path: readonly string[]): void {
-		const snapshot = INTRINSICS.apply(INTRINSICS.fetch, this.#properties, [source])
+		const memo = this.#memo
+		const captured = this.#properties
+		if (memo === undefined || captured === undefined) throw this.#unavailable()
+		const snapshot = INTRINSICS.reflect.apply(INTRINSICS.fetch, captured, [source])
 		if (snapshot === undefined) {
 			throw this.#create('cloneShape: properties could not be read', {
 				code: 'clone',
@@ -854,38 +887,41 @@ export class ShapeCloner implements ShapeClonerInterface {
 			if (entry === undefined) continue
 			const { key, child } = entry
 			if (child === undefined) {
-				throw this.#create('validateShapeDepth: every structural child must be a shape', {
+				throw this.#create('validateShape: every structural child must be a shape', {
 					code: 'structure',
 					context: { path: pathOf(path, 'properties', key) },
 				})
 			}
-			const cloned = INTRINSICS.apply(INTRINSICS.fetch, this.#memo, [child])
+			const cloned = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [child])
 			if (cloned === undefined) {
-				throw this.#create('validateShapeDepth: every structural child must be a shape', {
+				throw this.#create('validateShape: every structural child must be a shape', {
 					code: 'structure',
 					context: { path: pathOf(path, 'properties', key) },
 				})
 			}
 			properties[key] = cloned
 		}
-		INTRINSICS.write(clone, 'properties', INTRINSICS.freeze(properties))
+		INTRINSICS.reflect.write(clone, 'properties', INTRINSICS.freeze(properties))
 		const additional = clone.additionalProperties
 		if (additional !== undefined && additional !== true && additional !== false) {
-			const cloned = INTRINSICS.apply(INTRINSICS.fetch, this.#memo, [additional])
+			const cloned = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [additional])
 			if (cloned === undefined) {
-				throw this.#create('validateShapeDepth: every structural child must be a shape', {
+				throw this.#create('validateShape: every structural child must be a shape', {
 					code: 'structure',
 					context: { path: pathOf(path, 'additionalProperties') },
 				})
 			}
-			INTRINSICS.write(clone, 'additionalProperties', cloned)
+			INTRINSICS.reflect.write(clone, 'additionalProperties', cloned)
 		}
 	}
 
 	#wireUnion(source: ContractShape, clone: UnionShape, path: readonly string[]): void {
-		const snapshot = INTRINSICS.apply(INTRINSICS.fetch, this.#variants, [source])
+		const memo = this.#memo
+		const captured = this.#variants
+		if (memo === undefined || captured === undefined) throw this.#unavailable()
+		const snapshot = INTRINSICS.reflect.apply(INTRINSICS.fetch, captured, [source])
 		if (snapshot === undefined) {
-			throw this.#create('validateShapeDepth: variants must be a finite array', {
+			throw this.#create('validateShape: variants must be a finite array', {
 				code: 'structure',
 				context: { path: pathOf(path, 'variants') },
 			})
@@ -894,39 +930,43 @@ export class ShapeCloner implements ShapeClonerInterface {
 		for (let index = 0; index < snapshot.length; index += 1) {
 			const variant = snapshot[index]
 			if (variant === undefined) {
-				throw this.#create('validateShapeDepth: every structural child must be a shape', {
+				throw this.#create('validateShape: every structural child must be a shape', {
 					code: 'structure',
 					context: { path: pathOf(path, 'variants', INTRINSICS.text(index)) },
 				})
 			}
-			const cloned = INTRINSICS.apply(INTRINSICS.fetch, this.#memo, [variant])
+			const cloned = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [variant])
 			if (cloned === undefined) {
-				throw this.#create('validateShapeDepth: every structural child must be a shape', {
+				throw this.#create('validateShape: every structural child must be a shape', {
 					code: 'structure',
 					context: { path: pathOf(path, 'variants', INTRINSICS.text(index)) },
 				})
 			}
 			variants[variants.length] = cloned
 		}
-		INTRINSICS.write(clone, 'variants', INTRINSICS.freeze(variants))
+		INTRINSICS.reflect.write(clone, 'variants', INTRINSICS.freeze(variants))
 	}
 
 	#wireWrapper(clone: OptionalShape | NullableShape, path: readonly string[]): void {
-		const inner = INTRINSICS.apply(INTRINSICS.fetch, this.#memo, [clone.inner])
+		const memo = this.#memo
+		if (memo === undefined) throw this.#unavailable()
+		const inner = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [clone.inner])
 		if (inner === undefined) {
-			throw this.#create('validateShapeDepth: every structural child must be a shape', {
+			throw this.#create('validateShape: every structural child must be a shape', {
 				code: 'structure',
 				context: { path: pathOf(path, 'inner') },
 			})
 		}
-		INTRINSICS.write(clone, 'inner', inner)
+		INTRINSICS.reflect.write(clone, 'inner', inner)
 	}
 
 	#freezeNodes(): void {
+		const memo = this.#memo
+		if (memo === undefined) throw this.#unavailable()
 		for (let sourceIndex = 0; sourceIndex < this.#sources.length; sourceIndex += 1) {
 			const source = this.#sources[sourceIndex]
 			if (source === undefined) continue
-			const clone = INTRINSICS.apply(INTRINSICS.fetch, this.#memo, [source])
+			const clone = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [source])
 			if (clone !== undefined) INTRINSICS.freeze(clone)
 		}
 	}
@@ -940,6 +980,16 @@ export class ShapeCloner implements ShapeClonerInterface {
 		throw outcome.error
 	}
 
+	// One refusal for every dropped working map, because a settled cloner replays
+	// from `#state` and re-enters no walk method: nothing reachable settles here,
+	// and every guard that says so must say it the same way.
+	#unavailable(): ContractError {
+		return this.#create('ShapeCloner.clone: the capture state is unavailable', {
+			code: 'clone',
+			context: { shape: 'shape' },
+		})
+	}
+
 	#create(message: string, options: ContractErrorOptions): ContractError {
 		const error = new ContractError(message, options)
 		admitVisited(this.#owned, error)
@@ -950,13 +1000,17 @@ export class ShapeCloner implements ShapeClonerInterface {
 		return isObject(error) && matchesVisited(this.#owned, error)
 	}
 
+	// Assignment only: every working list takes the class's shared frozen empty
+	// peer and every working map is dropped outright. Nothing here calls a
+	// caller-mutable cleanup member and nothing here constructs a collection, so
+	// settlement cannot be redirected into leaving state behind.
 	#settle(result: Result<ContractShape, ContractError>): ContractShape {
-		this.#memo = this.#emptyMemo
-		this.#paths = this.#emptyPaths
-		this.#properties = this.#emptyProperties
-		this.#variants = this.#emptyVariants
-		this.#pending = this.#emptyPending
-		this.#sources = this.#emptySources
+		this.#memo = undefined
+		this.#paths = undefined
+		this.#properties = undefined
+		this.#variants = undefined
+		this.#pending = ShapeCloner.#emptyPending
+		this.#sources = ShapeCloner.#emptySources
 		this.#fidelity = undefined
 		this.#state = { phase: 'settled', result }
 		if (result.success) return result.value
@@ -964,6 +1018,11 @@ export class ShapeCloner implements ShapeClonerInterface {
 	}
 
 	static {
+		// Frozen in a statement of its own, and the result discarded: `Object.freeze`
+		// returns a readonly view, so binding it back would retype the peers and
+		// stop them satisfying the mutable working fields they are assigned to.
+		INTRINSICS.freeze(ShapeCloner.#emptyPending)
+		INTRINSICS.freeze(ShapeCloner.#emptySources)
 		// Pinned while this class is DEFINED. `cloneShape` / `ownShape` reach it
 		// through `ShapeCloner.prototype.clone`, so one assignment there made
 		// `compileSchema`, `contract.audit` and `contract.explain` publish whatever

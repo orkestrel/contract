@@ -57,10 +57,10 @@ import {
 	contain,
 	ContractCompiler,
 	ContractError,
-	createArrayFaults,
+	buildArrayFaults,
 	createContract,
-	createNumberFaults,
-	createStringFaults,
+	buildNumberFaults,
+	buildStringFaults,
 	drawRandom,
 	INTRINSICS,
 	limitEntries,
@@ -79,12 +79,11 @@ import {
 	refuseExpansion,
 	retainDepth,
 	sortValues,
-	validateShapeDepth,
+	validateShape,
 	enumerableKeys,
 	enumerableSymbolCount,
 	GUARD_DEPTH_LIMIT,
 	holds,
-	inferSamples,
 	isBoundedJSONValue,
 	isJSONValue,
 	isContractError,
@@ -1151,7 +1150,7 @@ describe('sanitizeDepth', () => {
 
 	it('passes a budget at or below the limit through unchanged', () => {
 		// The control: without this the helper could return the constant for every
-		// input and still satisfy the cap above, which would make `maxDepth` inert
+		// input and still satisfy the cap above, which would make `limits.depth` inert
 		// rather than narrowing.
 		for (const value of [0, 1, 4, INFER_DEPTH_LIMIT - 1, INFER_DEPTH_LIMIT]) {
 			expect(sanitizeDepth(value)).toBe(value)
@@ -2569,6 +2568,31 @@ describe('INTRINSICS', () => {
 		}
 	})
 
+	it('freezes the proxy-visible group the same way it freezes the table', () => {
+		// The group is a row like any other, so a reader that stopped at the top
+		// level would report the whole table frozen while every proxy-visible
+		// operation stayed writable.
+		expect(Object.isFrozen(INTRINSICS.reflect)).toBe(true)
+		for (const key of Object.getOwnPropertyNames(INTRINSICS.reflect)) {
+			const descriptor = Object.getOwnPropertyDescriptor(INTRINSICS.reflect, key)
+			expect(descriptor).toBeDefined()
+			expect(descriptor !== undefined && Object.hasOwn(descriptor, 'value')).toBe(true)
+			expect(descriptor?.writable).toBe(false)
+		}
+	})
+
+	it('separates the reflective operations from their flat Object peers', () => {
+		// `describe`, `define`, and `prototype` name one operation in each set, and
+		// the split is the whole reason the group exists: the flat row reports the
+		// target and the grouped row reports the trap.
+		expect(INTRINSICS.describe).toBe(Object.getOwnPropertyDescriptor)
+		expect(INTRINSICS.reflect.describe).toBe(Reflect.getOwnPropertyDescriptor)
+		expect(INTRINSICS.define).toBe(Object.defineProperty)
+		expect(INTRINSICS.reflect.define).toBe(Reflect.defineProperty)
+		expect(INTRINSICS.prototype).toBe(Object.getPrototypeOf)
+		expect(INTRINSICS.reflect.prototype).toBe(Reflect.getPrototypeOf)
+	})
+
 	it('keeps answering after the member it captured is replaced', () => {
 		const thrower = (): never => {
 			throw new Error('replaced')
@@ -2808,7 +2832,7 @@ describe('pinned prototypes', () => {
 		expect(typeof descriptor?.get).toBe('function')
 		expect(descriptor?.configurable).toBe(false)
 		expect(new Counted().count).toBe(7)
-		expect(new ShapeValidator({ type: 'string' }).expansion).toBe(0)
+		expect(new ShapeValidator({ type: 'string' }).expansion).toBeUndefined()
 	})
 
 	it('leaves no exported class prototype member writable', () => {
@@ -2889,22 +2913,22 @@ describe('shapeToKind — declared return type (H9)', () => {
 	})
 })
 
-describe('createStringFaults', () => {
+describe('buildStringFaults', () => {
 	it('reports min, max, and pattern in declaration order', () => {
 		// All three cannot be violated by one length, so the order is proven in two
 		// halves that overlap on `pattern`.
 		const short: StringShape = { type: 'string', min: 4, pattern: /^[0-9]+$/ }
-		expect(faultsToConstraints(createStringFaults(short, 'ab', []))).toEqual(['min', 'pattern'])
+		expect(faultsToConstraints(buildStringFaults(short, 'ab', []))).toEqual(['min', 'pattern'])
 
 		const long: StringShape = { type: 'string', max: 2, pattern: /^[0-9]+$/ }
-		expect(faultsToConstraints(createStringFaults(long, 'abcd', []))).toEqual(['max', 'pattern'])
+		expect(faultsToConstraints(buildStringFaults(long, 'abcd', []))).toEqual(['max', 'pattern'])
 	})
 
 	it('treats both bounds as inclusive and previews the offending value', () => {
 		const bounded: StringShape = { type: 'string', min: 2, max: 4 }
-		expect(createStringFaults(bounded, 'ab', [])).toEqual([])
-		expect(createStringFaults(bounded, 'abcd', [])).toEqual([])
-		expect(createStringFaults(bounded, 'a', [])).toEqual([
+		expect(buildStringFaults(bounded, 'ab', [])).toEqual([])
+		expect(buildStringFaults(bounded, 'abcd', [])).toEqual([])
+		expect(buildStringFaults(bounded, 'a', [])).toEqual([
 			{
 				reason: 'constraint',
 				path: [],
@@ -2914,7 +2938,7 @@ describe('createStringFaults', () => {
 				received: '"a"',
 			},
 		])
-		expect(createStringFaults(bounded, 'abcde', [])).toEqual([
+		expect(buildStringFaults(bounded, 'abcde', [])).toEqual([
 			{
 				reason: 'constraint',
 				path: [],
@@ -2928,7 +2952,7 @@ describe('createStringFaults', () => {
 
 	it('carries the pattern source as the limit and roots faults at the given path', () => {
 		const shape: StringShape = { type: 'string', pattern: /^[a-z]+$/ }
-		expect(createStringFaults(shape, 'A1', ['properties', 'name'])).toEqual([
+		expect(buildStringFaults(shape, 'A1', ['properties', 'name'])).toEqual([
 			{
 				reason: 'constraint',
 				path: ['properties', 'name'],
@@ -2946,8 +2970,8 @@ describe('createStringFaults', () => {
 		// rebuild strips it; the controls below prove the flag was really set.
 		const pattern = /^[a-z]+$/g
 		const shape: StringShape = { type: 'string', pattern }
-		expect(createStringFaults(shape, 'abc', [])).toEqual([])
-		expect(createStringFaults(shape, 'abc', [])).toEqual([])
+		expect(buildStringFaults(shape, 'abc', [])).toEqual([])
+		expect(buildStringFaults(shape, 'abc', [])).toEqual([])
 		expect(pattern.lastIndex).toBe(0)
 		expect(pattern.global).toBe(true)
 	})
@@ -2955,14 +2979,14 @@ describe('createStringFaults', () => {
 	it('returns a fresh array per call and mutates neither the shape nor the path', () => {
 		const path = ['items']
 		const shape: StringShape = { type: 'string', min: 3 }
-		const first = createStringFaults(shape, 'a', path)
-		const second = createStringFaults(shape, 'a', path)
+		const first = buildStringFaults(shape, 'a', path)
+		const second = buildStringFaults(shape, 'a', path)
 
 		expect(first).not.toBe(second)
 		expect(first).toEqual(second)
 		expect(path).toEqual(['items'])
 		expect(shape).toEqual({ type: 'string', min: 3 })
-		expect(createStringFaults(shape, 'abc', [])).not.toBe(createStringFaults(shape, 'abc', []))
+		expect(buildStringFaults(shape, 'abc', [])).not.toBe(buildStringFaults(shape, 'abc', []))
 	})
 
 	it('refuses a shape it cannot read instead of publishing the host failure', () => {
@@ -2974,33 +2998,33 @@ describe('createStringFaults', () => {
 		// published door that leaks a raw host value falsifies the promise its
 		// sibling `shapeToKind` states for this whole module.
 		const disguised = captureContractError(() =>
-			createStringFaults({ type: 'string', pattern: new Proxy(/^a+$/, {}) }, 'abc', []),
+			buildStringFaults({ type: 'string', pattern: new Proxy(/^a+$/, {}) }, 'abc', []),
 		)
 		expect(disguised.code).toBe('structure')
-		expect(disguised.message).toBe('createStringFaults: shape could not be read')
+		expect(disguised.message).toBe('buildStringFaults: shape could not be read')
 
 		const hostile: StringShape = { type: 'string' }
 		Object.defineProperty(hostile, 'min', {
 			get: throwSentinel(new Error('boom')),
 			enumerable: true,
 		})
-		const unreadable = captureContractError(() => createStringFaults(hostile, 'abc', []))
+		const unreadable = captureContractError(() => buildStringFaults(hostile, 'abc', []))
 		expect(unreadable.code).toBe('structure')
-		expect(unreadable.message).toBe('createStringFaults: shape could not be read')
+		expect(unreadable.message).toBe('buildStringFaults: shape could not be read')
 		expect(unreadable.cause).toBeInstanceOf(Error)
 
 		// Control: the honest shape beside it still reports, so the boundary refuses
 		// the unreadable declaration rather than swallowing every answer.
-		expect(faultsToConstraints(createStringFaults({ type: 'string', min: 4 }, 'ab', []))).toEqual([
+		expect(faultsToConstraints(buildStringFaults({ type: 'string', min: 4 }, 'ab', []))).toEqual([
 			'min',
 		])
 	})
 })
 
-describe('createNumberFaults', () => {
+describe('buildNumberFaults', () => {
 	it('reports integer, min, and max in declaration order', () => {
 		const shape: NumberShape = { type: 'number', integer: true, min: 10, max: 1 }
-		expect(faultsToConstraints(createNumberFaults(shape, 5.5, []))).toEqual([
+		expect(faultsToConstraints(buildNumberFaults(shape, 5.5, []))).toEqual([
 			'integer',
 			'min',
 			'max',
@@ -3008,7 +3032,7 @@ describe('createNumberFaults', () => {
 	})
 
 	it('names the declared kind rather than the value kind', () => {
-		expect(createNumberFaults({ type: 'number', integer: true, min: 1 }, 0, [])).toEqual([
+		expect(buildNumberFaults({ type: 'number', integer: true, min: 1 }, 0, [])).toEqual([
 			{
 				reason: 'constraint',
 				path: [],
@@ -3018,7 +3042,7 @@ describe('createNumberFaults', () => {
 				received: '0',
 			},
 		])
-		expect(createNumberFaults({ type: 'number', min: 1 }, 0, [])).toEqual([
+		expect(buildNumberFaults({ type: 'number', min: 1 }, 0, [])).toEqual([
 			{
 				reason: 'constraint',
 				path: [],
@@ -3032,20 +3056,20 @@ describe('createNumberFaults', () => {
 
 	it('treats both bounds as inclusive and accepts a whole-valued float as an integer', () => {
 		const bounded: NumberShape = { type: 'number', min: -1, max: 1 }
-		expect(createNumberFaults(bounded, -1, [])).toEqual([])
-		expect(createNumberFaults(bounded, 1, [])).toEqual([])
-		expect(faultsToConstraints(createNumberFaults(bounded, -1.5, []))).toEqual(['min'])
+		expect(buildNumberFaults(bounded, -1, [])).toEqual([])
+		expect(buildNumberFaults(bounded, 1, [])).toEqual([])
+		expect(faultsToConstraints(buildNumberFaults(bounded, -1.5, []))).toEqual(['min'])
 		// Negative zero satisfies both bounds exactly as positive zero does, and
 		// `Number.isInteger(-0)` is true, so the signed zero faults at neither gate.
-		expect(createNumberFaults({ type: 'number', integer: true }, -0, [])).toEqual([])
-		expect(createNumberFaults({ type: 'number', integer: true }, 2.0, [])).toEqual([])
+		expect(buildNumberFaults({ type: 'number', integer: true }, -0, [])).toEqual([])
+		expect(buildNumberFaults({ type: 'number', integer: true }, 2.0, [])).toEqual([])
 	})
 
 	it('returns a fresh array per call and mutates neither the shape nor the path', () => {
 		const path = ['properties', 'age']
 		const shape: NumberShape = { type: 'number', max: 1 }
-		const first = createNumberFaults(shape, 2, path)
-		const second = createNumberFaults(shape, 2, path)
+		const first = buildNumberFaults(shape, 2, path)
+		const second = buildNumberFaults(shape, 2, path)
 
 		expect(first).not.toBe(second)
 		expect(first).toEqual(second)
@@ -3059,24 +3083,24 @@ describe('createNumberFaults', () => {
 			get: throwSentinel(new Error('boom')),
 			enumerable: true,
 		})
-		const error = captureContractError(() => createNumberFaults(hostile, 3, []))
+		const error = captureContractError(() => buildNumberFaults(hostile, 3, []))
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('createNumberFaults: shape could not be read')
+		expect(error.message).toBe('buildNumberFaults: shape could not be read')
 		expect(error.cause).toBeInstanceOf(Error)
 
 		// Control: the honest shape beside it still reports.
-		expect(faultsToConstraints(createNumberFaults({ type: 'number', min: 4 }, 3, []))).toEqual([
+		expect(faultsToConstraints(buildNumberFaults({ type: 'number', min: 4 }, 3, []))).toEqual([
 			'min',
 		])
 	})
 })
 
-describe('createArrayFaults', () => {
+describe('buildArrayFaults', () => {
 	it('reports min then max against the observed length', () => {
 		const shape: ArrayShape = { type: 'array', items: { type: 'string' }, min: 2, max: 3 }
-		expect(createArrayFaults(shape, 2, [])).toEqual([])
-		expect(createArrayFaults(shape, 3, [])).toEqual([])
-		expect(createArrayFaults(shape, 1, [])).toEqual([
+		expect(buildArrayFaults(shape, 2, [])).toEqual([])
+		expect(buildArrayFaults(shape, 3, [])).toEqual([])
+		expect(buildArrayFaults(shape, 1, [])).toEqual([
 			{
 				reason: 'constraint',
 				path: [],
@@ -3086,7 +3110,7 @@ describe('createArrayFaults', () => {
 				received: '1',
 			},
 		])
-		expect(createArrayFaults(shape, 4, [])).toEqual([
+		expect(buildArrayFaults(shape, 4, [])).toEqual([
 			{
 				reason: 'constraint',
 				path: [],
@@ -3103,7 +3127,7 @@ describe('createArrayFaults', () => {
 		// reported here is that read's count, so a value whose `length` moved between
 		// reads cannot make the diagnostic disagree with the walk that produced it.
 		const shape: ArrayShape = { type: 'array', items: { type: 'string' }, min: 5 }
-		expect(createArrayFaults(shape, 0, ['items'])).toEqual([
+		expect(buildArrayFaults(shape, 0, ['items'])).toEqual([
 			{
 				reason: 'constraint',
 				path: ['items'],
@@ -3118,8 +3142,8 @@ describe('createArrayFaults', () => {
 	it('returns a fresh array per call and mutates neither the shape nor the path', () => {
 		const path = ['0']
 		const shape: ArrayShape = { type: 'array', items: { type: 'string' }, min: 1 }
-		const first = createArrayFaults(shape, 0, path)
-		const second = createArrayFaults(shape, 0, path)
+		const first = buildArrayFaults(shape, 0, path)
+		const second = buildArrayFaults(shape, 0, path)
 
 		expect(first).not.toBe(second)
 		expect(first).toEqual(second)
@@ -3133,15 +3157,15 @@ describe('createArrayFaults', () => {
 			get: throwSentinel(new Error('boom')),
 			enumerable: true,
 		})
-		const error = captureContractError(() => createArrayFaults(hostile, 3, []))
+		const error = captureContractError(() => buildArrayFaults(hostile, 3, []))
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('createArrayFaults: shape could not be read')
+		expect(error.message).toBe('buildArrayFaults: shape could not be read')
 		expect(error.cause).toBeInstanceOf(Error)
 
 		// Control: the honest shape beside it still reports.
 		expect(
 			faultsToConstraints(
-				createArrayFaults({ type: 'array', items: { type: 'string' }, min: 4 }, 3, []),
+				buildArrayFaults({ type: 'array', items: { type: 'string' }, min: 4 }, 3, []),
 			),
 		).toEqual(['min'])
 	})
@@ -3194,7 +3218,7 @@ describe('the shared fault helpers are the reporter and auditor rule (R6-A)', ()
 	it('gives explain and audit the same string faults, in the helper order', () => {
 		const shape = stringShape({ min: 4, pattern: /^[0-9]+$/ })
 		const contract = createContract(shape)
-		const expected = createStringFaults(shape, 'ab', [])
+		const expected = buildStringFaults(shape, 'ab', [])
 
 		expect(faultsToConstraints(expected)).toEqual(['min', 'pattern'])
 		expect(contract.explain('ab')).toEqual(expected)
@@ -3204,7 +3228,7 @@ describe('the shared fault helpers are the reporter and auditor rule (R6-A)', ()
 	it('gives explain and audit the same number faults, in the helper order', () => {
 		const shape = integerShape({ min: 10 })
 		const contract = createContract(shape)
-		const expected = createNumberFaults(shape, 5.5, [])
+		const expected = buildNumberFaults(shape, 5.5, [])
 
 		expect(faultsToConstraints(expected)).toEqual(['integer', 'min'])
 		expect(contract.explain(5.5)).toEqual(expected)
@@ -3214,7 +3238,7 @@ describe('the shared fault helpers are the reporter and auditor rule (R6-A)', ()
 	it('gives explain and audit the same array length faults', () => {
 		const shape = arrayShape(stringShape(), { min: 2 })
 		const contract = createContract(shape)
-		const expected = createArrayFaults(shape, 1, [])
+		const expected = buildArrayFaults(shape, 1, [])
 
 		expect(expected.length).toBe(1)
 		expect(contract.explain(['a'])).toEqual(expected)
@@ -3246,6 +3270,17 @@ describe('the shared fault helpers are the reporter and auditor rule (R6-A)', ()
 })
 
 describe('refuseExpansion', () => {
+	it('refuses an absent measurement rather than reading it as a small one', () => {
+		// `undefined` reaches here only when the pass that was to measure the graph
+		// did not, so admitting it would report the node bound as satisfied by a
+		// count nobody took.
+		const error = captureContractError(() => refuseExpansion(undefined))
+
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe('validateShape: a validated shape measured no expansion')
+		expect(error.context).toEqual({ path: [] })
+	})
+
 	it('accepts a count at the limit and refuses the first count past it', () => {
 		expect(() => refuseExpansion(0)).not.toThrow()
 		expect(() => refuseExpansion(COMPILE_NODE_LIMIT)).not.toThrow()
@@ -3253,9 +3288,7 @@ describe('refuseExpansion', () => {
 		const error = captureContractError(() => refuseExpansion(COMPILE_NODE_LIMIT + 1))
 
 		expect(error.code).toBe('expansion')
-		expect(error.message).toBe(
-			'validateShapeDepth: a shape expands past the compilation node limit',
-		)
+		expect(error.message).toBe('validateShape: a shape expands past the compilation node limit')
 		expect(error.context).toEqual({
 			path: [],
 			limit: COMPILE_NODE_LIMIT,
@@ -3269,7 +3302,7 @@ describe('refuseExpansion', () => {
 		// declaration past the cap must be refused with the identical error at both
 		// — one message, one code, one context, however the caller arrived.
 		const refused = buildSharedDagShape(14)
-		const eager = captureContractError(() => validateShapeDepth(refused))
+		const eager = captureContractError(() => validateShape(refused))
 		const lazy = captureContractError(() => new ContractCompiler(refused).schema)
 
 		expect(lazy.message).toBe(eager.message)
@@ -3336,7 +3369,7 @@ describe('retainDepth', () => {
 describe('readSampleMemo', () => {
 	it('returns the memo it was given and refuses one whose collections are wrong', () => {
 		const memo = buildSampleMemo()
-		expect(readSampleMemo(memo, 'inferSamples')).toBe(memo)
+		expect(readSampleMemo(memo, 'samplesToSchema')).toBe(memo)
 
 		// Inside the rule: a record built by this module whose collection fields
 		// are the wrong KIND. The refusal names the door the memo was read for and
@@ -3344,9 +3377,9 @@ describe('readSampleMemo', () => {
 		// whole reason the check exists rather than letting the traversal fail.
 		const swappedRows = buildSampleMemo()
 		Reflect.set(swappedRows, 'rows', new Map())
-		const rows = captureContractError(() => readSampleMemo(swappedRows, 'inferSamples'))
+		const rows = captureContractError(() => readSampleMemo(swappedRows, 'samplesToSchema'))
 		expect(rows.code).toBe('structure')
-		expect(rows.message).toBe('inferSamples: memo must be a sample memo')
+		expect(rows.message).toBe('samplesToSchema: memo must be a sample memo')
 		expect(rows.context).toEqual({
 			path: ['memo'],
 			limit: 'SampleMemo',
@@ -3355,9 +3388,9 @@ describe('readSampleMemo', () => {
 
 		const swappedSchemas = buildSampleMemo()
 		Reflect.set(swappedSchemas, 'schemas', new WeakMap())
-		const schemas = captureContractError(() => readSampleMemo(swappedSchemas, 'inferRecordSamples'))
+		const schemas = captureContractError(() => readSampleMemo(swappedSchemas, 'compileSchema'))
 		expect(schemas.code).toBe('structure')
-		expect(schemas.message).toBe('inferRecordSamples: memo must be a sample memo')
+		expect(schemas.message).toBe('compileSchema: memo must be a sample memo')
 	})
 
 	it('accepts a memo from outside the population buildSampleMemo produces', () => {
@@ -3369,25 +3402,15 @@ describe('readSampleMemo', () => {
 		const foreign = new ClassSampleMemo()
 
 		expect(isRecord(foreign)).toBe(false)
-		expect(readSampleMemo(foreign, 'inferSamples')).toBe(foreign)
-
-		// And it is a working memo at the real door, not merely one the reader lets
-		// past: the walk it is handed answers from it.
-		expect(inferSamples([{ id: 1 }], 32, 256, true, false, false, foreign)).toEqual({
-			type: 'object',
-			properties: { id: { type: 'integer' } },
-			required: ['id'],
-			additionalProperties: false,
-		})
+		expect(readSampleMemo(foreign, 'samplesToSchema')).toBe(foreign)
 
 		// The pair that makes the acceptance mean something: the SAME class with
-		// one collection swapped is refused at that same door, so the door is
-		// applying the rule to this argument rather than ignoring it.
+		// one collection swapped is refused, so the reader is applying the rule to
+		// the value rather than letting every class instance past.
 		const corrupt = new ClassSampleMemo()
 		Reflect.set(corrupt, 'schemas', new WeakMap())
-		expect(
-			captureContractError(() => inferSamples([{ id: 1 }], 32, 256, true, false, false, corrupt))
-				.message,
-		).toBe('inferSamples: memo must be a sample memo')
+		expect(captureContractError(() => readSampleMemo(corrupt, 'samplesToSchema')).message).toBe(
+			'samplesToSchema: memo must be a sample memo',
+		)
 	})
 })

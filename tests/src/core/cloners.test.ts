@@ -547,7 +547,7 @@ describe('ownShape', () => {
 		const error = captureContractError(() => ownShape(source))
 
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('validateShapeDepth: every node must be a recognized shape')
+		expect(error.message).toBe('validateShape: every node must be a recognized shape')
 		expect(Object.hasOwn(error, 'cause')).toBe(false)
 	})
 

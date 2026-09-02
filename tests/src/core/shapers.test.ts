@@ -16,8 +16,6 @@ import {
 	arrayShape,
 	attempt,
 	booleanShape,
-	buildObjectShape,
-	buildShapeFromNode,
 	compileGenerator,
 	compileGuard,
 	compileParser,
@@ -41,7 +39,6 @@ import {
 	rawShape,
 	recordShape,
 	samplesToSchema,
-	schemaNodeToShape,
 	schemaToShape,
 	seededRandom,
 	stringShape,
@@ -561,9 +558,7 @@ describe('shape builders', () => {
 			{ properties: nullProperties },
 		] satisfies readonly JSONSchema[]) {
 			const error = captureContractError(() => rawShape(schema))
-			expect(error.message).toBe(
-				'validateShapeDepth: every raw schema child must be a plain record',
-			)
+			expect(error.message).toBe('validateShape: every raw schema child must be a plain record')
 			expect(error.code).toBe('structure')
 			expect(error.context).toEqual({ path: ['schema'] })
 			expect(Object.hasOwn(error, 'cause')).toBe(false)
@@ -846,7 +841,7 @@ describe('shape builders', () => {
 
 		const error = captureContractError(() => literalShape(values))
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('validateShapeDepth: values must be a dense data array')
+		expect(error.message).toBe('validateShape: values must be a dense data array')
 	})
 
 	it('literalShape attaches the description via options', () => {
@@ -942,7 +937,7 @@ describe('shape builders', () => {
 		expect(reads).toBe(2)
 		expect(error.code).toBe('structure')
 		expect(error.message).toBe(
-			'validateShapeDepth: raw schema length bounds must be non-negative safe integers',
+			'validateShape: raw schema length bounds must be non-negative safe integers',
 		)
 		expect(error.context?.path).toEqual(['schema'])
 	})
@@ -1263,8 +1258,8 @@ describe('schemaToShape — round-trip law: compileGuard(schemaToShape(valueToSc
 		// derived from. A hole is an absent own property, so the node widens to the
 		// accept-anything `{}` instead of reading a present `undefined` member.
 		// The repair is re-asked at the two other entry points that reach the same
-		// `inferArray` rule, because a fix verified only where it was found ships
-		// the defect at every other door.
+		// array rule, because a fix verified only where it was found ships the
+		// defect at every other door.
 		const sparse = buildSparseArray()
 		expect(valueToSchema(sparse)).toEqual({})
 		for (const value of [sparse, { row: sparse }, [sparse]]) {
@@ -1714,16 +1709,19 @@ describe('schemaToShape — hostile schema triad', () => {
 				},
 			},
 		)
+		// The object branch, the keyword switch and the per-node entry are all
+		// reached through this one door now, so the door is where the refusal is
+		// asked for — at the root, inside `properties`, and inside `items`.
 		const runs = [
-			() => buildObjectShape(hostile, INFER_DEPTH_LIMIT, new WeakSet(), new WeakMap(), undefined),
-			() => buildShapeFromNode(hostile, INFER_DEPTH_LIMIT, new WeakSet(), new WeakMap()),
-			() => schemaNodeToShape(hostile, INFER_DEPTH_LIMIT, new WeakSet(), new WeakMap()),
 			() => schemaToShape(hostile),
+			() => schemaToShape({ type: 'object', properties: { nested: hostile } }),
+			() => schemaToShape({ type: 'array', items: hostile }),
 		]
 		for (const run of runs) {
 			const error = captureContractError(run)
 			expect(error.code).toBe('structure')
 			expect(error.context).toEqual({ shape: 'schema' })
+			expect(error.message).toBe('schemaToShape: schema could not be read')
 		}
 	})
 
@@ -1923,8 +1921,8 @@ describe('shape builders — reparented class brands', () => {
 		const node = new NullBaseDeclaration()
 
 		expect(schemaToShape(node)).toEqual(rawShape({}))
-		expect(schemaNodeToShape(node, INFER_DEPTH_LIMIT, new WeakSet(), new WeakMap())).toEqual(
-			rawShape({}),
+		expect(schemaToShape({ type: 'object', properties: { nested: node } })).toEqual(
+			objectShape({ nested: optionalShape(rawShape({})) }, { additionalProperties: true }),
 		)
 	})
 })
@@ -1935,8 +1933,7 @@ describe('schemaToShape — readable malformed vocabulary (H9)', () => {
 		// VOCABULARY, and this conversion's stated rule for malformed vocabulary is
 		// to ignore it and widen — never to throw, and never to misattribute a data
 		// defect to a hostile host. `literalShape`'s uniqueness gate refused the
-		// duplicate and `readValue` republished that refusal as
-		// `schemaNodeToShape: schema could not be read`.
+		// duplicate and `readValue` republished that refusal as a read failure.
 		expect(schemaToShape({ enum: ['a', 'a'] })).toEqual(literalShape(['a']))
 		expect(schemaToShape({ enum: ['a', 'a', 'b'] })).toEqual(literalShape(['a', 'b']))
 		// SameValueZero, the package-wide membership rule: `-0` and `0` are one
@@ -1965,7 +1962,7 @@ describe('schemaToShape — readable malformed vocabulary (H9)', () => {
 		})
 		const error = captureContractError(() => schemaToShape(hostile))
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('schemaNodeToShape: schema could not be read')
+		expect(error.message).toBe('schemaToShape: schema could not be read')
 	})
 
 	it('serves its memo per (node, remaining depth), so a cyclic path widens a shared node earlier', () => {

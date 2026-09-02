@@ -1,46 +1,25 @@
-import type { JSONSchema, SampleMemo, SchemaFormat, ValueToSchemaOptions } from './types.js'
-import {
-	FORMAT_MAX_LENGTH,
-	INFER_BREADTH_LIMIT,
-	INFER_ENUM_LIMIT,
-	INTRINSICS,
-} from './constants.js'
+import type { JSONSchema, SchemaFormat, ValueToSchemaOptions } from './types.js'
+import { FORMAT_MAX_LENGTH, INFER_BREADTH_LIMIT, INTRINSICS } from './constants.js'
 import { ContractError } from './errors.js'
-import {
-	isArray,
-	isBoolean,
-	isDate,
-	isFiniteNumber,
-	isInteger,
-	isNull,
-	isNumber,
-	isRecord,
-	isString,
-} from './validators.js'
+import { isFiniteNumber, isRecord, isString } from './validators.js'
 import {
 	admitMember,
-	admitVisited,
 	appendEntries,
 	attempt,
-	buildSampleMemo,
 	canonicalStringify,
 	classifyFormat,
 	collectMembers,
 	contain,
-	enumerableKeys,
-	limitEntries,
 	matchesMember,
-	matchesVisited,
-	omitVisited,
 	readArrayEntries,
 	readOptions,
-	readSampleMemo,
 	readValue,
-	retainDepth,
 	sanitizeBudget,
 	sanitizeDepth,
 	sortValues,
 } from './helpers.js'
+import { SampleInferer } from './SampleInferer.js'
+import { ValueInferer } from './ValueInferer.js'
 
 // The inferers walk an UNKNOWN, possibly adversarial runtime value (or a set
 // of example values) and emit a JSONSchema — the reverse direction of
@@ -161,7 +140,7 @@ export function unifySchemas(schemas: readonly JSONSchema[]): JSONSchema {
  * Total, pure, and deterministic. Fixed precedence, most specific first:
  * `'uuid'`, `'date-time'`, `'date'`, `'time'`, `'email'`, `'uri'` — the first
  * match wins. The `date-time` / `date` / `time` branches require BOTH a
- * strict ISO-8601 shape match AND a real {@link isValidISOInstant} validity
+ * strict ISO-8601 shape match AND a real {@link matchesISOInstant} validity
  * check, so a shape-plausible but impossible date (`2020-13-45`) is rejected.
  * Returns `undefined` when no format matches (including the empty string).
  *
@@ -198,7 +177,7 @@ export function stringToFormat(value: string): SchemaFormat | undefined {
  * the SAME {@link stringToFormat} result (including all mapping to
  * `undefined`, which itself returns `undefined` here). A single disagreeing
  * value, a non-string value, or an empty list all yield `undefined` — the
- * multi-sample seam ({@link samplesToSchema} / {@link inferRecordSamples})
+ * multi-sample seam behind {@link samplesToSchema}
  * relies on this unanimity so a slot with mixed string shapes emits a bare
  * `{ type: 'string' }` rather than an `anyOf` of formats.
  *
@@ -337,333 +316,14 @@ export function inferPrimitiveEnum(
 // === Single-value inference
 
 /**
- * Infer a `JSONSchema` fragment for one runtime value — the recursive spine
- * shared by {@link valueToSchema} and, per collected property/element, by
- * {@link inferArray} / {@link inferObject}.
- *
- * @remarks
- * Terminates on cyclic readable input via `visited`; failed traversal is
- * refused by the containing public reader. Leaf
- * classification order: `null`, boolean, integer (`Number.isInteger`
- * semantics — `-0` counts), finite non-integer number, string (gaining a
- * `format` keyword when `format` is on and {@link stringToFormat} matches),
- * array (recurse), plain record (recurse), `Date` (`{ type: 'string' }`,
- * plus `format: 'date-time'` when `format` is on); everything else — a
- * NON-FINITE number (`NaN` / `±Infinity`), a function, a symbol, a bigint,
- * `undefined`, and other non-plain objects such as `Map` / `Set` — is the
- * empty accept-anything schema `{}`.
- *
- * A non-finite number bottoms out with the other JSON-inexpressible values on
- * purpose: JSON carries no `NaN` / `±Infinity` (`JSON.stringify(Number.NaN)`
- * is `'null'`), so `{ type: 'number' }` would ASSERT something a JSON Schema
- * validator rejects — and the shape {@link schemaToShape} builds from it would
- * reject the very sample it was inferred from. `{}` is the truthful
- * description, and it inverts to an accept-anything shape, keeping
- * `compileGuard(schemaToShape(valueToSchema(v)))(v)` true.
- *
- * @param value - The value to classify
- * @param depth - Remaining descent budget (0 halts recursion with `{}`)
- * @param breadth - The per-container sampling cap passed through to children
- * @param closed - Whether descended objects emit `additionalProperties: false`
- * @param format - Whether a string/`Date` leaf gains a `format` keyword
- * @param visited - The ancestor set guarding against cycles
- * @param memo - A per-call `(object, remaining depth) → schema` cache guarding
- *               against exponential re-inference of a shared-reference DAG
- * @returns The inferred schema fragment for `value`
- * @throws {ContractError} When a traversed container cannot be read
- *
- * @example
- * ```ts
- * inferValue(42, 32, 256, true, false, new WeakSet(), new WeakMap()) // { type: 'integer' }
- * ```
- */
-export function inferValue(
-	value: unknown,
-	depth: number,
-	breadth: number,
-	closed: boolean,
-	format: boolean,
-	visited: WeakSet<object>,
-	memo: WeakMap<object, Map<number, JSONSchema>>,
-): JSONSchema {
-	return contain(() => {
-		return readValue(() => {
-			if (isNull(value)) return { type: 'null' }
-			if (isBoolean(value)) return { type: 'boolean' }
-			if (isInteger(value)) return { type: 'integer' }
-			if (isFiniteNumber(value)) return { type: 'number' }
-			// A non-finite number has no JSON representation at all, so it widens to
-			// `{}` with the other inexpressible values rather than claiming a `number`
-			// type no validator would accept it under.
-			if (isNumber(value)) return {}
-			if (isString(value)) {
-				if (format) {
-					const detected = stringToFormat(value)
-					if (detected) return { type: 'string', format: detected }
-				}
-				return { type: 'string' }
-			}
-			if (isArray(value)) return inferArray(value, depth, breadth, closed, format, visited, memo)
-			if (isRecord(value)) return inferObject(value, depth, breadth, closed, format, visited, memo)
-			if (isDate(value))
-				return format ? { type: 'string', format: 'date-time' } : { type: 'string' }
-			return {}
-		}, 'inferValue')
-	}, 'inferValue')
-}
-
-/**
- * Infer a `JSONSchema` array fragment from an array's sampled elements.
- *
- * @remarks
- * An empty array infers `{ type: 'array' }` with no `items`. Otherwise the
- * first `breadth` elements are classified via {@link inferValue} (one less
- * depth) and unified with {@link unifySchemas}: a single distinct element
- * schema becomes `items` directly; multiple distinct schemas become
- * `items: { anyOf: [...] }`. Depth exhaustion or a cyclic re-encounter of
- * `value` both yield the empty schema `{}` instead of descending. A SPARSE
- * array (holes, e.g. `[1, , 3]`) has no JSON expression and widens to the
- * accept-anything `{}`, the same treatment `NaN`, a function, a symbol, a
- * `Map` and a `Set` receive — it is not read as a list of present `undefined`
- * leaves, because the array schema that reading produced was rejected by its
- * own compiled guard, which is the one direction the round-trip law forbids.
- * Invalid direct depth and breadth budgets use {@link sanitizeBudget} with the
- * package defaults, matching the higher-level inference boundaries.
- *
- * ALL reads of `value` — including its `length` — happen inside
- * {@link attempt}, then cross {@link readValue}: a hostile `length` getter,
- * throwing own-getter element, or hostile element access raises the shared
- * coded refusal instead of returning the empty-array schema. A genuinely
- * empty sampled/classified list still returns `{ type: 'array' }` with no
- * `items`. A same-object re-inference at the same remaining `depth` is served
- * from `memo` instead of recomputing (guards a shared-reference DAG against
- * exponential blowup).
- *
- * @param value - The array to infer from
- * @param depth - Remaining descent budget; invalid values use the package default
- * @param breadth - Maximum elements sampled; invalid values use the package default
- * @param closed - Threaded through to nested object elements
- * @param format - Threaded through to nested string/`Date` elements
- * @param visited - The ancestor set guarding against cycles
- * @param memo - A per-call `(object, remaining depth) → schema` cache guarding
- *               against exponential re-inference of a shared-reference DAG
- * @returns The inferred array schema
- * @throws {ContractError} When the array cannot be read
- *
- * @example
- * ```ts
- * inferArray([1, 2.5], 32, 256, true, false, new WeakSet(), new WeakMap())
- * // { type: 'array', items: { type: 'number' } }
- * ```
- */
-export function inferArray(
-	value: readonly unknown[],
-	depth: number,
-	breadth: number,
-	closed: boolean,
-	format: boolean,
-	visited: WeakSet<object>,
-	memo: WeakMap<object, Map<number, JSONSchema>>,
-): JSONSchema {
-	return contain(() => {
-		const maxDepth = sanitizeDepth(depth)
-		const maxBreadth = sanitizeBudget(breadth, INFER_BREADTH_LIMIT)
-		return readValue(() => {
-			if (!(maxDepth > 0) || matchesVisited(visited, value)) return {}
-			// At a node reached through a cycle at the SAME remaining depth via two
-			// different paths, the memo may serve the first traversal's already
-			// cycle-truncated fragment (`{}`) to the second path instead of a fully
-			// re-descended schema — a sound, deterministic over-approximation, never
-			// a false-reject (a schema too permissive, never too strict).
-			const cached = INTRINSICS.apply(INTRINSICS.recall, memo, [value])?.get(maxDepth)
-			if (cached) return cached
-			admitVisited(visited, value)
-			const outcome = attempt(() => {
-				const snapshot = readArrayEntries(value)
-				if (!snapshot.success) throw snapshot.error
-				// A HOLE is an absent own property, and that is the lens every other
-				// door in this package applies: `arrayOf`, `parseArray`, `isJSONValue`,
-				// `cloneJSONValue`, `canonicalStringify` and the compiled array guard
-				// all refuse a sparse array. Reading a hole as a PRESENT `undefined`
-				// leaf made this door the one dissenter, and the disagreement was not
-				// cosmetic: `valueToSchema([1, , 3])` emitted an array schema whose
-				// guard REJECTED `[1, , 3]`, so the package published a schema that
-				// refused the value it was inferred from. A non-dense snapshot has no
-				// JSON expression, so it widens to `{}` alongside `NaN`, a function, a
-				// symbol, a `Map` and a `Set` — which restores the round-trip law
-				// rather than adding a fourth exception to it.
-				if (!snapshot.value.dense) return undefined
-				const entries = snapshot.value.entries
-				const sampled: JSONSchema[] = []
-				const length = INTRINSICS.min(entries.length, maxBreadth)
-				for (let index = 0; index < length; index += 1) {
-					sampled[sampled.length] = inferValue(
-						entries[index],
-						maxDepth - 1,
-						maxBreadth,
-						closed,
-						format,
-						visited,
-						memo,
-					)
-				}
-				return sampled
-			})
-			omitVisited(visited, value)
-			const sampled = readValue(() => {
-				if (!outcome.success) throw outcome.error
-				return outcome.value
-			}, 'inferArray')
-			const schema: JSONSchema =
-				sampled === undefined
-					? {}
-					: sampled.length > 0
-						? { type: 'array', items: unifySchemas(sampled) }
-						: { type: 'array' }
-			retainDepth(memo, value, maxDepth, schema)
-			return schema
-		}, 'inferArray')
-	}, 'inferArray')
-}
-
-/**
- * Infer a `JSONSchema` object fragment from a plain record's sampled
- * properties.
- *
- * @remarks
- * Own enumerable string keys via {@link enumerableKeys}, sorted
- * lexicographically for deterministic output, capped at `breadth`. This is the
- * same property view compiled object guards, parsers, and reporters use. Each
- * property value is read through {@link attempt} and {@link readValue}; a
- * hostile getter raises the shared coded refusal. A readable property whose
- * value is `undefined` is DROPPED
- * — JSON encodes no such property (`JSON.stringify({ a: undefined })` is
- * `'{}'`), so it contributes neither a `properties` entry nor a `required`
- * entry. Every other present key is required (single-value mode).
- *
- * Emits `additionalProperties: false` when `closed`, `true` otherwise —
- * mirroring {@link compileSchema}'s object-emission convention — EXCEPT when
- * the sampled key list no longer describes every key `value` actually carries,
- * which happens two ways: the own-key list exceeds `breadth` (truncation), or
- * a key was dropped for holding `undefined`. Either way `additionalProperties`
- * is forced to `true` regardless of `closed`, because a CLOSED schema built
- * from an incomplete key list would reject the very object it was inferred
- * from (`recordOf` rejects any own key the shape does not declare).
- *
- * Depth exhaustion or a cyclic re-encounter of `value` both yield `{}`. A
- * same-object re-inference at the same remaining `depth` is served from `memo`
- * instead of recomputing (guards a shared-reference DAG against exponential
- * blowup).
- *
- * @param value - The record to infer from
- * @param depth - Remaining descent budget
- * @param breadth - The maximum number of properties sampled
- * @param closed - Whether the emitted schema closes to unknown keys
- * @param format - Threaded through to nested string/`Date` properties
- * @param visited - The ancestor set guarding against cycles
- * @param memo - A per-call `(object, remaining depth) → schema` cache guarding
- *               against exponential re-inference of a shared-reference DAG
- * @returns The inferred object schema
- * @throws {ContractError} When the record cannot be read
- *
- * @example
- * ```ts
- * inferObject({ id: 1 }, 32, 256, true, false, new WeakSet(), new WeakMap())
- * // { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'],
- * //   additionalProperties: false }
- * ```
- */
-export function inferObject(
-	value: Record<string, unknown>,
-	depth: number,
-	breadth: number,
-	closed: boolean,
-	format: boolean,
-	visited: WeakSet<object>,
-	memo: WeakMap<object, Map<number, JSONSchema>>,
-): JSONSchema {
-	return contain(() => {
-		// The BREADTH budget passes through `sanitizeBudget`, as `inferArray`'s
-		// already did. Without it `limitEntries(keys, NaN)` returned the EMPTY key
-		// list while `allKeys.length > NaN` left `truncated` false, so a public
-		// export emitted `{ type: 'object', additionalProperties: false }` — a
-		// CLOSED schema that rejects the very record it was inferred from, the one
-		// direction the schema-inversion law forbids. The DEPTH budget is left
-		// exactly as it was in one respect — `!(maxDepth > 0)` still fails safe by
-		// widening to `{}` — but it now passes through `sanitizeDepth` as well, so a
-		// direct caller cannot hand this door a budget deeper than the walk survives.
-		// `inferArray` already sanitized its depth and this one did not, so the two
-		// containers answered a hostile budget differently at the same level.
-		const maxBreadth = sanitizeBudget(breadth, INFER_BREADTH_LIMIT)
-		const maxDepth = sanitizeDepth(depth)
-		return readValue(() => {
-			if (!(maxDepth > 0) || matchesVisited(visited, value)) return {}
-			const cached = INTRINSICS.apply(INTRINSICS.recall, memo, [value])?.get(maxDepth)
-			if (cached) return cached
-			admitVisited(visited, value)
-			// Contain the whole key-enumeration + value-read walk before converting a
-			// failed advertised read to the shared coded refusal below. Readable depth
-			// or cycle exhaustion widens to `{}`; unreadability never does.
-			const outcome = attempt(() => {
-				const snapshot = enumerableKeys(value)
-				if (snapshot === undefined)
-					throw new INTRINSICS.error('inferObject: property enumeration failed')
-				const allKeys = sortValues(snapshot)
-				const keys = limitEntries(allKeys, maxBreadth)
-				const truncated = allKeys.length > maxBreadth
-				// Honest typing: a null-prototype accumulator so a property literally
-				// named '__proto__' becomes an own data key instead of mutating the
-				// prototype — the same pattern compileGuard / compileParser use
-				// (compilers.ts).
-				const properties: Record<string, JSONSchema> = INTRINSICS.create(null)
-				const required: string[] = []
-				let dropped = false
-				for (let index = 0; index < keys.length; index += 1) {
-					const key = keys[index]
-					if (key === undefined) continue
-					const propertyValue = value[key]
-					if (propertyValue === undefined) {
-						dropped = true
-						continue
-					}
-					properties[key] = inferValue(
-						propertyValue,
-						maxDepth - 1,
-						maxBreadth,
-						closed,
-						format,
-						visited,
-						memo,
-					)
-					required[required.length] = key
-				}
-				return { properties, required, partial: truncated || dropped }
-			})
-			omitVisited(visited, value)
-			const readable = readValue(() => {
-				if (!outcome.success) throw outcome.error
-				return outcome.value
-			}, 'inferObject')
-			const { properties, required, partial } = readable
-			const schema: JSONSchema = {
-				type: 'object',
-				...(INTRINSICS.keys(properties).length > 0 ? { properties } : {}),
-				...(required.length > 0 ? { required } : {}),
-				additionalProperties: partial ? true : !closed,
-			}
-			retainDepth(memo, value, maxDepth, schema)
-			return schema
-		}, 'inferObject')
-	}, 'inferObject')
-}
-
-/**
  * Infer a `JSONSchema` for one unknown value — the reverse direction of
  * {@link compileSchema}.
  *
  * @remarks
- * Cycle/depth/breadth-bounded (see {@link inferValue} / {@link inferArray} /
- * {@link inferObject}). A failed traversal throws a `structure`
+ * Cycle-, depth-, and breadth-bounded: the walk keeps an ancestor set and an
+ * `(object, remaining depth)` memo of its own, so a cyclic host terminates and a
+ * shared-reference DAG costs its nodes rather than its paths. A failed traversal
+ * throws a `structure`
  * {@link ContractError}; it never becomes `{}` or another permissive schema. Nested
  * objects close to unknown keys (`additionalProperties: false`) by default;
  * pass `closed: false` to open them. `format` (default `false`) opts a
@@ -675,19 +335,19 @@ export function inferObject(
  * expect an object-shaped `inputSchema`; wrap a non-object payload with
  * {@link schemaToObject} before advertising it as a tool's parameters.
  *
- * `maxProperties` is sanitized via {@link sanitizeBudget} to a finite
+ * `limits.properties` is sanitized via {@link sanitizeBudget} to a finite
  * non-negative integer, falling back to {@link INFER_BREADTH_LIMIT} for anything
  * else (`NaN`, `Infinity`, negative, fractional), so a malformed breadth cannot
  * corrupt the sampled key/element list.
  *
- * `maxDepth` goes through {@link sanitizeDepth}, which does the same and then caps
+ * `limits.depth` goes through {@link sanitizeDepth}, which does the same and then caps
  * at {@link INFER_DEPTH_LIMIT}, so the option NARROWS the walk and cannot widen
  * it. The cap is what makes the depth guard unbreakable: depth is the recursing
  * axis, and a large-but-valid budget used to descend until the call STACK failed
  * rather than until the guard said stop.
  *
  * @param value - The value to infer a schema from
- * @param options - Optional `maxDepth` / `maxProperties` / `closed` / `format` bounds
+ * @param options - Optional {@link ValueToSchemaLimits} `limits` plus `closed` / `format` bounds
  * @returns The inferred `JSONSchema`
  * @throws {ContractError} When the value or options cannot be read
  *
@@ -703,343 +363,35 @@ export function valueToSchema(value: unknown, options?: ValueToSchemaOptions): J
 	return contain(() => {
 		const optionsSnapshot = readOptions(
 			options,
-			['maxDepth', 'maxProperties', 'closed', 'format', 'enum'],
+			['limits', 'closed', 'format', 'enum'],
 			'valueToSchema',
 			'schema',
 		)
-		const maxDepth = sanitizeDepth(optionsSnapshot?.maxDepth)
-		const maxProperties = sanitizeBudget(optionsSnapshot?.maxProperties, INFER_BREADTH_LIMIT)
+		// The grouped budgets cross the same contained read the flat keys crossed:
+		// `limits` is a caller-owned record, so a hostile getter or `ownKeys` trap
+		// on it refuses under this door's name rather than reaching the walk.
+		const limits = readOptions(
+			optionsSnapshot?.limits,
+			['depth', 'properties'],
+			'valueToSchema',
+			'schema',
+		)
+		const depth = sanitizeDepth(limits?.depth)
+		const properties = sanitizeBudget(limits?.properties, INFER_BREADTH_LIMIT)
 		const closed = optionsSnapshot?.closed ?? true
 		const format = optionsSnapshot?.format ?? false
+		// The whole walk runs inside this door's own read boundary, so a hostile
+		// getter, `length` trap, or key enumeration anywhere below it is published
+		// under this door's name rather than under the name of an engine method no
+		// consumer can call.
 		return readValue(
-			() =>
-				inferValue(
-					value,
-					maxDepth,
-					maxProperties,
-					closed,
-					format,
-					new INTRINSICS.weakSet(),
-					new INTRINSICS.weakMap(),
-				),
+			() => new ValueInferer(value, depth, properties, closed, format).infer(),
 			'valueToSchema',
 		)
 	}, 'valueToSchema')
 }
 
 // === Multi-sample inference
-
-/**
- * Infer a `JSONSchema` for a collected slot of sample values — the shared
- * non-record recursion step behind {@link samplesToSchema} (top level) and
- * {@link inferRecordSamples} (per collected property).
- *
- * @remarks
- * When every value is itself a plain record, delegates to
- * {@link inferRecordSamples}. Otherwise: enum inference runs FIRST when
- * `enumOn` — {@link inferPrimitiveEnum} fires only for a low-cardinality,
- * repeated, single-primitive-kind slot, and its `{ enum: [...] }` result wins
- * outright (ENUM > FORMAT > bare string). Failing that, each value is
- * classified independently via {@link inferValue} with `format` FORCED OFF
- * (the multi-sample seam: nested formats never compound into an `anyOf`) and
- * unified with {@link unifySchemas}; only when that unified result is exactly
- * `{ type: 'string' }` and the outer `format` flag is on does
- * {@link samplesToFormat} run to (maybe) reattach a unanimous `format`.
- *
- * @param samples - The collected slot values
- * @param depth - Remaining descent budget
- * @param breadth - The maximum number of properties/elements sampled per nested container
- * @param closed - Whether nested objects close to unknown keys
- * @param format - Whether a unanimous string slot gains a `format` keyword
- * @param enumOn - Whether low-cardinality primitive slots may emit `enum`
- * @param memo - The walk's {@link SampleMemo}, shared with
- *               {@link inferRecordSamples} so a row list reached through
- *               several slots is inferred once; build one with
- *               {@link buildSampleMemo}
- * @returns The inferred schema for the slot
- * @throws {ContractError} When the samples or the memo cannot be read
- *
- * @example
- * ```ts
- * inferSamples(['2024-01-01', '2024-02-02'], 32, 256, true, true, false, buildSampleMemo())
- * // { type: 'string', format: 'date' }
- * ```
- */
-export function inferSamples(
-	samples: readonly unknown[],
-	depth: number,
-	breadth: number,
-	closed: boolean,
-	format: boolean,
-	enumOn: boolean,
-	memo: SampleMemo,
-): JSONSchema {
-	return contain(() => {
-		const maxBreadth = sanitizeBudget(breadth, INFER_BREADTH_LIMIT)
-		const read = readValue(
-			() => {
-				const snapshot = readArrayEntries(samples)
-				if (!snapshot.success) throw snapshot.error
-				return snapshot.value
-			},
-			'inferSamples',
-			{ subject: 'samples' },
-		)
-		// A HOLE is not an unreadable value, and saying so was a true refusal with a
-		// false diagnosis: every read succeeded. This door requires a dense sample
-		// list — the same own-index lens `arrayOf` and `parseArray` apply — and now
-		// says that instead.
-		if (!read.dense) {
-			throw new ContractError('inferSamples: samples must be a dense array', {
-				code: 'structure',
-			})
-		}
-		// The memo is the one argument position whose failure used to be published
-		// as `samples could not be read` — a true refusal naming the wrong
-		// argument, and the only position these doors never checked. It is checked
-		// here, under its own name and its own path, AFTER the sample list it
-		// follows in the signature.
-		const cache = readSampleMemo(memo, 'inferSamples')
-		return readValue(
-			() => {
-				const owned = read.entries
-				if (owned.length === 0) return {}
-				// Indexed rather than `every`, and the narrowed rows are collected as they
-				// are recognized so the record branch keeps its honest typing without an
-				// assertion.
-				const records: Array<Record<string, unknown>> = []
-				for (let index = 0; index < owned.length; index += 1) {
-					const sample = owned[index]
-					if (isRecord(sample)) records[records.length] = sample
-				}
-				if (records.length === owned.length) {
-					return inferRecordSamples(records, depth, maxBreadth, closed, format, enumOn, cache)
-				}
-				if (enumOn) {
-					const enumSchema = inferPrimitiveEnum(owned, INFER_ENUM_LIMIT)
-					if (enumSchema) return enumSchema
-				}
-				const schemas: JSONSchema[] = []
-				for (let index = 0; index < owned.length; index += 1) {
-					schemas[schemas.length] = inferValue(
-						owned[index],
-						depth,
-						maxBreadth,
-						closed,
-						false,
-						new INTRINSICS.weakSet(),
-						new INTRINSICS.weakMap(),
-					)
-				}
-				const unified = unifySchemas(schemas)
-				if (format && unified.type === 'string' && INTRINSICS.keys(unified).length === 1) {
-					const detected = samplesToFormat(owned)
-					if (detected) return { type: 'string', format: detected }
-				}
-				return unified
-			},
-			'inferSamples',
-			{ subject: 'samples' },
-		)
-	}, 'inferSamples')
-}
-
-/**
- * Infer a `JSONSchema` object fragment from a set of plain-record samples
- * (e.g. database rows) — the record-specialized branch of
- * {@link samplesToSchema}.
- *
- * @remarks
- * `properties` is the union of every sample's own keys (sorted, capped at
- * `breadth`); a key is `required` only when present (and non-`undefined`) in
- * EVERY sample. Each key's schema is inferred over the collected values for
- * that key via {@link inferSamples} itself (one less depth), so a
- * property that is itself an array/object of varying shape across rows is
- * unified the same way the top level is, and the same `format` / `enum`
- * gating applies per key. Unlike {@link inferObject}/
- * {@link inferArray}, this path carries no `visited` `WeakSet` — a value
- * shared by reference across multiple sample rows is legitimate (not a
- * cycle back to an ancestor), so termination on cyclic row data relies on
- * the decrementing `depth` budget and the shared {@link SampleMemo}.
- *
- * `additionalProperties` is forced to `true` regardless of `closed` when the
- * key union exceeds `breadth`, or a readable row carries a key as an own
- * property holding `undefined`. A hostile getter or failed KEY walk throws the
- * shared coded refusal instead of dropping a key or widening the whole slot.
- *
- * The memo is keyed by the slot's ORDERED row identities, not by a single row.
- * Keying only the one-row slot left every MULTI-row slot — the shape this door
- * exists for — re-inferring a shared child once per path: two rows sharing one
- * `{ a: child, b: child }` detail cost `2^depth` inferences, the identical
- * denial of service the one-row memo was added to remove, through the same
- * public door.
- *
- * @param samples - The plain-record samples
- * @param depth - Remaining descent budget
- * @param breadth - The maximum number of properties sampled
- * @param closed - Whether the emitted schema closes to unknown keys
- * @param format - Whether a unanimous string column gains a `format` keyword
- * @param enumOn - Whether a low-cardinality column may emit `enum`
- * @param memo - The walk's {@link SampleMemo}, shared with
- *               {@link inferSamples}; build one with {@link buildSampleMemo}
- * @returns The inferred object schema
- * @throws {ContractError} When a sample row or the memo cannot be read
- *
- * @example
- * ```ts
- * inferRecordSamples([{ id: 1 }, { id: 2, name: 'Ada' }], 32, 256, true, false, false, buildSampleMemo())
- * // { type: 'object', properties: { id: { type: 'integer' }, name: { type: 'string' } },
- * //   required: ['id'], additionalProperties: false }
- * ```
- */
-export function inferRecordSamples(
-	samples: ReadonlyArray<Record<string, unknown>>,
-	depth: number,
-	breadth: number,
-	closed: boolean,
-	format: boolean,
-	enumOn: boolean,
-	memo: SampleMemo,
-): JSONSchema {
-	return contain(() => {
-		// Breadth hygiene, for the reason `inferObject` states: `limitEntries(keys,
-		// NaN)` returned the EMPTY key list while `allKeys.length > NaN` left
-		// `truncated` false, so this door emitted a CLOSED empty object schema that
-		// rejects the very row it was inferred from. The depth budget keeps its
-		// established meaning, including the no-read exhaustion check below.
-		const maxBreadth = sanitizeBudget(breadth, INFER_BREADTH_LIMIT)
-		if (!(depth > 0)) return {}
-		const read = readValue(
-			() => {
-				const snapshot = readArrayEntries(samples)
-				if (!snapshot.success) throw snapshot.error
-				return snapshot.value
-			},
-			'inferRecordSamples',
-			{ subject: 'samples' },
-		)
-		if (!read.dense) {
-			throw new ContractError('inferRecordSamples: samples must be a dense array', {
-				code: 'structure',
-			})
-		}
-		const cache = readSampleMemo(memo, 'inferRecordSamples')
-		const owned = read.entries
-		// The slot's ROW LIST is the key, followed one row at a time through the
-		// memo's prefix chain, and the recorded schema is keyed by every budget and
-		// flag the emission depends on. A multi-row list is a fresh array on every
-		// call, but its rows are not: following their identities lands on the same
-		// node whichever array carried them.
-		let node = cache
-		for (let index = 0; index < owned.length; index += 1) {
-			const row = owned[index]
-			if (!isRecord(row)) break
-			const next = INTRINSICS.apply(INTRINSICS.recall, node.rows, [row])
-			if (next !== undefined) {
-				node = readSampleMemo(next, 'inferRecordSamples')
-				continue
-			}
-			const fresh = buildSampleMemo()
-			INTRINSICS.apply(INTRINSICS.retain, node.rows, [row, fresh])
-			node = fresh
-		}
-		const signature = `${depth}|${maxBreadth}|${closed}|${format}|${enumOn}`
-		const cached = INTRINSICS.apply(INTRINSICS.fetch, node.schemas, [signature])
-		if (cached !== undefined) return cached
-		return readValue(
-			() => {
-				// Refuse the whole key-enumeration claim when any row cannot be read.
-				const seen = collectMembers([])
-				const collected: string[] = []
-				for (let sampleIndex = 0; sampleIndex < owned.length; sampleIndex += 1) {
-					const sample = owned[sampleIndex]
-					if (!isRecord(sample))
-						throw new INTRINSICS.error('inferRecordSamples: every sample must be a record')
-					const sampleKeys = readValue(() => {
-						const keys = enumerableKeys(sample)
-						if (keys === undefined) {
-							throw new INTRINSICS.error('inferRecordSamples: property enumeration failed')
-						}
-						return keys
-					}, 'inferRecordSamples')
-					for (let keyIndex = 0; keyIndex < sampleKeys.length; keyIndex += 1) {
-						const key = sampleKeys[keyIndex]
-						if (key === undefined || matchesMember(seen, key)) continue
-						admitMember(seen, key)
-						collected[collected.length] = key
-					}
-				}
-				const allKeys = sortValues(collected)
-				const keys = limitEntries(allKeys, maxBreadth)
-				const truncated = allKeys.length > maxBreadth
-				// Honest typing: a null-prototype accumulator so a key literally named
-				// '__proto__' becomes an own data key instead of mutating the prototype —
-				// the same pattern compileGuard / compileParser use (compilers.ts).
-				const properties: Record<string, JSONSchema> = INTRINSICS.create(null)
-				const required: string[] = []
-				let partial = truncated
-				// Bounded by depth alone: unlike inferObject/inferArray, this record-
-				// sample path carries no `visited` WeakSet. A shared reference across
-				// sample rows is legitimate data (not a cycle back to an ancestor), so
-				// the decrementing depth budget is the sole termination guarantee here.
-				for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
-					const key = keys[keyIndex]
-					if (key === undefined) continue
-					// Refuse the whole per-key claim when any sample value cannot be read.
-					const valuesOutcome = attempt(() => {
-						const values: unknown[] = []
-						let dropped = false
-						for (let sampleIndex = 0; sampleIndex < owned.length; sampleIndex += 1) {
-							const sample = owned[sampleIndex]
-							if (!isRecord(sample)) {
-								throw new INTRINSICS.error('inferRecordSamples: every sample must be a record')
-							}
-							const propertyValue = sample[key]
-							if (propertyValue === undefined) {
-								if (INTRINSICS.own(sample, key)) dropped = true
-								continue
-							}
-							values[values.length] = propertyValue
-						}
-						return { values, dropped }
-					})
-					const readable = readValue(() => {
-						if (!valuesOutcome.success) throw valuesOutcome.error
-						return valuesOutcome.value
-					}, 'inferRecordSamples')
-					const { values, dropped } = readable
-					// A row holding `undefined` for this key OPENS the schema; it does not
-					// delete the column. Skipping the key entirely discarded a property two
-					// of three rows carried as a real integer, and neither the TSDoc nor the
-					// guide ever promised more than the opening.
-					if (dropped) partial = true
-					if (values.length > 0) {
-						properties[key] = inferSamples(
-							values,
-							depth - 1,
-							maxBreadth,
-							closed,
-							format,
-							enumOn,
-							cache,
-						)
-					}
-					if (!dropped && values.length === owned.length) required[required.length] = key
-				}
-				const schema: JSONSchema = {
-					type: 'object',
-					...(INTRINSICS.keys(properties).length > 0 ? { properties } : {}),
-					...(required.length > 0 ? { required } : {}),
-					additionalProperties: partial ? true : !closed,
-				}
-				INTRINSICS.apply(INTRINSICS.store, node.schemas, [signature, schema])
-				return schema
-			},
-			'inferRecordSamples',
-			{ subject: 'samples' },
-		)
-	}, 'inferRecordSamples')
-}
 
 /**
  * Infer a `JSONSchema` from a set of example values — the multi-example
@@ -1049,20 +401,21 @@ export function inferRecordSamples(
  * @remarks
  * An empty `samples` array infers the empty accept-anything schema `{}`.
  * When every sample is a plain record, properties/required are unified
- * per-key across all samples (see {@link inferRecordSamples}) — a key
+ * per-key across all samples — a key
  * required iff present and non-`undefined` in every sample. Otherwise the
- * slot is inferred via {@link inferSamples} (independent {@link valueToSchema}
+ * slot is inferred one value at a time (independent {@link valueToSchema}
  * per sample, unified with {@link unifySchemas} — the same de-duplication and
- * `anyOf` ordering {@link inferArray} applies to element schemas). `format`
+ * `anyOf` ordering an array's element schemas receive). `format`
  * and `enum` (both default `false`) opt a low-cardinality/unanimous-format
- * slot into the corresponding keyword — see {@link inferSamples} for the
- * precedence and the multi-sample format-disabling seam. `maxDepth` /
- * `maxProperties` are resolved exactly as {@link valueToSchema} resolves them —
+ * slot into the corresponding keyword: enum inference runs first and wins
+ * outright, and a unanimous format is reattached only to a slot that unified to
+ * exactly `{ type: 'string' }`, with nested formats forced off. `limits.depth` /
+ * `limits.properties` are resolved exactly as {@link valueToSchema} resolves them —
  * breadth through {@link sanitizeBudget}, depth through {@link sanitizeDepth},
  * which also caps at {@link INFER_DEPTH_LIMIT}; see there for why.
  *
  * @param samples - The example values to infer a schema from
- * @param options - Optional `maxDepth` / `maxProperties` / `closed` / `format` / `enum` bounds
+ * @param options - Optional {@link ValueToSchemaLimits} `limits` plus `closed` / `format` / `enum` bounds
  * @returns The inferred `JSONSchema`
  * @throws {ContractError} When the samples or options cannot be read
  *
@@ -1081,12 +434,18 @@ export function samplesToSchema(
 	return contain(() => {
 		const optionsSnapshot = readOptions(
 			options,
-			['maxDepth', 'maxProperties', 'closed', 'format', 'enum'],
+			['limits', 'closed', 'format', 'enum'],
 			'samplesToSchema',
 			'schema',
 		)
-		const maxDepth = sanitizeDepth(optionsSnapshot?.maxDepth)
-		const maxProperties = sanitizeBudget(optionsSnapshot?.maxProperties, INFER_BREADTH_LIMIT)
+		const limits = readOptions(
+			optionsSnapshot?.limits,
+			['depth', 'properties'],
+			'samplesToSchema',
+			'schema',
+		)
+		const depth = sanitizeDepth(limits?.depth)
+		const properties = sanitizeBudget(limits?.properties, INFER_BREADTH_LIMIT)
 		const closed = optionsSnapshot?.closed ?? true
 		const format = optionsSnapshot?.format ?? false
 		const enumOn = optionsSnapshot?.enum ?? false
@@ -1111,16 +470,7 @@ export function samplesToSchema(
 		// anywhere below is still published as `samplesToSchema: samples could not
 		// be read` rather than under the name of an internal spine function.
 		return readValue(
-			() =>
-				inferSamples(
-					read.entries,
-					maxDepth,
-					maxProperties,
-					closed,
-					format,
-					enumOn,
-					buildSampleMemo(),
-				),
+			() => new SampleInferer(read.entries, depth, properties, closed, format, enumOn).infer(),
 			'samplesToSchema',
 			{ subject: 'samples' },
 		)

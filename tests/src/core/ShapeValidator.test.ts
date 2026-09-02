@@ -16,7 +16,7 @@ import {
 	rawShape,
 	seededRandom,
 	ShapeValidator,
-	validateShapeDepth,
+	validateShape,
 } from '@src/core'
 import type { TerminalIntrinsic } from '../../setup.js'
 import {
@@ -46,7 +46,7 @@ describe('ShapeValidator', () => {
 			'expansion',
 			'validate',
 		])
-		expect(validator.expansion).toBe(0)
+		expect(validator.expansion).toBeUndefined()
 		validator.validate()
 		expect(validator.expansion).toBe(1)
 	})
@@ -54,7 +54,7 @@ describe('ShapeValidator', () => {
 	it('refuses a class instance at every depth whether or not its prototype is reparented', () => {
 		for (const declaration of [new StringDeclaration(), new NullBaseDeclaration()]) {
 			const root = captureContractError(() => new ShapeValidator(declaration).validate())
-			expect(root.message).toBe('validateShapeDepth: every structural child must be a shape')
+			expect(root.message).toBe('validateShape: every structural child must be a shape')
 			expect(root.code).toBe('structure')
 			expect(root.context?.path).toEqual([])
 			expect(Object.hasOwn(root, 'cause')).toBe(false)
@@ -62,7 +62,7 @@ describe('ShapeValidator', () => {
 			const child = captureContractError(() =>
 				new ShapeValidator({ type: 'array', items: declaration }).validate(),
 			)
-			expect(child.message).toBe('validateShapeDepth: every structural child must be a shape')
+			expect(child.message).toBe('validateShape: every structural child must be a shape')
 			expect(child.code).toBe('structure')
 			expect(child.context?.path).toEqual(['items'])
 		}
@@ -166,7 +166,7 @@ describe('ShapeValidator', () => {
 	it('keeps the eager wrapper fresh and error-identical to the class', () => {
 		const source: ContractShape = { type: 'string', min: -1 }
 		const classError = captureContractError(() => new ShapeValidator(source).validate())
-		const wrapperError = captureContractError(() => validateShapeDepth(source))
+		const wrapperError = captureContractError(() => validateShape(source))
 
 		expect(wrapperError.message).toBe(classError.message)
 		expect(wrapperError.code).toBe(classError.code)
@@ -174,7 +174,7 @@ describe('ShapeValidator', () => {
 		expect(Object.hasOwn(wrapperError, 'cause')).toBe(Object.hasOwn(classError, 'cause'))
 
 		Reflect.set(source, 'min', 1)
-		validateShapeDepth(source)
+		validateShape(source)
 	})
 
 	it('retains the recognized-node fallback across hostile node observation', () => {
@@ -198,10 +198,10 @@ describe('ShapeValidator', () => {
 			reads = 0
 			const direct = captureContractError(() => new ShapeValidator(source).validate())
 			reads = 0
-			const depth = captureContractError(() => validateShapeDepth(source))
+			const depth = captureContractError(() => validateShape(source))
 
 			for (const error of [direct, depth]) {
-				expect(error.message).toBe('validateShapeDepth: every node must be a recognized shape')
+				expect(error.message).toBe('validateShape: every node must be a recognized shape')
 				expect(error.code).toBe('structure')
 				expect(error.context).toEqual({ path: [] })
 				expect(Object.hasOwn(error, 'cause')).toBe(false)
@@ -243,7 +243,7 @@ describe('ShapeValidator', () => {
 
 		const error = captureContractError(() => new ShapeValidator({ type: 'raw', schema }).validate())
 
-		expect(error.message).toBe('validateShapeDepth: every node must be a recognized shape')
+		expect(error.message).toBe('validateShape: every node must be a recognized shape')
 		expect(error.code).toBe('structure')
 		expect(error.context).toEqual({ path: ['schema'] })
 		expect(Object.hasOwn(error, 'cause')).toBe(false)
@@ -266,7 +266,7 @@ describe('ShapeValidator', () => {
 
 		const error = captureContractError(() => new ShapeValidator(source).validate())
 
-		expect(error.message).toBe('validateShapeDepth: every node must be a recognized shape')
+		expect(error.message).toBe('validateShape: every node must be a recognized shape')
 		expect(error.code).toBe('structure')
 		expect(error.context).toEqual({ path: ['properties', 'sibling'] })
 		expect(Object.hasOwn(error, 'cause')).toBe(false)
@@ -320,7 +320,7 @@ describe('ShapeValidator', () => {
 
 		for (const [source, path] of entries) {
 			const error = captureContractError(() => new ShapeValidator(source).validate())
-			expect(error.message).toBe('validateShapeDepth: every node must be a recognized shape')
+			expect(error.message).toBe('validateShape: every node must be a recognized shape')
 			expect(error.code).toBe('structure')
 			expect(error.context).toEqual({ path })
 			expect(Object.hasOwn(error, 'cause')).toBe(false)
@@ -329,7 +329,7 @@ describe('ShapeValidator', () => {
 		const pattern = captureContractError(() =>
 			new ShapeValidator({ type: 'raw', schema: { pattern: '[' } }).validate(),
 		)
-		expect(pattern.message).toBe('validateShapeDepth: raw schema pattern must be valid')
+		expect(pattern.message).toBe('validateShape: raw schema pattern must be valid')
 		expect(pattern.code).toBe('structure')
 		expect(pattern.context).toEqual({ path: ['schema'] })
 		expect(Object.hasOwn(pattern, 'cause')).toBe(false)
@@ -339,19 +339,19 @@ describe('ShapeValidator', () => {
 		for (const entry of [
 			{
 				keyword: 'enum',
-				message: 'validateShapeDepth: raw schema enum must be a non-empty array',
+				message: 'validateShape: raw schema enum must be a non-empty array',
 			},
 			{
 				keyword: 'required',
-				message: 'validateShapeDepth: raw schema required must be an array',
+				message: 'validateShape: raw schema required must be an array',
 			},
 			{
 				keyword: 'anyOf',
-				message: 'validateShapeDepth: raw schema unions must be non-empty arrays',
+				message: 'validateShape: raw schema unions must be non-empty arrays',
 			},
 			{
 				keyword: 'oneOf',
-				message: 'validateShapeDepth: raw schema unions must be non-empty arrays',
+				message: 'validateShape: raw schema unions must be non-empty arrays',
 			},
 		]) {
 			let reads = 0
@@ -393,16 +393,16 @@ describe('ShapeValidator', () => {
 			new ShapeValidator({ type: 'union', variants: directUnion.value }).validate(),
 		)
 		expect(directUnionError.code).toBe('structure')
-		expect(directUnionError.message).toBe('validateShapeDepth: variants must be a dense data array')
+		expect(directUnionError.message).toBe('validateShape: variants must be a dense data array')
 		expect(directUnionError.context?.path).toEqual(['variants'])
 		expect(Object.hasOwn(directUnionError, 'cause')).toBe(false)
 		expect(directUnion.probes).toEqual([])
 
 		const eagerUnion = createNativeMaximumSparseArray<ContractShape>()
 		const eagerUnionError = captureContractError(() =>
-			validateShapeDepth({ type: 'union', variants: eagerUnion.value }),
+			validateShape({ type: 'union', variants: eagerUnion.value }),
 		)
-		expect(eagerUnionError.message).toBe('validateShapeDepth: variants must be a dense data array')
+		expect(eagerUnionError.message).toBe('validateShape: variants must be a dense data array')
 		expect(eagerUnionError.context?.path).toEqual(['variants'])
 		expect(Object.hasOwn(eagerUnionError, 'cause')).toBe(false)
 		expect(eagerUnion.probes).toEqual([])
@@ -412,16 +412,16 @@ describe('ShapeValidator', () => {
 			new ShapeValidator({ type: 'literal', values: directLiteral.value }).validate(),
 		)
 		expect(directLiteralError.code).toBe('structure')
-		expect(directLiteralError.message).toBe('validateShapeDepth: values must be a dense data array')
+		expect(directLiteralError.message).toBe('validateShape: values must be a dense data array')
 		expect(directLiteralError.context?.path).toEqual(['values'])
 		expect(Object.hasOwn(directLiteralError, 'cause')).toBe(false)
 		expect(directLiteral.probes).toEqual([])
 
 		const eagerLiteral = createNativeMaximumSparseArray<LiteralValue>()
 		const eagerLiteralError = captureContractError(() =>
-			validateShapeDepth({ type: 'literal', values: eagerLiteral.value }),
+			validateShape({ type: 'literal', values: eagerLiteral.value }),
 		)
-		expect(eagerLiteralError.message).toBe('validateShapeDepth: values must be a dense data array')
+		expect(eagerLiteralError.message).toBe('validateShape: values must be a dense data array')
 		expect(eagerLiteralError.context?.path).toEqual(['values'])
 		expect(Object.hasOwn(eagerLiteralError, 'cause')).toBe(false)
 		expect(eagerLiteral.probes).toEqual([])
@@ -429,10 +429,10 @@ describe('ShapeValidator', () => {
 
 	it('bounds native-maximum raw array populations with their existing density rules', () => {
 		for (const entry of [
-			{ keyword: 'enum', message: 'validateShapeDepth: raw schema enum must be dense' },
-			{ keyword: 'required', message: 'validateShapeDepth: raw schema required must be dense' },
-			{ keyword: 'anyOf', message: 'validateShapeDepth: raw schema unions must be dense arrays' },
-			{ keyword: 'oneOf', message: 'validateShapeDepth: raw schema unions must be dense arrays' },
+			{ keyword: 'enum', message: 'validateShape: raw schema enum must be dense' },
+			{ keyword: 'required', message: 'validateShape: raw schema required must be dense' },
+			{ keyword: 'anyOf', message: 'validateShape: raw schema unions must be dense arrays' },
+			{ keyword: 'oneOf', message: 'validateShape: raw schema unions must be dense arrays' },
 		]) {
 			const fixture = createNativeMaximumSparseArray<unknown>()
 			const schema: JSONSchema = {}
@@ -464,7 +464,7 @@ describe('ShapeValidator', () => {
 			new ShapeValidator({ type: 'raw', schema }).validate(),
 		)
 		expect(rawError.code).toBe('structure')
-		expect(rawError.message).toBe('validateShapeDepth: a raw schema may not contain a cycle')
+		expect(rawError.message).toBe('validateShape: a raw schema may not contain a cycle')
 		expect(rawError.context?.path).toEqual(['schema'])
 	})
 
@@ -528,12 +528,10 @@ describe('ShapeValidator', () => {
 			const shape = { type: 'raw', schema } satisfies ContractShape
 			const errors = [
 				captureContractError(() => new ShapeValidator(shape).validate()),
-				captureContractError(() => validateShapeDepth(shape)),
+				captureContractError(() => validateShape(shape)),
 			]
 			for (const error of errors) {
-				expect(error.message).toBe(
-					'validateShapeDepth: every raw schema child must be a plain record',
-				)
+				expect(error.message).toBe('validateShape: every raw schema child must be a plain record')
 				expect(error.code).toBe('structure')
 				expect(error.context).toEqual({ path: ['schema'] })
 				expect(Object.hasOwn(error, 'cause')).toBe(false)
@@ -550,7 +548,7 @@ describe('ShapeValidator', () => {
 			createUndefinedSchema('additionalProperties'),
 		] satisfies readonly JSONSchema[]) {
 			new ShapeValidator({ type: 'raw', schema }).validate()
-			validateShapeDepth({ type: 'raw', schema })
+			validateShape({ type: 'raw', schema })
 		}
 
 		for (const keyword of ['anyOf', 'oneOf']) {
@@ -561,7 +559,7 @@ describe('ShapeValidator', () => {
 			const error = captureContractError(() =>
 				new ShapeValidator({ type: 'raw', schema }).validate(),
 			)
-			expect(error.message).toBe('validateShapeDepth: raw schema unions must be dense arrays')
+			expect(error.message).toBe('validateShape: raw schema unions must be dense arrays')
 			expect(error.code).toBe('structure')
 			expect(error.context).toEqual({ path: ['schema'] })
 		}
@@ -601,7 +599,7 @@ describe('ShapeValidator', () => {
 		)
 
 		expect(error.message).toBe(
-			'validateShapeDepth: a string shape pattern must not use flags; use inline pattern constructs instead',
+			'validateShape: a string shape pattern must not use flags; use inline pattern constructs instead',
 		)
 		expect(error.code).toBe('pattern')
 		expect(error.context).toEqual({ path: [], shape: 'string', received: '/a/i' })
@@ -725,7 +723,7 @@ describe('ShapeValidator', () => {
 			readonly open: (shape: ContractShape) => void
 		}> = [
 			{ name: 'ShapeValidator.validate', open: (shape) => new ShapeValidator(shape).validate() },
-			{ name: 'validateShapeDepth', open: (shape) => validateShapeDepth(shape) },
+			{ name: 'validateShape', open: (shape) => validateShape(shape) },
 		]
 		const escaped: string[] = []
 		// A row that never armed is reported rather than skipped: the escape check
@@ -805,7 +803,7 @@ describe('ShapeValidator', () => {
 })
 
 describe('the raw-schema gate decides through captured operations', () => {
-	// Two documented refusals of `rawShape` / `validateShapeDepth` were decided by
+	// Two documented refusals of `rawShape` / `validateShape` were decided by
 	// a live global read and by a caller-writable membership test, so a caller
 	// could make a malformed schema compile clean without anything throwing.
 	const answerFalse = (): boolean => false
@@ -864,7 +862,7 @@ describe('one observation per unique node per call (R6-A)', () => {
 		// The baseline the counts below are meaningful against: one node, one
 		// incoming edge, one observation.
 		const alone = new ObservedShape()
-		validateShapeDepth(buildStaircaseShape(alone.shape, 1))
+		validateShape(buildStaircaseShape(alone.shape, 1))
 		const once = alone.reads
 		expect(once).toBeGreaterThan(0)
 
@@ -873,7 +871,7 @@ describe('one observation per unique node per call (R6-A)', () => {
 		// because a subtree cleared from a shallow start says nothing about a
 		// deeper one under a per-depth memo.
 		const shared = new ObservedShape()
-		validateShapeDepth(buildStaircaseShape(shared.shape, 16))
+		validateShape(buildStaircaseShape(shared.shape, 16))
 		expect(shared.reads).toBe(once)
 
 		// Declaration order must not decide it either: deepest edge first is the
@@ -885,19 +883,19 @@ describe('one observation per unique node per call (R6-A)', () => {
 			for (let step = 0; step < level; step += 1) node = { type: 'array', items: node }
 			properties[`k${String(level)}`] = node
 		}
-		validateShapeDepth({ type: 'object', properties })
+		validateShape({ type: 'object', properties })
 		expect(reversed.reads).toBe(once)
 	})
 
 	it('starts a fresh observation for every new call, so a live source is re-read', () => {
 		const live = new ObservedShape()
 		const shape = buildStaircaseShape(live.shape, 4)
-		validateShapeDepth(shape)
+		validateShape(shape)
 		const first = live.reads
 		expect(first).toBeGreaterThan(0)
 
 		live.clear()
-		validateShapeDepth(shape)
+		validateShape(shape)
 		expect(live.reads).toBe(first)
 
 		// And through a fresh validator, which is what every eager door builds.
@@ -912,7 +910,7 @@ describe('one observation per unique node per call (R6-A)', () => {
 		const inner = stringShape()
 		const misplaced = optionalShape(inner)
 		const error = captureContractError(() =>
-			validateShapeDepth({
+			validateShape({
 				type: 'object',
 				properties: {
 					legal: misplaced,
@@ -927,7 +925,7 @@ describe('one observation per unique node per call (R6-A)', () => {
 		// Control: the same node in two legal slots still compiles, so the rule is
 		// about placement rather than about reuse.
 		expect(() =>
-			validateShapeDepth({ type: 'object', properties: { a: misplaced, b: misplaced } }),
+			validateShape({ type: 'object', properties: { a: misplaced, b: misplaced } }),
 		).not.toThrow()
 	})
 
@@ -940,7 +938,7 @@ describe('one observation per unique node per call (R6-A)', () => {
 		Reflect.set(corrupt, 'type', 'not-a-category')
 
 		const error = captureContractError(() =>
-			validateShapeDepth({
+			validateShape({
 				type: 'object',
 				properties: { first: stringShape(), second: host, third: host },
 			}),
@@ -961,9 +959,9 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 		let shape: ContractShape = tail
 		for (let level = 0; level < half; level += 1) shape = { type: 'array', items: shape }
 
-		const error = captureContractError(() => validateShapeDepth(shape))
+		const error = captureContractError(() => validateShape(shape))
 		expect(error.code).toBe('depth')
-		expect(error.message).toBe('validateShapeDepth: a shape exceeds the compilation depth limit')
+		expect(error.message).toBe('validateShape: a shape exceeds the compilation depth limit')
 		expect(error.context?.limit).toBe(COMPILE_DEPTH_LIMIT)
 
 		// Control: one level shallower is accepted, so the bound is the bound and
@@ -972,7 +970,7 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 		for (let level = 0; level < COMPILE_DEPTH_LIMIT; level += 1) {
 			inside = { type: 'array', items: inside }
 		}
-		expect(() => validateShapeDepth(inside)).not.toThrow()
+		expect(() => validateShape(inside)).not.toThrow()
 	})
 
 	it('names the earliest offending path in declaration order', () => {
@@ -985,7 +983,7 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 			tower = { type: 'array', items: tower }
 		}
 		const error = captureContractError(() =>
-			validateShapeDepth({ type: 'object', properties: { alpha: tower, beta: tower } }),
+			validateShape({ type: 'object', properties: { alpha: tower, beta: tower } }),
 		)
 
 		expect(error.code).toBe('depth')
@@ -1008,7 +1006,7 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 		for (let level = 0; level < COMPILE_DEPTH_LIMIT; level += 1) {
 			tower = { type: 'array', items: tower }
 		}
-		const error = captureContractError(() => validateShapeDepth(tower))
+		const error = captureContractError(() => validateShape(tower))
 
 		expect(error.code).toBe('depth')
 		const path = error.context?.path
@@ -1023,20 +1021,20 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 		for (let level = 0; level < COMPILE_DEPTH_LIMIT - 1; level += 1) {
 			shallow = { type: 'array', items: shallow }
 		}
-		expect(captureContractError(() => validateShapeDepth(shallow)).code).toBe('structure')
+		expect(captureContractError(() => validateShape(shallow)).code).toBe('structure')
 	})
 
 	it('lets depth outrank a cycle reached beyond the limit and lose to one inside it', () => {
 		const looped: ContractShape = { type: 'array', items: { type: 'string' } }
 		Reflect.set(looped, 'items', looped)
-		const near = captureContractError(() => validateShapeDepth(looped))
+		const near = captureContractError(() => validateShape(looped))
 		expect(near.code).toBe('cycle')
 
 		let buried: ContractShape = looped
 		for (let level = 0; level < COMPILE_DEPTH_LIMIT + 1; level += 1) {
 			buried = { type: 'array', items: buried }
 		}
-		expect(captureContractError(() => validateShapeDepth(buried)).code).toBe('depth')
+		expect(captureContractError(() => validateShape(buried)).code).toBe('depth')
 	})
 
 	it('answers a cyclic declaration without re-reading the caller source', () => {
@@ -1051,12 +1049,12 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 			far: { type: 'array', items: { type: 'array', items: observed.shape } },
 			back: looped,
 		})
-		const error = captureContractError(() => validateShapeDepth(looped))
+		const error = captureContractError(() => validateShape(looped))
 		expect(error.code).toBe('cycle')
 		const cyclic = observed.reads
 
 		observed.clear()
-		validateShapeDepth({ type: 'object', properties: { leaf: observed.shape } })
+		validateShape({ type: 'object', properties: { leaf: observed.shape } })
 		expect(cyclic).toBe(observed.reads)
 	})
 
@@ -1085,9 +1083,9 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 				alias = { type: 'object', properties: { k0: alias } }
 			}
 			const root: ContractShape = { type: 'object', properties: { a: fork, b: alias } }
-			const error = captureContractError(() => validateShapeDepth(root))
+			const error = captureContractError(() => validateShape(root))
 			expect(error.code).toBe('depth')
-			expect(error.message).toBe('validateShapeDepth: a shape exceeds the compilation depth limit')
+			expect(error.message).toBe('validateShape: a shape exceeds the compilation depth limit')
 			// The rule lives in one engine, but a repair proven at one door is a
 			// hypothesis at the others, so the typed entry point is asked too.
 			expect(captureContractError(() => createContract(root)).code).toBe('depth')
@@ -1120,7 +1118,7 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 			}
 			expect(
 				captureContractError(() =>
-					validateShapeDepth({ type: 'object', properties: { a: fork, b: alias } }),
+					validateShape({ type: 'object', properties: { a: fork, b: alias } }),
 				).code,
 			).toBe('depth')
 		}
@@ -1142,7 +1140,7 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 			}
 			expect(
 				captureContractError(() =>
-					validateShapeDepth({ type: 'object', properties: { a: fork, b: alias } }),
+					validateShape({ type: 'object', properties: { a: fork, b: alias } }),
 				).code,
 			).toBe('cycle')
 		}
@@ -1195,7 +1193,7 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 					: variant === 'swapped'
 						? { k1: toTail, k0: loop }
 						: { k0: loop, k1: toTail }
-			const error = captureContractError(() => validateShapeDepth({ type: 'object', properties }))
+			const error = captureContractError(() => validateShape({ type: 'object', properties }))
 			const path = error.context?.path
 			verdicts[verdicts.length] =
 				`${error.code}:${Array.isArray(path) ? String(path.length) : 'unknown'}`
@@ -1220,7 +1218,7 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 		for (let level = 0; level < 26; level += 1) {
 			tower = { type: 'object', properties: { left: tower, right: tower } }
 		}
-		expect(captureContractError(() => validateShapeDepth(tower)).code).toBe('cycle')
+		expect(captureContractError(() => validateShape(tower)).code).toBe('cycle')
 	})
 
 	it('counts emitted expansion over the shared graph exactly as before', () => {
@@ -1230,10 +1228,10 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 		expect(validator.expansion).toBe(31)
 
 		const refused = new ShapeValidator(buildSharedDagShape(20))
-		expect(captureContractError(() => validateShapeDepth(buildSharedDagShape(20))).code).toBe(
+		expect(captureContractError(() => validateShape(buildSharedDagShape(20))).code).toBe(
 			'expansion',
 		)
-		expect(refused.expansion).toBe(0)
+		expect(refused.expansion).toBeUndefined()
 	})
 })
 
@@ -1241,7 +1239,7 @@ describe('raw schema records are inspected once per call (R6-A)', () => {
 	it('validates a schema shared by two raw nodes once and still refuses it', () => {
 		const shared: JSONSchema = { type: 'object', properties: { value: { type: 'string' } } }
 		expect(() =>
-			validateShapeDepth({
+			validateShape({
 				type: 'object',
 				properties: { a: { type: 'raw', schema: shared }, b: { type: 'raw', schema: shared } },
 			}),
@@ -1249,7 +1247,7 @@ describe('raw schema records are inspected once per call (R6-A)', () => {
 
 		const broken: JSONSchema = { type: 'string', minLength: -1 }
 		const error = captureContractError(() =>
-			validateShapeDepth({
+			validateShape({
 				type: 'object',
 				properties: { a: { type: 'raw', schema: broken }, b: { type: 'raw', schema: broken } },
 			}),
@@ -1263,9 +1261,9 @@ describe('raw schema records are inspected once per call (R6-A)', () => {
 		for (let level = 0; level < COMPILE_DEPTH_LIMIT + 1; level += 1) {
 			schema = { type: 'array', items: schema }
 		}
-		const error = captureContractError(() => validateShapeDepth({ type: 'raw', schema }))
+		const error = captureContractError(() => validateShape({ type: 'raw', schema }))
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('validateShapeDepth: raw schema exceeds the compilation depth limit')
+		expect(error.message).toBe('validateShape: raw schema exceeds the compilation depth limit')
 		expect(error.context?.path).toEqual(['schema'])
 
 		// A schema that fits at the root but not once the node is nested: the same
@@ -1275,15 +1273,15 @@ describe('raw schema records are inspected once per call (R6-A)', () => {
 			modest = { type: 'array', items: modest }
 		}
 		const node: ContractShape = { type: 'raw', schema: modest }
-		expect(() => validateShapeDepth(node)).not.toThrow()
+		expect(() => validateShape(node)).not.toThrow()
 		expect(
 			captureContractError(() =>
-				validateShapeDepth({
+				validateShape({
 					type: 'array',
 					items: { type: 'array', items: { type: 'array', items: node } },
 				}),
 			).message,
-		).toBe('validateShapeDepth: raw schema exceeds the compilation depth limit')
+		).toBe('validateShape: raw schema exceeds the compilation depth limit')
 	})
 
 	it('names an overshooting occurrence of a shared raw node, whichever edge is declared first', () => {
@@ -1301,17 +1299,15 @@ describe('raw schema records are inspected once per call (R6-A)', () => {
 		for (let level = 0; level < 504; level += 1) deep = { type: 'array', items: deep }
 
 		// Control: the shallow slot alone is accepted, so it is not the violation.
-		expect(() => validateShapeDepth({ type: 'object', properties: { a: shared } })).not.toThrow()
+		expect(() => validateShape({ type: 'object', properties: { a: shared } })).not.toThrow()
 
 		for (const properties of [
 			{ a: shared, b: deep },
 			{ b: deep, a: shared },
 		]) {
-			const error = captureContractError(() => validateShapeDepth({ type: 'object', properties }))
+			const error = captureContractError(() => validateShape({ type: 'object', properties }))
 			expect(error.code).toBe('structure')
-			expect(error.message).toBe(
-				'validateShapeDepth: raw schema exceeds the compilation depth limit',
-			)
+			expect(error.message).toBe('validateShape: raw schema exceeds the compilation depth limit')
 			const path = error.context?.path
 			expect(Array.isArray(path)).toBe(true)
 			if (!Array.isArray(path)) return
@@ -1330,15 +1326,15 @@ describe('raw schema records are inspected once per call (R6-A)', () => {
 	it('still refuses a cyclic raw schema and a shared acyclic one', () => {
 		const cyclic: JSONSchema = { type: 'object', properties: {} }
 		Reflect.set(cyclic, 'properties', { back: cyclic })
-		const error = captureContractError(() => validateShapeDepth({ type: 'raw', schema: cyclic }))
+		const error = captureContractError(() => validateShape({ type: 'raw', schema: cyclic }))
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('validateShapeDepth: a raw schema may not contain a cycle')
+		expect(error.message).toBe('validateShape: a raw schema may not contain a cycle')
 
 		// The control that separates sharing from cycling: the same record in two
 		// sibling slots is legal and must not be mistaken for a back edge.
 		const leaf: JSONSchema = { type: 'string' }
 		expect(() =>
-			validateShapeDepth({
+			validateShape({
 				type: 'raw',
 				schema: { type: 'object', properties: { a: leaf, b: leaf } },
 			}),
@@ -1387,7 +1383,7 @@ describe('the cyclic fallback agrees with an unmemoized walk (R6-A-fix)', () => 
 			}
 			const root = hubs[0]
 			if (root === undefined) continue
-			const outcome = attempt(() => validateShapeDepth(root))
+			const outcome = attempt(() => validateShape(root))
 			if (outcome.success) {
 				tally.accepted += 1
 				continue

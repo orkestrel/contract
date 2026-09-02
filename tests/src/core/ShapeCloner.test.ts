@@ -22,7 +22,7 @@ import {
 	arrayShape,
 	ShapeCloner,
 	stringShape,
-	validateShapeDepth,
+	validateShape,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
@@ -63,7 +63,7 @@ describe('ShapeCloner', () => {
 
 	it('refuses non-record nodes before discriminant observation without narrowing valid realms', () => {
 		const root = captureContractError(() => new ShapeCloner(new StringDeclaration()).clone())
-		expect(root.message).toBe('validateShapeDepth: every structural child must be a shape')
+		expect(root.message).toBe('validateShape: every structural child must be a shape')
 		expect(root.code).toBe('structure')
 		expect(root.context?.path).toEqual([])
 		expect(Object.hasOwn(root, 'cause')).toBe(false)
@@ -71,9 +71,7 @@ describe('ShapeCloner', () => {
 		const reparentedRoot = captureContractError(() =>
 			new ShapeCloner(new NullBaseDeclaration()).clone(),
 		)
-		expect(reparentedRoot.message).toBe(
-			'validateShapeDepth: every structural child must be a shape',
-		)
+		expect(reparentedRoot.message).toBe('validateShape: every structural child must be a shape')
 		expect(reparentedRoot.code).toBe('structure')
 		expect(reparentedRoot.context?.path).toEqual([])
 		expect(Object.hasOwn(reparentedRoot, 'cause')).toBe(false)
@@ -81,16 +79,14 @@ describe('ShapeCloner', () => {
 		const reparentedChild = captureContractError(() =>
 			new ShapeCloner({ type: 'array', items: new NullBaseDeclaration() }).clone(),
 		)
-		expect(reparentedChild.message).toBe(
-			'validateShapeDepth: every structural child must be a shape',
-		)
+		expect(reparentedChild.message).toBe('validateShape: every structural child must be a shape')
 		expect(reparentedChild.code).toBe('structure')
 		expect(reparentedChild.context?.path).toEqual(['items'])
 
 		const nested = captureContractError(() =>
 			new ShapeCloner({ type: 'array', items: new StringDeclaration() }).clone(),
 		)
-		expect(nested.message).toBe('validateShapeDepth: every structural child must be a shape')
+		expect(nested.message).toBe('validateShape: every structural child must be a shape')
 		expect(nested.code).toBe('structure')
 		expect(nested.context?.path).toEqual(['items'])
 		expect(Object.hasOwn(nested, 'cause')).toBe(false)
@@ -533,7 +529,7 @@ describe('ShapeCloner', () => {
 			new ShapeCloner({ type: 'union', variants: union.value }).clone(),
 		)
 		expect(unionError.code).toBe('structure')
-		expect(unionError.message).toBe('validateShapeDepth: variants must be a dense data array')
+		expect(unionError.message).toBe('validateShape: variants must be a dense data array')
 		expect(unionError.context?.path).toEqual(['variants'])
 		expect(Object.hasOwn(unionError, 'cause')).toBe(false)
 		expect(union.probes).toEqual([])
@@ -543,7 +539,7 @@ describe('ShapeCloner', () => {
 			new ShapeCloner({ type: 'literal', values: literal.value }).clone(),
 		)
 		expect(literalError.code).toBe('structure')
-		expect(literalError.message).toBe('validateShapeDepth: values must be a dense data array')
+		expect(literalError.message).toBe('validateShape: values must be a dense data array')
 		expect(literalError.context?.path).toEqual(['values'])
 		expect(Object.hasOwn(literalError, 'cause')).toBe(false)
 		expect(literal.probes).toEqual([])
@@ -570,7 +566,7 @@ describe('ShapeCloner', () => {
 		const error = captureContractError(() => new ShapeCloner({ type: 'literal', values }).clone())
 
 		expect(error.message).toBe(
-			'validateShapeDepth: every literal value must be a string, number, or boolean',
+			'validateShape: every literal value must be a string, number, or boolean',
 		)
 		expect(error.context?.path).toEqual(['values', '1'])
 		expect([...descriptors.entries()]).toEqual([
@@ -613,10 +609,10 @@ describe('ShapeCloner', () => {
 		const pathError = captureContractError(() => new ShapeCloner(declaration).clone())
 		expect(pathError).toBeInstanceOf(ContractError)
 		// DECLARATION order, not capture order: the LIFO drain this replaced named
-		// the LAST offending sibling while `validateShapeDepth` named the first, so one
+		// the LAST offending sibling while `validateShape` named the first, so one
 		// declaration produced two different `context.path` values.
 		expect(pathError.context?.path).toEqual(['properties', 'first'])
-		const validated = captureContractError(() => validateShapeDepth(declaration))
+		const validated = captureContractError(() => validateShape(declaration))
 		expect(validated.code).toBe(pathError.code)
 		expect(validated.message).toBe(pathError.message)
 		expect(validated.context?.path).toEqual(pathError.context?.path)
@@ -624,7 +620,7 @@ describe('ShapeCloner', () => {
 		const optional: ContractShape = { type: 'optional', inner: shared }
 		const placementEngine = new ShapeCloner({ type: 'array', items: optional })
 		expect(() => placementEngine.clone()).toThrow(
-			'validateShapeDepth: an optional shape may only appear as a direct object-property value',
+			'validateShape: an optional shape may only appear as a direct object-property value',
 		)
 	})
 
@@ -639,7 +635,7 @@ describe('ShapeCloner', () => {
 		Reflect.set(malformed, 'description', 7)
 		const validation = captureContractError(() => new ShapeCloner(malformed).clone())
 		expect(validation.code).toBe('structure')
-		expect(validation.message).toContain('validateShapeDepth')
+		expect(validation.message).toContain('validateShape')
 
 		const sentinel = Object.freeze({ sentinel: true })
 		const hostile = new Proxy<StringShape>(
@@ -672,7 +668,7 @@ describe('ShapeCloner', () => {
 		})
 		const fidelityCloner = new ShapeCloner({ type: 'union', variants: stableVariants })
 		const fidelity = captureContractError(() => fidelityCloner.clone())
-		expect(fidelity.message).toBe('validateShapeDepth: every structural child must be a shape')
+		expect(fidelity.message).toBe('validateShape: every structural child must be a shape')
 		expect(captureContractError(() => fidelityCloner.clone())).toBe(fidelity)
 
 		const cycle: { readonly type: 'array'; readonly items: ContractShape } = {
@@ -729,7 +725,7 @@ describe('ShapeCloner', () => {
 		const reason = captureContractError(() => engine.clone())
 		expect(reason).toBeInstanceOf(ContractError)
 		expect(reason.message).toBe(
-			'validateShapeDepth: a string shape pattern must not use flags; use inline pattern constructs instead',
+			'validateShape: a string shape pattern must not use flags; use inline pattern constructs instead',
 		)
 		expect(reason.code).toBe('pattern')
 		expect(reason.context).toEqual({ path: [], shape: 'string', received: '/a/i' })
@@ -743,12 +739,12 @@ describe('ShapeCloner', () => {
 			new ShapeCloner({ type: 'string', min: -1, pattern: /a/i }).clone(),
 		)
 		expect(min.code).toBe('bound')
-		expect(min.message).toContain('validateShapeDepth: a string shape min')
+		expect(min.message).toContain('validateShape: a string shape min')
 		const max = captureContractError(() =>
 			new ShapeCloner({ type: 'string', max: -1, pattern: /a/i }).clone(),
 		)
 		expect(max.code).toBe('bound')
-		expect(max.message).toContain('validateShapeDepth: a string shape max')
+		expect(max.message).toContain('validateShape: a string shape max')
 		const range = captureContractError(() =>
 			new ShapeCloner({ type: 'string', min: 2, max: 1, pattern: /a/ }).clone(),
 		)
@@ -1086,8 +1082,8 @@ describe('the property snapshot survives an arity-preserving iterator lie', () =
 })
 
 describe('ShapeCloner — one arbiter, one verdict (H9)', () => {
-	it('names the same rule at the same path as validateShapeDepth for one declaration', () => {
-		// The guide names `cloneShape`, `ownShape`, `validateShapeDepth`, `compileSchema`,
+	it('names the same rule at the same path as validateShape for one declaration', () => {
+		// The guide names `cloneShape`, `ownShape`, `validateShape`, `compileSchema`,
 		// `compileGuard` and `createContract` in one sentence as agreeing. They did
 		// not: capture-time domain refusals fired in LIFO capture order, before the
 		// validator's structure -> cycle -> domain precedence could apply.
@@ -1123,7 +1119,7 @@ describe('ShapeCloner — one arbiter, one verdict (H9)', () => {
 		]
 
 		for (const declaration of declarations) {
-			const reference = captureContractError(() => validateShapeDepth(declaration))
+			const reference = captureContractError(() => validateShape(declaration))
 			for (const door of [cloneShape, compileSchema, compileGuard, createContract]) {
 				const observed = captureContractError(() => door(declaration))
 				expect([observed.code, observed.message, observed.context?.path]).toEqual([
@@ -1139,14 +1135,14 @@ describe('ShapeCloner — one arbiter, one verdict (H9)', () => {
 		// Capture materialised the ENTIRE over-limit graph — wiring and freezing a
 		// declaration certain to be refused — before the depth gate ever ran, and
 		// every child registration copies its whole path, so the cost was quadratic:
-		// 4,000 levels took 142 ms against `validateShapeDepth`'s 2 ms for the identical
+		// 4,000 levels took 142 ms against `validateShape`'s 2 ms for the identical
 		// verdict.
 		let declaration: ContractShape = { type: 'string' }
 		for (let index = 0; index < 8_000; index += 1) {
 			declaration = { type: 'array', items: declaration }
 		}
 
-		const reference = captureContractError(() => validateShapeDepth(declaration))
+		const reference = captureContractError(() => validateShape(declaration))
 		const started = Date.now()
 		const observed = captureContractError(() => cloneShape(declaration))
 		const elapsed = Date.now() - started

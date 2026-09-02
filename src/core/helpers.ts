@@ -209,7 +209,7 @@ export function sortValues<T extends string | number>(values: readonly T[]): rea
 		if (value === undefined) continue
 		owned[owned.length] = value
 	}
-	INTRINSICS.apply(INTRINSICS.order, owned, [compareValues])
+	INTRINSICS.reflect.apply(INTRINSICS.order, owned, [compareValues])
 	return owned
 }
 
@@ -247,7 +247,7 @@ export function sortValues<T extends string | number>(values: readonly T[]): rea
 export function collectMembers(values: readonly unknown[]): Set<unknown> {
 	const members = new INTRINSICS.set<unknown>()
 	for (let index = 0; index < values.length; index += 1) {
-		INTRINSICS.apply(INTRINSICS.admit, members, [values[index]])
+		INTRINSICS.reflect.apply(INTRINSICS.admit, members, [values[index]])
 	}
 	return members
 }
@@ -266,7 +266,7 @@ export function collectMembers(values: readonly unknown[]): Set<unknown> {
  * ```
  */
 export function matchesMember(members: ReadonlySet<unknown>, value: unknown): boolean {
-	return INTRINSICS.apply(INTRINSICS.member, members, [value]) === true
+	return INTRINSICS.reflect.apply(INTRINSICS.member, members, [value]) === true
 }
 
 /**
@@ -283,7 +283,7 @@ export function matchesMember(members: ReadonlySet<unknown>, value: unknown): bo
  * ```
  */
 export function admitMember(members: Set<unknown>, value: unknown): void {
-	INTRINSICS.apply(INTRINSICS.admit, members, [value])
+	INTRINSICS.reflect.apply(INTRINSICS.admit, members, [value])
 }
 
 /**
@@ -310,7 +310,7 @@ export function admitMember(members: Set<unknown>, value: unknown): void {
  * ```
  */
 export function matchesVisited(visited: WeakSet<object>, value: object): boolean {
-	return INTRINSICS.apply(INTRINSICS.tracked, visited, [value]) === true
+	return INTRINSICS.reflect.apply(INTRINSICS.tracked, visited, [value]) === true
 }
 
 /**
@@ -325,7 +325,7 @@ export function matchesVisited(visited: WeakSet<object>, value: object): boolean
  * ```
  */
 export function admitVisited(visited: WeakSet<object>, value: object): void {
-	INTRINSICS.apply(INTRINSICS.track, visited, [value])
+	INTRINSICS.reflect.apply(INTRINSICS.track, visited, [value])
 }
 
 /**
@@ -340,7 +340,7 @@ export function admitVisited(visited: WeakSet<object>, value: object): void {
  * ```
  */
 export function omitVisited(visited: WeakSet<object>, value: object): void {
-	INTRINSICS.apply(INTRINSICS.untrack, visited, [value])
+	INTRINSICS.reflect.apply(INTRINSICS.untrack, visited, [value])
 }
 
 /**
@@ -350,10 +350,10 @@ export function omitVisited(visited: WeakSet<object>, value: object): void {
  * A depth-bounded walk answers the same node differently depending on how much
  * allowance was left when it arrived, so each node keeps a `Map` of answers
  * inside one `WeakMap`. Written inline, the get-or-create ferried that map out
- * of the branch that built it through a `let`, three times over in
- * `inferArray`, `inferObject` and `schemaNodeToShape`. Written once it is one
- * statement per caller, and the captured `WeakMap`/`Map` members stay the only
- * ones all three dispatch through — a substituted `WeakMap.prototype.get` that
+ * of the branch that built it through a `let`, three times over across the two
+ * container branches of value inference and the schema-inversion walk. Written
+ * once it is one statement per caller, and the captured `WeakMap`/`Map` members
+ * stay the only ones all three dispatch through — a substituted `WeakMap.prototype.get` that
  * answered a decoy map would otherwise decide what a later call replays.
  *
  * @param memo - The per-node depth memo this walk owns
@@ -374,10 +374,10 @@ export function retainDepth<T>(
 	depth: number,
 	answer: T,
 ): void {
-	const known = INTRINSICS.apply(INTRINSICS.recall, memo, [node])
+	const known = INTRINSICS.reflect.apply(INTRINSICS.recall, memo, [node])
 	const depths = known || new INTRINSICS.map<number, T>()
-	if (!known) INTRINSICS.apply(INTRINSICS.retain, memo, [node, depths])
-	INTRINSICS.apply(INTRINSICS.store, depths, [depth, answer])
+	if (!known) INTRINSICS.reflect.apply(INTRINSICS.retain, memo, [node, depths])
+	INTRINSICS.reflect.apply(INTRINSICS.store, depths, [depth, answer])
 }
 
 /**
@@ -387,15 +387,14 @@ export function retainDepth<T>(
  * The root a multi-sample walk starts from and the node every further row
  * prefix is grown into, built from the CAPTURED `WeakMap` and `Map` so a
  * replaced global cannot decide what a published schema is served from. One
- * memo belongs to one walk: {@link samplesToSchema} builds it at the door, and
- * a direct caller of {@link inferSamples} / {@link inferRecordSamples} builds a
- * fresh one per call.
+ * memo belongs to one walk: {@link samplesToSchema} builds one at the door and
+ * grows a fresh node per row prefix inside it.
  *
  * @returns An empty memo node with no recorded rows and no recorded schemas
  *
  * @example
  * ```ts
- * inferRecordSamples([{ id: 1 }], 32, 256, true, false, false, buildSampleMemo())
+ * buildSampleMemo() // { rows: WeakMap {}, schemas: Map {} }
  * ```
  */
 export function buildSampleMemo(): SampleMemo {
@@ -407,13 +406,11 @@ export function buildSampleMemo(): SampleMemo {
  * published schema in it.
  *
  * @remarks
- * The memo is the one argument position on `inferSamples` /
- * `inferRecordSamples` that reaches a `WeakMap` and a `Map` the caller
- * supplied, and both doors are reachable untyped from JavaScript. Without this
- * check a wrong value there failed inside the traversal and was published as
- * `samples could not be read` — a true refusal naming the wrong argument, the
- * defect class those doors were already corrected for twice. It refuses under
- * the memo's own name and its own path instead.
+ * The memo reaches a `WeakMap` and a `Map` the walk stored a node in, and a
+ * wrong value there fails inside the traversal and is published as
+ * `samples could not be read` — a true refusal naming the wrong argument. This
+ * refuses under the memo's own name and its own path instead. The multi-sample
+ * walk asks it of every node it reads back out of its own prefix chain.
  *
  * @param memo - The candidate memo
  * @param reader - The door name the refusal is published under
@@ -422,7 +419,7 @@ export function buildSampleMemo(): SampleMemo {
  *
  * @example
  * ```ts
- * readSampleMemo(buildSampleMemo(), 'inferSamples') // the same memo
+ * readSampleMemo(buildSampleMemo(), 'samplesToSchema') // the same memo
  * ```
  */
 export function readSampleMemo(memo: SampleMemo, reader: string): SampleMemo {
@@ -486,7 +483,7 @@ export function collectEntries(target: unknown[][]): EntryCollectorFunction {
 export function readSetEntries(value: ReadonlySet<unknown>): Result<readonly unknown[]> {
 	return attempt(() => {
 		const collected: unknown[][] = []
-		INTRINSICS.apply(INTRINSICS.sweep, value, [collectEntries(collected)])
+		INTRINSICS.reflect.apply(INTRINSICS.sweep, value, [collectEntries(collected)])
 		const entries: unknown[] = []
 		for (let index = 0; index < collected.length; index += 1) {
 			const pair = collected[index]
@@ -521,7 +518,7 @@ export function readMapEntries(
 ): Result<ReadonlyArray<readonly unknown[]>> {
 	return attempt(() => {
 		const collected: unknown[][] = []
-		INTRINSICS.apply(INTRINSICS.pairs, value, [collectEntries(collected)])
+		INTRINSICS.reflect.apply(INTRINSICS.pairs, value, [collectEntries(collected)])
 		return INTRINSICS.freeze(collected)
 	})
 }
@@ -549,7 +546,7 @@ export function readMapEntries(
 export function readPatternSource(pattern: unknown): string | undefined {
 	const read = INTRINSICS.expression
 	if (read === undefined) return undefined
-	const source: unknown = INTRINSICS.apply(read, pattern, [])
+	const source: unknown = INTRINSICS.reflect.apply(read, pattern, [])
 	return isString(source) ? source : undefined
 }
 
@@ -568,7 +565,7 @@ export function readPatternSource(pattern: unknown): string | undefined {
 export function readPatternFlags(pattern: unknown): string | undefined {
 	const read = INTRINSICS.modifiers
 	if (read === undefined) return undefined
-	const flags: unknown = INTRINSICS.apply(read, pattern, [])
+	const flags: unknown = INTRINSICS.reflect.apply(read, pattern, [])
 	return isString(flags) ? flags : undefined
 }
 
@@ -595,7 +592,7 @@ export function readPatternFlags(pattern: unknown): string | undefined {
  * ```
  */
 export function matchesPattern(pattern: RegExp, value: string): boolean {
-	return INTRINSICS.apply(INTRINSICS.captures, pattern, [value]) !== null
+	return INTRINSICS.reflect.apply(INTRINSICS.captures, pattern, [value]) !== null
 }
 
 /**
@@ -678,7 +675,7 @@ export function readPattern(pattern: RegExp): RegExp {
  * ```
  */
 export function pinMembers(prototype: object, owner: string): void {
-	const members = INTRINSICS.members(prototype)
+	const members = INTRINSICS.reflect.members(prototype)
 	for (let index = 0; index < members.length; index += 1) {
 		const key = members[index]
 		if (key === undefined) continue
@@ -689,7 +686,7 @@ export function pinMembers(prototype: object, owner: string): void {
 		// exists to make impossible.
 		const declared = INTRINSICS.describe(prototype, key)
 		const accessor = declared !== undefined && !INTRINSICS.own(declared, 'value')
-		INTRINSICS.declare(
+		INTRINSICS.reflect.define(
 			prototype,
 			key,
 			accessor ? { configurable: false } : { writable: false, configurable: false },
@@ -1037,7 +1034,7 @@ export function readArrayEntries<T>(value: readonly T[]): Result<ArrayRead<T>> {
 		const keys: string[] = []
 		let ascending = true
 		let previous = -1
-		const members = INTRINSICS.members(value)
+		const members = INTRINSICS.reflect.members(value)
 		for (let position = 0; position < members.length; position += 1) {
 			const key = members[position]
 			if (!isString(key)) continue
@@ -1105,7 +1102,7 @@ export function readGuardShape(
 ): GuardShapeRead {
 	const declared = readValue(
 		() => {
-			const members = INTRINSICS.members(shape)
+			const members = INTRINSICS.reflect.members(shape)
 			const guards: Record<string, Guard<unknown> | undefined> = INTRINSICS.create(null)
 			const names: string[] = []
 			for (let index = 0; index < members.length; index += 1) {
@@ -1226,11 +1223,11 @@ export function readOptions<T extends object>(
 				for (let index = 0; index < keys.length; index += 1) {
 					const key = keys[index]
 					if (key === undefined) continue
-					values[key] = INTRINSICS.read(input, key)
-					INTRINSICS.present(input, key)
-					INTRINSICS.reveal(input, key)
+					values[key] = INTRINSICS.reflect.read(input, key)
+					INTRINSICS.reflect.present(input, key)
+					INTRINSICS.reflect.describe(input, key)
 				}
-				INTRINSICS.members(input)
+				INTRINSICS.reflect.members(input)
 				const record = matchesRecordBrand(input)
 				const snapshot: T = INTRINSICS.create(INTRINSICS.base)
 				for (let index = 0; index < keys.length; index += 1) {
@@ -1238,7 +1235,7 @@ export function readOptions<T extends object>(
 					if (key === undefined) continue
 					const value = values[key]
 					if (value === undefined) continue
-					INTRINSICS.declare(snapshot, key, {
+					INTRINSICS.reflect.define(snapshot, key, {
 						value,
 						enumerable: true,
 						configurable: true,
@@ -1332,7 +1329,7 @@ export function resolveField(record: Readonly<Record<string, unknown>>, path: Fi
 			const key = keys[index]
 			if (key === undefined) return undefined
 			if (!isObject(current) || !INTRINSICS.own(current, key)) return undefined
-			current = INTRINSICS.read(current, key)
+			current = INTRINSICS.reflect.read(current, key)
 		}
 		return current
 	})
@@ -1380,7 +1377,7 @@ export function matchesJSONDepth(value: unknown): boolean {
 			if (frame === undefined) return false
 			if (frame.operation === 'exit') {
 				omitVisited(active, frame.value)
-				INTRINSICS.apply(INTRINSICS.retain, settled, [frame.value, frame.depth])
+				INTRINSICS.reflect.apply(INTRINSICS.retain, settled, [frame.value, frame.depth])
 				continue
 			}
 
@@ -1394,7 +1391,7 @@ export function matchesJSONDepth(value: unknown): boolean {
 			if (depth > GUARD_DEPTH_LIMIT) return false
 			// Settled at a deeper start means every path below it was measured with
 			// LESS headroom than this one has, so it cannot exceed the limit here.
-			const deepest: unknown = INTRINSICS.apply(INTRINSICS.recall, settled, [entry])
+			const deepest: unknown = INTRINSICS.reflect.apply(INTRINSICS.recall, settled, [entry])
 			if (isNumber(deepest) && depth <= deepest) continue
 			admitVisited(active, entry)
 			stack[stack.length] = { operation: 'exit', value: entry, depth }
@@ -1415,7 +1412,11 @@ export function matchesJSONDepth(value: unknown): boolean {
 				const key = keys[index]
 				if (key === undefined) return false
 				if (!INTRINSICS.own(entry, key)) return false
-				stack[stack.length] = { operation: 'enter', value: INTRINSICS.read(entry, key), depth }
+				stack[stack.length] = {
+					operation: 'enter',
+					value: INTRINSICS.reflect.read(entry, key),
+					depth,
+				}
 			}
 		}
 
@@ -1685,146 +1686,11 @@ export function schemaToObject(schema: JSONSchema): JSONSchema {
 // === Canonicalization
 
 /**
- * Encode one value as a deterministic, key-sorted JSON string — the traversal
- * spine of {@link canonicalStringify}.
- *
- * @remarks
- * Arrays keep their element order through the shared dense own-index lens;
- * records sort their own keys before encoding, at every nesting level. Every
- * other value is encoded by
- * `JSON.stringify`, so `NaN` / `±Infinity` collapse to `'null'` and `-0`
- * encodes as `'0'` — the same lossy-but-deterministic mapping real JSON makes.
- *
- * Returns `undefined` for anything JSON cannot encode: `undefined` itself, a
- * function, a symbol, an array hole, or a cyclic back-edge to an ancestor. A
- * container carrying such a member is itself un-encodable and returns
- * `undefined` too, so the result is either a faithful encoding of the WHOLE
- * value or nothing — a partially-encoded key is never emitted. A hostile
- * getter or `Proxy` trap is refused through this function's own required-read
- * boundary, including when this spine is called directly.
- *
- * The walk is ITERATIVE over an explicit enter/exit stack and keeps a
- * walk-local encoding memo, so a container reached through several paths is
- * encoded ONCE. That memo is sound precisely because a partial answer does not
- * exist here: any cycle or JSON-inexpressible member abandons the whole call,
- * so a recorded encoding is the container's complete encoding on every path.
- * The earlier recursion re-encoded per path, which made thirty ordinary shared
- * aliases cost `2^30` encodings through the public {@link canonicalStringify}
- * and {@link unifySchemas} doors. Each container's members are read ONCE, at
- * the moment it is entered, and the ancestor set is restored on every exit
- * including the abandoning ones.
- *
- * @param value - The value to encode
- * @param ancestors - Objects on the active traversal path, guarding cycles
- * @returns The deterministic encoding, or `undefined` when JSON cannot encode
- *          `value`
- *
- * @example
- * ```ts
- * canonicalizeValue({ b: 1, a: 2 }, new WeakSet()) // '{"a":2,"b":1}'
- * canonicalizeValue(undefined, new WeakSet())      // undefined
- * ```
- */
-export function canonicalizeValue(value: unknown, ancestors: WeakSet<object>): string | undefined {
-	return contain(() => {
-		return readValue(() => {
-			if (!isObject(value) || (!isArray(value) && !matchesRecordBrand(value))) {
-				return encodeLeaf(value)
-			}
-			const encodings = new INTRINSICS.weakMap<object, string>()
-			const admitted: object[] = []
-			const stack: Array<
-				| { readonly operation: 'enter'; readonly value: object }
-				| {
-						readonly operation: 'exit'
-						readonly value: object
-						readonly members: readonly unknown[]
-						readonly keys: readonly string[] | undefined
-				  }
-			> = [{ operation: 'enter', value }]
-			try {
-				while (stack.length > 0) {
-					const frame = stack.pop()
-					if (frame === undefined) return undefined
-					if (frame.operation === 'exit') {
-						// Indexed and concatenated, not iterated and joined: this string IS
-						// the canonical identity every schema de-duplication and every `enum`
-						// ordering is keyed by, and both `Array.prototype[Symbol.iterator]`
-						// and `Array.prototype.join` are caller-writable members on it.
-						let encoded = ''
-						for (let index = 0; index < frame.members.length; index += 1) {
-							const member = frame.members[index]
-							const part = isObject(member)
-								? (INTRINSICS.apply(INTRINSICS.recall, encodings, [member]) ?? encodeLeaf(member))
-								: encodeLeaf(member)
-							if (part === undefined) return undefined
-							const key = frame.keys?.[index]
-							const text = key === undefined ? part : `${INTRINSICS.stringify(key)}:${part}`
-							encoded += index === 0 ? text : `,${text}`
-						}
-						const text = frame.keys === undefined ? `[${encoded}]` : `{${encoded}}`
-						INTRINSICS.apply(INTRINSICS.retain, encodings, [frame.value, text])
-						omitVisited(ancestors, frame.value)
-						continue
-					}
-
-					const container = frame.value
-					if (matchesVisited(ancestors, container)) return undefined
-					if (INTRINSICS.apply(INTRINSICS.recall, encodings, [container]) !== undefined) continue
-					const members: unknown[] = []
-					const selected: string[] = []
-					let keys: readonly string[] | undefined
-					if (isArray(container)) {
-						const snapshot = readArrayEntries(container)
-						if (!snapshot.success) throw snapshot.error
-						if (!snapshot.value.dense) return undefined
-						// Indexed, not `appendEntries`: a PRESENT `undefined` element is a
-						// value JSON cannot encode and must abandon the whole encoding, and
-						// the shared appender skips `undefined` by design.
-						const entries = snapshot.value.entries
-						for (let index = 0; index < entries.length; index += 1) {
-							members[members.length] = entries[index]
-						}
-					} else {
-						const names = sortValues(INTRINSICS.keys(container))
-						for (let index = 0; index < names.length; index += 1) {
-							const key = names[index]
-							if (key === undefined) continue
-							selected[selected.length] = key
-							members[members.length] = INTRINSICS.read(container, key)
-						}
-						keys = selected
-					}
-					admitVisited(ancestors, container)
-					admitted[admitted.length] = container
-					stack[stack.length] = { operation: 'exit', value: container, members, keys }
-					for (let index = members.length - 1; index >= 0; index -= 1) {
-						const member = members[index]
-						if (isObject(member) && (isArray(member) || matchesRecordBrand(member))) {
-							stack[stack.length] = { operation: 'enter', value: member }
-						}
-					}
-				}
-				return INTRINSICS.apply(INTRINSICS.recall, encodings, [value])
-			} finally {
-				// An abandoning return leaves entered containers on the caller's
-				// ancestor set, and that set outlives this call when a direct caller
-				// brought it.
-				for (let index = 0; index < admitted.length; index += 1) {
-					const entered = admitted[index]
-					if (entered !== undefined) omitVisited(ancestors, entered)
-				}
-			}
-		}, 'canonicalizeValue')
-	}, 'canonicalizeValue')
-}
-
-/**
  * Encode one non-container value the way JSON encodes it, or `undefined` when
  * JSON cannot encode it at all.
  *
  * @remarks
- * The leaf half of {@link canonicalizeValue}: `JSON.stringify` returns
+ * The leaf half of {@link canonicalStringify}: `JSON.stringify` returns
  * `undefined` (never a string) for `undefined`, a function, and a symbol —
  * exactly the values with no JSON encoding — and THROWS on a bigint, which is
  * refused before the call rather than through it. A `Date` and any other
@@ -1863,7 +1729,7 @@ export function encodeLeaf(value: unknown): string | undefined {
  *   none of them), at the top level or anywhere inside a container;
  * - a bigint (`JSON.stringify` throws on one);
  * - cyclic input, tracked with the same ancestor-{@link WeakSet} discipline
- *   {@link inferArray} / {@link inferObject} use, so a shared (non-cyclic)
+ *   the container branches of value inference use, so a shared (non-cyclic)
  *   reference reached twice through different paths still encodes;
  * A hostile traversal is categorically different: a throwing own-getter,
  * hostile `ownKeys` trap, or revoked `Proxy` throws a `structure`
@@ -1892,14 +1758,93 @@ export function encodeLeaf(value: unknown): string | undefined {
  */
 export function canonicalStringify(value: unknown): string | undefined {
 	return contain(() => {
-		return readValue(() => canonicalizeValue(value, new INTRINSICS.weakSet()), 'canonicalStringify')
+		return readValue(() => {
+			if (!isObject(value) || (!isArray(value) && !matchesRecordBrand(value))) {
+				return encodeLeaf(value)
+			}
+			const ancestors = new INTRINSICS.weakSet<object>()
+			const encodings = new INTRINSICS.weakMap<object, string>()
+			const stack: Array<
+				| { readonly operation: 'enter'; readonly value: object }
+				| {
+						readonly operation: 'exit'
+						readonly value: object
+						readonly members: readonly unknown[]
+						readonly keys: readonly string[] | undefined
+				  }
+			> = [{ operation: 'enter', value }]
+			while (stack.length > 0) {
+				const frame = stack.pop()
+				if (frame === undefined) return undefined
+				if (frame.operation === 'exit') {
+					// Indexed and concatenated, not iterated and joined: this string IS
+					// the canonical identity every schema de-duplication and every `enum`
+					// ordering is keyed by, and both `Array.prototype[Symbol.iterator]`
+					// and `Array.prototype.join` are caller-writable members on it.
+					let encoded = ''
+					for (let index = 0; index < frame.members.length; index += 1) {
+						const member = frame.members[index]
+						const part = isObject(member)
+							? (INTRINSICS.reflect.apply(INTRINSICS.recall, encodings, [member]) ??
+								encodeLeaf(member))
+							: encodeLeaf(member)
+						if (part === undefined) return undefined
+						const key = frame.keys?.[index]
+						const text = key === undefined ? part : `${INTRINSICS.stringify(key)}:${part}`
+						encoded += index === 0 ? text : `,${text}`
+					}
+					const text = frame.keys === undefined ? `[${encoded}]` : `{${encoded}}`
+					INTRINSICS.reflect.apply(INTRINSICS.retain, encodings, [frame.value, text])
+					omitVisited(ancestors, frame.value)
+					continue
+				}
+
+				const container = frame.value
+				if (matchesVisited(ancestors, container)) return undefined
+				if (INTRINSICS.reflect.apply(INTRINSICS.recall, encodings, [container]) !== undefined)
+					continue
+				const members: unknown[] = []
+				const selected: string[] = []
+				let keys: readonly string[] | undefined
+				if (isArray(container)) {
+					const snapshot = readArrayEntries(container)
+					if (!snapshot.success) throw snapshot.error
+					if (!snapshot.value.dense) return undefined
+					// Indexed, not `appendEntries`: a PRESENT `undefined` element is a
+					// value JSON cannot encode and must abandon the whole encoding, and
+					// the shared appender skips `undefined` by design.
+					const entries = snapshot.value.entries
+					for (let index = 0; index < entries.length; index += 1) {
+						members[members.length] = entries[index]
+					}
+				} else {
+					const names = sortValues(INTRINSICS.keys(container))
+					for (let index = 0; index < names.length; index += 1) {
+						const key = names[index]
+						if (key === undefined) continue
+						selected[selected.length] = key
+						members[members.length] = INTRINSICS.reflect.read(container, key)
+					}
+					keys = selected
+				}
+				admitVisited(ancestors, container)
+				stack[stack.length] = { operation: 'exit', value: container, members, keys }
+				for (let index = members.length - 1; index >= 0; index -= 1) {
+					const member = members[index]
+					if (isObject(member) && (isArray(member) || matchesRecordBrand(member))) {
+						stack[stack.length] = { operation: 'enter', value: member }
+					}
+				}
+			}
+			return INTRINSICS.reflect.apply(INTRINSICS.recall, encodings, [value])
+		}, 'canonicalStringify')
 	}, 'canonicalStringify')
 }
 
 // === Format classification
 
 /**
- * Determine whether a supported ISO-8601 date or date-time is valid.
+ * Checks whether a supported ISO-8601 date or date-time names a real instant.
  *
  * @remarks
  * Accepts exactly `YYYY-MM-DD`, or `YYYY-MM-DDTHH:MM:SS` with optional
@@ -1910,21 +1855,21 @@ export function canonicalStringify(value: unknown): string | undefined {
  * and prefixed `time` validation.
  *
  * @param value - The candidate ISO-8601 string
- * @returns `true` when `value` parses to a real instant
+ * @returns True if `value` parses to a real instant; false otherwise
  *
  * @example
  * ```ts
- * isValidISOInstant('2024-02-29')          // true
- * isValidISOInstant('2024-01-01T24:00Z')   // false — incomplete normalized clock
+ * matchesISOInstant('2024-02-29')          // true
+ * matchesISOInstant('2024-01-01T24:00Z')   // false — incomplete normalized clock
  * ```
  */
-export function isValidISOInstant(value: string): boolean {
+export function matchesISOInstant(value: string): boolean {
 	const outcome = attempt(() => {
 		// The CAPTURED `exec`, not the live member: `RegExp.prototype.test` is
 		// spec-defined in terms of `RegExpExec`, so both spellings of a pattern
 		// question answer whatever the caller most recently installed, and a decoy
 		// match published a `format` for a string that never had one.
-		const match = INTRINSICS.apply(
+		const match = INTRINSICS.reflect.apply(
 			INTRINSICS.captures,
 			/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$/,
 			[value],
@@ -1957,7 +1902,7 @@ export function isValidISOInstant(value: string): boolean {
 			}
 		}
 		const date = new INTRINSICS.date(value)
-		return !INTRINSICS.nan(INTRINSICS.apply(INTRINSICS.instant, date, []))
+		return !INTRINSICS.nan(INTRINSICS.reflect.apply(INTRINSICS.instant, date, []))
 	})
 	return outcome.success && outcome.value
 }
@@ -1985,16 +1930,16 @@ export function classifyFormat(value: string): SchemaFormat | undefined {
 	if (matchesPattern(FORMAT_PATTERNS.uuid, value)) return 'uuid'
 	if (
 		matchesPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/, value) &&
-		isValidISOInstant(value)
+		matchesISOInstant(value)
 	) {
 		return 'date-time'
 	}
-	if (matchesPattern(/^\d{4}-\d{2}-\d{2}$/, value) && isValidISOInstant(value)) {
+	if (matchesPattern(/^\d{4}-\d{2}-\d{2}$/, value) && matchesISOInstant(value)) {
 		return 'date'
 	}
 	if (
 		matchesPattern(/^\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/, value) &&
-		isValidISOInstant(`1970-01-01T${value}`)
+		matchesISOInstant(`1970-01-01T${value}`)
 	) {
 		return 'time'
 	}
@@ -2075,14 +2020,14 @@ export function deriveRangeBounds(min: unknown, max: unknown): BoundsRead {
 // === Inference option sanitization
 
 /**
- * Sanitize a user-supplied inference budget (`maxDepth` / `maxProperties`) to
+ * Sanitizes a user-supplied inference budget (`limits.depth` / `limits.properties`) to
  * a finite non-negative integer, selecting a valid fallback for anything else.
  *
  * @remarks
  * Guards {@link valueToSchema} / {@link samplesToSchema} against a hostile or
  * malformed budget: an unclamped `NaN` defeats every `depth <= 0` guard
  * (`NaN <= 0` is `false`, so recursion never halts), and a negative
- * `maxProperties` makes `slice(0, -1)` silently drop the LAST sorted key
+ * `limits.properties` makes `slice(0, -1)` silently drop the LAST sorted key
  * instead of capping the list (a fractional value has a similarly undefined
  * `slice` bound). `Infinity` is rejected too — `Number.isInteger(Infinity)`
  * is `false` — since an unbounded budget is exactly the adversarial case the
@@ -2131,7 +2076,7 @@ export function sanitizeBudget(value: number | undefined, fallback: number): num
  * entries actually present.
  *
  * So {@link INFER_DEPTH_LIMIT} is the ceiling as well as the default, and
- * `maxDepth` narrows the walk rather than widening it. One bound, and the same
+ * `limits.depth` narrows the walk rather than widening it. One bound, and the same
  * answer on every host.
  *
  * @param value - The candidate depth budget
@@ -2218,7 +2163,7 @@ export function preview(value: unknown): string {
 }
 
 /**
- * Build the refinement faults a string value has against a {@link StringShape}.
+ * Builds the refinement faults a string value has against a {@link StringShape}.
  *
  * @remarks
  * The single source of the string refinement report, shared by
@@ -2252,11 +2197,11 @@ export function preview(value: unknown): string {
  *
  * @example
  * ```ts
- * createStringFaults({ type: 'string', min: 3 }, 'ab', [])
+ * buildStringFaults({ type: 'string', min: 3 }, 'ab', [])
  * // [{ reason: 'constraint', path: [], expected: 'string', constraint: 'min', limit: 3, received: '"ab"' }]
  * ```
  */
-export function createStringFaults(
+export function buildStringFaults(
 	shape: StringShape,
 	value: string,
 	path: readonly string[],
@@ -2297,21 +2242,21 @@ export function createStringFaults(
 			}
 			return faults
 		},
-		'createStringFaults',
+		'buildStringFaults',
 		{ subject: 'shape' },
 	)
 }
 
 /**
- * Build the refinement faults a number value has against a {@link NumberShape}.
+ * Builds the refinement faults a number value has against a {@link NumberShape}.
  *
  * @remarks
- * The numeric sibling of {@link createStringFaults}, shared by the same two
+ * The numeric sibling of {@link buildStringFaults}, shared by the same two
  * doors for the same reason. `expected` is the shape's own kind — `'integer'`
  * when `integer: true`, otherwise `'number'` — so a caller reading the report
  * sees the declaration's vocabulary rather than the value's. Order is
  * `integer`, then `min`, then `max`. It refuses an unreadable shape through the
- * same boundary and for the same reason {@link createStringFaults} does.
+ * same boundary and for the same reason {@link buildStringFaults} does.
  *
  * @param shape - The number shape whose refinements are checked
  * @param value - The already-obtained number to check
@@ -2321,11 +2266,11 @@ export function createStringFaults(
  *
  * @example
  * ```ts
- * createNumberFaults({ type: 'number', integer: true }, 1.5, [])
+ * buildNumberFaults({ type: 'number', integer: true }, 1.5, [])
  * // [{ reason: 'constraint', path: [], expected: 'integer', constraint: 'integer', received: '1.5' }]
  * ```
  */
-export function createNumberFaults(
+export function buildNumberFaults(
 	shape: NumberShape,
 	value: number,
 	path: readonly string[],
@@ -2365,13 +2310,13 @@ export function createNumberFaults(
 			}
 			return faults
 		},
-		'createNumberFaults',
+		'buildNumberFaults',
 		{ subject: 'shape' },
 	)
 }
 
 /**
- * Build the length faults an array has against an {@link ArrayShape}.
+ * Builds the length faults an array has against an {@link ArrayShape}.
  *
  * @remarks
  * Takes the LENGTH rather than the array, because both doors have already read
@@ -2380,7 +2325,7 @@ export function createNumberFaults(
  * that count rendered through the captured `String`, matching the other length
  * diagnostics in the package. Order is `min`, then `max`. It refuses an
  * unreadable shape through the same boundary and for the same reason
- * {@link createStringFaults} does.
+ * {@link buildStringFaults} does.
  *
  * @param shape - The array shape whose bounds are checked
  * @param length - The entry count the door already observed
@@ -2390,11 +2335,11 @@ export function createNumberFaults(
  *
  * @example
  * ```ts
- * createArrayFaults({ type: 'array', items: { type: 'string' }, min: 2 }, 1, [])
+ * buildArrayFaults({ type: 'array', items: { type: 'string' }, min: 2 }, 1, [])
  * // [{ reason: 'constraint', path: [], expected: 'array', constraint: 'min', limit: 2, received: '1' }]
  * ```
  */
-export function createArrayFaults(
+export function buildArrayFaults(
 	shape: ArrayShape,
 	length: number,
 	path: readonly string[],
@@ -2424,7 +2369,7 @@ export function createArrayFaults(
 			}
 			return faults
 		},
-		'createArrayFaults',
+		'buildArrayFaults',
 		{ subject: 'shape' },
 	)
 }
@@ -2539,16 +2484,17 @@ export function shapeToKind(shape: ContractShape): FaultKind {
  * @remarks
  * The compilers' emitted-node bound, written once because two boundaries apply
  * it over a {@link ShapeValidatorInterface.expansion} count: the eager
- * {@link validateShapeDepth} function and the lazy {@link ContractCompiler}
- * preparation. The refusal keeps `validateShapeDepth`'s name because that gate
+ * {@link validateShape} function and the lazy {@link ContractCompiler}
+ * preparation. The refusal keeps `validateShape`'s name because that gate
  * OWNS the rule and its exact diagnostic is public API — the same reason
  * `ShapeCloner` publishes the gate's depth wording rather than inventing a
  * second vocabulary for one rule. Two constructions of one refusal are two
  * messages waiting to drift apart.
  *
- * @param expansion - The node count one successful validation measured
+ * @param expansion - The node count one successful validation measured, or
+ *                    `undefined` when no pass measured one
  * @returns Nothing when the count is within the limit
- * @throws {ContractError} When the count exceeds {@link COMPILE_NODE_LIMIT}
+ * @throws {ContractError} When the count exceeds {@link COMPILE_NODE_LIMIT}, or when no successful pass measured one
  *
  * @example
  * ```ts
@@ -2557,9 +2503,19 @@ export function shapeToKind(shape: ContractShape): FaultKind {
  * refuseExpansion(validator.expansion)
  * ```
  */
-export function refuseExpansion(expansion: number): void {
+export function refuseExpansion(expansion: number | undefined): void {
+	// An absent measurement is not a small one. Both boundaries call this
+	// immediately after a successful pass, so `undefined` here means the pass that
+	// was supposed to measure the graph did not — and letting that through would
+	// publish the compilers' node bound as satisfied by a count nobody took.
+	if (expansion === undefined) {
+		throw new ContractError('validateShape: a validated shape measured no expansion', {
+			code: 'structure',
+			context: { path: [] },
+		})
+	}
 	if (expansion <= COMPILE_NODE_LIMIT) return
-	throw new ContractError('validateShapeDepth: a shape expands past the compilation node limit', {
+	throw new ContractError('validateShape: a shape expands past the compilation node limit', {
 		code: 'expansion',
 		context: {
 			path: [],

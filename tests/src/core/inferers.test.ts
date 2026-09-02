@@ -2,24 +2,18 @@ import type { JSONSchema } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
 	attempt,
-	buildSampleMemo,
-	canonicalizeValue,
 	canonicalStringify,
 	classifyFormat,
 	compileSchema,
 	compileGuard,
 	encodeLeaf,
-	inferArray,
-	inferObject,
 	inferPrimitiveEnum,
-	inferRecordSamples,
-	inferSamples,
 	integerShape,
 	INFER_BREADTH_LIMIT,
 	INFER_DEPTH_LIMIT,
 	INFER_ENUM_LIMIT,
 	isContractError,
-	isValidISOInstant,
+	matchesISOInstant,
 	literalShape,
 	objectShape,
 	samplesToFormat,
@@ -315,7 +309,7 @@ describe('valueToSchema — depth and breadth caps', () => {
 			const next: Record<string, unknown> = { child: current }
 			current = next
 		}
-		const shallow = valueToSchema(current, { maxDepth: 1 })
+		const shallow = valueToSchema(current, { limits: { depth: 1 } })
 		expect(shallow).toEqual({
 			type: 'object',
 			properties: { child: {} },
@@ -324,15 +318,15 @@ describe('valueToSchema — depth and breadth caps', () => {
 		})
 	})
 
-	it('caps sampled object properties at maxProperties', () => {
+	it('caps sampled object properties at the properties limit', () => {
 		const wide: Record<string, unknown> = { a: 1, b: 2, c: 3, d: 4 }
-		const capped = valueToSchema(wide, { maxProperties: 2 })
+		const capped = valueToSchema(wide, { limits: { properties: 2 } })
 		expect(Object.keys(capped.properties ?? {})).toHaveLength(2)
 		expect(Object.keys(capped.properties ?? {})).toEqual(['a', 'b'])
 	})
 
-	it('caps sampled array elements at maxProperties', () => {
-		const wide = valueToSchema([1, 'x', true, 3.5], { maxProperties: 2 })
+	it('caps sampled array elements at the properties limit', () => {
+		const wide = valueToSchema([1, 'x', true, 3.5], { limits: { properties: 2 } })
 		// Only the first 2 elements (1, 'x') are sampled → integer + string.
 		expect(wide.items?.anyOf).toHaveLength(2)
 	})
@@ -797,7 +791,7 @@ describe('samplesToSchema — hostile input with enum/format on', () => {
 	})
 })
 
-describe('inferArray — hostile own-getter / Proxy-over-array refusal (C1)', () => {
+describe('array inference — hostile own-getter / Proxy-over-array refusal (C1)', () => {
 	it('refuses when a throwing own-getter sits at array index 0', () => {
 		const hostile: unknown[] = [1, 2, 3]
 		Object.defineProperty(hostile, 0, {
@@ -912,28 +906,28 @@ describe('valueToSchema / samplesToSchema — option sanitization (C2)', () => {
 	})
 
 	it.each([Number.NaN, Number.POSITIVE_INFINITY, 1e9, -1, 2.5])(
-		'never hangs or throws for a hostile maxDepth of %s',
-		(maxDepth) => {
+		'never hangs or throws for a hostile depth limit of %s',
+		(depth) => {
 			let current: unknown = 'leaf'
 			for (let level = 0; level < 500; level += 1) current = { child: current }
-			expect(() => valueToSchema(current, { maxDepth })).not.toThrow()
+			expect(() => valueToSchema(current, { limits: { depth } })).not.toThrow()
 		},
 	)
 
 	it.each([Number.NaN, -1, -5])(
-		'keeps properties/required in sync under a hostile maxProperties of %s (no dropped-required leak)',
-		(maxProperties) => {
+		'keeps properties/required in sync under a hostile properties limit of %s (no dropped-required leak)',
+		(properties) => {
 			const wide: Record<string, unknown> = { a: 1, b: 2, c: 3, d: 4, e: 5 }
-			const schema = valueToSchema(wide, { maxProperties })
+			const schema = valueToSchema(wide, { limits: { properties } })
 			expect(Object.keys(schema.properties ?? {}).sort()).toEqual(
 				[...(schema.required ?? [])].sort(),
 			)
 		},
 	)
 
-	it('a negative maxProperties never drops the last sorted key (sanitized back to the default budget)', () => {
+	it('a negative properties limit never drops the last sorted key (sanitized back to the default budget)', () => {
 		const wide: Record<string, unknown> = { a: 1, b: 2, c: 3, d: 4, e: 5 }
-		const schema = valueToSchema(wide, { maxProperties: -5 })
+		const schema = valueToSchema(wide, { limits: { properties: -5 } })
 		// -5 sanitizes to INFER_BREADTH_LIMIT (no truncation for 5 keys), so
 		// every key survives and the schema stays closed — the pre-fix bug was
 		// slice(0, -5) silently dropping the last sorted keys.
@@ -942,15 +936,15 @@ describe('valueToSchema / samplesToSchema — option sanitization (C2)', () => {
 	})
 
 	it('falls back to INFER_DEPTH_LIMIT / INFER_BREADTH_LIMIT for a hostile budget (sanitizeBudget)', () => {
-		const shallow = valueToSchema({ a: { b: { c: 1 } } }, { maxDepth: Number.NaN })
+		const shallow = valueToSchema({ a: { b: { c: 1 } } }, { limits: { depth: Number.NaN } })
 		const withDefault = valueToSchema({ a: { b: { c: 1 } } })
 		expect(shallow).toEqual(withDefault)
 	})
 })
 
 describe('valueToSchema — truncation opens the schema (C3)', () => {
-	it('does not close additionalProperties when maxProperties truncates the key list', () => {
-		const schema = valueToSchema({ a: 1, b: 2, c: 3, d: 4 }, { maxProperties: 2 })
+	it('does not close additionalProperties when the properties limit truncates the key list', () => {
+		const schema = valueToSchema({ a: 1, b: 2, c: 3, d: 4 }, { limits: { properties: 2 } })
 		expect(schema.additionalProperties).not.toBe(false)
 		expect(schema.additionalProperties).toBe(true)
 		const properties = Object.keys(schema.properties ?? {})
@@ -960,14 +954,14 @@ describe('valueToSchema — truncation opens the schema (C3)', () => {
 	})
 
 	it('keeps additionalProperties: false when the object is NOT truncated', () => {
-		const schema = valueToSchema({ a: 1, b: 2 }, { maxProperties: 2 })
+		const schema = valueToSchema({ a: 1, b: 2 }, { limits: { properties: 2 } })
 		expect(schema.additionalProperties).toBe(false)
 	})
 })
 
 describe('samplesToSchema — truncation opens the schema for record samples (C3)', () => {
 	it('does not close additionalProperties when the sample key union is truncated', () => {
-		const schema = samplesToSchema([{ a: 1, b: 2, c: 3, d: 4 }], { maxProperties: 2 })
+		const schema = samplesToSchema([{ a: 1, b: 2, c: 3, d: 4 }], { limits: { properties: 2 } })
 		expect(schema.additionalProperties).not.toBe(false)
 		expect(schema.additionalProperties).toBe(true)
 		const properties = Object.keys(schema.properties ?? {})
@@ -977,7 +971,7 @@ describe('samplesToSchema — truncation opens the schema for record samples (C3
 	})
 
 	it('keeps additionalProperties: false when the sample key union is NOT truncated', () => {
-		const schema = samplesToSchema([{ a: 1 }, { b: 2 }], { maxProperties: 2 })
+		const schema = samplesToSchema([{ a: 1 }, { b: 2 }], { limits: { properties: 2 } })
 		expect(schema.additionalProperties).toBe(false)
 	})
 })
@@ -1111,7 +1105,7 @@ describe('unifySchemas — direct', () => {
 	})
 })
 
-describe('encodeLeaf — the leaf half of canonicalizeValue', () => {
+describe('encodeLeaf — the leaf half of canonicalStringify', () => {
 	it('answers JSON’s own encoding for a leaf and undefined where JSON has none', () => {
 		// Shipped public with no test of its own. The contract is JSON's, not this
 		// package's: whatever `JSON.stringify` returns for a non-container.
@@ -1226,24 +1220,16 @@ describe('canonicalStringify — encoding and read refusal', () => {
 	})
 })
 
-describe('canonicalizeValue — direct', () => {
-	it('contains failed record classification at the direct and public reader boundaries', () => {
+describe('canonicalStringify — the walk at its door', () => {
+	it('contains failed record classification at the door boundary', () => {
 		const sentinel = new Error('prototype read')
-
-		const direct = captureContractError(() =>
-			canonicalizeValue(createThrowingPrototype(sentinel), new WeakSet()),
-		)
-		expect(direct.code).toBe('structure')
-		expect(direct.message).toBe('canonicalizeValue: value could not be read')
-		expect(direct.cause).toBe(sentinel)
 
 		const outer = captureContractError(() => canonicalStringify(createThrowingPrototype(sentinel)))
 		expect(outer.code).toBe('structure')
 		expect(outer.message).toBe('canonicalStringify: value could not be read')
-		expect(isContractError(outer.cause)).toBe(true)
-		if (!isContractError(outer.cause)) throw new Error('expected the contained canonicalize error')
-		expect(outer.cause.message).toBe('canonicalizeValue: value could not be read')
-		expect(outer.cause.cause).toBe(sentinel)
+		// The walk is interned, so the door's own name is the only one published and
+		// the caller reaches the host failure through one `cause` rather than two.
+		expect(outer.cause).toBe(sentinel)
 	})
 
 	it('sorts readable record realms but leaves readable exotics on native JSON fallback', () => {
@@ -1255,43 +1241,47 @@ describe('canonicalizeValue — direct', () => {
 			readonly a = 2
 		}
 
-		expect(canonicalizeValue(realmRecord, new WeakSet())).toBe('{"a":2,"b":1}')
-		expect(canonicalizeValue(new Exotic(), new WeakSet())).toBe('{"b":1,"a":2}')
+		expect(canonicalStringify(realmRecord)).toBe('{"a":2,"b":1}')
+		expect(canonicalStringify(new Exotic())).toBe('{"b":1,"a":2}')
 		// A class whose prototype a caller reparented to `null` is an exotic too:
 		// the shared record brand refuses it, so it keeps declaration order
 		// instead of being canonicalized as a plain record.
-		expect(canonicalizeValue(new NullBaseDeclaration(), new WeakSet())).toBe(
-			'{"type":"string","min":1}',
-		)
-		expect(canonicalizeValue(new Map([['b', 1]]), new WeakSet())).toBe('{}')
+		expect(canonicalStringify(new NullBaseDeclaration())).toBe('{"type":"string","min":1}')
+		expect(canonicalStringify(new Map([['b', 1]]))).toBe('{}')
 	})
 
-	it('refuses hostile traversal at the direct recursive export', () => {
-		const error = captureContractError(() => canonicalizeValue(createHostileKeys(), new WeakSet()))
+	it('refuses hostile traversal', () => {
+		const error = captureContractError(() => canonicalStringify(createHostileKeys()))
 
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('canonicalizeValue: value could not be read')
+		expect(error.message).toBe('canonicalStringify: value could not be read')
 	})
 
 	it('sorts record keys, preserves array order, and encodes leaves as JSON', () => {
-		expect(canonicalizeValue({ b: 1, a: [3, 1] }, new WeakSet())).toBe('{"a":[3,1],"b":1}')
-		expect(canonicalizeValue(-0, new WeakSet())).toBe('0')
-		expect(canonicalizeValue(Number.NaN, new WeakSet())).toBe('null')
+		expect(canonicalStringify({ b: 1, a: [3, 1] })).toBe('{"a":[3,1],"b":1}')
+		expect(canonicalStringify(-0)).toBe('0')
+		expect(canonicalStringify(Number.NaN)).toBe('null')
 	})
 
 	it('reports an un-encodable value as undefined without throwing', () => {
-		expect(canonicalizeValue(undefined, new WeakSet())).toBeUndefined()
-		expect(canonicalizeValue(buildSparseArray(), new WeakSet())).toBeUndefined()
+		expect(canonicalStringify(undefined)).toBeUndefined()
+		expect(canonicalStringify(buildSparseArray())).toBeUndefined()
 	})
 
-	it('treats only the ACTIVE traversal path as a cycle, per the caller-owned ancestor set', () => {
+	it('treats only the ACTIVE traversal path as a cycle, so a repeated alias still encodes', () => {
+		// The ancestor set is walk-owned now, so a caller cannot seed it. What it
+		// guards is unchanged: the set unwinds after each subtree, so one node
+		// reached twice through two noncyclic paths encodes both times, while a
+		// back-edge to a node on the ACTIVE path abandons the whole encoding.
 		const node = { a: 1 }
-		const ancestors = new WeakSet<object>()
-		expect(canonicalizeValue(node, ancestors)).toBe('{"a":1}')
-		// The set unwinds after each subtree, so the same node encodes again.
-		expect(canonicalizeValue(node, ancestors)).toBe('{"a":1}')
-		ancestors.add(node)
-		expect(canonicalizeValue(node, ancestors)).toBeUndefined()
+		expect(canonicalStringify(node)).toBe('{"a":1}')
+		expect(canonicalStringify({ first: node, second: node })).toBe(
+			'{"first":{"a":1},"second":{"a":1}}',
+		)
+
+		const cyclic: Record<string, unknown> = { a: 1 }
+		cyclic.self = cyclic
+		expect(canonicalStringify(cyclic)).toBeUndefined()
 	})
 })
 
@@ -1349,63 +1339,63 @@ describe('unifySchemas / inferPrimitiveEnum — un-canonicalizable members', () 
 	})
 })
 
-describe('isValidISOInstant — direct', () => {
+describe('matchesISOInstant — direct', () => {
 	it('returns true for a valid date string', () => {
-		expect(isValidISOInstant('2024-01-15')).toBe(true)
+		expect(matchesISOInstant('2024-01-15')).toBe(true)
 	})
 
 	it('returns false for an impossible date', () => {
-		expect(isValidISOInstant('2020-13-45')).toBe(false)
+		expect(matchesISOInstant('2020-13-45')).toBe(false)
 	})
 
 	it('accepts real leap dates and rejects normalized calendar overflow', () => {
-		expect(isValidISOInstant('2024-02-29')).toBe(true)
-		expect(isValidISOInstant('2000-02-29')).toBe(true)
-		expect(isValidISOInstant('2023-02-29')).toBe(false)
-		expect(isValidISOInstant('1900-02-29')).toBe(false)
-		expect(isValidISOInstant('2024-04-31')).toBe(false)
-		expect(isValidISOInstant('2024-02-30')).toBe(false)
-		expect(isValidISOInstant('2024-02-30T00:00:00Z')).toBe(false)
+		expect(matchesISOInstant('2024-02-29')).toBe(true)
+		expect(matchesISOInstant('2000-02-29')).toBe(true)
+		expect(matchesISOInstant('2023-02-29')).toBe(false)
+		expect(matchesISOInstant('1900-02-29')).toBe(false)
+		expect(matchesISOInstant('2024-04-31')).toBe(false)
+		expect(matchesISOInstant('2024-02-30')).toBe(false)
+		expect(matchesISOInstant('2024-02-30T00:00:00Z')).toBe(false)
 	})
 
 	it('rejects normalized hour 24 while retaining the valid clock boundary', () => {
-		expect(isValidISOInstant('2024-01-15T23:59:59Z')).toBe(true)
-		expect(isValidISOInstant('2024-01-15T24:00:00Z')).toBe(false)
+		expect(matchesISOInstant('2024-01-15T23:59:59Z')).toBe(true)
+		expect(matchesISOInstant('2024-01-15T24:00:00Z')).toBe(false)
 	})
 
 	it('accepts the complete date and offset date-time grammar', () => {
-		expect(isValidISOInstant('2024-01-15')).toBe(true)
-		expect(isValidISOInstant('2024-01-15T23:59:59Z')).toBe(true)
-		expect(isValidISOInstant('2024-01-15T23:59:59.123Z')).toBe(true)
-		expect(isValidISOInstant('2024-01-15T23:59:59+23:59')).toBe(true)
-		expect(isValidISOInstant('2024-01-15T23:59:59-23:59')).toBe(true)
+		expect(matchesISOInstant('2024-01-15')).toBe(true)
+		expect(matchesISOInstant('2024-01-15T23:59:59Z')).toBe(true)
+		expect(matchesISOInstant('2024-01-15T23:59:59.123Z')).toBe(true)
+		expect(matchesISOInstant('2024-01-15T23:59:59+23:59')).toBe(true)
+		expect(matchesISOInstant('2024-01-15T23:59:59-23:59')).toBe(true)
 	})
 
 	it('rejects incomplete clocks instead of validating only the date prefix', () => {
-		expect(isValidISOInstant('2024-01-15T24:00Z')).toBe(false)
-		expect(isValidISOInstant('2024-01-15T23:59Z')).toBe(false)
+		expect(matchesISOInstant('2024-01-15T24:00Z')).toBe(false)
+		expect(matchesISOInstant('2024-01-15T23:59Z')).toBe(false)
 	})
 
 	it('rejects space and lowercase separators instead of validating only the date prefix', () => {
-		expect(isValidISOInstant('2024-01-15 24:00:00Z')).toBe(false)
-		expect(isValidISOInstant('2024-01-15t24:00:00z')).toBe(false)
+		expect(matchesISOInstant('2024-01-15 24:00:00Z')).toBe(false)
+		expect(matchesISOInstant('2024-01-15t24:00:00z')).toBe(false)
 	})
 
 	it('rejects a junk suffix instead of validating only the date prefix', () => {
-		expect(isValidISOInstant('2024-01-15junk')).toBe(false)
-		expect(isValidISOInstant('2024-01-15T00:00:00Zjunk')).toBe(false)
+		expect(matchesISOInstant('2024-01-15junk')).toBe(false)
+		expect(matchesISOInstant('2024-01-15T00:00:00Zjunk')).toBe(false)
 	})
 
 	it('rejects complete clock and offset boundaries outside the supported range', () => {
-		expect(isValidISOInstant('2024-01-15T24:00:00Z')).toBe(false)
-		expect(isValidISOInstant('2024-01-15T23:60:00Z')).toBe(false)
-		expect(isValidISOInstant('2024-01-15T23:59:60Z')).toBe(false)
-		expect(isValidISOInstant('2024-01-15T23:59:59+24:00')).toBe(false)
-		expect(isValidISOInstant('2024-01-15T23:59:59+23:60')).toBe(false)
+		expect(matchesISOInstant('2024-01-15T24:00:00Z')).toBe(false)
+		expect(matchesISOInstant('2024-01-15T23:60:00Z')).toBe(false)
+		expect(matchesISOInstant('2024-01-15T23:59:60Z')).toBe(false)
+		expect(matchesISOInstant('2024-01-15T23:59:59+24:00')).toBe(false)
+		expect(matchesISOInstant('2024-01-15T23:59:59+23:60')).toBe(false)
 	})
 
 	it('is total (never throws) for a hostile string', () => {
-		expect(() => isValidISOInstant(' '.repeat(1000))).not.toThrow()
+		expect(() => matchesISOInstant(' '.repeat(1000))).not.toThrow()
 	})
 })
 
@@ -1425,12 +1415,12 @@ describe('samplesToSchema — enum boundary and ordering', () => {
 })
 
 describe('samplesToSchema / valueToSchema — depth and property boundary coverage', () => {
-	it('returns {} for samplesToSchema with maxDepth: 0', () => {
-		expect(samplesToSchema([{ a: 1 }], { maxDepth: 0 })).toEqual({})
+	it('returns {} for samplesToSchema with a depth limit of 0', () => {
+		expect(samplesToSchema([{ a: 1 }], { limits: { depth: 0 } })).toEqual({})
 	})
 
-	it('returns an object schema with no properties for maxProperties: 0', () => {
-		const result = samplesToSchema([{ a: 1 }], { maxProperties: 0 })
+	it('returns an object schema with no properties for a properties limit of 0', () => {
+		const result = samplesToSchema([{ a: 1 }], { limits: { properties: 0 } })
 		expect(result).toEqual({ type: 'object', additionalProperties: true })
 	})
 
@@ -1439,21 +1429,21 @@ describe('samplesToSchema / valueToSchema — depth and property boundary covera
 		expect(result.additionalProperties).toBe(true)
 	})
 
-	it('returns {} for valueToSchema with maxDepth: 0 on an object root', () => {
-		expect(valueToSchema({ a: 1 }, { maxDepth: 0 })).toEqual({})
+	it('returns {} for valueToSchema with a depth limit of 0 on an object root', () => {
+		expect(valueToSchema({ a: 1 }, { limits: { depth: 0 } })).toEqual({})
 	})
 
-	it('returns {} for valueToSchema with maxDepth: 0 on an array root', () => {
-		expect(valueToSchema([1, 2], { maxDepth: 0 })).toEqual({})
+	it('returns {} for valueToSchema with a depth limit of 0 on an array root', () => {
+		expect(valueToSchema([1, 2], { limits: { depth: 0 } })).toEqual({})
 	})
 })
 
 describe('samplesToSchema — nested containers and mixed sample shapes', () => {
 	it('locks the actual behavior for a nested array-of-dates column: per-row arrays unify without a re-attached format', () => {
-		// Each row's `dates` array is itself a sample column value, inferred via
-		// inferSamples' non-record branch — which forces `format` OFF for each
-		// row's array (the multi-sample format-disabling seam applies one level
-		// down too, since the unified result is `{ type: 'array', ... }`, not
+		// Each row's `dates` array is itself a sample column value, taken through
+		// the walk's non-record branch — which forces `format` OFF for each row's
+		// array (the multi-sample format-disabling seam applies one level down too,
+		// since the unified result is `{ type: 'array', ... }`, not
 		// `{ type: 'string' }`, so samplesToFormat reattachment never triggers).
 		const result = samplesToSchema(
 			[{ dates: ['2024-01-01', '2024-02-02'] }, { dates: ['2024-03-03'] }],
@@ -1466,14 +1456,14 @@ describe('samplesToSchema — nested containers and mixed sample shapes', () => 
 	})
 
 	it('unifies arrays-of-records as samples independently per row (no per-key row merge)', () => {
-		// Top-level samples are arrays, not records, so inferSamples takes the
-		// non-record branch: each row's array is classified independently via
-		// inferValue and the results are unified with anyOf — unlike
-		// inferRecordSamples' per-key merge for record-shaped rows.
+		// Top-level samples are arrays, not records, so the walk takes the
+		// non-record branch: each row's array is classified independently as one
+		// value and the results are unified with anyOf — unlike the per-key merge
+		// record-shaped rows get.
 		const result = samplesToSchema([[{ a: 1 }], [{ a: 2, b: 'x' }]])
 		// The two rows infer distinct array schemas (different item shapes), so
 		// unifySchemas wraps them as a top-level anyOf rather than merging their
-		// item shapes the way inferRecordSamples merges record rows.
+		// item shapes the way the record branch merges record rows.
 		expect(result.anyOf).toBeDefined()
 		expect(result.anyOf).toHaveLength(2)
 		for (const member of result.anyOf ?? []) {
@@ -1557,7 +1547,7 @@ describe('valueToSchema — Date leaf at the depth boundary under format: true',
 	it('infers a Date leaf when it lands exactly at the last usable depth', () => {
 		const schema = valueToSchema(
 			{ createdAt: new Date('2024-01-01T00:00:00Z') },
-			{ maxDepth: 1, format: true },
+			{ limits: { depth: 1 }, format: true },
 		)
 		expect(schema.properties?.createdAt).toEqual({ type: 'string', format: 'date-time' })
 	})
@@ -1566,7 +1556,7 @@ describe('valueToSchema — Date leaf at the depth boundary under format: true',
 		const schema = valueToSchema(
 			{ nested: { createdAt: new Date() } },
 			{
-				maxDepth: 1,
+				limits: { depth: 1 },
 				format: true,
 			},
 		)
@@ -1581,18 +1571,10 @@ describe('samplesToFormat — single-sample unanimity', () => {
 })
 
 describe('caller-owned inference arrays', () => {
-	it('inferArray samples only a native-maximum sparse prefix without source index reads', () => {
+	it('samples only a native-maximum sparse prefix without source index reads', () => {
 		const fixture = createNativeMaximumSparseArray<unknown>()
-		const schema = inferArray(fixture.value, 8, 3, true, false, new WeakSet(), new WeakMap())
-		const fallback = inferArray(
-			fixture.value,
-			8,
-			Infinity,
-			true,
-			false,
-			new WeakSet(),
-			new WeakMap(),
-		)
+		const schema = valueToSchema(fixture.value, { limits: { depth: 8, properties: 3 } })
+		const fallback = valueToSchema(fixture.value, { limits: { depth: 8, properties: Infinity } })
 
 		// A non-dense source has no JSON expression, so it widens rather than being
 		// read as a list of present `undefined` leaves — and the walk still performs
@@ -1603,9 +1585,9 @@ describe('caller-owned inference arrays', () => {
 
 		const sparse = [1, undefined, 3]
 		Reflect.deleteProperty(sparse, '1')
-		expect(inferArray(sparse, 8, 3, true, false, new WeakSet(), new WeakMap())).toEqual({})
+		expect(valueToSchema(sparse, { limits: { depth: 8, properties: 3 } })).toEqual({})
 		// The dense control at the same door still samples and still unifies.
-		expect(inferArray([1, 'x'], 8, 3, true, false, new WeakSet(), new WeakMap())).toEqual({
+		expect(valueToSchema([1, 'x'], { limits: { depth: 8, properties: 3 } })).toEqual({
 			type: 'array',
 			items: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
 		})
@@ -1613,15 +1595,9 @@ describe('caller-owned inference arrays', () => {
 
 	it('normalizes an invalid fractional breadth through the shared fallback', () => {
 		const values = [1, 'value', true, null]
-		const expected = inferArray(
-			values,
-			INFER_DEPTH_LIMIT,
-			INFER_BREADTH_LIMIT,
-			true,
-			false,
-			new WeakSet(),
-			new WeakMap(),
-		)
+		const expected = valueToSchema(values, {
+			limits: { depth: INFER_DEPTH_LIMIT, properties: INFER_BREADTH_LIMIT },
+		})
 
 		// Anchored to a literal, not only to the canonical call's own answer: two
 		// calls agreeing on a degenerate `{}` would satisfy an equality alone, and
@@ -1634,7 +1610,7 @@ describe('caller-owned inference arrays', () => {
 			},
 		})
 		expect(
-			inferArray(values, INFER_DEPTH_LIMIT, 2.5, true, false, new WeakSet(), new WeakMap()),
+			valueToSchema(values, { limits: { depth: INFER_DEPTH_LIMIT, properties: 2.5 } }),
 		).toEqual(expected)
 	})
 
@@ -1651,21 +1627,15 @@ describe('caller-owned inference arrays', () => {
 				throw new Error('breadth exceeded')
 			},
 		})
-		const expected = inferArray(
-			values,
-			INFER_DEPTH_LIMIT,
-			INFER_BREADTH_LIMIT,
-			true,
-			false,
-			new WeakSet(),
-			new WeakMap(),
-		)
+		const expected = valueToSchema(values, {
+			limits: { depth: INFER_DEPTH_LIMIT, properties: INFER_BREADTH_LIMIT },
+		})
 
 		// The canonical budget stops one element short of the hostile child, so the
 		// answer is a real schema rather than an abandonment.
 		expect(expected).toEqual({ type: 'array', items: { type: 'integer' } })
 		expect(
-			inferArray(values, INFER_DEPTH_LIMIT, Infinity, true, false, new WeakSet(), new WeakMap()),
+			valueToSchema(values, { limits: { depth: INFER_DEPTH_LIMIT, properties: Infinity } }),
 		).toEqual(expected)
 	})
 
@@ -1677,27 +1647,19 @@ describe('caller-owned inference arrays', () => {
 		})
 		let values: readonly unknown[] = [hostile]
 		for (let level = 0; level < INFER_DEPTH_LIMIT; level += 1) values = [values]
-		const expected = inferArray(
-			values,
-			INFER_DEPTH_LIMIT,
-			1,
-			true,
-			false,
-			new WeakSet(),
-			new WeakMap(),
-		)
+		const expected = valueToSchema(values, {
+			limits: { depth: INFER_DEPTH_LIMIT, properties: 1 },
+		})
 
 		// The canonical budget produces a real nested schema rather than an
 		// abandonment, so the equality below is about the infinite budget being
 		// normalized and not about both calls giving up in the same way.
 		expect(expected).not.toEqual({})
 		expect(expected.type).toBe('array')
-		expect(inferArray(values, Infinity, 1, true, false, new WeakSet(), new WeakMap())).toEqual(
-			expected,
-		)
+		expect(valueToSchema(values, { limits: { depth: Infinity, properties: 1 } })).toEqual(expected)
 	})
 
-	it('inferArray refuses split membership', () => {
+	it('refuses an array whose membership is split between its own keys', () => {
 		const split = new Proxy([1, 2], {
 			ownKeys() {
 				return ['0', 'length']
@@ -1707,13 +1669,13 @@ describe('caller-owned inference arrays', () => {
 			},
 		})
 		const error = captureContractError(() =>
-			inferArray(split, 8, 8, true, false, new WeakSet(), new WeakMap()),
+			valueToSchema(split, { limits: { depth: 8, properties: 8 } }),
 		)
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('inferArray: value could not be read')
+		expect(error.message).toBe('valueToSchema: value could not be read')
 	})
 
-	it('inferArray refuses canonical indices outside advertised length', () => {
+	it("refuses canonical indices outside an array's advertised length", () => {
 		const shortened = new Proxy([1, 2], {
 			get(target, property, receiver) {
 				return property === 'length' ? 1 : Reflect.get(target, property, receiver)
@@ -1721,10 +1683,10 @@ describe('caller-owned inference arrays', () => {
 		})
 
 		const error = captureContractError(() =>
-			inferArray(shortened, 8, 8, true, false, new WeakSet(), new WeakMap()),
+			valueToSchema(shortened, { limits: { depth: 8, properties: 8 } }),
 		)
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('inferArray: value could not be read')
+		expect(error.message).toBe('valueToSchema: value could not be read')
 	})
 
 	it('unifySchemas ignores caller iteration and keeps every indexed schema', () => {
@@ -1759,14 +1721,14 @@ describe('caller-owned inference arrays', () => {
 		expect(inferPrimitiveEnum(values, INFER_ENUM_LIMIT)).toBeUndefined()
 	})
 
-	it('inferSamples keeps every indexed sample despite contradictory membership', () => {
+	it('keeps every indexed mixed sample despite contradictory membership', () => {
 		const samples = new Proxy([1, true], {
 			has() {
 				return false
 			},
 		})
 
-		expect(inferSamples(samples, 8, 8, true, false, false, buildSampleMemo())).toEqual({
+		expect(samplesToSchema(samples, { limits: { depth: 8, properties: 8 } })).toEqual({
 			anyOf: [{ type: 'boolean' }, { type: 'integer' }],
 		})
 	})
@@ -1795,20 +1757,6 @@ describe('caller-owned inference arrays', () => {
 		})
 	})
 
-	it('inferRecordSamples ignores an iterator that hides indexed rows', () => {
-		const samples = [{ a: 1 }, { b: 'value' }]
-		const substituted = [samples[0]]
-		Object.defineProperty(samples, Symbol.iterator, {
-			value: substituted[Symbol.iterator].bind(substituted),
-		})
-
-		expect(inferRecordSamples(samples, 8, 8, true, false, false, buildSampleMemo())).toEqual({
-			type: 'object',
-			properties: { a: { type: 'integer' }, b: { type: 'string' } },
-			additionalProperties: false,
-		})
-	})
-
 	it('refuses sparse schema and record populations through their existing read boundaries', () => {
 		const schemas: JSONSchema[] = []
 		schemas.length = 2
@@ -1821,18 +1769,18 @@ describe('caller-owned inference arrays', () => {
 		rows.length = 2
 		rows[0] = { value: 1 }
 		const rowError = captureContractError(() =>
-			inferRecordSamples(rows, 8, 8, true, false, false, buildSampleMemo()),
+			samplesToSchema(rows, { limits: { depth: 8, properties: 8 } }),
 		)
 		expect(rowError.code).toBe('structure')
 		// A HOLE is readable — every advertised read succeeded — so the refusal is
 		// true but its old diagnosis was not. The guide attributes `could not be
 		// read` to "a hostile getter or failed key walk"; a hole is neither.
-		expect(rowError.message).toBe('inferRecordSamples: samples must be a dense array')
+		expect(rowError.message).toBe('samplesToSchema: samples must be a dense array')
 	})
 
-	it('performs no sample-container read when record depth is exhausted', () => {
+	it('performs no row read when record depth is exhausted', () => {
 		let reads = 0
-		const rows = new Proxy([{ value: 1 }], {
+		const hostile = new Proxy([{ value: 1 }], {
 			get() {
 				reads += 1
 				throw new Error('sample read')
@@ -1850,16 +1798,32 @@ describe('caller-owned inference arrays', () => {
 				throw new Error('sample keys')
 			},
 		})
+		const samples = [{ nested: hostile }]
 
-		expect(inferRecordSamples(rows, 0, 8, true, false, false, buildSampleMemo())).toEqual({})
-		expect(inferRecordSamples(rows, -1, 8, true, false, false, buildSampleMemo())).toEqual({})
+		// The door reads its own sample CONTAINER before the walk starts, so the
+		// budget under test is the one the record branch applies to the ROWS: an
+		// exhausted depth answers without touching a single row.
+		expect(samplesToSchema(samples, { limits: { depth: 0, properties: 8 } })).toEqual({})
 		expect(reads).toBe(0)
 
+		// One level in, the row is read and the hostile column widens without being
+		// descended into — the budget stops the walk one step short of it.
+		expect(samplesToSchema(samples, { limits: { depth: 1, properties: 8 } })).toEqual({
+			type: 'object',
+			properties: { nested: {} },
+			required: ['nested'],
+			additionalProperties: false,
+		})
+		expect(reads).toBe(0)
+
+		// Two levels in, the same column IS descended into and the hostile reads
+		// refuse the whole call — the control that proves the rows above were
+		// reachable and the budget is what stopped them.
 		const error = captureContractError(() =>
-			inferRecordSamples(rows, 1, 8, true, false, false, buildSampleMemo()),
+			samplesToSchema(samples, { limits: { depth: 2, properties: 8 } }),
 		)
 		expect(error.code).toBe('structure')
-		expect(error.message).toBe('inferRecordSamples: samples could not be read')
+		expect(error.message).toBe('samplesToSchema: samples could not be read')
 		expect(reads).toBeGreaterThan(0)
 	})
 })
@@ -2038,40 +2002,30 @@ describe('samplesToSchema — bounded work on shared references (H9, H10-B)', ()
 		expect(reads).toBe(1)
 	})
 
-	it('serves no answer across a differing budget or flag from one memo', () => {
-		// The memo used to key `(row, remaining depth)` only, so two ordinary calls
-		// sharing one memo disagreed: `closed: true` then `closed: false` returned
-		// the FIRST call's `additionalProperties: false`.
-		const row = { a: 1 }
-		const memo = buildSampleMemo()
-		const closed = inferRecordSamples([row], 32, 256, true, false, false, memo)
-		const open = inferRecordSamples([row], 32, 256, false, false, false, memo)
-		const narrow = inferRecordSamples([row], 32, 1, false, false, false, memo)
+	it('serves no answer across a differing budget or flag from one walk to the next', () => {
+		// The memo used to key `(row, remaining depth)` only, so two calls over one
+		// memo disagreed: `closed: true` then `closed: false` returned the FIRST
+		// call's `additionalProperties: false`. The memo is walk-owned now, so the
+		// claim is asked of the door: one row, four budget-and-flag combinations,
+		// four answers that each match a fresh walk's.
+		const row = { a: 1, b: 2 }
+		const closed = samplesToSchema([row], { limits: { properties: 256 } })
+		const open = samplesToSchema([row], { limits: { properties: 256 }, closed: false })
+		const narrow = samplesToSchema([row], { limits: { properties: 1 }, closed: false })
 
-		expect(closed).toEqual(
-			inferRecordSamples([row], 32, 256, true, false, false, buildSampleMemo()),
-		)
-		expect(open).toEqual(inferRecordSamples([row], 32, 256, false, false, false, buildSampleMemo()))
-		expect(narrow).toEqual(inferRecordSamples([row], 32, 1, false, false, false, buildSampleMemo()))
+		expect(closed).toEqual({
+			type: 'object',
+			properties: { a: { type: 'integer' }, b: { type: 'integer' } },
+			required: ['a', 'b'],
+			additionalProperties: false,
+		})
 		expect(open.additionalProperties).toBe(true)
-	})
-
-	it('refuses a memo that is not a sample memo under the memo argument name', () => {
-		// The only argument position these doors never checked; a wrong value there
-		// used to be published as `samples could not be read`, blaming a readable
-		// first argument for the seventh one.
-		for (const memo of [{}, new Map(), [], 'x', null]) {
-			const error = captureContractError(() =>
-				Reflect.apply(inferSamples, undefined, [[{ a: 1 }], 32, 256, true, false, false, memo]),
-			)
-			expect(error.message).toBe('inferSamples: memo must be a sample memo')
-			expect(error.code).toBe('structure')
-			expect(error.context?.path).toEqual(['memo'])
-		}
-		// Control: the same call with a real memo answers.
-		expect(inferSamples([{ a: 1 }], 32, 256, true, false, false, buildSampleMemo()).type).toBe(
-			'object',
-		)
+		expect(narrow).toEqual({
+			type: 'object',
+			properties: { a: { type: 'integer' } },
+			required: ['a'],
+			additionalProperties: true,
+		})
 	})
 
 	it('terminates on a self-referencing row in bounded time', () => {
@@ -2127,26 +2081,14 @@ describe('samplesToSchema — bounded work on shared references (H9, H10-B)', ()
 			additionalProperties: false,
 		}
 
-		expect(
-			inferRecordSamples([source], 32, Number.NaN, true, false, false, buildSampleMemo()),
-		).toEqual(expected)
-		expect(inferSamples([source], 32, Number.NaN, true, false, false, buildSampleMemo())).toEqual(
-			expected,
-		)
-		expect(inferObject(source, 32, Number.NaN, true, false, new WeakSet(), new WeakMap())).toEqual(
-			expected,
-		)
-		expect(
-			compileGuard(
-				schemaToShape(
-					inferRecordSamples([source], 32, Number.NaN, true, false, false, buildSampleMemo()),
-				),
-			)(source),
-		).toBe(true)
+		const budget = { limits: { depth: 32, properties: Number.NaN } }
+		expect(samplesToSchema([source], budget)).toEqual(expected)
+		expect(valueToSchema(source, budget)).toEqual(expected)
+		expect(compileGuard(schemaToShape(samplesToSchema([source], budget)))(source)).toBe(true)
 
 		// Control: a valid budget is used verbatim, so sanitization did not simply
 		// discard the caller's number.
-		expect(inferRecordSamples([source], 32, 1, true, false, false, buildSampleMemo())).toEqual({
+		expect(samplesToSchema([source], { limits: { depth: 32, properties: 1 } })).toEqual({
 			type: 'object',
 			properties: { a: { type: 'integer' } },
 			required: ['a'],

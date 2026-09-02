@@ -50,7 +50,7 @@ export const CONTRACT_ERROR_BRAND = Symbol.for('@orkestrel/contract.error')
  * namespaces, and — this is the part the earlier wording got wrong by writing
  * the rule from the rows instead of the rows from the rule — it admits a
  * PROTOTYPE member on the same terms, including an ACCESSOR's getter,
- * dispatched onto the package's own receiver through {@link INTRINSICS.apply}.
+ * dispatched onto the package's own receiver through {@link INTRINSICS.reflect.apply}.
  * A round that read `Object.getOwnPropertyDescriptor(RegExp.prototype, 'source')`
  * per call had captured nothing: capture is decided by WHEN the reference is
  * taken, not by which reflective spelling takes it.
@@ -105,24 +105,37 @@ export const INTRINSICS = Object.freeze({
 	symbols: Object.getOwnPropertySymbols,
 	/** `Object.prototype` — the realm-local plain-record prototype identity. */
 	base: Object.prototype,
-	/** `Reflect.get` — a proxy-visible read that reports the trap's exact answer. */
-	read: Reflect.get,
-	/** `Reflect.set` — a proxy-visible write. */
-	write: Reflect.set,
-	/** `Reflect.ownKeys` — the complete own-key population, strings and symbols. */
-	members: Reflect.ownKeys,
-	/** `Reflect.has` — a proxy-visible presence observation. */
-	present: Reflect.has,
-	/** `Reflect.getOwnPropertyDescriptor` — the reflective descriptor observation. */
-	reveal: Reflect.getOwnPropertyDescriptor,
-	/** `Reflect.defineProperty` — placement that answers instead of throwing. */
-	declare: Reflect.defineProperty,
-	/** `Reflect.getPrototypeOf` — the reflective prototype observation. */
-	parent: Reflect.getPrototypeOf,
-	/** `Reflect.apply` — dispatch of a captured method onto its receiver. */
-	apply: Reflect.apply,
-	/** `Reflect.construct` — construction with an explicit new target. */
-	construct: Reflect.construct,
+	/**
+	 * The proxy-visible operations, grouped because that is what separates them:
+	 * each reports the trap's exact answer where `Object`'s flat peer above
+	 * reports the target's.
+	 *
+	 * @remarks
+	 * Frozen on its own, so the sub-entity is as immutable as the table holding
+	 * it. `describe`, `define`, and `prototype` name the same operations their
+	 * flat peers name, and the group is what tells a reader which of the two a
+	 * call site asked for.
+	 */
+	reflect: Object.freeze({
+		/** `Reflect.get` — a proxy-visible read that reports the trap's exact answer. */
+		read: Reflect.get,
+		/** `Reflect.set` — a proxy-visible write. */
+		write: Reflect.set,
+		/** `Reflect.ownKeys` — the complete own-key population, strings and symbols. */
+		members: Reflect.ownKeys,
+		/** `Reflect.has` — a proxy-visible presence observation. */
+		present: Reflect.has,
+		/** `Reflect.getOwnPropertyDescriptor` — the reflective descriptor observation. */
+		describe: Reflect.getOwnPropertyDescriptor,
+		/** `Reflect.defineProperty` — placement that answers instead of throwing. */
+		define: Reflect.defineProperty,
+		/** `Reflect.getPrototypeOf` — the reflective prototype observation. */
+		prototype: Reflect.getPrototypeOf,
+		/** `Reflect.apply` — dispatch of a captured method onto its receiver. */
+		apply: Reflect.apply,
+		/** `Reflect.construct` — construction with an explicit new target. */
+		construct: Reflect.construct,
+	}),
 	/** `Number.isFinite` — the finite-bound test every numeric shape refuses on. */
 	finite: Number.isFinite,
 	/** `Number.isInteger` — the integer-budget test the inference caps refuse on. */
@@ -336,7 +349,7 @@ export const GUARD_DEPTH_LIMIT = 512
  * The maximum supported nesting depth of a compiled contract shape, frozen.
  *
  * @remarks
- * {@link validateShapeDepth} rejects the next level
+ * {@link validateShape} rejects the next level
  * with a depth-coded {@link ContractError} before recursive artifact
  * compilation begins, so a finite but pathologically deep developer-authored
  * shape fails predictably instead of reaching the JavaScript call-stack limit.
@@ -361,7 +374,7 @@ export const COMPILE_DEPTH_LIMIT = 512
  * and the compilers cannot fold the expansion away without publishing a schema
  * whose members alias each other.
  *
- * So the cost is BOUNDED rather than paid. {@link validateShapeDepth} and
+ * So the cost is BOUNDED rather than paid. {@link validateShape} and
  * {@link ContractCompiler} preparation both count the nodes the declaration
  * expands into (one per node, summed over every incoming edge) and refuse past
  * this cap through {@link refuseExpansion}, with an `expansion`-coded
@@ -463,7 +476,7 @@ export const GENERATION_ATTEMPT_LIMIT = 32
  * Bounds inference against adversarial or cyclic runtime input — once the
  * remaining depth budget reaches zero, inference stops descending and emits
  * the empty accept-anything schema `{}` for that branch instead of recursing
- * further. LOWERABLE per call via {@link ValueToSchemaOptions.maxDepth}; a
+ * further. LOWERABLE per call via {@link ValueToSchemaLimits.depth}; a
  * higher value is held here.
  *
  * A ceiling rather than a default, because the walk recurses: what a deeper
@@ -482,7 +495,7 @@ export const INFER_DEPTH_LIMIT = 32
  * @remarks
  * Bounds the work (and the emitted schema's size) against a wide record or a
  * huge array — properties/elements beyond this cap are never inspected.
- * Overridable per call via {@link ValueToSchemaOptions.maxProperties}.
+ * Overridable per call via {@link ValueToSchemaLimits.properties}.
  */
 export const INFER_BREADTH_LIMIT = 256
 
@@ -491,8 +504,7 @@ export const INFER_BREADTH_LIMIT = 256
  * before enum inference gives up and falls back to a bare `type`, frozen.
  *
  * @remarks
- * Bounds how large an `enum` list {@link samplesToSchema} / {@link inferRecordSamples}
- * will emit — a slot with distinct-value count at or above this limit is
+ * Bounds how large an `enum` list {@link samplesToSchema} will emit — a slot with distinct-value count at or above this limit is
  * treated as unbounded (an ID column, not a category) and never gets an
  * `enum` keyword. Overridable per call via {@link ValueToSchemaOptions.enum}
  * (which gates whether enum inference runs at all).

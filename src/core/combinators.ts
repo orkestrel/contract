@@ -446,7 +446,7 @@ export function recordOf<
 				if (!isRecord(value)) {
 					return false
 				}
-				const members = INTRINSICS.members(value)
+				const members = INTRINSICS.reflect.members(value)
 				for (let index = 0; index < members.length; index += 1) {
 					const key = members[index]
 					if (isString(key) && !matchesMember(declared.vocabulary, key)) {
@@ -542,7 +542,7 @@ export function objectOf<
 					const key = declared.names[index]
 					if (key === undefined) continue
 					const guard = declared.guards[key]
-					const member = INTRINSICS.read(value, key)
+					const member = INTRINSICS.reflect.read(value, key)
 					if (matchesMember(declared.optional, key)) {
 						if (member !== undefined && (guard === undefined || !guard(member))) {
 							return false
@@ -581,7 +581,7 @@ export function keyOf<const O extends Readonly<Record<PropertyKey, unknown>>>(
 	value: O,
 ): Guard<keyof O> {
 	return contain(() => {
-		const keys = collectMembers(readValue(() => INTRINSICS.members(value), 'keyOf'))
+		const keys = collectMembers(readValue(() => INTRINSICS.reflect.members(value), 'keyOf'))
 		return (entry: unknown): entry is keyof O =>
 			holds(
 				() =>
@@ -627,7 +627,7 @@ export function pickOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 		return readValue(
 			() => {
 				const result: { [P in keyof S]: S[P] } = INTRINSICS.create(null)
-				const members = INTRINSICS.members(shape)
+				const members = INTRINSICS.reflect.members(shape)
 				for (let index = 0; index < members.length; index += 1) {
 					const key = members[index]
 					if (isString(key) && matchesMember(selected, key)) {
@@ -683,7 +683,7 @@ export function omitOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 		return readValue(
 			() => {
 				const result: { [P in keyof S]: S[P] } = INTRINSICS.create(null)
-				const members = INTRINSICS.members(shape)
+				const members = INTRINSICS.reflect.members(shape)
 				for (let index = 0; index < members.length; index += 1) {
 					const key = members[index]
 					if (isString(key) && !matchesMember(skipped, key)) {

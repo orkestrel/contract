@@ -24,7 +24,7 @@ import { ShapeValidator } from './ShapeValidator.js'
 // === Validation
 
 /**
- * Gate recursive compiler work on shape structure, depth, and cycles.
+ * Gates recursive compiler work on shape structure, depth, and cycles.
  *
  * @remarks
  * Constructs a fresh {@link ShapeValidator} and eagerly validates the graph.
@@ -68,15 +68,15 @@ import { ShapeValidator } from './ShapeValidator.js'
  *
  * @example
  * ```ts
- * validateShapeDepth(stringShape({ min: 1 })) // returns; the declaration is compilable
+ * validateShape(stringShape({ min: 1 })) // returns; the declaration is compilable
  * ```
  */
-export function validateShapeDepth(shape: ContractShape): void {
+export function validateShape(shape: ContractShape): void {
 	return contain(() => {
 		const validator = new ShapeValidator(shape)
 		validator.validate()
 		refuseExpansion(validator.expansion)
-	}, 'validateShapeDepth')
+	}, 'validateShape')
 }
 
 // === Schema
