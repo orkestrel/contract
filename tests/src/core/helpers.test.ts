@@ -68,6 +68,7 @@ import {
 	matchesPattern,
 	matchesVisited,
 	omitVisited,
+	ownPattern,
 	pathOf,
 	pinMembers,
 	readMapEntries,
@@ -618,6 +619,102 @@ describe('readValue', () => {
 		expect(Object.values(error.context ?? {})).not.toContain(stolen)
 		expect(error.message).toBe('stringShape: options could not be read')
 	})
+
+	it('refuses the read when any own context field throws, advertised or not', () => {
+		// The copy takes every OWN enumerable key, so a key `ContractErrorContext`
+		// never advertises is read at the same moment as one it does. A reader
+		// consulting the four consumed names BY NAME would let the unadvertised
+		// getter through and go on to publish a refusal built from a context
+		// nothing could finish reading.
+		const reason = Object.freeze({ stage: 'context read' })
+		const observed = ['path', 'detail'].map((key) => {
+			const context: ContractErrorContext = {}
+			Object.defineProperty(context, key, { enumerable: true, get: throwSentinel(reason) })
+			const error = captureContractError(() => readValue(() => 42, 'example', { context }))
+			return [key, error.message, error.code, error.cause === reason]
+		})
+
+		expect(observed).toEqual([
+			['path', 'readValue: options could not be read', 'structure', true],
+			['detail', 'readValue: options could not be read', 'structure', true],
+		])
+	})
+
+	it('publishes carried context fields in one canonical order and retains no caller object', () => {
+		const reason = Object.freeze({ stage: 'read' })
+		const carried: ContractErrorContext = {
+			received: '"sample"',
+			limit: 8,
+			shape: 'string',
+			path: ['values', 'name'],
+		}
+		const error = captureContractError(() =>
+			readValue(throwSentinel(reason), 'example', {
+				subject: 'array',
+				code: 'bound',
+				context: carried,
+			}),
+		)
+
+		expect(Object.keys(error.context ?? {})).toEqual(['path', 'shape', 'limit', 'received'])
+		expect(error.context).toEqual({
+			path: ['values', 'name'],
+			shape: 'string',
+			limit: 8,
+			received: '"sample"',
+		})
+		expect(error.context).not.toBe(carried)
+		expect(error.code).toBe('bound')
+		expect(error.message).toBe('example: array could not be read')
+		expect(error.cause).toBe(reason)
+
+		const partial = captureContractError(() =>
+			readValue(throwSentinel(reason), 'example', { context: { received: 'null', path: ['id'] } }),
+		)
+
+		expect(Object.keys(partial.context ?? {})).toEqual(['path', 'received'])
+	})
+
+	it('returns the callback value by identity when every context field is carried', () => {
+		const value = Object.freeze({ id: 1 })
+		const read = readValue(() => value, 'example', {
+			subject: 'record',
+			code: 'clone',
+			context: { path: ['values'], shape: 'object', limit: 4, received: 'object' },
+		})
+
+		expect(read).toBe(value)
+		expect(readValue(() => undefined, 'example')).toBeUndefined()
+	})
+
+	it('refuses through its own error when a subject accessor changes its answer between reads', () => {
+		let reads = 0
+		const options = {
+			get subject() {
+				reads += 1
+				return reads === 1
+					? 'thing'
+					: {
+							toString() {
+								throw new Error('hostile toString')
+							},
+						}
+			},
+		}
+		const error = captureContractError(() =>
+			Reflect.apply(readValue, undefined, [
+				() => {
+					throw new Error('hostile read')
+				},
+				'door',
+				options,
+			]),
+		)
+
+		expect(error).toBeInstanceOf(ContractError)
+		expect(error.message).toBe('door: thing could not be read')
+		expect(reads).toBe(1)
+	})
 })
 
 describe('readArrayEntries', () => {
@@ -700,6 +797,82 @@ describe('readArrayEntries', () => {
 		expect(outcome.value.entries).toEqual(expected.value.entries)
 		expect(outcome.value.dense).toBe(expected.value.dense)
 		expect(outcome.value.dense).toBe(true)
+	})
+
+	it('snapshots an array carrying an extra own string key like a plain array', () => {
+		const annotated: number[] = [1, 2]
+		Object.defineProperty(annotated, 'note', { value: 'metadata', enumerable: true })
+		const outcome = readArrayEntries(annotated)
+		const plain = readArrayEntries([1, 2])
+
+		expect(Reflect.ownKeys(annotated)).toEqual(['0', '1', 'length', 'note'])
+		expect(outcome.success).toBe(true)
+		if (!outcome.success) throw outcome.error
+		if (!plain.success) throw plain.error
+		expect(outcome.value.entries).toEqual(plain.value.entries)
+		expect(outcome.value.dense).toBe(plain.value.dense)
+		expect(outcome.value.dense).toBe(true)
+		expect(Reflect.ownKeys(outcome.value.entries)).toEqual(['0', '1', 'length'])
+	})
+
+	it('snapshots an array carrying an own symbol key like a plain array', () => {
+		const marked: number[] = [1, 2]
+		Object.defineProperty(marked, Symbol('mark'), { value: 'metadata', enumerable: true })
+		const outcome = readArrayEntries(marked)
+		const plain = readArrayEntries([1, 2])
+
+		expect(Reflect.ownKeys(marked).length).toBe(4)
+		expect(outcome.success).toBe(true)
+		if (!outcome.success) throw outcome.error
+		if (!plain.success) throw plain.error
+		expect(outcome.value.entries).toEqual(plain.value.entries)
+		expect(outcome.value.dense).toBe(plain.value.dense)
+		expect(outcome.value.dense).toBe(true)
+		expect(Object.getOwnPropertySymbols(outcome.value.entries)).toEqual([])
+	})
+
+	it('refuses a canonical population that disowns its last index', () => {
+		// The reported population is exactly the canonical indices then `length`,
+		// so the direct copy answers it — and every index is still corroborated
+		// against its own membership read rather than taken from the report. The
+		// refusal is pinned to its exact message, so a refusal arriving from
+		// another cause cannot stand in for this one.
+		const disowning = new Proxy([1, 2], {
+			getOwnPropertyDescriptor(target, property) {
+				return property === '1' ? undefined : Reflect.getOwnPropertyDescriptor(target, property)
+			},
+		})
+
+		expect(Reflect.ownKeys(disowning)).toEqual(['0', '1', 'length'])
+		expect(Object.hasOwn(disowning, '1')).toBe(false)
+
+		const outcome = readArrayEntries(disowning)
+		expect(outcome.success).toBe(false)
+		if (outcome.success) throw new Error('a disowned last index was accepted')
+		const refusal = outcome.error
+		if (!(refusal instanceof Error)) throw refusal
+		expect(refusal.message).toBe('Array index views disagree')
+	})
+
+	it('refuses a canonical population that disowns its first index', () => {
+		// The first index is pinned beside the last: a corroboration reaching only
+		// one end of the population still refuses the other, and one end alone
+		// would read as covered.
+		const disowning = new Proxy([1, 2], {
+			getOwnPropertyDescriptor(target, property) {
+				return property === '0' ? undefined : Reflect.getOwnPropertyDescriptor(target, property)
+			},
+		})
+
+		expect(Reflect.ownKeys(disowning)).toEqual(['0', '1', 'length'])
+		expect(Object.hasOwn(disowning, '0')).toBe(false)
+
+		const outcome = readArrayEntries(disowning)
+		expect(outcome.success).toBe(false)
+		if (outcome.success) throw new Error('a disowned first index was accepted')
+		const refusal = outcome.error
+		if (!(refusal instanceof Error)) throw refusal
+		expect(refusal.message).toBe('Array index views disagree')
 	})
 
 	it('fails a non-native advertised length', () => {
@@ -2315,6 +2488,63 @@ describe('preview', () => {
 		expect(preview([1, 2, 3])).toBe('array')
 		expect(preview(() => 1)).toBe('function')
 	})
+
+	it('renders a string by its escaped length at, on, and past the clip boundary', () => {
+		// The ESCAPED inner length decides the answer, never the input length. At
+		// two under `PREVIEW_LIMIT` the render closes with the quote, and one
+		// character further it closes with the clip mark instead.
+		expect(preview('x'.repeat(62))).toBe(`"${'x'.repeat(62)}"`)
+		expect(preview('x'.repeat(63))).toBe(`"${'x'.repeat(63)}…`)
+		expect(preview('x'.repeat(64))).toBe(`"${'x'.repeat(63)}…`)
+		expect(preview('\n'.repeat(31))).toBe(`"${'\\n'.repeat(31)}"`)
+		expect(preview(`${'\n'.repeat(30)}xxx`)).toBe(`"${'\\n'.repeat(30)}xxx…`)
+		expect(preview('\n'.repeat(32))).toBe(`"${'\\n'.repeat(31)}…`)
+	})
+
+	it('escapes a lone surrogate and keeps a short astral pair whole', () => {
+		const pair = `a${String.fromCodePoint(0x1f600)}b`
+
+		expect(preview('\ud800')).toBe('"\\ud800"')
+		expect(preview('a\udc00b')).toBe('"a\\udc00b"')
+		expect(preview(pair)).toBe(`"${pair}"`)
+		expect(preview(pair).isWellFormed()).toBe(true)
+	})
+
+	it('renders a symbol unquoted at a length a string renders quoted', () => {
+		expect(preview(Symbol('sample'))).toBe('Symbol(sample)')
+		expect(preview(Symbol('line\n'))).toBe('Symbol(line\\n)')
+		expect(preview('sample')).toBe('"sample"')
+	})
+
+	it('renders text far past the limit without encoding the text it never renders', () => {
+		// The clipped answer is the same whether or not the whole string was
+		// encoded first, so the promise that enormous primitive text is never
+		// fully encoded is a cost relationship rather than an output difference.
+		// The lowest reading of several is taken on each side, so a scheduler
+		// stall lengthens one reading instead of deciding the comparison. The
+		// encoded length is asserted as well, because a control that skipped the
+		// work would make the comparison meaningless.
+		const huge = '\n'.repeat(2_000_000)
+		let rendering = Number.POSITIVE_INFINITY
+		let encoding = Number.POSITIVE_INFINITY
+		let rendered = ''
+		let encoded = ''
+		for (let round = 0; round < 3; round += 1) {
+			const renderStart = performance.now()
+			rendered = preview(huge)
+			rendering = Math.min(rendering, performance.now() - renderStart)
+			const encodeStart = performance.now()
+			encoded = INTRINSICS.stringify(huge)
+			encoding = Math.min(encoding, performance.now() - encodeStart)
+		}
+
+		expect(rendered).toBe(`"${'\\n'.repeat(31)}…`)
+		expect(encoded.length).toBe(4_000_002)
+		// The threshold is 20 times; the gate measured about 2600 times on an
+		// idle host, so a red reading here is host noise or a lost gate, and
+		// the Orchestrator's idle re-run decides which.
+		expect(rendering * 20).toBeLessThan(encoding)
+	})
 })
 
 describe('shapeToKind', () => {
@@ -2770,6 +3000,35 @@ describe('captured pattern reads', () => {
 	})
 })
 
+describe('ownPattern', () => {
+	it("rebuilds a pattern statelessly and refuses through the reader's coded error when the pattern cannot be read", () => {
+		const caller = /^[a-z]+$/gy
+		const owned = ownPattern(caller, 'stringOf')
+
+		expect(owned.source).toBe('^[a-z]+$')
+		expect(matchesPattern(owned, 'abc')).toBe(true)
+		expect(matchesPattern(owned, 'abc')).toBe(true)
+		expect(matchesPattern(owned, 'ABC')).toBe(false)
+		expect(matchesPattern(owned, 'abc')).toBe(true)
+		expect(caller.lastIndex).toBe(0)
+		expect(owned.lastIndex).toBe(0)
+		// Controls: the caller really carried the stateful flags, and the rebuild
+		// really dropped them, so the preceding repeated answers are the strip rather
+		// than a caller that never advanced.
+		expect(caller.flags).toBe('gy')
+		expect(owned.flags).toBe('')
+
+		// A Proxy carries no pattern internal slots, so the captured `source`
+		// getter refuses the receiver and the reader's own name reaches the caller
+		// instead of the host's raw `TypeError`.
+		const refusal = captureContractError(() => ownPattern(new Proxy(/^a$/, {}), 'stringOf'))
+
+		expect(refusal.message).toBe('stringOf: pattern could not be read')
+		expect(refusal.code).toBe('pattern')
+		expect(refusal.context).toEqual({ shape: 'string' })
+	})
+})
+
 describe('pinned prototypes', () => {
 	it('pins every own prototype member and refuses when the pin cannot be verified', () => {
 		class Widget {
@@ -2974,6 +3233,148 @@ describe('buildStringFaults', () => {
 		expect(buildStringFaults(shape, 'abc', [])).toEqual([])
 		expect(pattern.lastIndex).toBe(0)
 		expect(pattern.global).toBe(true)
+	})
+
+	it('reports the same faults from a supplied rebuild as from the shape itself', () => {
+		// A contradictory declaration is the only one a single length can violate on
+		// every axis at once, so it is what pins the whole order in one report.
+		const shape: StringShape = { type: 'string', min: 4, max: 2, pattern: /^[0-9]+$/ }
+		const supplied = buildStringFaults(shape, 'abc', ['items'], readPattern(/^[0-9]+$/))
+
+		expect(supplied).toEqual([
+			{
+				reason: 'constraint',
+				path: ['items'],
+				expected: 'string',
+				constraint: 'min',
+				limit: 4,
+				received: '"abc"',
+			},
+			{
+				reason: 'constraint',
+				path: ['items'],
+				expected: 'string',
+				constraint: 'max',
+				limit: 2,
+				received: '"abc"',
+			},
+			{
+				reason: 'constraint',
+				path: ['items'],
+				expected: 'string',
+				constraint: 'pattern',
+				limit: '^[0-9]+$',
+				received: '"abc"',
+			},
+		])
+		expect(buildStringFaults(shape, 'abc', ['items'])).toEqual(supplied)
+	})
+
+	it("applies the supplied pattern rather than the shape's own to decide the match", () => {
+		const shape: StringShape = { type: 'string', pattern: /^a$/ }
+		expect(buildStringFaults(shape, 'b', [], readPattern(/^b$/))).toEqual([])
+
+		// Control: the same value against the same shape without the supplied
+		// rebuild does fault, so the preceding empty report is the argument being
+		// applied rather than a value that was never checked at all.
+		expect(faultsToConstraints(buildStringFaults(shape, 'b', []))).toEqual(['pattern'])
+	})
+
+	it('answers repeatedly from one rebuild of a global caller pattern without moving lastIndex', () => {
+		// The rebuild is what a caller holding one shape for many values supplies
+		// once, so it has to be reusable: `g` on the caller's own object advances
+		// `lastIndex` per `exec`, and stripping it is what makes a single shared
+		// pattern answer the same way on every call.
+		const caller = /^[a-z]+$/g
+		const shape: StringShape = { type: 'string', pattern: /^[a-z]+$/ }
+		const stateless = readPattern(caller)
+
+		expect(buildStringFaults(shape, 'abc', [], stateless)).toEqual([])
+		expect(buildStringFaults(shape, 'abc', [], stateless)).toEqual([])
+		expect(buildStringFaults(shape, 'ABC', [], stateless)).toEqual([
+			{
+				reason: 'constraint',
+				path: [],
+				expected: 'string',
+				constraint: 'pattern',
+				limit: '^[a-z]+$',
+				received: '"ABC"',
+			},
+		])
+		expect(buildStringFaults(shape, 'abc', [], stateless)).toEqual([])
+		expect(caller.lastIndex).toBe(0)
+		expect(stateless.lastIndex).toBe(0)
+		// Controls: the caller really carried `g`, and the rebuild really dropped it.
+		expect(caller.global).toBe(true)
+		expect(stateless.global).toBe(false)
+	})
+
+	it("reads a hand-rolled shape's pattern accessor twice per call when the shape declares one, for the presence test and for the rebuild that names the limit", () => {
+		// A hand-rolled declaration is what can count the reads at all: the
+		// package's own clone answers with a fresh frozen `RegExp` per read, and a
+		// plain literal observes nothing. The accessor answers with the same
+		// pattern every time, so a differing read count is the only thing this can
+		// report.
+		let reads = 0
+		const shape: StringShape = {
+			type: 'string',
+			get pattern() {
+				reads += 1
+				return /^[0-9]+$/
+			},
+		}
+		const first = buildStringFaults(shape, 'abc', [])
+
+		expect(first).toEqual([
+			{
+				reason: 'constraint',
+				path: [],
+				expected: 'string',
+				constraint: 'pattern',
+				limit: '^[0-9]+$',
+				received: '"abc"',
+			},
+		])
+		// The rebuild that applied the pattern is also what the `limit` text is
+		// read from, so the accessor answers one read for it and one for the
+		// presence test that decides whether a pattern was declared at all.
+		expect(reads).toBe(2)
+
+		expect(buildStringFaults(shape, 'abc', [])).toEqual(first)
+		expect(reads).toBe(4)
+	})
+
+	it('answers from a supplied rebuild without asking the shape for its pattern', () => {
+		// A counting accessor is the only instrument that separates applying the
+		// supplied rebuild from rebuilding out of the shape regardless: the reports
+		// are identical either way, so only the read count binds the promise.
+		let reads = 0
+		const shape: StringShape = {
+			type: 'string',
+			get pattern() {
+				reads += 1
+				return /^[0-9]+$/
+			},
+		}
+		const supplied = buildStringFaults(shape, 'abc', [], readPattern(/^[0-9]+$/))
+
+		expect(supplied).toEqual([
+			{
+				reason: 'constraint',
+				path: [],
+				expected: 'string',
+				constraint: 'pattern',
+				limit: '^[0-9]+$',
+				received: '"abc"',
+			},
+		])
+		expect(reads).toBe(0)
+
+		// Control: the omitted form asks the same accessor, so a count that stayed
+		// at zero is the supplied rebuild being applied rather than an accessor
+		// that cannot count.
+		expect(buildStringFaults(shape, 'abc', [])).toEqual(supplied)
+		expect(reads).toBe(2)
 	})
 
 	it('returns a fresh array per call and mutates neither the shape nor the path', () => {

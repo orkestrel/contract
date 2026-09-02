@@ -780,12 +780,11 @@ export const TERMINAL_MEMBERS: readonly TerminalIntrinsic[] = Object.freeze(
  * rule draws from every exported callable, and an ordinary function's
  * `.prototype.constructor` is writable and always will be. The sweep's value is
  * unchanged and is what it always was — no door may consult any of these members
- * — but the corpus it sweeps is 213 rows, not none, and
- * `documents its own composition` in the integration suite pins both that shape
- * and that size. The size pin is the later repair: this number read 205 for a
- * round after eight more functions were exported, because the suite asserted
- * only that the corpus was non-empty and constructor-shaped, and a count nobody
- * asserts is a count that drifts.
+ * — but the corpus it sweeps is not empty, and `documents its own composition`
+ * in the integration suite pins its composition against the barrel: one row
+ * per exported plain function, derived from the exports rather than remembered
+ * as a number, because a remembered count drifted for a round after further
+ * functions were exported and no assertion failed.
  *
  * Control drawn from OUTSIDE this rule: {@link TERMINAL_MEMBERS}, whose holders
  * are host prototypes this package never declared, and — for the sweep itself —

@@ -3905,6 +3905,49 @@ describe('compileReporter — string constraint faults', () => {
 	})
 })
 
+describe('compiled string leaves — the pattern fault both doors publish', () => {
+	it('the auditor and the reporter report one pattern fault with the same limit and path', () => {
+		const shape = stringShape({ pattern: /^[a-z]+$/ })
+		const fault = {
+			reason: 'constraint',
+			path: ['properties', 'name'],
+			expected: 'string',
+			constraint: 'pattern',
+			limit: '^[a-z]+$',
+			received: '"A1"',
+		}
+
+		expect(compileAuditor(shape, 'A1', ['properties', 'name'])).toEqual([fault])
+		expect(compileReporter(shape, 'A1', ['properties', 'name'])).toEqual([fault])
+	})
+
+	it('one compiled plan answers every value alike however many answers came before', () => {
+		// The plan reads the declaration's `pattern` accessor once and carries the
+		// stateless rebuild into every answer, so a value's report must not depend on
+		// which values the same plan answered earlier.
+		const contract = createContract(stringShape({ min: 2, pattern: /^[a-z]+$/ }))
+		const clean: readonly Fault[] = []
+		const dirty = [
+			{
+				reason: 'constraint',
+				path: [],
+				expected: 'string',
+				constraint: 'pattern',
+				limit: '^[a-z]+$',
+				received: '"AB"',
+			},
+		]
+
+		expect(contract.audit('abc')).toEqual(clean)
+		expect(contract.audit('AB')).toEqual(dirty)
+		expect(contract.audit('abc')).toEqual(clean)
+		expect(contract.audit('AB')).toEqual(dirty)
+		expect(contract.explain('abc')).toEqual(clean)
+		expect(contract.explain('AB')).toEqual(dirty)
+		expect(contract.explain('abc')).toEqual(clean)
+	})
+})
+
 describe('compileReporter — number/integer faults', () => {
 	it('a coercible numeric string reports no fault', () => {
 		const shape = integerShape({ min: 0, max: 10 })

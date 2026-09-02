@@ -631,6 +631,39 @@ export function readPattern(pattern: RegExp): RegExp {
 }
 
 /**
+ * Rebuilds a declaration's regular expression as a stateless pattern this
+ * package owns, and refuses an unreadable one under the reader's own name.
+ *
+ * @remarks
+ * The one construction the compiled string leaves and `stringOf` share.
+ * {@link readPattern} strips `g` and `y`, so the result carries no `lastIndex`
+ * an answer could move and one rebuild answers every value alike — which is
+ * what lets a compiled door take the read while the plan is built and hold the
+ * rebuild for the plan's life, instead of minting a `RegExp` per answered
+ * value. The read runs through {@link readValue}, so a source or flags that
+ * cannot be read refuses with this module's uniform `pattern` diagnostic under
+ * the reader that asked, rather than with the host's raw `TypeError`.
+ *
+ * @param pattern - The declaration's regular expression to rebuild
+ * @param reader - The public reader name the diagnostic carries
+ * @returns An owned, stateless equivalent of the declaration's pattern
+ * @throws {ContractError} Thrown when the pattern's source or flags cannot be
+ *         read, coded `pattern` as `<reader>: pattern could not be read`
+ *
+ * @example
+ * ```ts
+ * ownPattern(/^a+$/gy, 'stringOf') // /^a+$/
+ * ```
+ */
+export function ownPattern(pattern: RegExp, reader: string): RegExp {
+	return readValue(() => readPattern(pattern), reader, {
+		subject: 'pattern',
+		code: 'pattern',
+		context: { shape: 'string' },
+	})
+}
+
+/**
  * Pin every own member of a class prototype as a non-configurable member —
  * non-writable too when it is a data property — and verify the pin took.
  *
@@ -778,24 +811,22 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 		// prototype chose what a refusal this module authored published and
 		// retained the caller's object by identity. Spread copies own enumerable
 		// properties only through the spec's own copy operation, so the projection
-		// stays own-only without dispatching through a replaceable global.
-		const owned = {
-			path: undefined,
-			shape: undefined,
-			limit: undefined,
-			received: undefined,
-			...source,
-		}
-		const context =
+		// stays own-only without dispatching through a replaceable global. The
+		// copy stays EAGER because performing it is what refuses a hostile
+		// context: a throwing getter on any own key — advertised or not — must
+		// refuse this call whether or not the callback goes on to succeed.
+		const owned =
 			source === undefined
 				? undefined
 				: {
-						...(owned.path === undefined ? {} : { path: owned.path }),
-						...(owned.shape === undefined ? {} : { shape: owned.shape }),
-						...(owned.limit === undefined ? {} : { limit: owned.limit }),
-						...(owned.received === undefined ? {} : { received: owned.received }),
+						path: undefined,
+						shape: undefined,
+						limit: undefined,
+						received: undefined,
+						...source,
 					}
 		const requested = options?.code
+		const subject = options?.subject
 		// Membership over the one declared vocabulary, not a re-spelled chain of
 		// equality tests: a copy of the union written here drifts from it silently,
 		// and the copy this replaced had already lost `expansion`, so a door asking
@@ -806,9 +837,9 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 				: 'structure'
 		return {
 			reader: isString(reader) ? reader : 'readValue',
-			subject: isString(options?.subject) ? options.subject : 'value',
+			subject: isString(subject) ? subject : 'value',
 			code,
-			context,
+			owned,
 		}
 	})
 	if (!diagnostics.success) {
@@ -819,11 +850,24 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 	}
 	const outcome = attempt(callback)
 	if (!outcome.success) {
+		// Only a refusal publishes a context, so the published object is assembled
+		// in this branch rather than beside the copy. `owned` already holds copied
+		// values, so assembling it outside the contained read cannot throw.
+		const owned = diagnostics.value.owned
+		const context =
+			owned === undefined
+				? undefined
+				: {
+						...(owned.path === undefined ? {} : { path: owned.path }),
+						...(owned.shape === undefined ? {} : { shape: owned.shape }),
+						...(owned.limit === undefined ? {} : { limit: owned.limit }),
+						...(owned.received === undefined ? {} : { received: owned.received }),
+					}
 		throw new ContractError(
 			`${diagnostics.value.reader}: ${diagnostics.value.subject} could not be read`,
 			{
 				code: diagnostics.value.code,
-				...(diagnostics.value.context === undefined ? {} : { context: diagnostics.value.context }),
+				...(context === undefined ? {} : { context }),
 				cause: outcome.error,
 			},
 		)
@@ -1008,12 +1052,15 @@ export function matchesRecordBrand(value: unknown): boolean {
  * frozen native snapshot retains actual holes: reading one yields `undefined`,
  * while own membership remains absent. Its work is proportional to the
  * reflected population, so a length-driven consumer must require `dense` or
- * carry an independent bound. Caller-defined iteration is ignored. A
- * descriptor-only index omitted from reflection is deliberately outside this
- * lens and remains a hole. Failure retains the exact thrown value when length,
- * reflection, membership, or indexed value observation throws; a non-native
- * length or view disagreement is also failure. `4294967295` is metadata rather
- * than an array index.
+ * carry an independent bound. A population that is exactly the canonical
+ * indices in ascending order followed by `length` is copied straight by index
+ * under the same per-index corroboration, and answers with the same entries,
+ * the same `dense` fact, and the same refusals as the walk. Caller-defined
+ * iteration is ignored. A descriptor-only index omitted from reflection is
+ * deliberately outside this lens and remains a hole. Failure retains the exact
+ * thrown value when length, reflection, membership, or indexed value
+ * observation throws; a non-native length or view disagreement is also
+ * failure. `4294967295` is metadata rather than an array index.
  *
  * @param value - The array whose reflected indexed entries to read
  * @returns A successful frozen entry snapshot with its dense fact, or a
@@ -1030,11 +1077,28 @@ export function readArrayEntries<T>(value: readonly T[]): Result<ArrayRead<T>> {
 		if (!INTRINSICS.safe(length) || length < 0 || length > 2 ** 32 - 1) {
 			throw new INTRINSICS.error('Array length is outside the native array domain')
 		}
+		const members = INTRINSICS.reflect.members(value)
+		// One canonicality question, asked once: the reported population is the
+		// ascending index texts and `length`, and nothing else. The scan stops at
+		// the first disagreement, so a population that fails the question pays for
+		// the prefix it shares with a canonical one before it walks.
+		let matched = 0
+		while (matched < length && members[matched] === INTRINSICS.text(matched)) matched += 1
+		if (matched === length && members.length === length + 1 && members[length] === 'length') {
+			const packed = new INTRINSICS.list<T | undefined>(length)
+			for (let index = 0; index < length; index += 1) {
+				const key = members[index]
+				if (key === undefined || !INTRINSICS.own(value, key)) {
+					throw new INTRINSICS.error('Array index views disagree')
+				}
+				packed[index] = value[index]
+			}
+			return INTRINSICS.freeze({ entries: INTRINSICS.freeze(packed), dense: true })
+		}
 		const collected: number[] = []
 		const keys: string[] = []
 		let ascending = true
 		let previous = -1
-		const members = INTRINSICS.reflect.members(value)
 		for (let position = 0; position < members.length; position += 1) {
 			const key = members[position]
 			if (!isString(key)) continue
@@ -2101,15 +2165,32 @@ export function sanitizeDepth(value: number | undefined): number {
  * @remarks
  * A primitive renders as printable text: a string retains its quoted JSON
  * representation, while a narrowed symbol renders through intrinsic `String`
- * and receives the same escaping without outer quotes. One bounded indexed
- * encoder appends only complete escaped code-point tokens within
- * {@link PREVIEW_LIMIT}; clipping therefore never retrieves the mutable string
- * iterator or splits an escape/surrogate pair before its trailing `…`, and
- * enormous primitive text is not fully traversed. A number / boolean / bigint
- * renders via `String`; `null` and `undefined` render as their own name. An
- * array renders as `'array'`. Every other host — a plain object, a function, a
- * class instance, a `Map` — is NEVER traversed or stringified; it renders as
- * its bare `typeof` tag (`'object'` / `'function'`).
+ * and receives the same escaping without outer quotes. A string of at most
+ * {@link PREVIEW_LIMIT} code units takes its answer from one whole-string
+ * encode when that encode fits the same limit, and the length predicate
+ * deciding it is exact rather than approximate. Every other string and every
+ * symbol renders through one bounded indexed encoder that appends only
+ * complete escaped code-point tokens within {@link PREVIEW_LIMIT}; clipping
+ * therefore never retrieves the mutable string iterator or splits an
+ * escape/surrogate pair before its trailing `…`, and enormous primitive text
+ * is not fully traversed. A number / boolean / bigint renders via `String`;
+ * `null` and `undefined` render as their own name. An array renders as
+ * `'array'`. Every other host — a plain object, a function, a class instance,
+ * a `Map` — is NEVER traversed or stringified; it renders as its bare
+ * `typeof` tag (`'object'` / `'function'`).
+ *
+ * The indexed encoder appends every token and closes with the quote exactly
+ * when the escaped inner length is at most `PREVIEW_LIMIT - 2`, which is
+ * character for character what one `JSON.stringify` call returns. At an inner
+ * length of `PREVIEW_LIMIT - 1` the indexed encoder appends every token and
+ * closes with `…` instead, while one `JSON.stringify` call over that same
+ * string measures `PREVIEW_LIMIT + 1` — so the predicate refuses that string
+ * and every longer one, and each of them renders through the indexed encoder.
+ * Escaping never shrinks text, so the leading `source.length` gate admits
+ * every string the predicate could accept while keeping enormous primitive
+ * text out of the whole-string encode. A symbol renders through the indexed
+ * encoder because its unquoted text is not what a `JSON.stringify` call
+ * returns.
  *
  * @param value - The value to preview
  * @returns A short descriptive string, always safe to embed in a diagnostic
@@ -2129,6 +2210,10 @@ export function preview(value: unknown): string {
 	if (isString(value) || isSymbol(value)) {
 		const quoted = isString(value)
 		const source = INTRINSICS.text(value)
+		if (quoted && source.length <= PREVIEW_LIMIT) {
+			const whole = INTRINSICS.stringify(source)
+			if (whole.length <= PREVIEW_LIMIT) return whole
+		}
 		let text = quoted ? '"' : ''
 		let index = 0
 		while (index < source.length) {
@@ -2174,10 +2259,18 @@ export function preview(value: unknown): string {
  * two contracts. Faults come out in declaration order — `min`, then `max`, then
  * `pattern` — because a report is read top to bottom and its order is public.
  *
- * The pattern is applied through an OWNED stateless rebuild
- * ({@link readPattern}) and asked through {@link matchesPattern}, so a caller's
- * `lastIndex` never moves and no caller-writable member decides whether the
- * value matched.
+ * The declaration's pattern is applied through an OWNED stateless rebuild
+ * ({@link readPattern}) asked through {@link matchesPattern}, so the shape's own
+ * pattern never moves a caller's `lastIndex` and no caller-writable member
+ * decides whether the value matched. The rebuild is stateless precisely because
+ * `g` and `y` are stripped, so one rebuilt pattern answers identically for every
+ * value and every call — which is what lets a compiled door build it once
+ * ({@link ownPattern}) and hand it down through `pattern` instead of rebuilding
+ * it on each answer. The `limit` text is read from the applied rebuild, so it
+ * names the pattern that decided the match. Left to rebuild, the helper asks
+ * the shape's `pattern` accessor once for the presence test that decides
+ * whether a pattern was declared at all, and once more for the rebuild that
+ * decides the match and names the `limit` when one was.
  *
  * The whole body reads the caller's SHAPE, so it runs through the same
  * {@link readValue} boundary {@link shapeToKind} uses and refuses an
@@ -2192,6 +2285,14 @@ export function preview(value: unknown): string {
  * @param shape - The string shape whose refinements are checked
  * @param value - The already-obtained string to check
  * @param path - The path every produced fault is rooted at
+ * @param pattern - The one-time stateless rebuild that decides the pattern
+ *                  refinement. Must be a {@link readPattern} result for this
+ *                  shape's own pattern; supplied, it decides the match, the
+ *                  `limit` text, and whether a pattern fault is reported at
+ *                  all, and `shape.pattern` is not read. A pattern carrying `g`
+ *                  or `y` moves the caller's `lastIndex` and makes repeated
+ *                  answers for one value disagree. Default: rebuilt from
+ *                  `shape.pattern` on every call, when the shape declares one
  * @returns A fresh array of faults, empty when the value satisfies every refinement
  * @throws {ContractError} When the shape's refinement fields cannot be read
  *
@@ -2205,6 +2306,7 @@ export function buildStringFaults(
 	shape: StringShape,
 	value: string,
 	path: readonly string[],
+	pattern?: RegExp,
 ): readonly Fault[] {
 	return readValue(
 		() => {
@@ -2229,8 +2331,17 @@ export function buildStringFaults(
 					received: preview(value),
 				}
 			}
-			if (shape.pattern !== undefined && !matchesPattern(readPattern(shape.pattern), value)) {
-				const limit = readPatternSource(shape.pattern)
+			// The bounds are read from the shape on every call because a number is
+			// what the fault carries. The pattern is not: rebuilding it allocates a
+			// `RegExp` per answer, so a caller holding the same shape for the life of
+			// a compiled door supplies the rebuild once and this reads it instead.
+			// Whatever arrives is what decides the match and names the fault's `limit`,
+			// so a rebuild of this shape's own pattern reports exactly what the
+			// shape's own read would: `readPattern` preserves `source` exactly.
+			const stateless =
+				pattern ?? (shape.pattern === undefined ? undefined : readPattern(shape.pattern))
+			if (stateless !== undefined && !matchesPattern(stateless, value)) {
+				const limit = readPatternSource(stateless)
 				faults[faults.length] = {
 					reason: 'constraint',
 					path,

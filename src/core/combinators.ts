@@ -33,6 +33,7 @@ import {
 	holds,
 	matchesMember,
 	matchesPattern,
+	ownPattern,
 	readArrayEntries,
 	readGuardShape,
 	readMapEntries,
@@ -1100,14 +1101,7 @@ export function stringOf(options?: StringGuardOptions): Guard<string> {
 		if (source !== undefined && !isRegExp(source)) {
 			throw new ContractError('stringOf: pattern must be a RegExp', { code: 'pattern' })
 		}
-		const pattern =
-			source === undefined
-				? undefined
-				: readValue(() => readPattern(source), 'stringOf', {
-						subject: 'pattern',
-						code: 'pattern',
-						context: { shape: 'string' },
-					})
+		const pattern = source === undefined ? undefined : ownPattern(source, 'stringOf')
 		if (min === undefined && max === undefined && pattern === undefined) {
 			return isString
 		}
