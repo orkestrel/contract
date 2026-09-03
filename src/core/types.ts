@@ -112,8 +112,8 @@ export interface ReadValueOptions {
  *
  * @remarks
  * Deliberately narrower than {@link ReadValueOptions}: a contained door's
- * subject IS the door, so there is no `subject` to name. The two options types
- * are separate because a signature that accepts a key it silently ignores tells
+ * subject IS the door, so there is no `subject` to name. This type and
+ * {@link ReadValueOptions} are separate because a signature that accepts a key it silently ignores tells
  * the caller a lie the type checker will not catch.
  */
 export interface ContainOptions {
@@ -419,7 +419,7 @@ export type JSONSchemaType =
  * keywords {@link Infer}-driven `compileSchema` produces, plus `format` —
  * emitted by the {@link stringToFormat} / {@link samplesToFormat} inference
  * heuristics (`valueToSchema` / `samplesToSchema`), never by `compileSchema`.
- * Recursive via `items` / `properties` / `additionalProperties` / `anyOf` /
+ * Recursive through `items` / `properties` / `additionalProperties` / `anyOf` /
  * `oneOf`. {@link createContract} owns and validates developer-authored shape
  * graphs; cycles and nesting past {@link COMPILE_DEPTH_LIMIT} fail with a coded
  * {@link ContractError} before artifact compilation.
@@ -450,7 +450,7 @@ export interface JSONSchema {
  * @remarks
  * Lowercase spec literals, matching the JSON Schema `format` vocabulary for
  * the subset the inferers detect: `'date-time'` / `'date'` / `'time'` are
- * ISO-8601 (validity-checked via `Date`, not pattern-only), `'uuid'` matches
+ * ISO-8601 (validity-checked through `Date`, not pattern-only), `'uuid'` matches
  * RFC-4122 hex layout, `'email'` and `'uri'` are pragmatic (not full-spec)
  * shape checks. See {@link FORMAT_PATTERNS}.
  */
@@ -483,7 +483,7 @@ export interface ValueToSchemaLimits {
  * @remarks
  * `limits` groups the two walk budgets; see {@link ValueToSchemaLimits}.
  * `format` (default `false`) emits a `format` keyword on a string leaf whose
- * value(s) unanimously match one {@link SchemaFormat} via {@link stringToFormat}
+ * value(s) unanimously match one {@link SchemaFormat} through {@link stringToFormat}
  * / {@link samplesToFormat}. `enum` (default `false`, multi-sample paths only)
  * emits an `enum` keyword for a low-cardinality, repeated primitive slot
  * instead of a bare `type`.
@@ -694,7 +694,7 @@ export interface RawShape {
  * string/number/boolean-literal union.
  *
  * The first, non-distributive branch bails out to `unknown` when `S` is the
- * full widened {@link ContractShape} union. Five members of that union recurse
+ * full widened {@link ContractShape} union. Several members of that union recurse
  * back into the whole union through their defaulted generics, so inferring the
  * full union is a fixed point that can never shrink — the compiler would fan
  * out until it aborts with TS2589. Bailing out lazily short-circuits that
@@ -777,7 +777,9 @@ export type InferObject<
 			{
 				[K in keyof P as P[K] extends { readonly category: 'optional' } ? never : K]: Infer<P[K]>
 			} & {
-				[K in keyof P as P[K] extends { readonly category: 'optional' } ? K : never]?: P[K] extends {
+				[
+					K in keyof P as P[K] extends { readonly category: 'optional' } ? K : never
+				]?: P[K] extends {
 					readonly category: 'optional'
 					readonly inner: infer I
 				}
@@ -852,7 +854,7 @@ export type InferMutable<S extends ContractShape> = { -readonly [K in keyof Infe
 
 // === Shape builder options
 
-/** Groups the options for {@link StringShape} (via `stringShape`). */
+/** Groups the options for {@link StringShape} (through `stringShape`). */
 export interface StringShapeOptions {
 	readonly min?: number
 	readonly max?: number
@@ -875,7 +877,7 @@ export interface StringGuardOptions {
 	readonly pattern?: RegExp
 }
 
-/** Groups the options for {@link NumberShape} (via `numberShape` / `integerShape`). */
+/** Groups the options for {@link NumberShape} (through `numberShape` / `integerShape`). */
 export interface NumberShapeOptions {
 	readonly min?: number
 	readonly max?: number
@@ -883,40 +885,47 @@ export interface NumberShapeOptions {
 	readonly description?: string
 }
 
-/** Groups the options for {@link BooleanShape} (via `booleanShape`). */
+/** Groups the options for {@link BooleanShape} (through `booleanShape`). */
 export interface BooleanShapeOptions {
 	readonly description?: string
 }
 
-/** Groups the options for {@link NullShape} (via `nullShape`). */
+/** Groups the options for {@link NullShape} (through `nullShape`). */
 export interface NullShapeOptions {
 	readonly description?: string
 }
 
-/** Groups the options for {@link JSONShape} (via `jsonShape`). */
+/** Groups the options for {@link JSONShape} (through `jsonShape`). */
 export interface JSONShapeOptions {
 	readonly description?: string
 }
 
-/** Groups the options for {@link LiteralShape} (via `literalShape`). */
+/** Groups the options for {@link LiteralShape} (through `literalShape`). */
 export interface LiteralShapeOptions {
 	readonly description?: string
 }
 
-/** Groups the options for {@link ArrayShape} (via `arrayShape`). */
+/** Groups the options for {@link ArrayShape} (through `arrayShape`). */
 export interface ArrayShapeOptions {
 	readonly min?: number
 	readonly max?: number
 	readonly description?: string
 }
 
-/** Groups the options for {@link ObjectShape} (via `objectShape`). */
+/**
+ * Groups the options for {@link ObjectShape} (through `objectShape`).
+ *
+ * @remarks
+ * The `additionalProperties` key mirrors the JSON Schema `additionalProperties`
+ * keyword and keeps that wording so a declaration and the schema it emits read
+ * the same.
+ */
 export interface ObjectShapeOptions<A extends boolean | ContractShape = boolean | ContractShape> {
 	readonly additionalProperties?: A
 	readonly description?: string
 }
 
-/** Groups the options for record shapes (via `recordShape`). */
+/** Groups the options for record shapes (through `recordShape`). */
 export interface RecordShapeOptions {
 	readonly description?: string
 }
@@ -1022,7 +1031,7 @@ export type ReporterFunction = (value: unknown, path?: readonly string[]) => rea
  *
  * @remarks
  * Named for the SEED DATA it produces rather than for the `generator` getter it
- * serves, which is the one place this package's three compiled-diagnostic types
+ * serves, which is the one place this package's compiled-diagnostic types
  * break their own symmetry with {@link AuditorFunction} and
  * {@link ReporterFunction}. `GeneratorFunction` is already taken twice over: it
  * is a realm global (the constructor every `function*` reports), and it is the
@@ -1061,7 +1070,7 @@ export interface ShapeValidatorInterface {
 }
 
 /**
- * Represents a compiled contract — the six lockstep outputs derived from one shape.
+ * Represents a compiled contract — the lockstep outputs derived from one shape.
  *
  * @remarks
  * Built by `createContract`: `is` narrows, `audit` diagnoses strict rejection,
@@ -1128,7 +1137,7 @@ export interface ContractInterface<T> {
 }
 
 /**
- * Owns one contract shape's six compiled artifacts plus their bundle, lazily.
+ * Owns one contract shape's compiled artifacts plus their bundle, lazily.
  *
  * @remarks
  * Construction observes nothing. The FIRST getter read owns the declaration
@@ -1138,10 +1147,10 @@ export interface ContractInterface<T> {
  * authored nodes rather than its paths. A getter builds its own family and no
  * other, except where an artifact genuinely consumes the compiled guard —
  * `parser`, `reporter` and `generator` resolve union membership through it, so
- * they build it too. `contract` requests all six roots in getter order.
+ * they build it too. `contract` requests every root in getter order.
  *
  * Every getter REPLAYS its exact artifact: reading one twice returns the same
- * function or graph by identity, and {@link contract}'s six members are those
+ * function or graph by identity, and {@link contract}'s members are those
  * exact values. One terminal lifecycle covers preparation and every family, so
  * a failure anywhere settles the compiler permanently — later getters rethrow
  * that exact error while an artifact already handed out stays usable, because
@@ -1177,6 +1186,6 @@ export interface ContractCompilerInterface<S extends ContractShape> {
 	readonly reporter: ReporterFunction
 	/** Returns the compiled seed-data source. */
 	readonly generator: SeederFunction<Infer<S>>
-	/** Returns the frozen six-member bundle whose values are the six artifacts above. */
+	/** Returns the frozen bundle whose values are the artifacts declared earlier. */
 	readonly contract: ContractInterface<Infer<S>>
 }

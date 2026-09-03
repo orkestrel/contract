@@ -36,7 +36,7 @@ import { ValueInferer } from './ValueInferer.js'
  * @remarks
  * De-duplicates by {@link canonicalStringify}, then applies the one
  * special-case subsumption inference performs: a bare `{ type: 'integer' }`
- * alongside a bare `{ type: 'number' }` collapses to just `{ type: 'number' }`
+ * alongside a bare `{ type: 'number' }` collapses to `{ type: 'number' }`
  * (an integer sample is also a valid `number` sample). A single surviving
  * distinct schema is returned directly; two or more are wrapped as
  * `{ anyOf: [...] }`, sorted by their canonical key for deterministic output.
@@ -227,7 +227,7 @@ export function samplesToFormat(values: readonly unknown[]): SchemaFormat | unde
  *
  * @remarks
  * Fires only when ALL of: every value is the same primitive kind (all string
- * or all FINITE number via {@link isFiniteNumber} — any `null`/boolean/mixed
+ * or all FINITE number through {@link isFiniteNumber} — any `null`/boolean/mixed
  * slot never qualifies, and a slot containing `NaN` / `±Infinity` never
  * qualifies either, since {@link canonicalStringify} collapses `NaN` to
  * `'null'` and would otherwise risk an invalid-JSON `enum`); at least 2
@@ -330,12 +330,12 @@ export function inferPrimitiveEnum(
  * string/`Date` leaf into the `format` keyword. Structurally-equal inputs
  * infer byte-identical schemas (object keys and `anyOf` members are sorted).
  *
- * A non-object root — e.g. `valueToSchema('hi')` yielding `{ type: 'string'
+ * A non-object root — for example `valueToSchema('hi')` yielding `{ type: 'string'
  * }` — is structurally accepted by `schemaToParameters`, but MCP clients
  * expect an object-shaped `inputSchema`; wrap a non-object payload with
  * {@link schemaToObject} before advertising it as a tool's parameters.
  *
- * `limits.properties` is sanitized via {@link sanitizeBudget} to a finite
+ * `limits.properties` is sanitized through {@link sanitizeBudget} to a finite
  * non-negative integer, falling back to {@link INFER_BREADTH_LIMIT} for anything
  * else (`NaN`, `Infinity`, negative, fractional), so a malformed breadth cannot
  * corrupt the sampled key/element list.
@@ -343,8 +343,8 @@ export function inferPrimitiveEnum(
  * `limits.depth` goes through {@link sanitizeDepth}, which does the same and then caps
  * at {@link INFER_DEPTH_LIMIT}, so the option NARROWS the walk and cannot widen
  * it. The cap is what makes the depth guard unbreakable: depth is the recursing
- * axis, and a large-but-valid budget used to descend until the call STACK failed
- * rather than until the guard said stop.
+ * axis, so an uncapped large-but-valid budget would descend until the call STACK
+ * failed rather than until the guard says stop.
  *
  * @param value - The value to infer a schema from
  * @param options - Optional {@link ValueToSchemaLimits} `limits` plus `closed` / `format` bounds
@@ -395,7 +395,7 @@ export function valueToSchema(value: unknown, options?: ValueToSchemaOptions): J
 
 /**
  * Infers a `JSONSchema` from a set of example values — the multi-example
- * counterpart of {@link valueToSchema} (e.g. inferring one schema from
+ * counterpart of {@link valueToSchema} (for example inferring one schema from
  * several database rows).
  *
  * @remarks

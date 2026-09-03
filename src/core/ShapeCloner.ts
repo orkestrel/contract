@@ -224,7 +224,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 	}
 
 	// The gate that OWNS the depth rule authors the diagnosis, on the same source
-	// `validateShape` would be handed, so the two doors cannot disagree about
+	// `validateShape` would be handed, so `cloneShape` and `validateShape` cannot disagree about
 	// which node exceeded the limit or what the refusal says.
 	#refuseDepth(): never {
 		this.#validateShape(this.#source)
@@ -440,13 +440,12 @@ export class ShapeCloner implements ShapeClonerInterface {
 		const max = this.#captureField(source, 'max', path)
 		const pattern = this.#capturePattern(source, path)
 		const description = this.#captureField(source, 'description', path)
-		// No declaration-policy rule is enforced here. Every bound, range and
-		// pattern-flag rule this capture used to author has an exact twin in
-		// `ShapeValidator`, which runs on the carried clone at `#execute` — and a
-		// second copy that fires EARLIER, in capture order rather than declaration
-		// order and before structure outranks domain, is exactly how `cloneShape`
-		// came to name a different rule at a different path than the shared gate
-		// for one declaration. One rule, one arbiter.
+		// No declaration-policy rule is enforced here. `ShapeValidator` owns every
+		// bound, range and pattern-flag rule and runs on the carried clone at
+		// `#execute`. A second copy here would fire EARLIER, in capture order rather
+		// than declaration order and before structure outranks domain, so `cloneShape`
+		// would name a different rule at a different path than the shared gate for one
+		// declaration. One rule, one arbiter.
 		const fields: StringShape = {
 			category: 'string',
 			...(min === undefined ? {} : { min }),

@@ -1037,7 +1037,8 @@ describe('shape factories', () => {
 			throw new Error('compositeShape: the nested level must be an object shape')
 		expect(Object.keys(level.properties)).toEqual(['nested', 'list', 'dict'])
 		const leaf: ContractShape = Reflect.get(level.properties, 'nested')
-		if (leaf.category !== 'object') throw new Error('compositeShape: the leaf must be an object shape')
+		if (leaf.category !== 'object')
+			throw new Error('compositeShape: the leaf must be an object shape')
 		expect(Object.keys(leaf.properties)).toEqual(Object.keys(flat.properties))
 	})
 

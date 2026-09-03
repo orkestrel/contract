@@ -80,15 +80,14 @@ import { cloneSchema, ownShape } from './cloners.js'
 import { ShapeValidator } from './ShapeValidator.js'
 
 /**
- * Owns one contract shape's six artifacts and their bundle, compiled lazily.
+ * Owns one contract shape's artifacts and their bundle, compiled lazily.
  *
  * @remarks
- * The engine every standalone `compile*` function and `createContract` now runs
- * on. Its reason for existing is that the recursive compilers used to re-own and
- * re-validate the SUBGRAPH at every node they descended into, so a depth-100
- * chain paid a hundred clones of shrinking graphs and a hundred validations —
- * quadratic work for a linear declaration, measured at 640 ms for one guard and
- * 1.87 s for one contract. Here ownership runs once, validation runs once over
+ * The engine every standalone `compile*` function and `createContract` runs
+ * on. A recursive compiler re-owns and
+ * re-validates the SUBGRAPH at every node it descends into, so a depth-100
+ * chain pays a hundred clones of shrinking graphs and a hundred validations —
+ * quadratic work for a linear declaration. Here ownership runs once, validation runs once over
  * that owned result, and each unique node and structural edge is indexed once
  * into children-before-parent order. Every artifact family is then a single
  * postorder pass whose entries are keyed by node identity, so a shared child is
@@ -132,10 +131,10 @@ export class ContractCompiler<
 	// documented to publish a `ContractError`.
 	static readonly #weakMap = WeakMap
 	// The call-scoped value ledger's clock. `#visits` hands out one identity per
-	// top-level walk and `#scope` names the walk now running, so a node's memo can
+	// top-level walk and `#scope` names the walk that is running, so a node's memo can
 	// say which call filled it. Both are static because a compiled artifact is
 	// self-contained by design — it must not reach instance state its compiler
-	// releases — and because these two numbers are the whole of it: no value, no
+	// releases — and because those numbers are the whole of it: no value, no
 	// answer, and nothing that outlives the walk that set them.
 	static #visits = 0
 	static #scope = 0
@@ -144,7 +143,7 @@ export class ContractCompiler<
 	// allocates one collection per family instead of two and construction carries
 	// no empty peer of its own. Sharing them is safe because nothing MUTATES a
 	// released collection: every element write — `#discover`, `#schedule`, and the
-	// six family loops — runs behind `#prepare`, which refuses after `#release`
+	// family loops — runs behind `#prepare`, which refuses after `#release`
 	// clears `#source`; the constructor and `#release` assign the field and never
 	// touch a sentinel's elements. The static block beneath freezes them, so a
 	// write that did reach one fails at its own line rather than leaking a node of
@@ -301,7 +300,7 @@ export class ContractCompiler<
 	}
 
 	/**
-	 * Returns the frozen six-member bundle of this compiler's artifacts.
+	 * Returns the frozen bundle of this compiler's artifacts.
 	 *
 	 * @remarks
 	 * Own enumerable keys `schema`, `is`, `parse`, `audit`, `explain`,
@@ -329,8 +328,8 @@ export class ContractCompiler<
 		return root
 	}
 
-	// Lifecycle. Every getter runs its build inside this, so preparation and all
-	// six families share one terminal state.
+	// Lifecycle. Every getter runs its build inside this, so preparation and every
+	// family share one terminal state.
 	#enter<T>(build: () => T): T {
 		const state = this.#state
 		if (state.phase === 'failed') throw state.error
@@ -374,8 +373,8 @@ export class ContractCompiler<
 		throw error
 	}
 
-	// Once all six roots exist nothing can need the graph again, so the graph, the
-	// index, the order and every family plan go. The six roots and the optional
+	// Once every root exists nothing can need the graph again, so the graph, the
+	// index, the order and every family plan go. The roots and the optional
 	// frozen bundle stay, and so does terminal state.
 	#collect(): void {
 		if (this.#schema === undefined || this.#guard === undefined) return
@@ -514,7 +513,7 @@ export class ContractCompiler<
 		// index would leave `WeakMap.prototype.get` throwing a host `TypeError`
 		// through a door whose whole contract is that it publishes this package's
 		// error class. Defense in depth, not a live path: a released compiler holds
-		// all six roots, so every family returns its ready root before locating
+		// every root, so every family returns its ready root before locating
 		// anything, and a failed one rethrows at `#enter` — which is why no
 		// reachable vector settles here and the guard still belongs.
 		const known = this.#index
@@ -948,7 +947,7 @@ export class ContractCompiler<
 				}
 				// The required keys are fixed here, so their presence question is
 				// answered by one integer rather than by a per-call vocabulary: each
-				// required key takes a bit position now, and a call ORs one bit per own
+				// required key takes a bit position here, and a call ORs one bit per own
 				// key it recognizes and compares the result against the full mask. The
 				// record is null-prototype own data so a key literally named
 				// '__proto__' takes a position like any other. Past the mask's width
@@ -970,7 +969,8 @@ export class ContractCompiler<
 					if (keys === undefined) return false
 					// Contain the whole key-enumeration + value-read walk — a hostile
 					// getter on `value`, or a replaced `globalThis.Set` reached by the
-					// presence view, must yield `false`, never throw (AGENTS §14).
+					// presence view, must yield `false`, never throw, as
+					// `.claude/rules/patterns.md` § Validation and contracts requires.
 					const outcome = attempt(() => {
 						if (maskable) {
 							let seen = 0
@@ -1241,7 +1241,8 @@ export class ContractCompiler<
 					if (keys === undefined) return undefined
 					// Contain the whole record walk — a hostile getter on `record`, or a
 					// replaced `globalThis.Set` reached by the presence view, must yield
-					// `undefined`, never throw (AGENTS §14).
+					// `undefined`, never throw, as `.claude/rules/patterns.md`
+					// § Validation and contracts requires.
 					const outcome = attempt(() => {
 						const present = maskable ? undefined : collectMembers(keys)
 						let seen = 0
@@ -1340,9 +1341,10 @@ export class ContractCompiler<
 					}
 				}
 				return (value) => {
-					// Identity pass first (AGENTS §14 clause A): a value already valid
-					// against ANY variant's guard is returned unchanged, so an earlier
-					// variant's coercion never overwrites a guard-valid input.
+					// Identity pass first, so guard-valid input is never rejected by its
+					// parser (`.claude/rules/patterns.md` § Validation and contracts): a
+					// value already valid against ANY variant's guard is returned
+					// unchanged, so an earlier variant's coercion never overwrites it.
 					for (let variantIndex = 0; variantIndex < variants.length; variantIndex += 1) {
 						const variant = variants[variantIndex]
 						if (variant === undefined) continue
@@ -1390,9 +1392,8 @@ export class ContractCompiler<
 	}
 
 	// The published root supplies the documented default root path and carries the
-	// door boundary the standalone `compileAuditor` used to provide around the
-	// whole walk, so a host failure under a hostile value still publishes this
-	// package's error class rather than the caller's raw value.
+	// door boundary around the whole walk, so a host failure under a hostile value
+	// publishes this package's error class rather than the caller's raw value.
 	#exposeAudit(
 		plan: (value: unknown, path: readonly string[]) => readonly AuditFault[],
 	): AuditorFunction {
@@ -2274,7 +2275,7 @@ export class ContractCompiler<
 		const ready = this.#bundle
 		if (ready !== undefined) return ready
 		// Getter order, so a declaration that refuses refuses at the same artifact
-		// whether the caller reads the six one at a time or asks for the bundle.
+		// whether the caller reads the roots one at a time or asks for the bundle.
 		const schema = this.#buildSchema()
 		const guard = this.#buildGuard()
 		const parser = this.#buildParser()
@@ -2296,7 +2297,7 @@ export class ContractCompiler<
 	static {
 		// Pinned while this class is DEFINED. Every standalone compiler and
 		// `createContract` reaches these getters, so one assignment on this
-		// prototype would decide what six public doors publish while none of them
+		// prototype would decide what the public doors publish while none of them
 		// was touched.
 		pinMembers(ContractCompiler.prototype, 'ContractCompiler')
 	}

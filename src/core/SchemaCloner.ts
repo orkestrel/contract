@@ -256,7 +256,7 @@ export class SchemaCloner implements SchemaClonerInterface {
 		return error
 	}
 
-	// Two rules this engine OWNS rather than adopts: the record-rooted snapshot
+	// The rules this engine OWNS rather than adopts: the record-rooted snapshot
 	// and the shared depth bound. Registered as owned exactly as `#create` does,
 	// so terminal replay still answers by identity.
 	#refuse(message: string, code: 'structure' | 'depth', path: readonly string[]): never {

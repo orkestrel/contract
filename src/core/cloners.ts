@@ -161,9 +161,9 @@ export function cloneShape(shape: ContractShape): ContractShape {
  * Every successful return is a deeply frozen caller-independent graph, and
  * "frozen" here means frozen by the `Object.freeze` this package captured while
  * it loaded, not by whatever `Object.freeze` names when the call is made. The
- * distinction is the whole guarantee: under `Object.freeze = (value) => value`
- * this door used to SUCCEED and publish a mutable graph, with no throw and no
- * signal a caller could read. A frozen caller root receives no identity
+ * distinction is the whole guarantee: a replaced `Object.freeze` that returns
+ * its argument untouched would otherwise let this door publish a mutable graph,
+ * with no throw and no signal a caller could read. A frozen caller root receives no identity
  * exception: shallow freezing cannot establish ownership of nested collections,
  * child nodes, raw schemas, or `RegExp` internal state, and the fidelity clone
  * has already paid the traversal cost needed to prove and carry those values.

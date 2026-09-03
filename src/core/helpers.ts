@@ -676,12 +676,11 @@ export function ownPattern(pattern: RegExp, reader: string): RegExp {
  * as a replaced host member with the package's own name on it, so every exported
  * class pins its prototype while it is DEFINED.
  *
- * The qualification that phrase used to carry — "before any importer's code can
- * run" — was FALSE, in exactly the case {@link INTRINSICS} already states and
- * does not defend: ESM evaluates imports in source order, so a module that
- * evaluates before this package has already run. What is true is narrower and is
- * what the pin buys: no code that runs AFTER this class is defined can replace a
- * member on its prototype.
+ * The pin buys exactly this: no code that runs AFTER this class is defined can
+ * replace a member on its prototype. It reaches no earlier, in exactly the case
+ * {@link INTRINSICS} already states and does not defend — ESM evaluates imports
+ * in source order, so a module that evaluates before this package has already
+ * run.
  *
  * Placement goes through the captured `Reflect.defineProperty`, which ANSWERS
  * instead of throwing, and the answer is then corroborated by reading the
@@ -741,7 +740,8 @@ export function pinMembers(prototype: object, owner: string): void {
  * {@link Result}.
  *
  * @remarks
- * The sanctioned never-throw boundary for the guards (AGENTS §14). The
+ * The sanctioned never-throw boundary for the guards, required by
+ * `.claude/rules/patterns.md` § Validation and contracts. The
  * `whereOf`, `lazyOf`, and `transformOf` combinators invoke caller-supplied
  * callbacks *inside* a guard body, yet a guard must NEVER throw — it returns a
  * `boolean`. This converts a throwing callback into a `Failure` so the
@@ -753,9 +753,7 @@ export function pinMembers(prototype: object, owner: string): void {
  * synchronous boundary. {@link isContractError} does not use this boundary and
  * is not an exception to it: it carries its own `try`/`catch` inside the class
  * body, because `errors.ts` cannot import this module without inverting the
- * dependency. The earlier claim here — that it was total BY CONSTRUCTION and had
- * nothing to contain — was false, and it is what justified deleting the
- * containment the committed baseline had. A guard whose totality rests on an
+ * dependency. A guard whose totality rests on an
  * argument that nothing inside it can throw is one refactor away from throwing.
  *
  * @param callback - The callback to invoke with no arguments
@@ -804,7 +802,7 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 	const diagnostics = attempt(() => {
 		const source = options?.context
 		// Every consumed field is projected through a literal that already OWNS
-		// all four names, so an absent field resolves to that own `undefined`
+		// every consumed name, so an absent field resolves to that own `undefined`
 		// instead of leaving the container for `Object.prototype` — which every
 		// caller can write. An unqualified `source.path` on a context literal
 		// carrying only `shape` is an ordinary `Get`, and it walked, so a polluted
@@ -953,7 +951,7 @@ export function holds(callback: () => boolean): boolean {
  * @remarks
  * THE single record-brand rule: a plain record is a non-array object whose
  * prototype is `null`, or is a realm's `Object.prototype`. Realm-agnosticism is
- * why the second arm cannot simply compare against this realm's
+ * why the second arm cannot compare against this realm's
  * `Object.prototype` — a plain object from another `vm.Context`, iframe, or
  * worker inherits from THAT realm's `Object.prototype`, which is a different
  * object. The earlier rule accepted any prototype that itself had a `null`
@@ -966,16 +964,16 @@ export function holds(callback: () => boolean): boolean {
  * through its own DESCRIPTOR so no accessor on a hostile prototype ever runs.
  * Each must be an own DATA property whose value is a FUNCTION — true of every
  * conformant realm, so the requirement costs a genuine foreign record nothing,
- * and it refuses the cheapest forgery (stamping the seven names with
+ * and it refuses the cheapest forgery (stamping the mandated names with
  * `undefined`) for free.
  *
  * That is a structural test, not a provenance one, and the residual is stated
  * as exactly what it is: a FUNCTION-VALUED forgery passes, and this realm's own
- * `Object.prototype` supplies the seven functions to stamp, so the price is a
+ * `Object.prototype` supplies those functions to stamp, so the price is a
  * few lines rather than nothing. Reparenting a class prototype to `null` and
- * stamping the seven names with real functions passes; so does leaving the
+ * stamping the mandated names with real functions passes; so does leaving the
  * class untouched and putting a `Proxy` in prototype position that reports
- * `null` as its own prototype and answers those seven descriptor reads with
+ * `null` as its own prototype and answers those descriptor reads with
  * functions. In both cases the value is a live class instance whose methods are
  * still reachable on it. A further own-key SUBSET rule buys even less: it
  * refuses a forgery that left methods on its prototype and accepts the same
@@ -1368,7 +1366,7 @@ export function drawRandom(random: RandomFunction, shape: string): number {
  * Intermediates may be objects or arrays indexed by string. Returns `undefined`
  * the moment a segment is missing or lands on a non-object, so the lookup is
  * total — even against a hostile getter or Proxy trap that throws on read,
- * contained via {@link attempt} so the throw never escapes.
+ * contained through {@link attempt} so the throw never escapes.
  *
  * @param record - The source record
  * @param path - A property key, or a key path descending into nested objects
@@ -1500,16 +1498,13 @@ export function matchesJSONDepth(value: unknown): boolean {
  * non-finite numbers are rejected.
  *
  * The walk is ITERATIVE, over an explicit enter/exit stack, exactly as
- * {@link matchesJSONDepth} already was. It used to recurse, and that made the
- * verdict a function of the REMAINING CALL STACK rather than of the value: the
- * same readable 4,000-deep document answered `true` at a root call site and
- * `false` a few frames down, and `parseJSONValue` republished the resulting
- * `RangeError` as `value could not be read` for a value every read of which
- * succeeded. A cap enforced by the JavaScript stack is not a cap. This walk
- * carries no depth cap of its own — `isJSONValue` is deliberately the unbounded
- * deep gate and {@link matchesJSONDepth} / `isBoundedJSONValue` are the bounded
- * pair beside it — so the answer now depends only on the value, at every depth
- * and from every call site.
+ * {@link matchesJSONDepth} is. A recursive walk makes the verdict a function of
+ * the REMAINING CALL STACK rather than of the value, and a cap enforced by the
+ * JavaScript stack is not a cap. This walk carries no depth cap of its own —
+ * `isJSONValue` is deliberately the unbounded deep gate and
+ * {@link matchesJSONDepth} / `isBoundedJSONValue` are the bounded pair beside
+ * it — so the answer depends only on the value, at every depth and from every
+ * call site.
  *
  * Beside the ancestor set the walk keeps a walk-local PROVED set, so a node
  * whose whole subtree already matched is not re-walked when a second path
@@ -1669,7 +1664,7 @@ export function enumerableSymbolCount(value: object): number {
 /**
  * Narrows a compiled {@link JSONSchema} down to the open `Readonly<Record<string, unknown>>` shape
  * tool definitions advertise as `parameters` — through the {@link isRecord} boundary guard, never
- * an assertion (AGENTS §14).
+ * an assertion, as `.claude/rules/patterns.md` § Validation and contracts requires.
  *
  * @remarks
  * A `JSONSchema` is the closed contract-compiler fragment (it has no index signature), whereas a
@@ -2173,7 +2168,7 @@ export function sanitizeDepth(value: number | undefined): number {
  * complete escaped code-point tokens within {@link PREVIEW_LIMIT}; clipping
  * therefore never retrieves the mutable string iterator or splits an
  * escape/surrogate pair before its trailing `…`, and enormous primitive text
- * is not fully traversed. A number / boolean / bigint renders via `String`;
+ * is not fully traversed. A number / boolean / bigint renders through `String`;
  * `null` and `undefined` render as their own name. An array renders as
  * `'array'`. Every other host — a plain object, a function, a class instance,
  * a `Map` — is NEVER traversed or stringified; it renders as its bare
@@ -2254,9 +2249,9 @@ export function preview(value: unknown): string {
  * The single source of the string refinement report, shared by
  * `compileReporter` and `compileAuditor`. The two doors differ only in how they
  * OBTAIN the string — the reporter coerces through `parseString`, the auditor
- * demands a primitive string — and agreed on every constraint afterwards by
- * carrying two copies of the same twenty-one lines, which is one edit away from
- * two contracts. Faults come out in declaration order — `min`, then `max`, then
+ * demands a primitive string — and share every constraint afterwards through
+ * this helper, so a constraint cannot drift between them.
+ * Faults come out in declaration order — `min`, then `max`, then
  * `pattern` — because a report is read top to bottom and its order is public.
  *
  * The declaration's pattern is applied through an OWNED stateless rebuild
@@ -2529,15 +2524,14 @@ export function selectClosestFaults<T extends AuditFault>(
  * @remarks
  * A structural mapping used by {@link compileReporter} to fill a `Fault`'s
  * `expected` field and by {@link compileAuditor} to fill an `AuditFault`'s:
- * most shapes map to their own `type` (`numberShape` maps to
+ * most shapes map to their own `category` (`numberShape` maps to
  * `'integer'` when `integer: true`, else `'number'`); `optionalShape` /
  * `nullableShape` project through to their inner shape's kind, and `rawShape`
  * (an arbitrary embedded schema with no fixed kind) projects to `'json'`.
  *
  * A hand-authored node carrying an unrecognized discriminant is REFUSED rather
- * than answered out of type. The switch used to fall off its end and return
- * `undefined` for such a node, which made the declared non-optional
- * {@link FaultKind} return type a lie at a public export; every other door in
+ * than answered out of type, which keeps the declared non-optional
+ * {@link FaultKind} return type true at a public export; every other door in
  * this module refuses out-of-domain input, so this one does too.
  *
  * @param shape - The shape to project

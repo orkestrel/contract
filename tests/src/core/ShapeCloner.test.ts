@@ -99,7 +99,11 @@ describe('ShapeCloner', () => {
 		const foreignCloner: unknown = Reflect.construct(ShapeCloner, [foreign])
 		if (!(foreignCloner instanceof ShapeCloner)) throw new Error('expected a ShapeCloner')
 		const foreignOwned = foreignCloner.clone()
-		expect([plain.category, nullOwned.category, foreignOwned.category]).toEqual(['string', 'string', 'string'])
+		expect([plain.category, nullOwned.category, foreignOwned.category]).toEqual([
+			'string',
+			'string',
+			'string',
+		])
 
 		const reason = Object.freeze({ stage: 'prototype' })
 		let discriminants = 0
@@ -563,7 +567,9 @@ describe('ShapeCloner', () => {
 				return Reflect.getOwnPropertyDescriptor(target, key)
 			},
 		})
-		const error = captureContractError(() => new ShapeCloner({ category: 'literal', values }).clone())
+		const error = captureContractError(() =>
+			new ShapeCloner({ category: 'literal', values }).clone(),
+		)
 
 		expect(error.message).toBe(
 			'validateShape: every literal value must be a string, number, or boolean',
@@ -1089,7 +1095,7 @@ describe('ShapeCloner — one arbiter, one verdict (H9)', () => {
 		// validator's structure -> cycle -> domain precedence could apply.
 		// Each unrecognized discriminant is a real declaration corrupted
 		// reflectively rather than an assertion: the point of the case is that the
-		// walk meets a node whose `type` it does not know, and an assertion would
+		// walk meets a node whose `category` it does not know, and an assertion would
 		// have moved that fact out of the value and into the type system.
 		const bogus: ContractShape = { category: 'string' }
 		Reflect.set(bogus, 'category', 'bogus')

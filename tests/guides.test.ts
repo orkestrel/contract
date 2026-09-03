@@ -1,5 +1,5 @@
 // The consumer-side guides-parity drop-in: runs `@orkestrel/guide`'s checks against
-// this repo's own `guides/README.md` manifest. The five constants below are this
+// this repo's own `guides/README.md` manifest. The constants below are this
 // package's own, and are the only part a sibling package changes.
 
 import { describe, expect, it } from 'vitest'
@@ -190,8 +190,8 @@ for (const entry of manifest) {
 // The RUNTIME half of the documentation contract. Everything above reflects
 // source TEXT: `createSource` reads declarations, so a guide can agree with
 // every declaration in the tree and still disagree with the object the package
-// actually ships. These read the real prototypes instead, and the two halves
-// answer different questions — which is why both are here.
+// actually ships. These read the real prototypes instead, and the text half and
+// the runtime half answer different questions — which is why each is here.
 const CORE_GUIDE = 'guides/contract.md'
 const RUNTIME_CLASSES = [
 	{ name: 'ContractCompiler', value: ContractCompiler },

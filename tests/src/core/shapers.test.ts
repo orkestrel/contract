@@ -1672,15 +1672,16 @@ describe('schemaToShape — format and pattern are never asserted', () => {
 describe('schemaToShape — hostile schema triad', () => {
 	it('does not stack-overflow or throw on a cyclic schema graph (self-referential properties)', () => {
 		// JSON.parse returns an untyped structure; mutate it before pinning the
-		// declared type to JSONSchema — no type assertion needed (AGENTS §1).
-		const raw = JSON.parse('{"category":"object","properties":{"child":{"category":"string"}}}')
+		// declared type to JSONSchema — no type assertion needed, as
+		// `AGENTS.md` § Non-negotiable rules requires.
+		const raw = JSON.parse('{"type":"object","properties":{"child":{"type":"string"}}}')
 		raw.properties.child = raw
 		const schema: JSONSchema = raw
 		expect(() => createContract(schemaToShape(schema))).not.toThrow()
 	})
 
 	it('does not stack-overflow or throw on a cyclic schema graph (self-referential items)', () => {
-		const raw = JSON.parse('{"category":"array"}')
+		const raw = JSON.parse('{"type":"array"}')
 		raw.items = raw
 		const schema: JSONSchema = raw
 		expect(() => createContract(schemaToShape(schema))).not.toThrow()

@@ -18,7 +18,8 @@ import {
 	readPatternSource,
 } from './helpers.js'
 
-// AGENTS §14: guards are total functions — a guard NEVER throws. Adversarial
+// `.claude/rules/patterns.md` § Validation and contracts: guards are total
+// functions — a guard NEVER throws. Adversarial
 // input (hostile getters, exotic objects, cycles) returns `false`, never an
 // error. Guards built from a single `typeof` / strict-equality test are
 // immediately total — no probe of the value's internals can throw. Every
@@ -365,7 +366,8 @@ export function isNullableBoolean(value: unknown): value is boolean | null {
  * @remarks
  * The low-level total helper every `instanceof`-based guard in this file (and
  * the `instanceOf` combinator) routes through. A bare `value instanceof X` is
- * NOT total (AGENTS §14): it invokes `getPrototypeOf` on `value` — which a
+ * NOT total, which `.claude/rules/patterns.md` § Validation and contracts
+ * requires: it invokes `getPrototypeOf` on `value` — which a
  * revoked `Proxy` or a `getPrototypeOf`-trap `Proxy` throws from — and, when
  * `X[Symbol.hasInstance]` is user-defined, can throw from arbitrary code. This
  * wraps the check in {@link holds} (see ./helpers.js) so any such throw
@@ -425,11 +427,11 @@ export function isRegExp(value: unknown): value is RegExp {
 	// The CAPTURED `source` getter applied to the candidate. That getter is
 	// defined only on an object carrying the pattern's internal slots, so a
 	// non-pattern throws and this total guard answers `false`. Re-reading the
-	// descriptor off `RegExp.prototype` per call, as this did, observed whatever
-	// getter was CURRENTLY installed and only checked that it returned a string —
-	// so `Object.defineProperty(RegExp.prototype, 'source', { get: () => '.*' })`
-	// made this guard accept a plain string, and it gates `matchOf`, `stringOf`
-	// and every string shape builder.
+	// descriptor off `RegExp.prototype` per call would observe whatever getter is
+	// installed at that moment and check only that it returned a string — so
+	// `Object.defineProperty(RegExp.prototype, 'source', { get: () => '.*' })`
+	// would make this guard accept a plain string, and it gates `matchOf`,
+	// `stringOf` and every string shape builder.
 	return holds(() => readPatternSource(value) !== undefined)
 }
 
@@ -515,7 +517,7 @@ export function isArrayBuffer(value: unknown): value is ArrayBuffer {
  *
  * @remarks
  * Guards the global existence of `SharedArrayBuffer` first — safe where it is
- * absent or disabled (e.g. a context that is not cross-origin isolated).
+ * absent or disabled (for example a context that is not cross-origin isolated).
  *
  * @param value - The value to inspect
  * @returns True if the value is a `SharedArrayBuffer`; false otherwise
@@ -581,7 +583,8 @@ export function isAsyncIterable<T = unknown>(value: unknown): value is AsyncIter
  * Determines whether a value is a non-null object.
  *
  * @remarks
- * `true` for arrays, class instances, plain objects, `Map`, `Set`, etc. — use
+ * `true` for every non-null object, including an array, a class instance, a
+ * plain object, a `Map`, and a `Set` — use
  * {@link isRecord} when you need a plain-record check.
  *
  * @param value - The value to inspect
@@ -604,7 +607,8 @@ export function isObject(value: unknown): value is object {
  *
  * @remarks
  * The total form of the shared {@link matchesRecordBrand} rule, and the only
- * one a guard may use: the whole brand runs inside `holds` (AGENTS §14) so a
+ * one a guard may use: the whole brand runs inside `holds`, as
+ * `.claude/rules/patterns.md` § Validation and contracts requires, so a
  * revoked `Proxy` or a hostile `getPrototypeOf` trap answers `false` instead of
  * escaping as a thrown error. Use instead of {@link isObject} to distinguish a
  * plain `{}` / `Object.create(null)` — or a plain object from another realm,
@@ -1100,7 +1104,8 @@ export function isZeroArg(value: unknown): value is ZeroArgFunction {
  *
  * @remarks
  * Uses `constructor.name === 'AsyncFunction'` — not `instanceof`, which is
- * unreliable across realms. The `?.` keeps the guard total (§14): a function
+ * unreliable across realms. The `?.` keeps the guard total, as
+ * `.claude/rules/patterns.md` § Validation and contracts requires: a function
  * whose `constructor` was nulled yields `undefined`, never a thrown `null.name`.
  *
  * @param value - The value to inspect
@@ -1235,7 +1240,8 @@ export function isConstructor(value: unknown): value is AnyConstructor<object> {
  * Total guard: never throws, returns `false` for cycles, functions, `Date`
  * instances, class instances, `NaN`, and `±Infinity`. Arrays and plain records
  * are walked with an ancestor set so recursive input fails instead of hanging.
- * The whole walk runs inside `holds` (AGENTS §14): a hostile getter on a
+ * The whole walk runs inside `holds`, as `.claude/rules/patterns.md`
+ * § Validation and contracts requires: a hostile getter on a
  * record property, or a revoked `Proxy` anywhere in the structure, is caught
  * and yields `false` instead of escaping as a thrown error.
  *

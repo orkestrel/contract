@@ -259,8 +259,9 @@ export class ShapeValidator implements ShapeValidatorInterface {
 		// The refinement, and the whole reason discovery is separate from
 		// measurement: a node already captured is not observed again. Every rule the
 		// OBSERVATION enforces is a property of the node, so a second look at the
-		// same node can only produce the same answer at a longer path. Two rules are
-		// properties of the POSITION instead, and they are answered in two different
+		// same node can only produce the same answer at a longer path. Optional
+		// placement and depth are properties of the POSITION instead, and they are
+		// answered in separate
 		// places: where an `optional` node is legal is re-asked here, from the
 		// capture, for every incoming edge, while depth — the shape's own and a raw
 		// node's embedded schema alike — is measured over the whole captured graph in
@@ -285,9 +286,9 @@ export class ShapeValidator implements ShapeValidatorInterface {
 					context: { path: pathOf(this.#path) },
 				},
 			)
-			// Captured as a childless leaf. Its subtree is not walked, exactly as
-			// before, but every later edge to it now measures its depth from the
-			// capture instead of re-running the observation that already refused.
+			// Captured as a childless leaf. Its subtree is not walked, and every later
+			// edge to it measures its depth from the capture instead of re-running the
+			// observation that already refused.
 			this.#post[this.#post.length] = this.#capture(current, [])
 			this.#path.length -= segments
 			return
@@ -524,10 +525,18 @@ export class ShapeValidator implements ShapeValidatorInterface {
 				}
 			}
 		}
-		if (current.category === 'array' && current.min !== undefined && typeof current.min !== 'number') {
+		if (
+			current.category === 'array' &&
+			current.min !== undefined &&
+			typeof current.min !== 'number'
+		) {
 			return this.#refuse('validateShape: array min must be a number', 'min')
 		}
-		if (current.category === 'array' && current.max !== undefined && typeof current.max !== 'number') {
+		if (
+			current.category === 'array' &&
+			current.max !== undefined &&
+			typeof current.max !== 'number'
+		) {
 			return this.#refuse('validateShape: array max must be a number', 'max')
 		}
 		if (
@@ -594,7 +603,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	// Where an `optional` node is legal depends on the SLOT it arrived through, not
 	// on the node, so this is the one rule discovery asks per incoming edge rather
 	// than once per node. It reads the captured category instead of the source: a
-	// second read of `type` would be a second observation of a node already
+	// second read of `category` would be a second observation of a node already
 	// observed, and an unrecognized node has no category to answer with.
 	#place(index: number, optional: boolean): void {
 		if (optional || this.#domain !== undefined) return
@@ -1249,7 +1258,8 @@ export class ShapeValidator implements ShapeValidatorInterface {
 		return INTRINSICS.reflect.apply(INTRINSICS.recall, this.#index, [shape])
 	}
 
-	// Everything the walk used to answer by walking again. Reading the discovery
+	// Everything a second walk would answer, answered from the capture instead.
+	// Reading the discovery
 	// postorder forwards gives every bottom-up fact — subtree height and emitted
 	// expansion — and reading it backwards gives the top-down one, the deepest
 	// position each node occupies. Both are one pass over the captured nodes and

@@ -21,10 +21,10 @@ export const CONTRACT_ERROR_BRAND = Symbol.for('@orkestrel/contract.error')
  * @remarks
  * THE answer to a defect class that mutated four times before anyone stated it
  * as a class. A caller can replace a global constructor, a static, a prototype
- * member, or a symbol-keyed hook, and each replacement can fail in two ways: it
- * can THROW, which a boundary contains, or it can LIE, which no boundary can
- * see. `Object.freeze = (value) => value` is the second kind and it is the
- * worse one: every cloner succeeds, publishes a mutable graph, and the caller
+ * member, or a symbol-keyed hook, and a replacement can fail by THROWING, which
+ * a boundary contains, or by LYING, which no boundary can
+ * see. `Object.freeze = (value) => value` lies, and that is the
+ * worse failure: every cloner succeeds, publishes a mutable graph, and the caller
  * cannot tell that the package's central guarantee evaporated.
  *
  * Containment cannot close that, because there is nothing to contain — only
@@ -55,10 +55,10 @@ export const CONTRACT_ERROR_BRAND = Symbol.for('@orkestrel/contract.error')
  * per call had captured nothing: capture is decided by WHEN the reference is
  * taken, not by which reflective spelling takes it.
  *
- * Collection membership was previously excluded on the grounds that it needs a
- * data structure rather than one operation, and the exclusion was answered with
- * an exported class whose `has` method every consumer could rewrite — which
- * reproduced the whole defect one prototype higher. The rule has no exception
+ * Collection membership needs a data structure rather than one operation, and
+ * answering it from an exported class's `has` method reproduces the whole defect
+ * one prototype higher, because every consumer can rewrite that method. The rule
+ * has no exception
  * for it: `Set.prototype.has` / `.add` / `.forEach`,
  * `Map.prototype.has` / `.forEach`, and
  * `WeakSet.prototype.has` / `.add` / `.delete` are ordinary rows here, dispatched
@@ -232,8 +232,8 @@ export const INTRINSICS = Object.freeze({
 
 // JSON-related constants. Kept as plain frozen data so the shipped combinators
 // and parsers operate on them directly — there is deliberately no bespoke
-// JSON-Schema guard (AGENTS §14 — the deep recursive validators stay out by
-// design).
+// JSON-Schema guard (`.claude/rules/patterns.md` § Validation and contracts — the
+// deep recursive validators stay out by design).
 
 /**
  * Lists the seven standard JSON Schema `type` names, frozen.
@@ -381,11 +381,10 @@ export const COMPILE_DEPTH_LIMIT = 512
  * they answer a shared-child graph in time proportional to its authored nodes
  * and keep working above this cap.
  *
- * What this cap bounds MOVED when the compilers stopped expanding a DAG. Every
- * artifact family is now one entry per unique node, so the boundary declaration
- * above compiles fourteen nodes in about a millisecond rather than sixteen
- * thousand in 1,342 ms, and the cap is no longer what keeps compilation finite.
- * What still expands is what a CONSUMER materializes from the artifacts: the
+ * This cap does not bound compilation, because the compilers do not expand a
+ * DAG. Every artifact family is one entry per unique node, so the boundary
+ * declaration above compiles its unique nodes in about a millisecond.
+ * What does expand is what a CONSUMER materializes from the artifacts: the
  * value `generate` builds, and the document a compiled schema serializes to,
  * are trees of exactly this size. The cap survives as a bound on what a caller
  * can be handed, not on what the compiler pays.
@@ -474,7 +473,7 @@ export const GENERATION_ATTEMPT_LIMIT = 32
  * Bounds inference against adversarial or cyclic runtime input — once the
  * remaining depth budget reaches zero, inference stops descending and emits
  * the empty accept-anything schema `{}` for that branch instead of recursing
- * further. LOWERABLE per call via {@link ValueToSchemaLimits.depth}; a
+ * further. LOWERABLE per call through {@link ValueToSchemaLimits.depth}; a
  * higher value is held here.
  *
  * A ceiling rather than a default, because the walk recurses: what a deeper
@@ -493,7 +492,7 @@ export const INFER_DEPTH_LIMIT = 32
  * @remarks
  * Bounds the work (and the emitted schema's size) against a wide record or a
  * huge array — properties/elements beyond this cap are never inspected.
- * Overridable per call via {@link ValueToSchemaLimits.properties}.
+ * Overridable per call through {@link ValueToSchemaLimits.properties}.
  */
 export const INFER_BREADTH_LIMIT = 256
 
@@ -504,7 +503,7 @@ export const INFER_BREADTH_LIMIT = 256
  * @remarks
  * Bounds how large an `enum` list {@link samplesToSchema} will emit — a slot with distinct-value count at or above this limit is
  * treated as unbounded (an ID column, not a category) and never gets an
- * `enum` keyword. Overridable per call via {@link ValueToSchemaOptions.enum}
+ * `enum` keyword. Overridable per call through {@link ValueToSchemaOptions.enum}
  * (which gates whether enum inference runs at all).
  */
 export const INFER_ENUM_LIMIT = 12

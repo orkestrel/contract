@@ -2011,7 +2011,8 @@ describe('schemaToParameters', () => {
 	it('returns undefined for a non-record schema (the defensive optionality fallback)', () => {
 		// A class INSTANCE structurally satisfies the all-optional `JSONSchema` interface yet is NOT a
 		// plain record (its prototype is the class, not `Object.prototype`), so the `isRecord` boundary
-		// guard rejects it and the helper yields its `undefined` fallback — the §14 narrowing in action.
+		// guard rejects it and the helper yields its `undefined` fallback — the narrowing
+		// `.claude/rules/patterns.md` § Validation and contracts requires, in action.
 		class FakeSchema {
 			readonly type: JSONSchemaType = 'object'
 		}
@@ -3416,9 +3417,9 @@ describe('buildStringFaults', () => {
 
 		// Control: the honest shape beside it still reports, so the boundary refuses
 		// the unreadable declaration rather than swallowing every answer.
-		expect(faultsToConstraints(buildStringFaults({ category: 'string', min: 4 }, 'ab', []))).toEqual([
-			'min',
-		])
+		expect(
+			faultsToConstraints(buildStringFaults({ category: 'string', min: 4 }, 'ab', [])),
+		).toEqual(['min'])
 	})
 })
 

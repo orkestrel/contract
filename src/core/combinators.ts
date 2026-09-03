@@ -43,9 +43,10 @@ import {
 	readValue,
 } from './helpers.js'
 
-// Every combinator returns a `Guard<T>` — a total function (AGENTS §14). The
+// Every combinator returns a `Guard<T>` — a total function, as
+// `.claude/rules/patterns.md` § Validation and contracts requires. The
 // combinators that invoke a caller-supplied callback inside the guard body
-// contain the whole call via `holds`, so
+// contain the whole call through `holds`, so
 // the produced guard reports a non-match instead of propagating. The container
 // combinators likewise wrap their complete element/entry/key-read walk in
 // `holds` — a hostile Proxy trap, a throwing getter, a throwing
@@ -238,7 +239,7 @@ export function literalOf(
  * Builds a guard that accepts instances of the provided constructor.
  *
  * @remarks
- * Verifies that `ctor` is a real constructor (via {@link isConstructor}) first,
+ * Verifies that `ctor` is a real constructor (through {@link isConstructor}) first,
  * so passing an arrow function does not silently produce a broken guard.
  *
  * @param ctor - The constructor whose instances the guard accepts
@@ -288,7 +289,7 @@ export function enumOf<const E extends Record<string, string | number>>(
 			readValue(() => INTRINSICS.values(enumeration), 'enumOf', { subject: 'enumeration' }),
 		)
 		// `holds`, exactly as `literalOf` does one screen up. The membership read is
-		// now unredirectable, but the guard contract is "never throws" and a guard
+		// unredirectable, but the guard contract is "never throws" and a guard
 		// that states it for one builder and not its sibling is a guard nobody can
 		// rely on.
 		return (value: unknown): value is E[keyof E] =>
@@ -386,7 +387,7 @@ export function mapOf(
  * Builds a guard that accepts plain records matching a guard shape.
  *
  * @remarks
- * Three calling modes depending on the `optional` argument:
+ * The calling modes depend on the `optional` argument:
  * - **No `optional`** — all shape keys required; extra keys rejected.
  * - **`optional: K[]`** — the listed keys are optional; all others required.
  * - **`optional: true`** — every shape key is optional.
@@ -479,7 +480,7 @@ export function recordOf<
  * Builds a guard that accepts non-array objects matching an open guard shape.
  *
  * @remarks
- * Three calling modes mirror {@link recordOf}:
+ * The calling modes mirror {@link recordOf}:
  * - **No `optional`** — all shape keys required; unknown members admitted.
  * - **`optional: K[]`** — the listed keys are optional; all others required.
  * - **`optional: true`** — every shape key is optional.
@@ -705,11 +706,11 @@ export function omitOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 }
 
 /**
- * Combines two guards with logical AND — passes only when both pass.
+ * Combines `left` and `right` with logical AND — passes only when both pass.
  *
  * @remarks
  * Use {@link whereOf} when the right side refines an already-narrowed type; use
- * `andOf` to combine two independent guards.
+ * `andOf` to combine independent guards.
  *
  * @param left - The guard tested first
  * @param right - The guard tested only after `left` passes
@@ -735,8 +736,8 @@ export function andOf(
 }
 
 /**
- * Combines two guards with logical OR — passes when at least one passes. For more
- * than two variants prefer {@link unionOf}.
+ * Combines `left` and `right` with logical OR — passes when at least one passes.
+ * Prefer {@link unionOf} for a wider set of variants.
  *
  * @param left - The guard tested first
  * @param right - The guard tested only after `left` fails
@@ -871,12 +872,10 @@ export function intersectionOf(
 ): Guard<unknown> {
 	return (value: unknown): value is unknown =>
 		holds(() => {
-			// Indexed, exactly as its declared twin `unionOf` twelve lines up. The
-			// ruling forbidding `Array.prototype.every` here was already stated 528
-			// lines earlier in this same file and applied to `literalOf`, and this
-			// statement was missed by the sweep that wrote it: `every` answering
-			// `true` for everything made this guard accept a value no constituent
-			// guard admits.
+			// Indexed, exactly as its declared twin `unionOf` is. `Array.prototype.every`
+			// is forbidden here for the reason `literalOf` states earlier in this file:
+			// a replaced `every` answering `true` for everything makes this guard accept
+			// a value no constituent guard admits.
 			for (let index = 0; index < guards.length; index += 1) {
 				const guard = guards[index]
 				if (guard === undefined || !guard(value)) return false
@@ -892,9 +891,10 @@ export function intersectionOf(
  * @remarks
  * The predicate receives a value already narrowed to `T`. When the predicate is
  * itself a type guard (`value is U`), the result narrows to `Guard<U>` — it
- * passes only when the value is genuinely a `U`, so the narrowing is sound. Per
- * §14 the returned guard never throws: if `predicate` throws, the throw is
- * contained and the guard reports a non-match.
+ * passes only when the value is genuinely a `U`, so the narrowing is sound. The
+ * returned guard never throws, as `.claude/rules/patterns.md` § Validation and
+ * contracts requires: if `predicate` throws, the throw is contained and the
+ * guard reports a non-match.
  *
  * @param base - The guard establishing the accepted domain
  * @param predicate - The refinement run only after `base` passes
@@ -926,8 +926,9 @@ export function whereOf<T>(base: Guard<T>, predicate: (value: T) => boolean): Gu
  * @remarks
  * `thunk` is called on every guard call, not cached — this lets it close over a
  * binding assigned *after* `lazyOf` is called, the primary use case for
- * self-referential recursive guards. Per §14 a throw from `thunk` (or the guard
- * it resolves to) is contained and reported as a non-match.
+ * self-referential recursive guards. A throw from `thunk` (or the guard it
+ * resolves to) is contained and reported as a non-match, as
+ * `.claude/rules/patterns.md` § Validation and contracts requires.
  *
  * Each lazy guard tracks its active invocation depth. An invocation that would
  * exceed {@link GUARD_DEPTH_LIMIT} returns `false` before resolving `thunk`; the
@@ -963,8 +964,9 @@ export function lazyOf<T>(thunk: () => Guard<T>): Guard<T> {
  * check is a validity constraint on a derived view, not a type transformation.
  *
  * @remarks
- * `project` is a plain `(value: T) => U`. Per §14 the returned guard never
- * throws: a throw from `project` or `target` is contained and reported as a
+ * `project` is a plain `(value: T) => U`. The returned guard never
+ * throws, as `.claude/rules/patterns.md` § Validation and contracts requires: a
+ * throw from `project` or `target` is contained and reported as a
  * non-match. (Unlike the reference implementation, there is no
  * "curried projector" branch — a projection that legitimately returns a function
  * would be double-invoked under that scheme. Compose explicitly if you need it.)
@@ -1073,7 +1075,7 @@ export function matchOf(pattern: RegExp): Guard<string> {
  * @remarks
  * Composes {@link isString} with {@link boundsOf} on the string's `.length` and
  * an owned stateless pattern (the same refinement {@link matchOf} performs).
- * When all three options are absent it returns the bare {@link isString} guard
+ * When `min`, `max`, and `pattern` are all absent it returns the bare {@link isString} guard
  * (the unconstrained fast path), so an unrefined string leaf pays no wrapping
  * cost. The single source of the string refinement shared by the compiled guard
  * and parser (compilers.ts).

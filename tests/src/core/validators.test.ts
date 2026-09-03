@@ -480,7 +480,7 @@ describe('emptiness validators', () => {
 		expect(isEmptyObject(Object.create(null))).toBe(true)
 	})
 
-	it('isEmptyString is exact-empty — whitespace-only strings are NOT empty (AGENTS §14 fix)', () => {
+	it('isEmptyString is exact-empty — whitespace-only strings are NOT empty', () => {
 		// Regression: isEmptyString previously used `.trim().length === 0`, which
 		// classified '  ' as empty and directly contradicted isNonEmptyString
 		// (which uses raw `.length > 0` and correctly calls '  ' non-empty). The
@@ -551,7 +551,7 @@ describe('emptiness validators', () => {
 	})
 })
 
-describe('reflective guards contain hostile getter/Proxy throws (AGENTS §14)', () => {
+describe('reflective guards contain hostile getter/Proxy throws', () => {
 	it('isPromiseLike returns false, never throws, on a throwing then getter', () => {
 		const hostile: unknown = {
 			get then() {
@@ -654,7 +654,7 @@ describe('reflective guards contain hostile getter/Proxy throws (AGENTS §14)', 
 	})
 })
 
-describe('instanceof-family guards are total against hostile Proxy input (AGENTS §14)', () => {
+describe('instanceof-family guards are total against hostile Proxy input', () => {
 	it('a revoked Proxy never throws — isDate, isMap, isPromise, a typed-array guard, isEmptyMap', () => {
 		const { proxy, revoke } = Proxy.revocable({}, {})
 		revoke()
@@ -690,7 +690,7 @@ describe('instanceof-family guards are total against hostile Proxy input (AGENTS
 	})
 })
 
-describe('isEmptyObject / isNonEmptyObject are total against an ownKeys-throwing Proxy (AGENTS §14)', () => {
+describe('isEmptyObject / isNonEmptyObject are total against an ownKeys-throwing Proxy', () => {
 	it('returns false, never throws, when Object.keys throws via an ownKeys trap', () => {
 		const hostile = new Proxy(
 			{},
@@ -886,7 +886,7 @@ describe('function validators', () => {
 		expect(isConstructor('not a function')).toBe(false)
 	})
 
-	it('stays total when a function constructor is nulled (AGENTS §14)', () => {
+	it('stays total when a function constructor is nulled', () => {
 		// A passive hostile input: `value.constructor` is null, so a bare
 		// `.constructor.name` would throw `null.name`. The guard must return
 		// `false`, never throw.

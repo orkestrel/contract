@@ -21,12 +21,12 @@ describe('createContract — eager bundle', () => {
 	it('publishes plain data properties rather than getters', () => {
 		const contract = createContract(objectShape({ name: stringShape() }))
 
-		for (const root of ROOTS) {
+		const descriptors = ROOTS.map((root) => {
 			const descriptor = Object.getOwnPropertyDescriptor(contract, root)
-			expect(descriptor, root).toBeDefined()
-			expect(Object.hasOwn(descriptor ?? {}, 'value'), root).toBe(true)
-			expect(descriptor?.get, root).toBeUndefined()
-		}
+			return { root, data: Object.hasOwn(descriptor ?? {}, 'value'), accessor: descriptor?.get }
+		})
+
+		expect(descriptors).toEqual(ROOTS.map((root) => ({ root, data: true, accessor: undefined })))
 	})
 
 	it('carries the same artifact identities through destructuring and through a spread', () => {
@@ -36,7 +36,7 @@ describe('createContract — eager bundle', () => {
 
 		expect(is).toBe(contract.is)
 		expect(parse).toBe(contract.parse)
-		for (const root of ROOTS) expect(spread[root], root).toBe(contract[root])
+		expect(ROOTS.filter((root) => spread[root] !== contract[root])).toEqual([])
 	})
 })
 
@@ -61,8 +61,10 @@ describe('createContract — both declared overloads', () => {
 		expect(contract.schema.type).toBe('object')
 		expect(contract.is({ name: 'Ada' })).toBe(true)
 		expect(contract.parse({ name: 'Ada' })).toEqual({ name: 'Ada' })
-		expect(contract.audit({ name: 1 }).length).toBeGreaterThan(0)
-		expect(contract.explain({ name: 1 }).length).toBeGreaterThan(0)
+		// An absent required key faults in both reports; a coercible `name` would fault
+		// in `audit` alone, because `explain` mirrors `parse` rather than `is`.
+		expect(contract.audit({}).length).toBeGreaterThan(0)
+		expect(contract.explain({}).length).toBeGreaterThan(0)
 		expect(contract.is(contract.generate(() => 0.5))).toBe(true)
 	})
 })
@@ -117,12 +119,19 @@ describe('createContract — door and getter agreement', () => {
 			{ name: 1 },
 		]
 
+		const doorReadings: boolean[] = []
+		const getterReadings: boolean[] = []
 		for (const shape of shapes) {
 			const door = createContract(shape).is
 			const getter = compileGuard(shape)
 			for (const value of corpus) {
-				expect(door(value), `${shape.category} ${String(value)}`).toBe(getter(value))
+				doorReadings.push(door(value))
+				getterReadings.push(getter(value))
 			}
 		}
+
+		expect(doorReadings).toEqual(getterReadings)
+		// The corpus exercises each answer, so agreement is not agreement on one verdict.
+		expect(new Set(doorReadings)).toEqual(new Set([true, false]))
 	})
 })

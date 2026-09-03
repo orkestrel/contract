@@ -209,7 +209,7 @@ describe('ShapeValidator', () => {
 		}
 
 		// `createContract` meets these two sources through OWNERSHIP, and the two
-		// answers differ for a reason worth stating. A refusal to reveal the `type`
+		// answers differ for a reason worth stating. A refusal to reveal the `category`
 		// descriptor stops the capture, so the contract refuses in ownership's own
 		// vocabulary. A field that lies from its THIRD read is never asked a third
 		// time, because one population needs two agreeing reads and no more — so
@@ -241,7 +241,9 @@ describe('ShapeValidator', () => {
 			},
 		})
 
-		const error = captureContractError(() => new ShapeValidator({ category: 'raw', schema }).validate())
+		const error = captureContractError(() =>
+			new ShapeValidator({ category: 'raw', schema }).validate(),
+		)
 
 		expect(error.message).toBe('validateShape: every node must be a recognized shape')
 		expect(error.code).toBe('structure')
@@ -450,7 +452,10 @@ describe('ShapeValidator', () => {
 
 	it('allows shared DAG children while rejecting shape and raw-schema cycles in their old channels', () => {
 		const shared: ContractShape = { category: 'string' }
-		new ShapeValidator({ category: 'object', properties: { first: shared, second: shared } }).validate()
+		new ShapeValidator({
+			category: 'object',
+			properties: { first: shared, second: shared },
+		}).validate()
 
 		const shapeCycle: ContractShape = { category: 'array', items: shared }
 		Reflect.set(shapeCycle, 'items', shapeCycle)
@@ -1241,7 +1246,10 @@ describe('raw schema records are inspected once per call (R6-A)', () => {
 		expect(() =>
 			validateShape({
 				category: 'object',
-				properties: { a: { category: 'raw', schema: shared }, b: { category: 'raw', schema: shared } },
+				properties: {
+					a: { category: 'raw', schema: shared },
+					b: { category: 'raw', schema: shared },
+				},
 			}),
 		).not.toThrow()
 
@@ -1249,7 +1257,10 @@ describe('raw schema records are inspected once per call (R6-A)', () => {
 		const error = captureContractError(() =>
 			validateShape({
 				category: 'object',
-				properties: { a: { category: 'raw', schema: broken }, b: { category: 'raw', schema: broken } },
+				properties: {
+					a: { category: 'raw', schema: broken },
+					b: { category: 'raw', schema: broken },
+				},
 			}),
 		)
 		expect(error.code).toBe('structure')
@@ -1318,7 +1329,8 @@ describe('raw schema records are inspected once per call (R6-A)', () => {
 			// The same declaration through the typed entry point, because a repair
 			// proven at one door is only a hypothesis at the next one.
 			expect(
-				captureContractError(() => createContract({ category: 'object', properties })).context?.path,
+				captureContractError(() => createContract({ category: 'object', properties })).context
+					?.path,
 			).toEqual(path)
 		}
 	})

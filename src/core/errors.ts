@@ -38,7 +38,8 @@ export class ContractError extends Error {
 		// The `pinMembers` body, inlined for the reason that helper's `@remarks`
 		// records: `helpers.ts` imports this module, so calling it here would invert
 		// the dependency. It stays aligned with that helper, accessor branch and
-		// answering `declare` included, so the two copies cannot pin differently.
+		// answering `declare` included, so this body and `pinMembers` cannot pin
+		// differently.
 		const members = INTRINSICS.reflect.members(this.prototype)
 		for (let index = 0; index < members.length; index += 1) {
 			const key = members[index]

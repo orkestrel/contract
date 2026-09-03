@@ -8,7 +8,7 @@ import { ContractCompiler } from './ContractCompiler.js'
 // projection, so it sits in the factory kind file its `create*` form names.
 
 /**
- * Compiles a {@link ContractShape} into a {@link ContractInterface} — the six
+ * Compiles a {@link ContractShape} into a {@link ContractInterface} — the
  * lockstep outputs from one declaration, lockstep meaning derived from one
  * owned snapshot rather than accepting the same values.
  *
@@ -16,16 +16,15 @@ import { ContractCompiler } from './ContractCompiler.js'
  * Creates ONE {@link ContractCompiler} and returns that compiler's exact
  * `contract` bundle. One ownership population governs the whole contract: the
  * declaration is owned once through {@link ownShape}, that owned graph is
- * validated once, and the six artifacts are compiled from it. There is no
+ * validated once, and every artifact is compiled from it. There is no
  * discarded pre-ownership pass over the caller's declaration and no second
  * snapshot — ownership already refuses a malformed structural slot, scalar
  * field, or bound rather than normalizing it, so a second walk of the caller's
  * live source only added a population that could disagree with the one the
  * artifacts actually use.
- * All six artifacts are precompiled, so `audit`, `explain` and `generate` no
- * longer re-walk and re-gate the declaration on every call the way they used
- * to; `contract.audit` and `compileAuditor` are the same compiled function
- * reached two ways.
+ * Every artifact is precompiled, so `audit`, `explain` and `generate` re-walk
+ * and re-gate nothing on a later call; `contract.audit` and `compileAuditor` are
+ * the same compiled function reached by different names.
  * The bundle is eager by intent. Its members are plain data properties holding
  * the compiled artifacts, so `const { is, parse } = createContract(shape)`
  * destructures those exact values and a spread of the result copies them; a

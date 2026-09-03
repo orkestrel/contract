@@ -82,7 +82,10 @@ import {
 import * as core from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 
-type ShapeByType<T extends ContractShape['category']> = Extract<ContractShape, { readonly category: T }>
+type ShapeByType<T extends ContractShape['category']> = Extract<
+	ContractShape,
+	{ readonly category: T }
+>
 
 type CompleteShape<T extends ContractShape['category']> = {
 	readonly [K in keyof ShapeByType<T>]-?: ShapeByType<T>[K]
@@ -739,7 +742,9 @@ describe('validateShape', () => {
 					}
 					presenceErrors.push(captureContractError(() => cloneShape(presenceRoot)))
 				}
-				expect(presenceErrors.map((error) => error.code)).toEqual(field === 'category' ? [] : ['clone'])
+				expect(presenceErrors.map((error) => error.code)).toEqual(
+					field === 'category' ? [] : ['clone'],
+				)
 				expect(presenceErrors.map((error) => error.message)).toEqual(
 					field === 'category' ? [] : ['cloneShape: failed to create an owned shape snapshot'],
 				)
@@ -974,7 +979,10 @@ describe('validateShape', () => {
 				malformed: rawAdditional,
 				control: {
 					category: 'union',
-					variants: [{ category: 'raw', schema: { additionalProperties: {} } }, { category: 'string' }],
+					variants: [
+						{ category: 'raw', schema: { additionalProperties: {} } },
+						{ category: 'string' },
+					],
 				},
 			},
 		]
@@ -1125,9 +1133,9 @@ describe('validateShape', () => {
 		const nested: JSONSchema = JSON.parse(
 			'{"type":"object","properties":{"value":{"items":{"type":"bogus"}}}}',
 		)
-		expect(captureContractError(() => compileSchema({ category: 'raw', schema: nested })).code).toBe(
-			'structure',
-		)
+		expect(
+			captureContractError(() => compileSchema({ category: 'raw', schema: nested })).code,
+		).toBe('structure')
 		const unsupported: JSONSchema = JSON.parse('{"const":"x"}')
 		expect(
 			captureContractError(() => compileSchema({ category: 'raw', schema: unsupported })).code,
@@ -2208,11 +2216,17 @@ describe('malformed shape children', () => {
 			deep = { category: 'array', items: deep }
 		}
 		const cases: ReadonlyArray<{ readonly name: string; readonly shape: ContractShape }> = [
-			{ name: 'optional placement', shape: { category: 'array', items: optionalShape(stringShape()) } },
+			{
+				name: 'optional placement',
+				shape: { category: 'array', items: optionalShape(stringShape()) },
+			},
 			{ name: 'integer range', shape: { category: 'number', integer: true, min: 0.2, max: 0.8 } },
 			{ name: 'string min domain', shape: { category: 'string', min: -1 } },
 			{ name: 'string range', shape: { category: 'string', min: 3, max: 1 } },
-			{ name: 'array min domain', shape: { category: 'array', items: { category: 'string' }, min: -1 } },
+			{
+				name: 'array min domain',
+				shape: { category: 'array', items: { category: 'string' }, min: -1 },
+			},
 			{ name: 'number min domain', shape: { category: 'number', min: Number.POSITIVE_INFINITY } },
 			{ name: 'flagged pattern', shape: { category: 'string', pattern: /a/i } },
 			{ name: 'empty union', shape: { category: 'union', variants: [] } },
@@ -2221,7 +2235,10 @@ describe('malformed shape children', () => {
 				name: 'non-finite literal',
 				shape: { category: 'literal', values: [Number.POSITIVE_INFINITY] },
 			},
-			{ name: 'union mode', shape: JSON.parse('{"category":"union","variants":[],"mode":"allOf"}') },
+			{
+				name: 'union mode',
+				shape: JSON.parse('{"category":"union","variants":[],"mode":"allOf"}'),
+			},
 			{ name: 'raw keyword', shape: { category: 'raw', schema: JSON.parse('{"nope":1}') } },
 			{ name: 'cycle', shape: cyclic },
 			{ name: 'depth', shape: deep },
@@ -2296,7 +2313,10 @@ describe('malformed shape children', () => {
 			Reflect.set(narrowed, 'min', 0.2)
 			Reflect.set(narrowed, 'max', 0.8)
 		})
-		const unreadableHost: Record<string, unknown> = { category: 'array', items: { category: 'string' } }
+		const unreadableHost: Record<string, unknown> = {
+			category: 'array',
+			items: { category: 'string' },
+		}
 		const unreadable = new LateMutation({ a: unreadableHost }, () => {
 			Reflect.set(unreadableHost, 'items', createRevokedProxy())
 		})
@@ -3666,7 +3686,8 @@ describe('compileParser', () => {
 		expect(parse({ name: 'Ada', age: -1 })).toBeUndefined() // age under min:0
 	})
 
-	// AGENTS §14 parse↔guard soundness for REFINED leaves: the compiled guard and
+	// Parse↔guard soundness for REFINED leaves, per `.claude/rules/patterns.md`
+	// § Validation and contracts: the compiled guard and
 	// parser are derived from one combinator source (`stringOf` / `boundsOf`), so every non-`undefined` parse
 	// must satisfy the guard — refinements included. (Clause B of soundness; the
 	// compiler intentionally rebuilds containers to coerce contents, so the leaf
@@ -4038,7 +4059,8 @@ describe('compileReporter — union / oneOf', () => {
 describe('compileReporter — hostile input containment', () => {
 	it('bounds a cyclic object value against a finite shape and JSON.stringify(faults) succeeds', () => {
 		const shape = objectShape({ id: stringShape() })
-		// The shape tree is finite (never cyclic per AGENTS §14), so recursion
+		// The shape tree is finite (never cyclic, per `.claude/rules/patterns.md`
+		// § Validation and contracts), so recursion
 		// depth follows the SHAPE, not the value — a self-referencing value poses
 		// no infinite-recursion risk. `id` is a non-coercible object, so it faults.
 		const cyclic: Record<string, unknown> = { id: {} }
@@ -5001,7 +5023,8 @@ describe('compiled artifacts answer through unredirectable dispatch', () => {
 })
 
 describe('four-door agreement (H9 soundness)', () => {
-	// AGENTS §14: guard-valid input is never rejected by its parser. The guide adds
+	// `.claude/rules/patterns.md` § Validation and contracts: guard-valid input is
+	// never rejected by its parser. The guide adds
 	// `audit(v).length === 0 ⟺ is(v)` and `explain(v).length === 0 ⟺ parse(v) !== undefined`.
 	// The direction that matters is the false clean: no door may CERTIFY a value
 	// another door then refuses.

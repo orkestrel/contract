@@ -42,14 +42,14 @@ import {
 } from './helpers.js'
 import { isLiteralValue, isObject, isRegExp } from './validators.js'
 
-// The builders return the parameterized types.ts interfaces (e.g. `ArrayShape<S>`,
+// The builders return the parameterized types.ts interfaces (for example `ArrayShape<S>`,
 // `ObjectShape<P>`), never inline object literals — the generic parameter keeps
 // `Infer<typeof shape>` exact while the return type still enforces conformance to
 // the shared shape interface.
 
 // Shape builders — pure constructors for the `ContractShape` union. Each returns
 // a plain descriptor; the compilers (compilers.ts) turn it into a guard, parser,
-// schema, and generator. The precise return types (e.g. literal tuples, generic
+// schema, and generator. The precise return types (for example literal tuples, generic
 // `items` / `properties`) are preserved so `Infer<typeof shape>` stays exact.
 
 // === Primitives
@@ -545,7 +545,7 @@ export function unionShape<V extends readonly ContractShape[]>(
  *   between variants has no well-defined coercion target.
  *
  * Prefer {@link unionShape} when a value may legitimately satisfy more than
- * one variant (e.g. overlapping shapes) and any match is acceptable. Prefer
+ * one variant (for example overlapping shapes) and any match is acceptable. Prefer
  * `oneOfShape` when overlap between variants indicates malformed input that
  * must be rejected.
  *
@@ -619,7 +619,7 @@ export function nullableShape<S extends ContractShape>(inner: S): NullableShape<
  * @remarks
  * The sound counterpart of {@link rawShape}: `rawShape` embeds an arbitrary
  * schema fragment and accepts every defined value at runtime, while `jsonShape`
- * validates that a value is real JSON (via {@link isJSONValue}). Its emitted
+ * validates that a value is real JSON (through {@link isJSONValue}). Its emitted
  * schema is the empty accept-anything `{}`, so here the schema claims MORE than
  * the compiled guard accepts — `NaN`, a `Map`, and a class instance all satisfy
  * `{}` and all fail `isJSONValue`.
@@ -691,7 +691,8 @@ export function rawShape(schema: JSONSchema): RawShape {
 // and bounded on three axes, mirroring the inferers: a WeakSet of ancestor
 // schema nodes (cycle safety), a decrementing depth budget (INFER_DEPTH_LIMIT
 // default), and a per-container sampling cap (INFER_BREADTH_LIMIT) on
-// properties/oneOf/anyOf entries — every branch stays total, per AGENTS §14.
+// properties/oneOf/anyOf entries — every branch stays total, as
+// `.claude/rules/patterns.md` § Validation and contracts requires.
 // Every keyword read is type-guarded: a malformed keyword is IGNORED, falling
 // through to the next rule, never thrown. `format` and `pattern` are NEVER
 // asserted — `format` is annotation-only, and compiling an attacker-supplied

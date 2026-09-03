@@ -1,5 +1,6 @@
-// Integration coverage for the full contract primitive matrix (AGENTS §14 /
-// contract behavior): every leaf shape × variation, every container and
+// Integration coverage for the full contract primitive matrix, against
+// `.claude/rules/patterns.md` § Validation and contracts and the package guide:
+// every leaf shape × variation, every container and
 // wrapper, large composite contracts, and cross-pair composition with the
 // guard combinators. Uses the shared factories/roundtrip helpers from
 // tests/setup.ts rather than re-declaring shapes locally.

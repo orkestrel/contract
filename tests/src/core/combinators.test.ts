@@ -986,7 +986,7 @@ describe('instanceOf', () => {
 		expect(instanceOf(Date)('1970-01-01')).toBe(false)
 	})
 
-	it('is total against a revoked Proxy — never throws (AGENTS §14)', () => {
+	it('is total against a revoked Proxy — never throws', () => {
 		const isDateValue = instanceOf(Date)
 		const { proxy, revoke } = Proxy.revocable({}, {})
 		revoke()
@@ -1043,7 +1043,7 @@ describe('empty-collection and zero-guard edge cases', () => {
 	})
 })
 
-describe('user-callback throw containment (AGENTS §14)', () => {
+describe('user-callback throw containment', () => {
 	it('logical, refinement, and nullish combinators contain every callback throw', () => {
 		// A throwing member is a NON-MATCH, and the answer that follows from that
 		// differs by combinator: a conjunction fails, a disjunction still passes on
@@ -1282,7 +1282,7 @@ describe('optionalOf', () => {
 	})
 })
 
-describe('container-combinator throw containment (AGENTS §14)', () => {
+describe('container-combinator throw containment', () => {
 	it('recordOf: a hostile getter on a value read is contained as a non-match', () => {
 		const hostile: unknown = {
 			get a() {

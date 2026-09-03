@@ -3100,7 +3100,8 @@ export const SOUNDNESS_SAMPLE: readonly unknown[] = Object.freeze([
 
 /**
  * Return the parse↔guard soundness violations of a (guard, parser) pair over
- * {@link SOUNDNESS_SAMPLE} — an empty result means the pair is sound (AGENTS §14):
+ * {@link SOUNDNESS_SAMPLE} — an empty result means the pair is sound, as
+ * `.claude/rules/patterns.md` § Validation and contracts requires:
  * - **A** — a guard-valid input is returned UNCHANGED (by identity), never rejected.
  * - **B** — every non-`undefined` output satisfies the guard.
  *
@@ -3304,7 +3305,7 @@ export function compositeShape(depth = 2): ContractShape {
 // === Value factories
 //
 // Small, curated (honest — not generator-derived) valid/invalid samples per
-// leaf kind, keyed by the shape's `type`. Covers the leaf kinds where a
+// leaf kind, keyed by the shape's `category`. Covers the leaf kinds where a
 // static sample set is meaningful; containers/wrappers are exercised through
 // generated values instead (see buildLockstep / buildJSONRoundtrip).
 

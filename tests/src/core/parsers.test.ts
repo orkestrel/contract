@@ -359,7 +359,7 @@ describe('record-field parsers', () => {
 	})
 })
 
-describe('parse ↔ guard soundness (AGENTS §14)', () => {
+describe('parse ↔ guard soundness', () => {
 	it('parseString ↔ isString', () => {
 		expect(soundnessViolations(isString, parseString)).toEqual([])
 	})

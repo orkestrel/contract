@@ -12,14 +12,14 @@ import { contain, refuseExpansion } from './helpers.js'
 import { ContractCompiler } from './ContractCompiler.js'
 import { ShapeValidator } from './ShapeValidator.js'
 
-// The public function boundaries over two engines. `ShapeValidator` owns the
+// The public function boundaries over the engines. `ShapeValidator` owns the
 // stateful declaration walk; `ContractCompiler` owns ownership, preparation and
-// the six artifact families. Each function below is a real typed door — its own
+// every artifact family. Each function below is a real typed door — its own
 // overloads, its own containment, its own diagnostics — that requests exactly
 // the root it is named for and nothing else, so asking for a guard never
-// compiles a generator. Recursion lives in the compiler, not here: the earlier
-// shape of this module re-entered its own public functions per node, which
-// re-owned and re-validated the subgraph at every level.
+// compiles a generator. Recursion lives in the compiler, not here: a module that
+// re-entered its own public functions per node would re-own and re-validate the
+// subgraph at every level.
 
 // === Validation
 
@@ -119,7 +119,8 @@ export function compileSchema(shape: ContractShape): JSONSchema {
  * key view their parser, reporter, auditor, and inference use for both open and
  * closed objects — the view is shared, the verdict on an undeclared key is not
  * (this guard rejects the object; the parser drops the key).
- * Like every guard it is total — it never throws (AGENTS §14). It requests
+ * Like every guard it is total — it never throws, as `.claude/rules/patterns.md`
+ * § Validation and contracts requires. It requests
  * exactly the `guard` root of a fresh {@link ContractCompiler}, which owns the
  * declaration once through {@link ownShape} and validates that snapshot once,
  * so an unfrozen caller-owned graph compiles from a snapshot and excessive
@@ -157,7 +158,8 @@ export function compileGuard(shape: ContractShape): Guard<unknown> {
  * length/pattern, `boundsOf` for a number's value and an array's length, and
  * {@link literalOf} for literal membership — so a value that coerces but
  * violates a bound parses to `undefined`. The result is full parse↔guard
- * soundness (AGENTS §14): a
+ * soundness, which `.claude/rules/patterns.md` § Validation and contracts
+ * mandates: a
  * non-`undefined` parse always satisfies the contract's `is`, refinements
  * included — a statement about the OUTPUT, never about the input, which may be
  * a value `is` rejects. Object presence and extra-key processing read the same
@@ -251,14 +253,15 @@ export function compileGenerator(shape: ContractShape, random?: RandomFunction):
  * call — object, array, and union alike, including a union's `oneOf` "no
  * match" / "no consensus" summary fault prepended to its closest variant's
  * faults — slices its return to at most {@link FAULT_LIMIT} entries, so the
- * bound holds at every level of nesting, not just the outermost container, on
+ * bound holds at every level of nesting rather than at the outermost container alone, on
  * adversarial input (a huge array, a wide record, a wide union of wide
  * records). A closed object's extra keys never
  * fault — `parse` silently drops them, so `explain` mirrors that leniency, and
  * {@link compileAuditor} is where they do fault; an open object with a
  * constraining `additionalProperties` shape recurses extras against it instead.
- * A hostile getter or throwing `Proxy` trap is contained via {@link attempt}
- * and surfaces as a single top-level type fault, never a throw (AGENTS §14).
+ * A hostile getter or throwing `Proxy` trap is contained through {@link attempt}
+ * and surfaces as a single top-level type fault, never a throw, as
+ * `.claude/rules/patterns.md` § Validation and contracts requires.
  * It requests exactly the `reporter` root of a fresh {@link ContractCompiler}
  * and applies it once, so one call owns and validates the declaration once
  * rather than re-gating every node it descends into. Reuse the compiler (or a

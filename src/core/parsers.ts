@@ -21,7 +21,8 @@ import {
 	resolveField,
 } from './helpers.js'
 
-// AGENTS §14: a parser answers "give me a `T` or nothing" — it returns the
+// `.claude/rules/patterns.md` § Validation and contracts: a parser answers
+// "give me a `T` or nothing" — it returns the
 // typed value or `undefined` for readable invalid input. `parseRecord` and
 // `parseJSONValue` refuse a failed traversal with a coded `ContractError`, so
 // unreadability cannot masquerade as ordinary invalidity. Each leaf parser here forms a
@@ -35,9 +36,9 @@ import {
 //   parseBoolean ↔ isBoolean         parseNull      ↔ isNull
 //                                    parseJSONValue ↔ isJSONValue
 //
-// Coercion of NON-valid inputs (e.g. numeric strings → numbers) is a bonus on
-// top of soundness, not a violation of it — clause A only constrains inputs the
-// guard already accepts.
+// Coercion of NON-valid inputs (for example numeric strings → numbers) is a
+// bonus on top of soundness, not a violation of it — soundness constrains only
+// the inputs the guard already accepts.
 //
 // These leaf parsers are deliberately TYPE-only: they know nothing about a
 // shape's `min` / `max` / `pattern` refinements. Those refinements are enforced
@@ -90,7 +91,7 @@ export function parseString(value: unknown): string | undefined {
  *
  * @remarks
  * A finite number is returned unchanged; a non-blank numeric string is parsed
- * via `Number(...)`. `NaN`, `±Infinity`, blank/non-numeric strings, and every
+ * through `Number(...)`. `NaN`, `±Infinity`, blank/non-numeric strings, and every
  * other type → `undefined`.
  *
  * @param value - The value to parse
@@ -254,7 +255,7 @@ export function parseArray<T = unknown>(
  *
  * @remarks
  * Unlike {@link parseRecord} / {@link parseArray}, this is a DEEP gate: it
- * walks the entire tree via {@link isJSONValue} rather than checking only the
+ * walks the entire tree through {@link isJSONValue} rather than checking only the
  * top-level shape. That walk is cycle-safe. A readable non-JSON structure,
  * including a cycle, returns `undefined`; a failed property read throws a
  * `structure` {@link ContractError}, keeping unreadability distinct from an
@@ -476,7 +477,7 @@ export function parseEnumField<const T extends LiteralValue>(
  * Reads and parses a JSON-value field from a record by key or nested key path.
  *
  * @remarks
- * Deep-gates the field's whole subtree via {@link parseJSONValue} — see that
+ * Deep-gates the field's whole subtree through {@link parseJSONValue} — see that
  * function's remarks for why this differs from the shallow
  * {@link parseRecordField} / {@link parseArrayField}.
  *
