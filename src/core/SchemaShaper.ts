@@ -322,7 +322,7 @@ export class SchemaShaper {
 					? this.#convert(extra, depth - 1)
 					: true
 		return INTRINSICS.freeze({
-			type: 'object',
+			category: 'object',
 			properties: INTRINSICS.freeze(properties),
 			additionalProperties,
 			...(description === undefined ? {} : { description }),

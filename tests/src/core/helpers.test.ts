@@ -3091,7 +3091,7 @@ describe('pinned prototypes', () => {
 		expect(typeof descriptor?.get).toBe('function')
 		expect(descriptor?.configurable).toBe(false)
 		expect(new Counted().count).toBe(7)
-		expect(new ShapeValidator({ type: 'string' }).expansion).toBeUndefined()
+		expect(new ShapeValidator({ category: 'string' }).expansion).toBeUndefined()
 	})
 
 	it('leaves no exported class prototype member writable', () => {
@@ -3159,8 +3159,8 @@ describe('shapeToKind — declared return type (H9)', () => {
 		// built as a real declaration and then corrupted reflectively, because a
 		// type assertion would have made the input the type system's problem rather
 		// than the switch's.
-		const corrupt: ContractShape = { type: 'string' }
-		Reflect.set(corrupt, 'type', 'not-a-real-category')
+		const corrupt: ContractShape = { category: 'string' }
+		Reflect.set(corrupt, 'category', 'not-a-real-category')
 		const error = captureContractError(() => shapeToKind(corrupt))
 		expect(error.code).toBe('structure')
 		expect(error.message).toBe('shapeToKind: shape could not be read')
@@ -3176,15 +3176,15 @@ describe('buildStringFaults', () => {
 	it('reports min, max, and pattern in declaration order', () => {
 		// All three cannot be violated by one length, so the order is proven in two
 		// halves that overlap on `pattern`.
-		const short: StringShape = { type: 'string', min: 4, pattern: /^[0-9]+$/ }
+		const short: StringShape = { category: 'string', min: 4, pattern: /^[0-9]+$/ }
 		expect(faultsToConstraints(buildStringFaults(short, 'ab', []))).toEqual(['min', 'pattern'])
 
-		const long: StringShape = { type: 'string', max: 2, pattern: /^[0-9]+$/ }
+		const long: StringShape = { category: 'string', max: 2, pattern: /^[0-9]+$/ }
 		expect(faultsToConstraints(buildStringFaults(long, 'abcd', []))).toEqual(['max', 'pattern'])
 	})
 
 	it('treats both bounds as inclusive and previews the offending value', () => {
-		const bounded: StringShape = { type: 'string', min: 2, max: 4 }
+		const bounded: StringShape = { category: 'string', min: 2, max: 4 }
 		expect(buildStringFaults(bounded, 'ab', [])).toEqual([])
 		expect(buildStringFaults(bounded, 'abcd', [])).toEqual([])
 		expect(buildStringFaults(bounded, 'a', [])).toEqual([
@@ -3210,7 +3210,7 @@ describe('buildStringFaults', () => {
 	})
 
 	it('carries the pattern source as the limit and roots faults at the given path', () => {
-		const shape: StringShape = { type: 'string', pattern: /^[a-z]+$/ }
+		const shape: StringShape = { category: 'string', pattern: /^[a-z]+$/ }
 		expect(buildStringFaults(shape, 'A1', ['properties', 'name'])).toEqual([
 			{
 				reason: 'constraint',
@@ -3228,7 +3228,7 @@ describe('buildStringFaults', () => {
 		// regex answers differently on the second call for the same value. The owned
 		// rebuild strips it; the controls below prove the flag was really set.
 		const pattern = /^[a-z]+$/g
-		const shape: StringShape = { type: 'string', pattern }
+		const shape: StringShape = { category: 'string', pattern }
 		expect(buildStringFaults(shape, 'abc', [])).toEqual([])
 		expect(buildStringFaults(shape, 'abc', [])).toEqual([])
 		expect(pattern.lastIndex).toBe(0)
@@ -3238,7 +3238,7 @@ describe('buildStringFaults', () => {
 	it('reports the same faults from a supplied rebuild as from the shape itself', () => {
 		// A contradictory declaration is the only one a single length can violate on
 		// every axis at once, so it is what pins the whole order in one report.
-		const shape: StringShape = { type: 'string', min: 4, max: 2, pattern: /^[0-9]+$/ }
+		const shape: StringShape = { category: 'string', min: 4, max: 2, pattern: /^[0-9]+$/ }
 		const supplied = buildStringFaults(shape, 'abc', ['items'], readPattern(/^[0-9]+$/))
 
 		expect(supplied).toEqual([
@@ -3271,7 +3271,7 @@ describe('buildStringFaults', () => {
 	})
 
 	it("applies the supplied pattern rather than the shape's own to decide the match", () => {
-		const shape: StringShape = { type: 'string', pattern: /^a$/ }
+		const shape: StringShape = { category: 'string', pattern: /^a$/ }
 		expect(buildStringFaults(shape, 'b', [], readPattern(/^b$/))).toEqual([])
 
 		// Control: the same value against the same shape without the supplied
@@ -3286,7 +3286,7 @@ describe('buildStringFaults', () => {
 		// `lastIndex` per `exec`, and stripping it is what makes a single shared
 		// pattern answer the same way on every call.
 		const caller = /^[a-z]+$/g
-		const shape: StringShape = { type: 'string', pattern: /^[a-z]+$/ }
+		const shape: StringShape = { category: 'string', pattern: /^[a-z]+$/ }
 		const stateless = readPattern(caller)
 
 		expect(buildStringFaults(shape, 'abc', [], stateless)).toEqual([])
@@ -3317,7 +3317,7 @@ describe('buildStringFaults', () => {
 		// report.
 		let reads = 0
 		const shape: StringShape = {
-			type: 'string',
+			category: 'string',
 			get pattern() {
 				reads += 1
 				return /^[0-9]+$/
@@ -3350,7 +3350,7 @@ describe('buildStringFaults', () => {
 		// are identical either way, so only the read count binds the promise.
 		let reads = 0
 		const shape: StringShape = {
-			type: 'string',
+			category: 'string',
 			get pattern() {
 				reads += 1
 				return /^[0-9]+$/
@@ -3379,14 +3379,14 @@ describe('buildStringFaults', () => {
 
 	it('returns a fresh array per call and mutates neither the shape nor the path', () => {
 		const path = ['items']
-		const shape: StringShape = { type: 'string', min: 3 }
+		const shape: StringShape = { category: 'string', min: 3 }
 		const first = buildStringFaults(shape, 'a', path)
 		const second = buildStringFaults(shape, 'a', path)
 
 		expect(first).not.toBe(second)
 		expect(first).toEqual(second)
 		expect(path).toEqual(['items'])
-		expect(shape).toEqual({ type: 'string', min: 3 })
+		expect(shape).toEqual({ category: 'string', min: 3 })
 		expect(buildStringFaults(shape, 'abc', [])).not.toBe(buildStringFaults(shape, 'abc', []))
 	})
 
@@ -3399,12 +3399,12 @@ describe('buildStringFaults', () => {
 		// published door that leaks a raw host value falsifies the promise its
 		// sibling `shapeToKind` states for this whole module.
 		const disguised = captureContractError(() =>
-			buildStringFaults({ type: 'string', pattern: new Proxy(/^a+$/, {}) }, 'abc', []),
+			buildStringFaults({ category: 'string', pattern: new Proxy(/^a+$/, {}) }, 'abc', []),
 		)
 		expect(disguised.code).toBe('structure')
 		expect(disguised.message).toBe('buildStringFaults: shape could not be read')
 
-		const hostile: StringShape = { type: 'string' }
+		const hostile: StringShape = { category: 'string' }
 		Object.defineProperty(hostile, 'min', {
 			get: throwSentinel(new Error('boom')),
 			enumerable: true,
@@ -3416,7 +3416,7 @@ describe('buildStringFaults', () => {
 
 		// Control: the honest shape beside it still reports, so the boundary refuses
 		// the unreadable declaration rather than swallowing every answer.
-		expect(faultsToConstraints(buildStringFaults({ type: 'string', min: 4 }, 'ab', []))).toEqual([
+		expect(faultsToConstraints(buildStringFaults({ category: 'string', min: 4 }, 'ab', []))).toEqual([
 			'min',
 		])
 	})
@@ -3424,7 +3424,7 @@ describe('buildStringFaults', () => {
 
 describe('buildNumberFaults', () => {
 	it('reports integer, min, and max in declaration order', () => {
-		const shape: NumberShape = { type: 'number', integer: true, min: 10, max: 1 }
+		const shape: NumberShape = { category: 'number', integer: true, min: 10, max: 1 }
 		expect(faultsToConstraints(buildNumberFaults(shape, 5.5, []))).toEqual([
 			'integer',
 			'min',
@@ -3433,7 +3433,7 @@ describe('buildNumberFaults', () => {
 	})
 
 	it('names the declared kind rather than the value kind', () => {
-		expect(buildNumberFaults({ type: 'number', integer: true, min: 1 }, 0, [])).toEqual([
+		expect(buildNumberFaults({ category: 'number', integer: true, min: 1 }, 0, [])).toEqual([
 			{
 				reason: 'constraint',
 				path: [],
@@ -3443,7 +3443,7 @@ describe('buildNumberFaults', () => {
 				received: '0',
 			},
 		])
-		expect(buildNumberFaults({ type: 'number', min: 1 }, 0, [])).toEqual([
+		expect(buildNumberFaults({ category: 'number', min: 1 }, 0, [])).toEqual([
 			{
 				reason: 'constraint',
 				path: [],
@@ -3456,30 +3456,30 @@ describe('buildNumberFaults', () => {
 	})
 
 	it('treats both bounds as inclusive and accepts a whole-valued float as an integer', () => {
-		const bounded: NumberShape = { type: 'number', min: -1, max: 1 }
+		const bounded: NumberShape = { category: 'number', min: -1, max: 1 }
 		expect(buildNumberFaults(bounded, -1, [])).toEqual([])
 		expect(buildNumberFaults(bounded, 1, [])).toEqual([])
 		expect(faultsToConstraints(buildNumberFaults(bounded, -1.5, []))).toEqual(['min'])
 		// Negative zero satisfies both bounds exactly as positive zero does, and
 		// `Number.isInteger(-0)` is true, so the signed zero faults at neither gate.
-		expect(buildNumberFaults({ type: 'number', integer: true }, -0, [])).toEqual([])
-		expect(buildNumberFaults({ type: 'number', integer: true }, 2.0, [])).toEqual([])
+		expect(buildNumberFaults({ category: 'number', integer: true }, -0, [])).toEqual([])
+		expect(buildNumberFaults({ category: 'number', integer: true }, 2.0, [])).toEqual([])
 	})
 
 	it('returns a fresh array per call and mutates neither the shape nor the path', () => {
 		const path = ['properties', 'age']
-		const shape: NumberShape = { type: 'number', max: 1 }
+		const shape: NumberShape = { category: 'number', max: 1 }
 		const first = buildNumberFaults(shape, 2, path)
 		const second = buildNumberFaults(shape, 2, path)
 
 		expect(first).not.toBe(second)
 		expect(first).toEqual(second)
 		expect(path).toEqual(['properties', 'age'])
-		expect(shape).toEqual({ type: 'number', max: 1 })
+		expect(shape).toEqual({ category: 'number', max: 1 })
 	})
 
 	it('refuses a shape it cannot read instead of publishing the host failure', () => {
-		const hostile: NumberShape = { type: 'number' }
+		const hostile: NumberShape = { category: 'number' }
 		Object.defineProperty(hostile, 'min', {
 			get: throwSentinel(new Error('boom')),
 			enumerable: true,
@@ -3490,7 +3490,7 @@ describe('buildNumberFaults', () => {
 		expect(error.cause).toBeInstanceOf(Error)
 
 		// Control: the honest shape beside it still reports.
-		expect(faultsToConstraints(buildNumberFaults({ type: 'number', min: 4 }, 3, []))).toEqual([
+		expect(faultsToConstraints(buildNumberFaults({ category: 'number', min: 4 }, 3, []))).toEqual([
 			'min',
 		])
 	})
@@ -3498,7 +3498,7 @@ describe('buildNumberFaults', () => {
 
 describe('buildArrayFaults', () => {
 	it('reports min then max against the observed length', () => {
-		const shape: ArrayShape = { type: 'array', items: { type: 'string' }, min: 2, max: 3 }
+		const shape: ArrayShape = { category: 'array', items: { category: 'string' }, min: 2, max: 3 }
 		expect(buildArrayFaults(shape, 2, [])).toEqual([])
 		expect(buildArrayFaults(shape, 3, [])).toEqual([])
 		expect(buildArrayFaults(shape, 1, [])).toEqual([
@@ -3527,7 +3527,7 @@ describe('buildArrayFaults', () => {
 		// Both doors read their entries once through `readArrayEntries`; the count
 		// reported here is that read's count, so a value whose `length` moved between
 		// reads cannot make the diagnostic disagree with the walk that produced it.
-		const shape: ArrayShape = { type: 'array', items: { type: 'string' }, min: 5 }
+		const shape: ArrayShape = { category: 'array', items: { category: 'string' }, min: 5 }
 		expect(buildArrayFaults(shape, 0, ['items'])).toEqual([
 			{
 				reason: 'constraint',
@@ -3542,18 +3542,18 @@ describe('buildArrayFaults', () => {
 
 	it('returns a fresh array per call and mutates neither the shape nor the path', () => {
 		const path = ['0']
-		const shape: ArrayShape = { type: 'array', items: { type: 'string' }, min: 1 }
+		const shape: ArrayShape = { category: 'array', items: { category: 'string' }, min: 1 }
 		const first = buildArrayFaults(shape, 0, path)
 		const second = buildArrayFaults(shape, 0, path)
 
 		expect(first).not.toBe(second)
 		expect(first).toEqual(second)
 		expect(path).toEqual(['0'])
-		expect(shape).toEqual({ type: 'array', items: { type: 'string' }, min: 1 })
+		expect(shape).toEqual({ category: 'array', items: { category: 'string' }, min: 1 })
 	})
 
 	it('refuses a shape it cannot read instead of publishing the host failure', () => {
-		const hostile: ArrayShape = { type: 'array', items: { type: 'string' } }
+		const hostile: ArrayShape = { category: 'array', items: { category: 'string' } }
 		Object.defineProperty(hostile, 'min', {
 			get: throwSentinel(new Error('boom')),
 			enumerable: true,
@@ -3566,7 +3566,7 @@ describe('buildArrayFaults', () => {
 		// Control: the honest shape beside it still reports.
 		expect(
 			faultsToConstraints(
-				buildArrayFaults({ type: 'array', items: { type: 'string' }, min: 4 }, 3, []),
+				buildArrayFaults({ category: 'array', items: { category: 'string' }, min: 4 }, 3, []),
 			),
 		).toEqual(['min'])
 	})

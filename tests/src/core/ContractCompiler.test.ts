@@ -71,8 +71,8 @@ describe('ContractCompiler', () => {
 		// counts them, and about work, so it is measured with declarations that
 		// cannot survive a walk. Neither construction touches either.
 		const observed = new ObservedShape()
-		const malformed: ContractShape = JSON.parse('{"type":"string","min":5,"max":1}')
-		const cyclic: ContractShape = JSON.parse('{"type":"array","items":{"type":"string"}}')
+		const malformed: ContractShape = JSON.parse('{"category":"string","min":5,"max":1}')
+		const cyclic: ContractShape = JSON.parse('{"category":"array","items":{"category":"string"}}')
 		Reflect.set(cyclic, 'items', cyclic)
 
 		const counted = new ContractCompiler(observed.shape)
@@ -159,7 +159,7 @@ describe('ContractCompiler', () => {
 		expect(counted.audit({ count: 'x' })).toHaveLength(1)
 		expect(names.schema).not.toEqual(counts.schema)
 
-		const malformed: ContractShape = JSON.parse('{"type":"string","min":5,"max":1}')
+		const malformed: ContractShape = JSON.parse('{"category":"string","min":5,"max":1}')
 		const later = new ContractCompiler(malformed)
 		const error = captureContractError(() => later.contract)
 
@@ -192,9 +192,9 @@ describe('ContractCompiler', () => {
 		// Every door must answer it well inside the bar, which a per-edge walk that
 		// re-owned and re-gated its subgraph could not.
 		const shape = buildStaircaseShape(buildDeepShape(69), 30)
-		const started = Date.now()
+		const started = performance.now()
 		const contract = createContract(shape)
-		const cost = Date.now() - started
+		const cost = performance.now() - started
 
 		expect(cost).toBeLessThan(1_000)
 		expect(contract.is({})).toBe(false)
@@ -203,9 +203,9 @@ describe('ContractCompiler', () => {
 
 	it('refuses a declaration whose expansion exceeds the node limit, in bounded time', () => {
 		const compiler = new ContractCompiler(buildSharedDagShape(30))
-		const started = Date.now()
+		const started = performance.now()
 		const error = captureContractError(() => compiler.schema)
-		const cost = Date.now() - started
+		const cost = performance.now() - started
 
 		expect(cost).toBeLessThan(1_000)
 		expect(error.code).toBe('expansion')
@@ -244,7 +244,7 @@ describe('ContractCompiler', () => {
 		// a host failure neither engine translated; no public vector reaches it,
 		// because every dispatch this class makes after those two engines return is
 		// either a captured intrinsic or an indexed read of an array it built.
-		const revocable = Proxy.revocable({ type: 'string' } satisfies ContractShape, {})
+		const revocable = Proxy.revocable({ category: 'string' } satisfies ContractShape, {})
 		revocable.revoke()
 		const compiler = new ContractCompiler(revocable.proxy)
 
@@ -265,7 +265,7 @@ describe('ContractCompiler', () => {
 		// it. A refusal adopted at `reporter` is the refusal `schema` and every
 		// other getter rethrows — the settling getter included — and none of them
 		// retries preparation against a compiler whose working state is gone.
-		const malformed: ContractShape = JSON.parse('{"type":"number","min":5,"max":1}')
+		const malformed: ContractShape = JSON.parse('{"category":"number","min":5,"max":1}')
 		const compiler = new ContractCompiler(malformed)
 
 		const error = captureContractError(() => compiler.reporter)
@@ -318,23 +318,23 @@ describe('ContractCompiler', () => {
 				const audited = contract.audit(value).length === 0
 				const parsed = contract.parse(value) !== undefined
 				const explained = contract.explain(value).length === 0
-				if (accepted !== audited) disagreements[disagreements.length] = `is/audit ${shape.type}`
+				if (accepted !== audited) disagreements[disagreements.length] = `is/audit ${shape.category}`
 				if (parsed !== explained) {
-					disagreements[disagreements.length] = `parse/explain ${shape.type}`
+					disagreements[disagreements.length] = `parse/explain ${shape.category}`
 				}
 				// The standalone doors must answer identically to the compiler's roots,
 				// since they are the same compiled artifacts reached another way.
 				if (compileGuard(shape)(value) !== accepted) {
-					disagreements[disagreements.length] = `door/is ${shape.type}`
+					disagreements[disagreements.length] = `door/is ${shape.category}`
 				}
 				if ((compileAuditor(shape, value).length === 0) !== audited) {
-					disagreements[disagreements.length] = `door/audit ${shape.type}`
+					disagreements[disagreements.length] = `door/audit ${shape.category}`
 				}
 				if ((compileReporter(shape, value).length === 0) !== explained) {
-					disagreements[disagreements.length] = `door/explain ${shape.type}`
+					disagreements[disagreements.length] = `door/explain ${shape.category}`
 				}
 				if ((compileParser(shape)(value) !== undefined) !== parsed) {
-					disagreements[disagreements.length] = `door/parse ${shape.type}`
+					disagreements[disagreements.length] = `door/parse ${shape.category}`
 				}
 			}
 			expect(compileSchema(shape)).toEqual(compiler.schema)
@@ -400,14 +400,14 @@ describe('ContractCompiler', () => {
 			value = [value, value]
 		}
 		const contract = createContract(shape)
-		const started = Date.now()
+		const started = performance.now()
 		const answers: readonly unknown[] = [
 			contract.is(value),
 			contract.audit(value),
 			contract.explain(value),
 		]
 
-		expect(Date.now() - started).toBeLessThan(1_000)
+		expect(performance.now() - started).toBeLessThan(1_000)
 		expect(answers).toEqual([true, [], []])
 	})
 

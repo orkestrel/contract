@@ -46,14 +46,14 @@ import {
 
 describe('ShapeCloner', () => {
 	it('is root-exported, conforms to its interface, and exposes only clone', () => {
-		const cloner: ShapeClonerInterface = new ShapeCloner({ type: 'string' })
+		const cloner: ShapeClonerInterface = new ShapeCloner({ category: 'string' })
 
-		expect(cloner.clone()).toEqual({ type: 'string' })
+		expect(cloner.clone()).toEqual({ category: 'string' })
 		expect(Reflect.ownKeys(ShapeCloner.prototype)).toEqual(['constructor', 'clone'])
 	})
 
 	it('does not observe the retained source during construction', () => {
-		const source = Proxy.revocable<ContractShape>({ type: 'string' }, {})
+		const source = Proxy.revocable<ContractShape>({ category: 'string' }, {})
 		source.revoke()
 
 		const cloner = new ShapeCloner(source.proxy)
@@ -77,37 +77,37 @@ describe('ShapeCloner', () => {
 		expect(Object.hasOwn(reparentedRoot, 'cause')).toBe(false)
 
 		const reparentedChild = captureContractError(() =>
-			new ShapeCloner({ type: 'array', items: new NullBaseDeclaration() }).clone(),
+			new ShapeCloner({ category: 'array', items: new NullBaseDeclaration() }).clone(),
 		)
 		expect(reparentedChild.message).toBe('validateShape: every structural child must be a shape')
 		expect(reparentedChild.code).toBe('structure')
 		expect(reparentedChild.context?.path).toEqual(['items'])
 
 		const nested = captureContractError(() =>
-			new ShapeCloner({ type: 'array', items: new StringDeclaration() }).clone(),
+			new ShapeCloner({ category: 'array', items: new StringDeclaration() }).clone(),
 		)
 		expect(nested.message).toBe('validateShape: every structural child must be a shape')
 		expect(nested.code).toBe('structure')
 		expect(nested.context?.path).toEqual(['items'])
 		expect(Object.hasOwn(nested, 'cause')).toBe(false)
 
-		const plain = new ShapeCloner({ type: 'string' }).clone()
-		const nullPrototype: StringShape = { type: 'string' }
+		const plain = new ShapeCloner({ category: 'string' }).clone()
+		const nullPrototype: StringShape = { category: 'string' }
 		Object.setPrototypeOf(nullPrototype, null)
 		const nullOwned = new ShapeCloner(nullPrototype).clone()
 		const foreign = createForeignStringShape()
 		const foreignCloner: unknown = Reflect.construct(ShapeCloner, [foreign])
 		if (!(foreignCloner instanceof ShapeCloner)) throw new Error('expected a ShapeCloner')
 		const foreignOwned = foreignCloner.clone()
-		expect([plain.type, nullOwned.type, foreignOwned.type]).toEqual(['string', 'string', 'string'])
+		expect([plain.category, nullOwned.category, foreignOwned.category]).toEqual(['string', 'string', 'string'])
 
 		const reason = Object.freeze({ stage: 'prototype' })
 		let discriminants = 0
 		const hostile = new Proxy<ContractShape>(
-			{ type: 'string' },
+			{ category: 'string' },
 			{
 				getOwnPropertyDescriptor(target, key) {
-					if (key === 'type') discriminants += 1
+					if (key === 'category') discriminants += 1
 					return Reflect.getOwnPropertyDescriptor(target, key)
 				},
 				getPrototypeOf() {
@@ -128,7 +128,7 @@ describe('ShapeCloner', () => {
 	it('settles success once and replays the exact frozen root without rereading', () => {
 		let observations = 0
 		const source = new Proxy<StringShape>(
-			{ type: 'string', min: 1 },
+			{ category: 'string', min: 1 },
 			{
 				get(target, key, receiver) {
 					observations += 1
@@ -158,7 +158,7 @@ describe('ShapeCloner', () => {
 		let observations = 0
 		const caller = new ContractError('caller', { code: 'clone' })
 		const source = new Proxy<StringShape>(
-			{ type: 'string' },
+			{ category: 'string' },
 			{
 				getOwnPropertyDescriptor() {
 					observations += 1
@@ -187,7 +187,7 @@ describe('ShapeCloner', () => {
 			new ContractError('caller contract error', { code: 'clone' }),
 		]) {
 			const source = new Proxy<StringShape>(
-				{ type: 'string' },
+				{ category: 'string' },
 				{
 					getOwnPropertyDescriptor() {
 						throw reason
@@ -208,7 +208,7 @@ describe('ShapeCloner', () => {
 	it('keeps distinct instances independent', () => {
 		let observations = 0
 		const source = new Proxy<StringShape>(
-			{ type: 'string' },
+			{ category: 'string' },
 			{
 				getOwnPropertyDescriptor(target, key) {
 					observations += 1
@@ -231,7 +231,7 @@ describe('ShapeCloner', () => {
 			nested: undefined,
 		}
 		const source = new Proxy<StringShape>(
-			{ type: 'string' },
+			{ category: 'string' },
 			{
 				getOwnPropertyDescriptor(target, key) {
 					if (key === 'min') {
@@ -263,7 +263,7 @@ describe('ShapeCloner', () => {
 				nested: undefined,
 			}
 			const source = new Proxy<StringShape>(
-				{ type: 'string' },
+				{ category: 'string' },
 				{
 					getOwnPropertyDescriptor(target, key) {
 						if (key === 'min') {
@@ -289,7 +289,7 @@ describe('ShapeCloner', () => {
 	})
 
 	it('captures every category and observes present and absent fields through one table', () => {
-		const leaf: StringShape = { type: 'string', description: 'leaf' }
+		const leaf: StringShape = { category: 'string', description: 'leaf' }
 		const rows: ReadonlyArray<{
 			readonly source: ContractShape
 			readonly fields: readonly string[]
@@ -298,78 +298,78 @@ describe('ShapeCloner', () => {
 		}> = [
 			{
 				source: {
-					type: 'string',
+					category: 'string',
 					min: 1,
 					max: 3,
 					pattern: /x/,
 					description: 'string',
 				},
-				fields: ['type', 'min', 'max', 'pattern', 'description'],
+				fields: ['category', 'min', 'max', 'pattern', 'description'],
 			},
 			{
 				source: {
-					type: 'number',
+					category: 'number',
 					integer: true,
 					min: 1,
 					max: 3,
 					description: 'number',
 				},
-				fields: ['type', 'integer', 'min', 'max', 'description'],
+				fields: ['category', 'integer', 'min', 'max', 'description'],
 			},
 			{
-				source: { type: 'boolean', description: 'boolean' },
-				fields: ['type', 'description'],
+				source: { category: 'boolean', description: 'boolean' },
+				fields: ['category', 'description'],
 			},
 			{
-				source: { type: 'null', description: 'null' },
-				fields: ['type', 'description'],
+				source: { category: 'null', description: 'null' },
+				fields: ['category', 'description'],
 			},
 			{
-				source: { type: 'literal', values: ['x'], description: 'literal' },
-				fields: ['type', 'values', 'description'],
+				source: { category: 'literal', values: ['x'], description: 'literal' },
+				fields: ['category', 'values', 'description'],
 			},
 			{
-				source: { type: 'array', items: leaf, min: 1, max: 3, description: 'array' },
-				fields: ['type', 'items', 'min', 'max', 'description'],
+				source: { category: 'array', items: leaf, min: 1, max: 3, description: 'array' },
+				fields: ['category', 'items', 'min', 'max', 'description'],
 			},
 			{
 				source: {
-					type: 'object',
+					category: 'object',
 					properties: { value: leaf },
 					additionalProperties: false,
 					description: 'object',
 				},
-				fields: ['type', 'properties', 'additionalProperties', 'description'],
+				fields: ['category', 'properties', 'additionalProperties', 'description'],
 			},
 			{
-				source: { type: 'union', variants: [leaf], mode: 'oneOf', description: 'union' },
-				fields: ['type', 'variants', 'mode', 'description'],
+				source: { category: 'union', variants: [leaf], mode: 'oneOf', description: 'union' },
+				fields: ['category', 'variants', 'mode', 'description'],
 			},
 			{
-				source: { type: 'optional', inner: leaf },
-				fields: ['type', 'inner'],
+				source: { category: 'optional', inner: leaf },
+				fields: ['category', 'inner'],
 				wrapped: true,
 			},
 			{
-				source: { type: 'nullable', inner: leaf },
-				fields: ['type', 'inner'],
+				source: { category: 'nullable', inner: leaf },
+				fields: ['category', 'inner'],
 			},
 			{
-				source: { type: 'json', description: 'json' },
-				fields: ['type', 'description'],
+				source: { category: 'json', description: 'json' },
+				fields: ['category', 'description'],
 			},
 			{
-				source: { type: 'raw', schema: { type: 'string' } },
-				fields: ['type', 'schema'],
+				source: { category: 'raw', schema: { type: 'string' } },
+				fields: ['category', 'schema'],
 			},
 			{
-				source: { type: 'string' },
-				fields: ['type'],
+				source: { category: 'string' },
+				fields: ['category'],
 				absent: ['min', 'max', 'pattern', 'description'],
 			},
 		]
 
-		expect(rows.map((row) => row.source.type)).toEqual([
+		expect(rows.map((row) => row.source.category)).toEqual([
 			'string',
 			'number',
 			'boolean',
@@ -405,18 +405,18 @@ describe('ShapeCloner', () => {
 				},
 			})
 			const root: ContractShape =
-				row.wrapped === true ? { type: 'object', properties: { value: observed } } : observed
+				row.wrapped === true ? { category: 'object', properties: { value: observed } } : observed
 			const clone = new ShapeCloner(root).clone()
 			expect(Object.isFrozen(clone)).toBe(true)
 			for (const field of row.fields) {
-				expect(reads.get(field), `${row.source.type}.${field} reads`).toBe(2)
-				expect(descriptors.get(field), `${row.source.type}.${field} descriptors`).toBe(1)
-				expect(presence.get(field) ?? 0, `${row.source.type}.${field} presence`).toBe(0)
+				expect(reads.get(field), `${row.source.category}.${field} reads`).toBe(2)
+				expect(descriptors.get(field), `${row.source.category}.${field} descriptors`).toBe(1)
+				expect(presence.get(field) ?? 0, `${row.source.category}.${field} presence`).toBe(0)
 			}
 			for (const field of row.absent ?? []) {
-				expect(descriptors.get(field), `${row.source.type}.${field} descriptors`).toBe(1)
-				expect(presence.get(field), `${row.source.type}.${field} presence`).toBe(1)
-				expect(reads.get(field) ?? 0, `${row.source.type}.${field} reads`).toBe(0)
+				expect(descriptors.get(field), `${row.source.category}.${field} descriptors`).toBe(1)
+				expect(presence.get(field), `${row.source.category}.${field} presence`).toBe(1)
+				expect(reads.get(field) ?? 0, `${row.source.category}.${field} reads`).toBe(0)
 			}
 		}
 	})
@@ -431,14 +431,14 @@ describe('ShapeCloner', () => {
 			},
 		})
 		const inherited: StringShape = Object.create(inheritedPrototype)
-		Object.defineProperty(inherited, 'type', { value: 'string', enumerable: true })
+		Object.defineProperty(inherited, 'category', { value: 'string', enumerable: true })
 		const inheritedEngine = new ShapeCloner(inherited)
 		const inheritedError = captureContractError(() => inheritedEngine.clone())
 		expect(inheritedError).toBeInstanceOf(ContractError)
 		expect(inheritedReads).toBe(0)
 
 		let accessorReads = 0
-		const accessor: StringShape = { type: 'string' }
+		const accessor: StringShape = { category: 'string' }
 		Object.defineProperty(accessor, 'description', {
 			get() {
 				accessorReads += 1
@@ -455,7 +455,7 @@ describe('ShapeCloner', () => {
 	it('owns the two-read pattern exception and completes collection observations during capture', () => {
 		let patternReads = 0
 		const source: StringShape = {
-			type: 'string',
+			category: 'string',
 			get pattern() {
 				patternReads += 1
 				return Object.freeze(new RegExp('x'))
@@ -463,7 +463,7 @@ describe('ShapeCloner', () => {
 		}
 		const clone = new ShapeCloner(source).clone()
 		expect(patternReads).toBe(2)
-		if (clone.type !== 'string') throw new Error('expected string clone')
+		if (clone.category !== 'string') throw new Error('expected string clone')
 		const first = clone.pattern
 		const second = clone.pattern
 		expect(first).not.toBe(second)
@@ -483,13 +483,13 @@ describe('ShapeCloner', () => {
 				return Reflect.getOwnPropertyDescriptor(target, key)
 			},
 		})
-		new ShapeCloner({ type: 'literal', values }).clone()
+		new ShapeCloner({ category: 'literal', values }).clone()
 		expect(valueReads).toBe(2)
 		expect(valueDescriptors).toBe(2)
 
 		let variantReads = 0
 		let variantDescriptors = 0
-		const variants = new Proxy<readonly ContractShape[]>([{ type: 'string' }], {
+		const variants = new Proxy<readonly ContractShape[]>([{ category: 'string' }], {
 			get(target, key, receiver) {
 				if (key === '0') variantReads += 1
 				return Reflect.get(target, key, receiver)
@@ -499,14 +499,14 @@ describe('ShapeCloner', () => {
 				return Reflect.getOwnPropertyDescriptor(target, key)
 			},
 		})
-		new ShapeCloner({ type: 'union', variants }).clone()
+		new ShapeCloner({ category: 'union', variants }).clone()
 		expect(variantReads).toBe(2)
 		expect(variantDescriptors).toBe(2)
 
 		let keyReads = 0
 		let childReads = 0
 		const properties = new Proxy<Readonly<Record<string, ContractShape>>>(
-			{ value: { type: 'string' } },
+			{ value: { category: 'string' } },
 			{
 				ownKeys(target) {
 					keyReads += 1
@@ -518,7 +518,7 @@ describe('ShapeCloner', () => {
 				},
 			},
 		)
-		new ShapeCloner({ type: 'object', properties }).clone()
+		new ShapeCloner({ category: 'object', properties }).clone()
 		expect(keyReads).toBe(2)
 		expect(childReads).toBe(2)
 	})
@@ -526,7 +526,7 @@ describe('ShapeCloner', () => {
 	it('refuses native-maximum sparse union and literal populations before indexed work', () => {
 		const union = createNativeMaximumSparseArray<ContractShape>()
 		const unionError = captureContractError(() =>
-			new ShapeCloner({ type: 'union', variants: union.value }).clone(),
+			new ShapeCloner({ category: 'union', variants: union.value }).clone(),
 		)
 		expect(unionError.code).toBe('structure')
 		expect(unionError.message).toBe('validateShape: variants must be a dense data array')
@@ -536,7 +536,7 @@ describe('ShapeCloner', () => {
 
 		const literal = createNativeMaximumSparseArray<LiteralValue>()
 		const literalError = captureContractError(() =>
-			new ShapeCloner({ type: 'literal', values: literal.value }).clone(),
+			new ShapeCloner({ category: 'literal', values: literal.value }).clone(),
 		)
 		expect(literalError.code).toBe('structure')
 		expect(literalError.message).toBe('validateShape: values must be a dense data array')
@@ -563,7 +563,7 @@ describe('ShapeCloner', () => {
 				return Reflect.getOwnPropertyDescriptor(target, key)
 			},
 		})
-		const error = captureContractError(() => new ShapeCloner({ type: 'literal', values }).clone())
+		const error = captureContractError(() => new ShapeCloner({ category: 'literal', values }).clone())
 
 		expect(error.message).toBe(
 			'validateShape: every literal value must be a string, number, or boolean',
@@ -582,18 +582,18 @@ describe('ShapeCloner', () => {
 	})
 
 	it('preserves sharing, declaration-order paths, placement, and deep freezing while refusing cycles', () => {
-		const shared: StringShape = { type: 'string' }
+		const shared: StringShape = { category: 'string' }
 		const graph = new ShapeCloner({
-			type: 'object',
+			category: 'object',
 			properties: { first: shared, second: shared },
 		}).clone()
-		if (graph.type !== 'object') throw new Error('expected object clone')
+		if (graph.category !== 'object') throw new Error('expected object clone')
 		expect(graph.properties.first).toBe(graph.properties.second)
 		expect(Object.isFrozen(graph.properties)).toBe(true)
 		expect(Object.isFrozen(graph.properties.first)).toBe(true)
 
-		const cycle: { readonly type: 'array'; readonly items: ContractShape } = {
-			type: 'array',
+		const cycle: { readonly category: 'array'; readonly items: ContractShape } = {
+			category: 'array',
 			items: shared,
 		}
 		Reflect.set(cycle, 'items', cycle)
@@ -601,9 +601,9 @@ describe('ShapeCloner', () => {
 		expect(cyclicError.code).toBe('cycle')
 		expect(cyclicError.context?.path).toEqual(['items'])
 
-		const invalid: StringShape = { type: 'string', min: -1 }
+		const invalid: StringShape = { category: 'string', min: -1 }
 		const declaration: ContractShape = {
-			type: 'object',
+			category: 'object',
 			properties: { first: invalid, second: invalid },
 		}
 		const pathError = captureContractError(() => new ShapeCloner(declaration).clone())
@@ -617,8 +617,8 @@ describe('ShapeCloner', () => {
 		expect(validated.message).toBe(pathError.message)
 		expect(validated.context?.path).toEqual(pathError.context?.path)
 
-		const optional: ContractShape = { type: 'optional', inner: shared }
-		const placementEngine = new ShapeCloner({ type: 'array', items: optional })
+		const optional: ContractShape = { category: 'optional', inner: shared }
+		const placementEngine = new ShapeCloner({ category: 'array', items: optional })
 		expect(() => placementEngine.clone()).toThrow(
 			'validateShape: an optional shape may only appear as a direct object-property value',
 		)
@@ -626,12 +626,12 @@ describe('ShapeCloner', () => {
 
 	it('owns raw schemas, validates the completed root, and contains hostile failures itself', () => {
 		const schema: JSONSchema = { type: 'object', properties: { value: { type: 'string' } } }
-		const raw = new ShapeCloner({ type: 'raw', schema }).clone()
-		if (raw.type !== 'raw') throw new Error('expected raw clone')
+		const raw = new ShapeCloner({ category: 'raw', schema }).clone()
+		if (raw.category !== 'raw') throw new Error('expected raw clone')
 		expect(raw.schema).not.toBe(schema)
 		expect(Object.isFrozen(raw.schema)).toBe(true)
 
-		const malformed: StringShape = { type: 'string' }
+		const malformed: StringShape = { category: 'string' }
 		Reflect.set(malformed, 'description', 7)
 		const validation = captureContractError(() => new ShapeCloner(malformed).clone())
 		expect(validation.code).toBe('structure')
@@ -639,7 +639,7 @@ describe('ShapeCloner', () => {
 
 		const sentinel = Object.freeze({ sentinel: true })
 		const hostile = new Proxy<StringShape>(
-			{ type: 'string' },
+			{ category: 'string' },
 			{
 				getOwnPropertyDescriptor() {
 					throw sentinel
@@ -656,8 +656,8 @@ describe('ShapeCloner', () => {
 	})
 
 	it('validates the completed root before applying the exact first fidelity error', () => {
-		const valid: ContractShape = { type: 'string' }
-		const replacement: ContractShape = { type: 'number' }
+		const valid: ContractShape = { category: 'string' }
+		const replacement: ContractShape = { category: 'number' }
 		let reads = 0
 		const stableVariants = new Proxy<readonly ContractShape[]>([valid], {
 			get(target, key, receiver) {
@@ -666,13 +666,13 @@ describe('ShapeCloner', () => {
 				return reads === 1 ? valid : replacement
 			},
 		})
-		const fidelityCloner = new ShapeCloner({ type: 'union', variants: stableVariants })
+		const fidelityCloner = new ShapeCloner({ category: 'union', variants: stableVariants })
 		const fidelity = captureContractError(() => fidelityCloner.clone())
 		expect(fidelity.message).toBe('validateShape: every structural child must be a shape')
 		expect(captureContractError(() => fidelityCloner.clone())).toBe(fidelity)
 
-		const cycle: { readonly type: 'array'; readonly items: ContractShape } = {
-			type: 'array',
+		const cycle: { readonly category: 'array'; readonly items: ContractShape } = {
+			category: 'array',
 			items: valid,
 		}
 		Reflect.set(cycle, 'items', cycle)
@@ -685,7 +685,7 @@ describe('ShapeCloner', () => {
 			},
 		})
 		const validation = captureContractError(() =>
-			new ShapeCloner({ type: 'union', variants: cyclicVariants }).clone(),
+			new ShapeCloner({ category: 'union', variants: cyclicVariants }).clone(),
 		)
 		expect(validation.code).toBe('cycle')
 	})
@@ -721,7 +721,7 @@ describe('ShapeCloner', () => {
 				},
 			},
 		})
-		const engine = new ShapeCloner({ type: 'string', min: 2, max: 1, pattern })
+		const engine = new ShapeCloner({ category: 'string', min: 2, max: 1, pattern })
 		const reason = captureContractError(() => engine.clone())
 		expect(reason).toBeInstanceOf(ContractError)
 		expect(reason.message).toBe(
@@ -736,24 +736,24 @@ describe('ShapeCloner', () => {
 		expect(stringReads).toBe(0)
 
 		const min = captureContractError(() =>
-			new ShapeCloner({ type: 'string', min: -1, pattern: /a/i }).clone(),
+			new ShapeCloner({ category: 'string', min: -1, pattern: /a/i }).clone(),
 		)
 		expect(min.code).toBe('bound')
 		expect(min.message).toContain('validateShape: a string shape min')
 		const max = captureContractError(() =>
-			new ShapeCloner({ type: 'string', max: -1, pattern: /a/i }).clone(),
+			new ShapeCloner({ category: 'string', max: -1, pattern: /a/i }).clone(),
 		)
 		expect(max.code).toBe('bound')
 		expect(max.message).toContain('validateShape: a string shape max')
 		const range = captureContractError(() =>
-			new ShapeCloner({ type: 'string', min: 2, max: 1, pattern: /a/ }).clone(),
+			new ShapeCloner({ category: 'string', min: 2, max: 1, pattern: /a/ }).clone(),
 		)
 		expect(range.code).toBe('range')
 
 		const stable = /stable/
 		stable.lastIndex = 3
-		const clone = new ShapeCloner({ type: 'string', pattern: stable }).clone()
-		if (clone.type !== 'string') throw new Error('expected string clone')
+		const clone = new ShapeCloner({ category: 'string', pattern: stable }).clone()
+		if (clone.category !== 'string') throw new Error('expected string clone')
 		const first = clone.pattern
 		const second = clone.pattern
 		expect(first).not.toBe(second)
@@ -777,7 +777,7 @@ describe('ShapeCloner', () => {
 		]) {
 			const cloner = new ShapeCloner(fixture.shape)
 			const clone = cloner.clone()
-			if (clone.type !== 'string') throw new Error('expected a string clone')
+			if (clone.category !== 'string') throw new Error('expected a string clone')
 			expect(clone.pattern?.source).toBe('a')
 			expect(clone.pattern?.flags).toBe('')
 			expect(fixture.carrier.count).toBe(0)
@@ -794,13 +794,13 @@ describe('ShapeCloner', () => {
 		const foreign = createForeignRegExp('a')
 		if (!isRegExp(foreign)) throw new Error('expected a genuine foreign RegExp')
 		const controls = [
-			new ShapeCloner({ type: 'string', pattern: /a/ }).clone(),
-			new ShapeCloner({ type: 'string', pattern: foreign }).clone(),
-			new ShapeCloner({ type: 'string', pattern: stable }).clone(),
+			new ShapeCloner({ category: 'string', pattern: /a/ }).clone(),
+			new ShapeCloner({ category: 'string', pattern: foreign }).clone(),
+			new ShapeCloner({ category: 'string', pattern: stable }).clone(),
 			new ShapeCloner(stringShape({ pattern: /a/ })).clone(),
 		]
 		for (const control of controls) {
-			if (control.type !== 'string') throw new Error('expected a string clone')
+			if (control.category !== 'string') throw new Error('expected a string clone')
 			expect(control.pattern?.source).toBe('a')
 			expect(Object.isFrozen(control.pattern)).toBe(true)
 		}
@@ -817,7 +817,7 @@ describe('ShapeCloner', () => {
 
 			const clone = cloner.clone()
 
-			if (clone.type !== 'string') throw new Error('expected a string clone')
+			if (clone.category !== 'string') throw new Error('expected a string clone')
 			expect(clone.pattern?.source, `accessor ${String(accessor)}`).toBe('a')
 			expect(fixture.reads, `accessor ${String(accessor)}`).toBe(0)
 			expect(cloner.clone(), `accessor ${String(accessor)}`).toBe(clone)
@@ -825,10 +825,10 @@ describe('ShapeCloner', () => {
 	})
 
 	it('settles success and traversal failure before caller-mutated cleanup can run', () => {
-		const successfulCloner = new ShapeCloner({ type: 'string' })
+		const successfulCloner = new ShapeCloner({ category: 'string' })
 		const reason = new Error('shape traversal failed')
 		const failingSource = new Proxy<StringShape>(
-			{ type: 'string' },
+			{ category: 'string' },
 			{
 				getOwnPropertyDescriptor() {
 					throw reason
@@ -871,7 +871,7 @@ describe('ShapeCloner', () => {
 		for (const intrinsic of intrinsics) {
 			const sentinel = Object.freeze({ stage: intrinsic.label })
 			const failingSource = new Proxy<StringShape>(
-				{ type: 'string' },
+				{ category: 'string' },
 				{
 					getOwnPropertyDescriptor() {
 						throw reason
@@ -879,7 +879,7 @@ describe('ShapeCloner', () => {
 				},
 			)
 			const cloners = [
-				{ name: 'readable', cloner: new ShapeCloner({ type: 'string' }) },
+				{ name: 'readable', cloner: new ShapeCloner({ category: 'string' }) },
 				{ name: 'unreadable', cloner: new ShapeCloner(failingSource) },
 			]
 
@@ -942,8 +942,8 @@ describe('ShapeCloner', () => {
 	})
 
 	it('refuses excessive iterative depth without leaking a recursive stack failure', () => {
-		let source: ContractShape = { type: 'string' }
-		for (let level = 0; level < 600; level += 1) source = { type: 'array', items: source }
+		let source: ContractShape = { category: 'string' }
+		for (let level = 0; level < 600; level += 1) source = { category: 'array', items: source }
 
 		const error = captureContractError(() => new ShapeCloner(source).clone())
 
@@ -1091,31 +1091,31 @@ describe('ShapeCloner — one arbiter, one verdict (H9)', () => {
 		// reflectively rather than an assertion: the point of the case is that the
 		// walk meets a node whose `type` it does not know, and an assertion would
 		// have moved that fact out of the value and into the type system.
-		const bogus: ContractShape = { type: 'string' }
-		Reflect.set(bogus, 'type', 'bogus')
-		const bogusA: ContractShape = { type: 'string' }
-		Reflect.set(bogusA, 'type', 'bogusA')
-		const bogusB: ContractShape = { type: 'string' }
-		Reflect.set(bogusB, 'type', 'bogusB')
+		const bogus: ContractShape = { category: 'string' }
+		Reflect.set(bogus, 'category', 'bogus')
+		const bogusA: ContractShape = { category: 'string' }
+		Reflect.set(bogusA, 'category', 'bogusA')
+		const bogusB: ContractShape = { category: 'string' }
+		Reflect.set(bogusB, 'category', 'bogusB')
 
 		const declarations: readonly ContractShape[] = [
 			{
-				type: 'object',
+				category: 'object',
 				properties: {
 					b: bogus,
-					a: { type: 'number', min: 5, max: 1 },
+					a: { category: 'number', min: 5, max: 1 },
 				},
 			},
 			{
-				type: 'object',
+				category: 'object',
 				properties: {
-					first: { type: 'number', min: 5, max: 1 },
-					second: { type: 'number', min: 9, max: 2 },
+					first: { category: 'number', min: 5, max: 1 },
+					second: { category: 'number', min: 9, max: 2 },
 				},
 			},
-			{ type: 'union', variants: [bogusA, bogusB] },
-			{ type: 'array', items: { type: 'string', min: -1 } },
-			{ type: 'array', items: optionalShape(stringShape()) },
+			{ category: 'union', variants: [bogusA, bogusB] },
+			{ category: 'array', items: { category: 'string', min: -1 } },
+			{ category: 'array', items: optionalShape(stringShape()) },
 		]
 
 		for (const declaration of declarations) {
@@ -1137,15 +1137,15 @@ describe('ShapeCloner — one arbiter, one verdict (H9)', () => {
 		// every child registration copies its whole path, so the cost was quadratic:
 		// 4,000 levels took 142 ms against `validateShape`'s 2 ms for the identical
 		// verdict.
-		let declaration: ContractShape = { type: 'string' }
+		let declaration: ContractShape = { category: 'string' }
 		for (let index = 0; index < 8_000; index += 1) {
-			declaration = { type: 'array', items: declaration }
+			declaration = { category: 'array', items: declaration }
 		}
 
 		const reference = captureContractError(() => validateShape(declaration))
-		const started = Date.now()
+		const started = performance.now()
 		const observed = captureContractError(() => cloneShape(declaration))
-		const elapsed = Date.now() - started
+		const elapsed = performance.now() - started
 
 		expect(observed.code).toBe('depth')
 		expect(observed.message).toBe(reference.message)
@@ -1154,12 +1154,12 @@ describe('ShapeCloner — one arbiter, one verdict (H9)', () => {
 
 		// Control: the boundary itself is unmoved — the last legal depth still
 		// clones, and the first illegal one still refuses.
-		let legal: ContractShape = { type: 'string' }
+		let legal: ContractShape = { category: 'string' }
 		for (let index = 0; index < COMPILE_DEPTH_LIMIT; index += 1) {
-			legal = { type: 'array', items: legal }
+			legal = { category: 'array', items: legal }
 		}
 		expect(() => cloneShape(legal)).not.toThrow()
-		expect(captureContractError(() => cloneShape({ type: 'array', items: legal })).code).toBe(
+		expect(captureContractError(() => cloneShape({ category: 'array', items: legal })).code).toBe(
 			'depth',
 		)
 	})

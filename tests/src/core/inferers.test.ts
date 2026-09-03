@@ -301,7 +301,7 @@ describe('valueToSchema — hostile input', () => {
 		expect(error.message).toBe('valueToSchema: value could not be read')
 	})
 
-	it('names the door in the refusal the walk retains as cause', () => {
+	it('publishes the door in the refusal and retains the failed read as its cause', () => {
 		const hostile = new Proxy(
 			{},
 			{
@@ -313,9 +313,11 @@ describe('valueToSchema — hostile input', () => {
 		const error = captureContractError(() => valueToSchema(hostile))
 		expect(isError(error.cause)).toBe(true)
 		if (!isError(error.cause)) throw new Error('expected the walk refusal as the cause')
-		// The walk is interned, so nothing a caller can reach carries its class
-		// name; the cause names the door the refusal came out of.
-		expect(error.cause.message).toBe('valueToSchema: property enumeration failed')
+		// The published refusal names the door that ran; the retained cause names the read
+		// that failed and carries no door of its own, because the interned walk it comes
+		// from is driven by `valueToSchema` and by `samplesToSchema` alike.
+		expect(error.message).toBe('valueToSchema: value could not be read')
+		expect(error.cause.message).toBe('property enumeration failed')
 	})
 })
 
@@ -1017,9 +1019,9 @@ describe('valueToSchema — shared-subtree DAG (C4)', () => {
 		for (let level = 0; level < 24; level += 1) {
 			node = { a: node, b: node }
 		}
-		const start = Date.now()
+		const start = performance.now()
 		const schema = valueToSchema(node)
-		const elapsed = Date.now() - start
+		const elapsed = performance.now() - start
 		expect(elapsed).toBeLessThan(5000)
 		expect(schema.type).toBe('object')
 		// The memo dedupes identical (object, remaining-depth) re-inference: the
@@ -1034,9 +1036,9 @@ describe('valueToSchema — shared-subtree DAG (C4)', () => {
 		for (let level = 0; level < 16; level += 1) {
 			node = { a: node, b: node, c: node }
 		}
-		const start = Date.now()
+		const start = performance.now()
 		expect(() => valueToSchema(node)).not.toThrow()
-		expect(Date.now() - start).toBeLessThan(5000)
+		expect(performance.now() - start).toBeLessThan(5000)
 	})
 })
 
@@ -1281,7 +1283,7 @@ describe('canonicalStringify — the walk at its door', () => {
 		// A class whose prototype a caller reparented to `null` is an exotic too:
 		// the shared record brand refuses it, so it keeps declaration order
 		// instead of being canonicalized as a plain record.
-		expect(canonicalStringify(new NullBaseDeclaration())).toBe('{"type":"string","min":1}')
+		expect(canonicalStringify(new NullBaseDeclaration())).toBe('{"category":"string","min":1}')
 		expect(canonicalStringify(new Map([['b', 1]]))).toBe('{}')
 	})
 
@@ -1993,12 +1995,12 @@ describe('samplesToSchema — bounded work on shared references (H9, H10-B)', ()
 		for (let index = 0; index < 18; index += 1) node = { a: node, b: node }
 
 		// Outside the fixed population, case 1: two DISTINCT rows sharing one child.
-		const started = Date.now()
+		const started = performance.now()
 		const distinct = samplesToSchema([
 			{ id: 1, detail: node },
 			{ id: 2, detail: node },
 		])
-		const elapsed = Date.now() - started
+		const elapsed = performance.now() - started
 
 		expect(reads).toBeLessThanOrEqual(INFER_DEPTH_LIMIT)
 		expect(elapsed).toBeLessThan(1_000)
@@ -2020,9 +2022,9 @@ describe('samplesToSchema — bounded work on shared references (H9, H10-B)', ()
 			left = nextLeft
 			right = nextRight
 		}
-		const swapped = Date.now()
+		const swapped = performance.now()
 		expect(samplesToSchema([left, right]).type).toBe('object')
-		expect(Date.now() - swapped).toBeLessThan(1_000)
+		expect(performance.now() - swapped).toBeLessThan(1_000)
 
 		// Inside the population, kept as the control the H9 round had: one row.
 		reads = 0
@@ -2068,13 +2070,13 @@ describe('samplesToSchema — bounded work on shared references (H9, H10-B)', ()
 		row.a = row
 		row.b = row
 
-		const started = Date.now()
+		const started = performance.now()
 		const schema = samplesToSchema([row])
-		expect(Date.now() - started).toBeLessThan(1_000)
+		expect(performance.now() - started).toBeLessThan(1_000)
 		expect(schema.type).toBe('object')
 
 		// Outside the one-row population: the same cycle reached as a multi-row slot.
-		const pair = Date.now()
+		const pair = performance.now()
 		expect(samplesToSchema([row, row]).type).toBe('object')
 		expect(
 			samplesToSchema([
@@ -2082,7 +2084,7 @@ describe('samplesToSchema — bounded work on shared references (H9, H10-B)', ()
 				{ id: 2, r: row },
 			]).type,
 		).toBe('object')
-		expect(Date.now() - pair).toBeLessThan(1_000)
+		expect(performance.now() - pair).toBeLessThan(1_000)
 	})
 
 	it('keeps a column two rows carry when one row holds undefined', () => {

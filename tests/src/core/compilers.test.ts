@@ -82,9 +82,9 @@ import {
 import * as core from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 
-type ShapeByType<T extends ContractShape['type']> = Extract<ContractShape, { readonly type: T }>
+type ShapeByType<T extends ContractShape['category']> = Extract<ContractShape, { readonly category: T }>
 
-type CompleteShape<T extends ContractShape['type']> = {
+type CompleteShape<T extends ContractShape['category']> = {
 	readonly [K in keyof ShapeByType<T>]-?: ShapeByType<T>[K]
 }
 
@@ -110,40 +110,40 @@ const COMPLETE_RAW_SCHEMA: JSONSchema = {
 
 const COMPLETE_SHAPES = {
 	string: {
-		type: 'string',
+		category: 'string',
 		min: 0,
 		max: 1,
 		pattern: /^x$/,
 		description: 'complete',
 	},
-	number: { type: 'number', min: 0, max: 1, integer: true, description: 'complete' },
-	boolean: { type: 'boolean', description: 'complete' },
-	null: { type: 'null', description: 'complete' },
-	literal: { type: 'literal', values: ['x', 1, true], description: 'complete' },
+	number: { category: 'number', min: 0, max: 1, integer: true, description: 'complete' },
+	boolean: { category: 'boolean', description: 'complete' },
+	null: { category: 'null', description: 'complete' },
+	literal: { category: 'literal', values: ['x', 1, true], description: 'complete' },
 	array: {
-		type: 'array',
-		items: { type: 'string' },
+		category: 'array',
+		items: { category: 'string' },
 		min: 0,
 		max: 1,
 		description: 'complete',
 	},
 	object: {
-		type: 'object',
-		properties: { value: { type: 'string' } },
-		additionalProperties: { type: 'string' },
+		category: 'object',
+		properties: { value: { category: 'string' } },
+		additionalProperties: { category: 'string' },
 		description: 'complete',
 	},
 	union: {
-		type: 'union',
-		variants: [{ type: 'string' }, { type: 'number' }],
+		category: 'union',
+		variants: [{ category: 'string' }, { category: 'number' }],
 		mode: 'anyOf',
 		description: 'complete',
 	},
-	optional: { type: 'optional', inner: { type: 'string' } },
-	nullable: { type: 'nullable', inner: { type: 'string' } },
-	json: { type: 'json', description: 'complete' },
-	raw: { type: 'raw', schema: COMPLETE_RAW_SCHEMA },
-} satisfies { readonly [T in ContractShape['type']]: CompleteShape<T> }
+	optional: { category: 'optional', inner: { category: 'string' } },
+	nullable: { category: 'nullable', inner: { category: 'string' } },
+	json: { category: 'json', description: 'complete' },
+	raw: { category: 'raw', schema: COMPLETE_RAW_SCHEMA },
+} satisfies { readonly [T in ContractShape['category']]: CompleteShape<T> }
 
 describe('validator consolidation (R6-A)', () => {
 	it('publishes one eager shape-validation function over the public ShapeValidator', () => {
@@ -170,7 +170,7 @@ describe('validator consolidation (R6-A)', () => {
 		})
 		expect(
 			captureContractError(() =>
-				validateShape({ type: 'number', integer: true, min: 2.5, max: 2.6 }),
+				validateShape({ category: 'number', integer: true, min: 2.5, max: 2.6 }),
 			),
 		).toMatchObject({
 			code: 'range',
@@ -178,7 +178,7 @@ describe('validator consolidation (R6-A)', () => {
 		})
 		expect(
 			captureContractError(() =>
-				validateShape({ type: 'array', items: optionalShape(stringShape()) }),
+				validateShape({ category: 'array', items: optionalShape(stringShape()) }),
 			),
 		).toMatchObject({
 			code: 'placement',
@@ -194,12 +194,12 @@ describe('validator consolidation (R6-A)', () => {
 		).toBe('depth')
 		expect(
 			captureContractError(() =>
-				createContract({ type: 'number', integer: true, min: 2.5, max: 2.6 }),
+				createContract({ category: 'number', integer: true, min: 2.5, max: 2.6 }),
 			).code,
 		).toBe('range')
 		expect(
 			captureContractError(() =>
-				createContract({ type: 'array', items: optionalShape(stringShape()) }),
+				createContract({ category: 'array', items: optionalShape(stringShape()) }),
 			).code,
 		).toBe('placement')
 		// Control: the legal placement still compiles, so the rule above is a
@@ -272,7 +272,7 @@ describe('validateShape', () => {
 					return stringShape()
 				},
 			})
-			const error = captureContractError(() => entry({ type: 'object', properties }))
+			const error = captureContractError(() => entry({ category: 'object', properties }))
 
 			expect(reads).toBe(0)
 			expect(error.code).toBe('structure')
@@ -302,15 +302,15 @@ describe('validateShape', () => {
 		(_name, entry, ownership) => {
 			let fields = 0
 			for (const source of Object.values(COMPLETE_SHAPES)) {
-				const category = source.type
+				const category = source.category
 				for (const field of Object.keys(source)) {
 					fields += 1
 					let reads = 0
 					let root: ContractShape = structuredClone(source)
 					let node = root
 					if (category === 'optional') {
-						root = { type: 'object', properties: { value: root } }
-						if (root.type === 'object') {
+						root = { category: 'object', properties: { value: root } }
+						if (root.category === 'object') {
 							const child = root.properties.value
 							if (child !== undefined) node = child
 						}
@@ -332,9 +332,9 @@ describe('validateShape', () => {
 					expect(isContractError(outcome.error), `${category}.${field}`).toBe(true)
 					if (!isContractError(outcome.error)) continue
 					const prefix = category === 'optional' ? ['properties', 'value'] : []
-					const path = field === 'type' ? prefix : [...prefix, field]
+					const path = field === 'category' ? prefix : [...prefix, field]
 					const message =
-						field === 'type'
+						field === 'category'
 							? ownership
 								? 'cloneShape: every node needs an own data discriminant'
 								: 'validateShape: every node must be a recognized shape'
@@ -363,7 +363,7 @@ describe('validateShape', () => {
 		'%s performs two present-data node-field reads and none after capture',
 		(_name, entry) => {
 			let reads = 0
-			const source = new Proxy({ type: 'string', min: 1 } satisfies ContractShape, {
+			const source = new Proxy({ category: 'string', min: 1 } satisfies ContractShape, {
 				get(target, property, receiver) {
 					if (property !== 'min') return Reflect.get(target, property, receiver)
 					reads += 1
@@ -388,7 +388,7 @@ describe('validateShape', () => {
 		// cannot appear in an artifact.
 		let reads = 0
 		let descriptors = 0
-		const source = new Proxy({ type: 'string', min: 1 } satisfies ContractShape, {
+		const source = new Proxy({ category: 'string', min: 1 } satisfies ContractShape, {
 			get(target, property, receiver) {
 				if (property !== 'min') return Reflect.get(target, property, receiver)
 				reads += 1
@@ -442,7 +442,7 @@ describe('validateShape', () => {
 				},
 			)
 
-			entry({ type: 'object', properties })
+			entry({ category: 'object', properties })
 
 			expect(reads).toBe(2)
 		},
@@ -467,7 +467,7 @@ describe('validateShape', () => {
 			},
 		)
 
-		const contract = createContract({ type: 'object', properties })
+		const contract = createContract({ category: 'object', properties })
 
 		expect(contract.schema.properties?.value).toEqual({ type: 'number' })
 		expect(contract.is({ value: 1 })).toBe(true)
@@ -483,7 +483,7 @@ describe('validateShape', () => {
 		// validate a legal entry and then capture an illegal one, which is why this
 		// case needed a fourth-read instrument to reach at all; it is now reachable
 		// on the entry's own first reads and refused there.
-		const invalid: ContractShape = JSON.parse('{"type":"string","min":"invalid"}')
+		const invalid: ContractShape = JSON.parse('{"category":"string","min":"invalid"}')
 		let reads = 0
 		const properties = new Proxy(
 			{ value: invalid },
@@ -496,7 +496,7 @@ describe('validateShape', () => {
 			},
 		)
 
-		const error = captureContractError(() => createContract({ type: 'object', properties }))
+		const error = captureContractError(() => createContract({ category: 'object', properties }))
 
 		expect(reads).toBe(2)
 		expect(error.code).toBe('structure')
@@ -506,49 +506,49 @@ describe('validateShape', () => {
 
 	it('carries every exhaustive category-field population and certifies membership', () => {
 		const alternates = new Map<string, unknown>([
-			['string.type', 'boolean'],
+			['string.category', 'boolean'],
 			['string.min', 1],
 			['string.max', 2],
 			['string.pattern', /^y$/],
 			['string.description', 'alternate'],
-			['number.type', 'boolean'],
+			['number.category', 'boolean'],
 			['number.min', -1],
 			['number.max', 2],
 			['number.integer', false],
 			['number.description', 'alternate'],
-			['boolean.type', 'null'],
+			['boolean.category', 'null'],
 			['boolean.description', 'alternate'],
-			['null.type', 'boolean'],
+			['null.category', 'boolean'],
 			['null.description', 'alternate'],
-			['literal.type', 'boolean'],
+			['literal.category', 'boolean'],
 			['literal.values', ['alternate']],
 			['literal.description', 'alternate'],
-			['array.type', 'boolean'],
-			['array.items', { type: 'number' }],
+			['array.category', 'boolean'],
+			['array.items', { category: 'number' }],
 			['array.min', 1],
 			['array.max', 2],
 			['array.description', 'alternate'],
-			['object.type', 'boolean'],
-			['object.properties', { alternate: { type: 'number' } }],
-			['object.additionalProperties', { type: 'number' }],
+			['object.category', 'boolean'],
+			['object.properties', { alternate: { category: 'number' } }],
+			['object.additionalProperties', { category: 'number' }],
 			['object.description', 'alternate'],
-			['union.type', 'boolean'],
-			['union.variants', [{ type: 'boolean' }, { type: 'null' }]],
+			['union.category', 'boolean'],
+			['union.variants', [{ category: 'boolean' }, { category: 'null' }]],
 			['union.mode', 'oneOf'],
 			['union.description', 'alternate'],
-			['optional.type', 'nullable'],
-			['optional.inner', { type: 'number' }],
-			['nullable.type', 'boolean'],
-			['nullable.inner', { type: 'number' }],
-			['json.type', 'boolean'],
+			['optional.category', 'nullable'],
+			['optional.inner', { category: 'number' }],
+			['nullable.category', 'boolean'],
+			['nullable.inner', { category: 'number' }],
+			['json.category', 'boolean'],
 			['json.description', 'alternate'],
-			['raw.type', 'boolean'],
+			['raw.category', 'boolean'],
 			['raw.schema', { type: 'number' }],
 		])
 		const members: string[] = []
 
 		for (const source of Object.values(COMPLETE_SHAPES)) {
-			const category = source.type
+			const category = source.category
 			for (const field of Object.keys(source)) {
 				const name = `${category}.${field}`
 				members.push(name)
@@ -557,15 +557,15 @@ describe('validateShape', () => {
 
 				let stableRoot: ContractShape = structuredClone(source)
 				if (category === 'optional') {
-					stableRoot = { type: 'object', properties: { value: stableRoot } }
+					stableRoot = { category: 'object', properties: { value: stableRoot } }
 				}
 				const stableSchema = compileSchema(stableRoot)
 
 				let laterRoot: ContractShape = structuredClone(source)
 				let laterNode = laterRoot
 				if (category === 'optional') {
-					laterRoot = { type: 'object', properties: { value: laterRoot } }
-					if (laterRoot.type === 'object') {
+					laterRoot = { category: 'object', properties: { value: laterRoot } }
+					if (laterRoot.category === 'object') {
 						const child = laterRoot.properties.value
 						if (child !== undefined) laterNode = child
 					}
@@ -586,7 +586,7 @@ describe('validateShape', () => {
 				})
 				let changingRoot: ContractShape = changing
 				if (category === 'optional') {
-					changingRoot = { type: 'object', properties: { value: changing } }
+					changingRoot = { category: 'object', properties: { value: changing } }
 				}
 
 				const clone = cloneShape(changingRoot)
@@ -594,9 +594,9 @@ describe('validateShape', () => {
 				expect(reads, `${name} read schedule`).toBe(2)
 
 				const prefix = category === 'optional' ? ['properties', 'value'] : []
-				const path = field === 'type' ? prefix : [...prefix, field]
+				const path = field === 'category' ? prefix : [...prefix, field]
 				const disagreementMessage =
-					field === 'type'
+					field === 'category'
 						? 'cloneShape: every node needs an own data discriminant'
 						: 'cloneShape: shape fields must be stable data'
 
@@ -609,7 +609,7 @@ describe('validateShape', () => {
 				})
 				let describedRoot: ContractShape = described
 				if (category === 'optional') {
-					describedRoot = { type: 'object', properties: { value: described } }
+					describedRoot = { category: 'object', properties: { value: described } }
 				}
 				const describedError = captureContractError(() => cloneShape(describedRoot))
 				expect(describedError.code, `${name} descriptor disagreement`).toBe('structure')
@@ -628,7 +628,7 @@ describe('validateShape', () => {
 				})
 				let repeatedRoot: ContractShape = repeated
 				if (category === 'optional') {
-					repeatedRoot = { type: 'object', properties: { value: repeated } }
+					repeatedRoot = { category: 'object', properties: { value: repeated } }
 				}
 				const repeatedError = captureContractError(() => cloneShape(repeatedRoot))
 				expect(repeatedError.code, `${name} repeated disagreement`).toBe('structure')
@@ -652,13 +652,13 @@ describe('validateShape', () => {
 				Object.setPrototypeOf(inheritedNode, prototype)
 				let inheritedRoot: ContractShape = inheritedNode
 				if (category === 'optional') {
-					inheritedRoot = { type: 'object', properties: { value: inheritedNode } }
+					inheritedRoot = { category: 'object', properties: { value: inheritedNode } }
 				}
 				const inheritedError = captureContractError(() => cloneShape(inheritedRoot))
 				expect(inheritedReads, `${name} inherited invocation`).toBe(0)
 				expect(inheritedError.code, `${name} inherited code`).toBe('structure')
 				expect(inheritedError.message, `${name} inherited message`).toBe(
-					field === 'type'
+					field === 'category'
 						? 'cloneShape: every node needs an own data discriminant'
 						: 'cloneShape: inherited shape fields cannot be owned',
 				)
@@ -668,10 +668,10 @@ describe('validateShape', () => {
 				Reflect.deleteProperty(absentNode, field)
 				let absentRoot: ContractShape = absentNode
 				if (category === 'optional') {
-					absentRoot = { type: 'object', properties: { value: absentNode } }
+					absentRoot = { category: 'object', properties: { value: absentNode } }
 				}
 				const required =
-					field === 'type' ||
+					field === 'category' ||
 					(category === 'literal' && field === 'values') ||
 					(category === 'array' && field === 'items') ||
 					(category === 'object' && field === 'properties') ||
@@ -698,7 +698,7 @@ describe('validateShape', () => {
 				})
 				let descriptorRoot: ContractShape = descriptorTrap
 				if (category === 'optional') {
-					descriptorRoot = { type: 'object', properties: { value: descriptorTrap } }
+					descriptorRoot = { category: 'object', properties: { value: descriptorTrap } }
 				}
 				const descriptorError = captureContractError(() => cloneShape(descriptorRoot))
 				expect(descriptorError.code, `${name} descriptor trap`).toBe('clone')
@@ -715,7 +715,7 @@ describe('validateShape', () => {
 				})
 				let getRoot: ContractShape = getTrap
 				if (category === 'optional') {
-					getRoot = { type: 'object', properties: { value: getTrap } }
+					getRoot = { category: 'object', properties: { value: getTrap } }
 				}
 				const getError = captureContractError(() => cloneShape(getRoot))
 				expect(getError.code, `${name} get trap`).toBe('clone')
@@ -724,7 +724,7 @@ describe('validateShape', () => {
 				)
 
 				const presenceErrors: ContractError[] = []
-				if (field !== 'type') {
+				if (field !== 'category') {
 					const presenceTarget: ContractShape = structuredClone(source)
 					Reflect.deleteProperty(presenceTarget, field)
 					const presenceTrap = new Proxy(presenceTarget, {
@@ -735,13 +735,13 @@ describe('validateShape', () => {
 					})
 					let presenceRoot: ContractShape = presenceTrap
 					if (category === 'optional') {
-						presenceRoot = { type: 'object', properties: { value: presenceTrap } }
+						presenceRoot = { category: 'object', properties: { value: presenceTrap } }
 					}
 					presenceErrors.push(captureContractError(() => cloneShape(presenceRoot)))
 				}
-				expect(presenceErrors.map((error) => error.code)).toEqual(field === 'type' ? [] : ['clone'])
+				expect(presenceErrors.map((error) => error.code)).toEqual(field === 'category' ? [] : ['clone'])
 				expect(presenceErrors.map((error) => error.message)).toEqual(
-					field === 'type' ? [] : ['cloneShape: failed to create an owned shape snapshot'],
+					field === 'category' ? [] : ['cloneShape: failed to create an owned shape snapshot'],
 				)
 			}
 		}
@@ -770,28 +770,28 @@ describe('validateShape', () => {
 		}> = [
 			{
 				name: 'raw properties undefined',
-				shape: { type: 'raw', schema: { properties } },
+				shape: { category: 'raw', schema: { properties } },
 				message: 'validateShape: every raw schema child must be a plain record',
 				code: 'structure',
 				context: { path: ['schema'] },
 			},
 			{
 				name: 'raw anyOf undefined',
-				shape: { type: 'raw', schema: { anyOf } },
+				shape: { category: 'raw', schema: { anyOf } },
 				message: 'validateShape: every raw schema child must be a plain record',
 				code: 'structure',
 				context: { path: ['schema'] },
 			},
 			{
 				name: 'raw oneOf undefined',
-				shape: { type: 'raw', schema: { oneOf } },
+				shape: { category: 'raw', schema: { oneOf } },
 				message: 'validateShape: every raw schema child must be a plain record',
 				code: 'structure',
 				context: { path: ['schema'] },
 			},
 			{
 				name: 'flagged string',
-				shape: { type: 'string', pattern: /a/i },
+				shape: { category: 'string', pattern: /a/i },
 				message:
 					'validateShape: a string shape pattern must not use flags; use inline pattern constructs instead',
 				code: 'pattern',
@@ -870,7 +870,7 @@ describe('validateShape', () => {
 			{ oneOf: [{}] },
 		]) {
 			const error = captureContractError(() =>
-				compileGenerator({ type: 'raw', schema }, () => {
+				compileGenerator({ category: 'raw', schema }, () => {
 					randomReads += 1
 					return 0
 				}),
@@ -880,8 +880,8 @@ describe('validateShape', () => {
 		}
 		expect(randomReads).toBe(0)
 
-		const plain = { type: 'string', pattern: /a/ } satisfies ContractShape
-		const inline = { type: 'string', pattern: /[aA]/ } satisfies ContractShape
+		const plain = { category: 'string', pattern: /a/ } satisfies ContractShape
+		const inline = { category: 'string', pattern: /[aA]/ } satisfies ContractShape
 		expect(compileSchema(plain).pattern).toBe('a')
 		expect(compileGuard(plain)('A')).toBe(false)
 		expect(compileParser(plain)('A')).toBeUndefined()
@@ -892,15 +892,15 @@ describe('validateShape', () => {
 
 	it('reports an unrecognized shape identically at the root and every structural slot', () => {
 		const unknown: ContractShape = structuredClone(COMPLETE_SHAPES.string)
-		Reflect.set(unknown, 'type', 'nope')
+		Reflect.set(unknown, 'category', 'nope')
 		const shapes = [
 			unknown,
-			{ type: 'array', items: unknown },
-			{ type: 'object', properties: { value: unknown } },
-			{ type: 'object', properties: {}, additionalProperties: unknown },
-			{ type: 'union', variants: [unknown] },
-			{ type: 'optional', inner: unknown },
-			{ type: 'nullable', inner: unknown },
+			{ category: 'array', items: unknown },
+			{ category: 'object', properties: { value: unknown } },
+			{ category: 'object', properties: {}, additionalProperties: unknown },
+			{ category: 'union', variants: [unknown] },
+			{ category: 'optional', inner: unknown },
+			{ category: 'nullable', inner: unknown },
 		] satisfies readonly ContractShape[]
 		for (const shape of shapes) {
 			const outcomes = [
@@ -946,35 +946,35 @@ describe('validateShape', () => {
 		}> = [
 			{
 				malformed: literalString,
-				control: { type: 'literal', values: ['a', 'b', 'c'] },
+				control: { category: 'literal', values: ['a', 'b', 'c'] },
 			},
 			{
 				malformed: literalObject,
-				control: { type: 'literal', values: ['a', 'b'] },
+				control: { category: 'literal', values: ['a', 'b'] },
 			},
 			{
 				malformed: literalTyped,
-				control: { type: 'literal', values: [1, 2] },
+				control: { category: 'literal', values: [1, 2] },
 			},
 			{
 				malformed: rawProperties,
 				control: {
-					type: 'union',
-					variants: [{ type: 'raw', schema: { properties: {} } }, { type: 'string' }],
+					category: 'union',
+					variants: [{ category: 'raw', schema: { properties: {} } }, { category: 'string' }],
 				},
 			},
 			{
 				malformed: rawItems,
 				control: {
-					type: 'union',
-					variants: [{ type: 'raw', schema: { items: {} } }, { type: 'string' }],
+					category: 'union',
+					variants: [{ category: 'raw', schema: { items: {} } }, { category: 'string' }],
 				},
 			},
 			{
 				malformed: rawAdditional,
 				control: {
-					type: 'union',
-					variants: [{ type: 'raw', schema: { additionalProperties: {} } }, { type: 'string' }],
+					category: 'union',
+					variants: [{ category: 'raw', schema: { additionalProperties: {} } }, { category: 'string' }],
 				},
 			},
 		]
@@ -1014,11 +1014,11 @@ describe('validateShape', () => {
 			readonly code: 'range' | 'placement'
 		}> = [
 			{
-				shape: JSON.parse('{"type":"number","integer":true,"min":1.2,"max":1.8}'),
+				shape: JSON.parse('{"category":"number","integer":true,"min":1.2,"max":1.8}'),
 				code: 'range',
 			},
 			{
-				shape: JSON.parse('{"type":"optional","inner":{"type":"string"}}'),
+				shape: JSON.parse('{"category":"optional","inner":{"category":"string"}}'),
 				code: 'placement',
 			},
 		]
@@ -1115,7 +1115,7 @@ describe('validateShape', () => {
 		]`)
 
 		for (const schema of malformedSchemas) {
-			const shape: RawShape = { type: 'raw', schema }
+			const shape: RawShape = { category: 'raw', schema }
 			const compilation = captureContractError(() => compileSchema(shape))
 			const construction = captureContractError(() => rawShape(schema))
 			expect(compilation.code).toBe('structure')
@@ -1125,12 +1125,12 @@ describe('validateShape', () => {
 		const nested: JSONSchema = JSON.parse(
 			'{"type":"object","properties":{"value":{"items":{"type":"bogus"}}}}',
 		)
-		expect(captureContractError(() => compileSchema({ type: 'raw', schema: nested })).code).toBe(
+		expect(captureContractError(() => compileSchema({ category: 'raw', schema: nested })).code).toBe(
 			'structure',
 		)
 		const unsupported: JSONSchema = JSON.parse('{"const":"x"}')
 		expect(
-			captureContractError(() => compileSchema({ type: 'raw', schema: unsupported })).code,
+			captureContractError(() => compileSchema({ category: 'raw', schema: unsupported })).code,
 		).toBe('structure')
 
 		const control: JSONSchema = {
@@ -1160,18 +1160,18 @@ describe('validateShape', () => {
 
 	it('rejects every malformed string and array length bound before contract compilation', () => {
 		const shapes: readonly ContractShape[] = [
-			{ type: 'string', min: Number.NaN },
-			{ type: 'string', max: Number.POSITIVE_INFINITY },
-			{ type: 'string', min: -1 },
-			{ type: 'string', max: 1.5 },
-			{ type: 'array', items: stringShape(), min: Number.NaN },
+			{ category: 'string', min: Number.NaN },
+			{ category: 'string', max: Number.POSITIVE_INFINITY },
+			{ category: 'string', min: -1 },
+			{ category: 'string', max: 1.5 },
+			{ category: 'array', items: stringShape(), min: Number.NaN },
 			{
-				type: 'array',
+				category: 'array',
 				items: stringShape(),
 				max: Number.POSITIVE_INFINITY,
 			},
-			{ type: 'array', items: stringShape(), min: -1 },
-			{ type: 'array', items: stringShape(), max: 1.5 },
+			{ category: 'array', items: stringShape(), min: -1 },
+			{ category: 'array', items: stringShape(), max: 1.5 },
 		]
 
 		for (const shape of shapes) {
@@ -1183,18 +1183,18 @@ describe('validateShape', () => {
 
 	it('throws coded ContractError categories for every malformed-shape policy', () => {
 		const malformedInteger: ContractShape = JSON.parse(
-			'{"type":"number","integer":true,"min":2.5,"max":2.6}',
+			'{"category":"number","integer":true,"min":2.5,"max":2.6}',
 		)
 		const cases: ReadonlyArray<{
 			readonly shape: ContractShape
 			readonly code: 'range' | 'empty' | 'placement' | 'literal'
 		}> = [
-			{ shape: { type: 'string', min: 5, max: 1 }, code: 'range' },
+			{ shape: { category: 'string', min: 5, max: 1 }, code: 'range' },
 			{ shape: malformedInteger, code: 'range' },
-			{ shape: JSON.parse('{"type":"literal","values":[]}'), code: 'empty' },
-			{ shape: JSON.parse('{"type":"union","variants":[]}'), code: 'empty' },
+			{ shape: JSON.parse('{"category":"literal","values":[]}'), code: 'empty' },
+			{ shape: JSON.parse('{"category":"union","variants":[]}'), code: 'empty' },
 			{ shape: optionalShape(stringShape()), code: 'placement' },
-			{ shape: { type: 'literal', values: [Number.NaN] }, code: 'literal' },
+			{ shape: { category: 'literal', values: [Number.NaN] }, code: 'literal' },
 		]
 
 		for (const entry of cases) {
@@ -1206,7 +1206,7 @@ describe('validateShape', () => {
 	})
 
 	it('raises a cycle ContractError with the item path for a self-referential array shape', () => {
-		const raw = JSON.parse('{"type":"array","items":{"type":"string"}}')
+		const raw = JSON.parse('{"category":"array","items":{"category":"string"}}')
 		raw.items = raw
 		const shape: ContractShape = raw
 
@@ -1219,7 +1219,7 @@ describe('validateShape', () => {
 	})
 
 	it('raises a cycle ContractError with the property path for a self-referential object shape', () => {
-		const raw = JSON.parse('{"type":"object","properties":{}}')
+		const raw = JSON.parse('{"category":"object","properties":{}}')
 		raw.properties.self = raw
 		const shape: ContractShape = raw
 
@@ -1231,7 +1231,7 @@ describe('validateShape', () => {
 	})
 
 	it('raises a cycle ContractError with the variant path for a self-referential union shape', () => {
-		const raw = JSON.parse('{"type":"union","variants":[]}')
+		const raw = JSON.parse('{"category":"union","variants":[]}')
 		raw.variants.push(raw)
 		const shape: ContractShape = raw
 
@@ -1310,7 +1310,7 @@ describe('validateShape', () => {
 				return Reflect.getOwnPropertyDescriptor(target, key)
 			},
 		})
-		const shape: ContractShape = { type: 'literal', values }
+		const shape: ContractShape = { category: 'literal', values }
 
 		const error = captureContractError(() => validateShape(shape))
 
@@ -1334,7 +1334,7 @@ describe('validateShape', () => {
 				return Reflect.getOwnPropertyDescriptor(target, key)
 			},
 		})
-		const shape: ContractShape = { type: 'union', variants }
+		const shape: ContractShape = { category: 'union', variants }
 
 		const error = captureContractError(() => validateShape(shape))
 
@@ -1347,14 +1347,14 @@ describe('validateShape', () => {
 		const values: LiteralValue[] = []
 		values.length = 2
 		values[0] = 'present'
-		const literalError = captureContractError(() => validateShape({ type: 'literal', values }))
+		const literalError = captureContractError(() => validateShape({ category: 'literal', values }))
 		expect(literalError.code).toBe('structure')
 		expect(literalError.message).toBe('validateShape: values must be a dense data array')
 
 		const variants: ContractShape[] = []
 		variants.length = 2
 		variants[0] = stringShape()
-		const unionError = captureContractError(() => validateShape({ type: 'union', variants }))
+		const unionError = captureContractError(() => validateShape({ category: 'union', variants }))
 		expect(unionError.code).toBe('structure')
 		expect(unionError.message).toBe('validateShape: variants must be a dense data array')
 		expect(unionError.context?.path).toEqual(['variants'])
@@ -1375,7 +1375,7 @@ describe('validateShape', () => {
 	})
 
 	it('throws on a string shape with min greater than max', () => {
-		expect(() => validateShape({ type: 'string', min: 5, max: 1 })).toThrow(
+		expect(() => validateShape({ category: 'string', min: 5, max: 1 })).toThrow(
 			'validateShape: a string shape has min greater than max',
 		)
 	})
@@ -1388,8 +1388,8 @@ describe('validateShape', () => {
 
 	it('rejects non-finite hand-authored number and integer bounds with bound errors', () => {
 		const shapes: readonly ContractShape[] = [
-			{ type: 'number', min: Number.NaN },
-			{ type: 'number', integer: true, max: Number.POSITIVE_INFINITY },
+			{ category: 'number', min: Number.NaN },
+			{ category: 'number', integer: true, max: Number.POSITIVE_INFINITY },
 		]
 
 		for (const shape of shapes) {
@@ -1423,7 +1423,7 @@ describe('validateShape', () => {
 
 	it('rejects excessive depth at every standalone compiler entry before recursion', () => {
 		let shape: ContractShape = stringShape()
-		for (let level = 0; level < 5_000; level += 1) shape = { type: 'array', items: shape }
+		for (let level = 0; level < 5_000; level += 1) shape = { category: 'array', items: shape }
 		const schemaError = captureContractError(() => compileSchema(shape))
 		const guardError = captureContractError(() => compileGuard(shape))
 		const parserError = captureContractError(() => compileParser(shape))
@@ -1481,11 +1481,11 @@ describe('validateShape', () => {
 		// that stops compilation. Thirty levels expand to 2 ** 31 - 1 emitted
 		// nodes; the clone is thirty-one nodes and returns immediately.
 		const wide = buildSharedDagShape(30)
-		const started = Date.now()
+		const started = performance.now()
 		const owned = ownShape(wide)
 
-		expect(Date.now() - started).toBeLessThan(1_000)
-		expect(owned.type).toBe('object')
+		expect(performance.now() - started).toBeLessThan(1_000)
+		expect(owned.category).toBe('object')
 		expect(Object.isFrozen(owned)).toBe(true)
 		expect(captureContractError(() => compileSchema(owned)).code).toBe('expansion')
 	})
@@ -1562,8 +1562,8 @@ describe('malformed shape children', () => {
 			value: createRevokedProxy(),
 		})
 
-		const throwing: ContractShape = JSON.parse('{"type":"string"}')
-		Object.defineProperty(throwing, 'type', {
+		const throwing: ContractShape = JSON.parse('{"category":"string"}')
+		Object.defineProperty(throwing, 'category', {
 			enumerable: true,
 			get() {
 				throw 'caller getter'
@@ -1607,7 +1607,7 @@ describe('malformed shape children', () => {
 			'structure',
 		])
 
-		const primitive: ContractShape = JSON.parse('{"type":"string"}')
+		const primitive: ContractShape = JSON.parse('{"category":"string"}')
 		Object.defineProperty(primitive, Symbol.toPrimitive, {
 			value() {
 				throw new Error('primitive trap')
@@ -1642,92 +1642,92 @@ describe('malformed shape children', () => {
 			readonly path: readonly string[]
 		}> = [
 			{
-				shape: JSON.parse('{"type":"string"}'),
+				shape: JSON.parse('{"category":"string"}'),
 				field: 'min',
 				path: ['min'],
 			},
 			{
-				shape: JSON.parse('{"type":"string"}'),
+				shape: JSON.parse('{"category":"string"}'),
 				field: 'max',
 				path: ['max'],
 			},
 			{
-				shape: JSON.parse('{"type":"string"}'),
+				shape: JSON.parse('{"category":"string"}'),
 				field: 'pattern',
 				path: ['pattern'],
 			},
 			{
-				shape: JSON.parse('{"type":"number"}'),
+				shape: JSON.parse('{"category":"number"}'),
 				field: 'min',
 				path: ['min'],
 			},
 			{
-				shape: JSON.parse('{"type":"number"}'),
+				shape: JSON.parse('{"category":"number"}'),
 				field: 'max',
 				path: ['max'],
 			},
 			{
-				shape: JSON.parse('{"type":"number"}'),
+				shape: JSON.parse('{"category":"number"}'),
 				field: 'integer',
 				path: ['integer'],
 			},
 			{
-				shape: JSON.parse('{"type":"array","items":{"type":"string"}}'),
+				shape: JSON.parse('{"category":"array","items":{"category":"string"}}'),
 				field: 'min',
 				path: ['min'],
 			},
 			{
-				shape: JSON.parse('{"type":"array","items":{"type":"string"}}'),
+				shape: JSON.parse('{"category":"array","items":{"category":"string"}}'),
 				field: 'max',
 				path: ['max'],
 			},
 			{
-				shape: JSON.parse('{"type":"union","variants":[{"type":"string"}]}'),
+				shape: JSON.parse('{"category":"union","variants":[{"category":"string"}]}'),
 				field: 'mode',
 				path: ['mode'],
 			},
 			{
-				shape: JSON.parse('{"type":"string"}'),
+				shape: JSON.parse('{"category":"string"}'),
 				field: 'description',
 				path: ['description'],
 			},
 			{
-				shape: JSON.parse('{"type":"number"}'),
+				shape: JSON.parse('{"category":"number"}'),
 				field: 'description',
 				path: ['description'],
 			},
 			{
-				shape: JSON.parse('{"type":"boolean"}'),
+				shape: JSON.parse('{"category":"boolean"}'),
 				field: 'description',
 				path: ['description'],
 			},
 			{
-				shape: JSON.parse('{"type":"null"}'),
+				shape: JSON.parse('{"category":"null"}'),
 				field: 'description',
 				path: ['description'],
 			},
 			{
-				shape: JSON.parse('{"type":"literal","values":["ok"]}'),
+				shape: JSON.parse('{"category":"literal","values":["ok"]}'),
 				field: 'description',
 				path: ['description'],
 			},
 			{
-				shape: JSON.parse('{"type":"array","items":{"type":"string"}}'),
+				shape: JSON.parse('{"category":"array","items":{"category":"string"}}'),
 				field: 'description',
 				path: ['description'],
 			},
 			{
-				shape: JSON.parse('{"type":"object","properties":{}}'),
+				shape: JSON.parse('{"category":"object","properties":{}}'),
 				field: 'description',
 				path: ['description'],
 			},
 			{
-				shape: JSON.parse('{"type":"union","variants":[{"type":"string"}]}'),
+				shape: JSON.parse('{"category":"union","variants":[{"category":"string"}]}'),
 				field: 'description',
 				path: ['description'],
 			},
 			{
-				shape: JSON.parse('{"type":"json"}'),
+				shape: JSON.parse('{"category":"json"}'),
 				field: 'description',
 				path: ['description'],
 			},
@@ -1755,8 +1755,8 @@ describe('malformed shape children', () => {
 			}
 		}
 
-		const literal: ContractShape = JSON.parse('{"type":"literal","values":[null]}')
-		if (literal.type !== 'literal') throw new Error('test setup: expected a literal shape')
+		const literal: ContractShape = JSON.parse('{"category":"literal","values":[null]}')
+		if (literal.category !== 'literal') throw new Error('test setup: expected a literal shape')
 		Object.defineProperty(literal.values, '0', {
 			value: trap,
 			enumerable: true,
@@ -1789,15 +1789,15 @@ describe('malformed shape children', () => {
 				message: 'validateShape: every node must be a recognized shape',
 			},
 			{
-				shape: { type: 'array', items: missing.child },
+				shape: { category: 'array', items: missing.child },
 				message: 'validateShape: every structural child must be a shape',
 			},
 			{
-				shape: JSON.parse('{"type":"object"}'),
+				shape: JSON.parse('{"category":"object"}'),
 				message: 'validateShape: properties must be a plain property map',
 			},
 			{
-				shape: JSON.parse('{"type":"union"}'),
+				shape: JSON.parse('{"category":"union"}'),
 				message: 'validateShape: variants must be a finite array',
 			},
 		]
@@ -1817,8 +1817,8 @@ describe('malformed shape children', () => {
 			value: revocable.proxy,
 		})
 
-		const throwing: ContractShape = JSON.parse('{"type":"string"}')
-		Object.defineProperty(throwing, 'type', {
+		const throwing: ContractShape = JSON.parse('{"category":"string"}')
+		Object.defineProperty(throwing, 'category', {
 			get() {
 				throw new Error('boom from getter')
 			},
@@ -1826,10 +1826,10 @@ describe('malformed shape children', () => {
 
 		const inheritedSource: { readonly child: ContractShape } = JSON.parse('{}')
 		Object.setPrototypeOf(inheritedSource, {
-			child: Object.freeze(Object.create({ type: 'string' })),
+			child: Object.freeze(Object.create({ category: 'string' })),
 		})
-		const revokedArray: ContractShape = { type: 'array', items: revokedSource.child }
-		const throwingArray: ContractShape = { type: 'array', items: throwing }
+		const revokedArray: ContractShape = { category: 'array', items: revokedSource.child }
+		const throwingArray: ContractShape = { category: 'array', items: throwing }
 		const cases: readonly ContractShape[] = [
 			Object.freeze(revokedArray),
 			Object.freeze(throwingArray),
@@ -1855,7 +1855,7 @@ describe('malformed shape children', () => {
 
 	it('contains hostile fields and revoked proxies in every structural slot at depth', () => {
 		let reads = 0
-		const secondRead: ContractShape = JSON.parse('{"type":"string"}')
+		const secondRead: ContractShape = JSON.parse('{"category":"string"}')
 		Object.defineProperty(secondRead, 'description', {
 			enumerable: true,
 			get() {
@@ -1878,7 +1878,7 @@ describe('malformed shape children', () => {
 		})
 		Object.freeze(pattern)
 		const hostilePattern: ContractShape = Object.freeze({
-			type: 'string',
+			category: 'string',
 			pattern,
 		})
 		expect(compileSchema(hostilePattern)).toEqual({ type: 'string', pattern: 'safe' })
@@ -1894,22 +1894,22 @@ describe('malformed shape children', () => {
 			},
 		)
 		const propertiesShape: ContractShape = Object.freeze({
-			type: 'object',
+			category: 'object',
 			properties: hostileProperties,
 		})
 
 		const pollutedSource: { readonly child: ContractShape } = JSON.parse('{}')
 		Object.defineProperty(pollutedSource, 'child', {
-			value: Object.freeze(Object.create({ type: 'string' })),
+			value: Object.freeze(Object.create({ category: 'string' })),
 		})
 
-		const items = Proxy.revocable<ContractShape>(JSON.parse('{"type":"string"}'), {})
+		const items = Proxy.revocable<ContractShape>(JSON.parse('{"category":"string"}'), {})
 		const properties = Proxy.revocable<Record<string, ContractShape>>({}, {})
-		const additional = Proxy.revocable<ContractShape>(JSON.parse('{"type":"string"}'), {})
+		const additional = Proxy.revocable<ContractShape>(JSON.parse('{"category":"string"}'), {})
 		const variants = Proxy.revocable<ContractShape[]>([stringShape()], {})
 		const values = Proxy.revocable<LiteralValue[]>(['ok'], {})
-		const optional = Proxy.revocable<ContractShape>(JSON.parse('{"type":"string"}'), {})
-		const nullable = Proxy.revocable<ContractShape>(JSON.parse('{"type":"string"}'), {})
+		const optional = Proxy.revocable<ContractShape>(JSON.parse('{"category":"string"}'), {})
+		const nullable = Proxy.revocable<ContractShape>(JSON.parse('{"category":"string"}'), {})
 		const schema = Proxy.revocable<JSONSchema>({}, {})
 		items.revoke()
 		properties.revoke()
@@ -1921,33 +1921,33 @@ describe('malformed shape children', () => {
 		schema.revoke()
 
 		const revokedShapes: ContractShape[] = [
-			Object.freeze({ type: 'array', items: items.proxy }),
-			Object.freeze({ type: 'object', properties: properties.proxy }),
+			Object.freeze({ category: 'array', items: items.proxy }),
+			Object.freeze({ category: 'object', properties: properties.proxy }),
 			Object.freeze({
-				type: 'object',
+				category: 'object',
 				properties: Object.freeze({}),
 				additionalProperties: additional.proxy,
 			}),
-			Object.freeze({ type: 'union', variants: variants.proxy }),
-			Object.freeze({ type: 'literal', values: values.proxy }),
-			Object.freeze({ type: 'optional', inner: optional.proxy }),
-			Object.freeze({ type: 'nullable', inner: nullable.proxy }),
-			Object.freeze({ type: 'raw', schema: schema.proxy }),
+			Object.freeze({ category: 'union', variants: variants.proxy }),
+			Object.freeze({ category: 'literal', values: values.proxy }),
+			Object.freeze({ category: 'optional', inner: optional.proxy }),
+			Object.freeze({ category: 'nullable', inner: nullable.proxy }),
+			Object.freeze({ category: 'raw', schema: schema.proxy }),
 		]
 		const nested: ContractShape = {
-			type: 'object',
+			category: 'object',
 			properties: {
 				outer: {
-					type: 'array',
+					category: 'array',
 					items: {
-						type: 'object',
+						category: 'object',
 						properties: { inner: revokedShapes[0] ?? stringShape() },
 					},
 				},
 			},
 		}
 		Object.freeze(nested)
-		const polluted: ContractShape = { type: 'array', items: pollutedSource.child }
+		const polluted: ContractShape = { category: 'array', items: pollutedSource.child }
 		const cases = [secondRead, propertiesShape, Object.freeze(polluted), nested, ...revokedShapes]
 
 		for (const shape of cases) {
@@ -1969,7 +1969,7 @@ describe('malformed shape children', () => {
 	})
 
 	it('rejects a structural array whose reported length is not finite', () => {
-		const shape: ContractShape = JSON.parse('{"type":"union","variants":[]}')
+		const shape: ContractShape = JSON.parse('{"category":"union","variants":[]}')
 		const variants = new Proxy([], {
 			get(target, key, receiver) {
 				return key === 'length' ? Number.POSITIVE_INFINITY : Reflect.get(target, key, receiver)
@@ -1988,12 +1988,12 @@ describe('malformed shape children', () => {
 			['cycle', 'bad'],
 			['bad', 'cycle'],
 		]) {
-			const cycle: ContractShape = JSON.parse('{"type":"array","items":{}}')
+			const cycle: ContractShape = JSON.parse('{"category":"array","items":{}}')
 			Object.defineProperty(cycle, 'items', { value: cycle })
 			const properties: Record<string, ContractShape> = Object.create(null)
 			const missing: { readonly child: ContractShape } = JSON.parse('{}')
 			for (const key of order) properties[key] = key === 'cycle' ? cycle : missing.child
-			const error = captureContractError(() => validateShape({ type: 'object', properties }))
+			const error = captureContractError(() => validateShape({ category: 'object', properties }))
 			codes.push(error.code)
 		}
 
@@ -2008,20 +2008,20 @@ describe('malformed shape children', () => {
 			readonly path: readonly string[]
 		}> = [
 			{
-				shape: { type: 'object', properties: { k: child } },
+				shape: { category: 'object', properties: { k: child } },
 				path: ['properties', 'k'],
 			},
-			{ shape: { type: 'array', items: child }, path: ['items'] },
+			{ shape: { category: 'array', items: child }, path: ['items'] },
 			{
-				shape: { type: 'union', variants: [stringShape(), child] },
+				shape: { category: 'union', variants: [stringShape(), child] },
 				path: ['variants', '1'],
 			},
 			{
-				shape: { type: 'union', variants: [stringShape(), child], mode: 'oneOf' },
+				shape: { category: 'union', variants: [stringShape(), child], mode: 'oneOf' },
 				path: ['variants', '1'],
 			},
-			{ shape: { type: 'optional', inner: child }, path: ['inner'] },
-			{ shape: { type: 'nullable', inner: child }, path: ['inner'] },
+			{ shape: { category: 'optional', inner: child }, path: ['inner'] },
+			{ shape: { category: 'nullable', inner: child }, path: ['inner'] },
 		]
 
 		for (const entry of cases) {
@@ -2042,8 +2042,8 @@ describe('malformed shape children', () => {
 	})
 
 	it('rejects every structural slot before ownership can erase an unfrozen malformed child', () => {
-		const missing: ContractShape = JSON.parse('{"type":"object","properties":{}}')
-		if (missing.type !== 'object') throw new Error('test setup: expected an object shape')
+		const missing: ContractShape = JSON.parse('{"category":"object","properties":{}}')
+		if (missing.category !== 'object') throw new Error('test setup: expected an object shape')
 		Object.defineProperty(missing.properties, 'missing', {
 			value: undefined,
 			enumerable: true,
@@ -2053,11 +2053,11 @@ describe('malformed shape children', () => {
 			readonly path: readonly string[]
 		}> = [
 			{
-				shape: JSON.parse('{"type":"array","items":42}'),
+				shape: JSON.parse('{"category":"array","items":42}'),
 				path: ['items'],
 			},
 			{
-				shape: JSON.parse('{"type":"object","properties":{"value":42}}'),
+				shape: JSON.parse('{"category":"object","properties":{"value":42}}'),
 				path: ['properties', 'value'],
 			},
 			{
@@ -2065,19 +2065,19 @@ describe('malformed shape children', () => {
 				path: ['properties', 'missing'],
 			},
 			{
-				shape: JSON.parse('{"type":"object","properties":{},"additionalProperties":42}'),
+				shape: JSON.parse('{"category":"object","properties":{},"additionalProperties":42}'),
 				path: ['additionalProperties'],
 			},
 			{
-				shape: JSON.parse('{"type":"union","variants":[{"type":"string"},42]}'),
+				shape: JSON.parse('{"category":"union","variants":[{"category":"string"},42]}'),
 				path: ['variants', '1'],
 			},
 			{
-				shape: JSON.parse('{"type":"optional","inner":42}'),
+				shape: JSON.parse('{"category":"optional","inner":42}'),
 				path: ['inner'],
 			},
 			{
-				shape: JSON.parse('{"type":"nullable","inner":42}'),
+				shape: JSON.parse('{"category":"nullable","inner":42}'),
 				path: ['inner'],
 			},
 		]
@@ -2120,26 +2120,26 @@ describe('malformed shape children', () => {
 
 		for (const boundary of ['min', 'max']) {
 			for (const value of integral) {
-				const string: ContractShape = { type: 'string', [boundary]: value }
+				const string: ContractShape = { category: 'string', [boundary]: value }
 				const array: ContractShape = {
-					type: 'array',
-					items: { type: 'string' },
+					category: 'array',
+					items: { category: 'string' },
 					[boundary]: value,
 				}
 				cases.push({ shape: string, code: 'bound' }, { shape: array, code: 'bound' })
 			}
 			for (const value of finite) {
-				const number: ContractShape = { type: 'number', [boundary]: value }
+				const number: ContractShape = { category: 'number', [boundary]: value }
 				cases.push({ shape: number, code: 'bound' })
 			}
 		}
 		cases.push(
-			{ shape: { type: 'string', min: 2, max: 1 }, code: 'range' },
+			{ shape: { category: 'string', min: 2, max: 1 }, code: 'range' },
 			{
-				shape: { type: 'array', items: { type: 'string' }, min: 2, max: 1 },
+				shape: { category: 'array', items: { category: 'string' }, min: 2, max: 1 },
 				code: 'range',
 			},
-			{ shape: { type: 'number', min: 2, max: 1 }, code: 'range' },
+			{ shape: { category: 'number', min: 2, max: 1 }, code: 'range' },
 		)
 
 		for (const entry of cases) {
@@ -2166,8 +2166,8 @@ describe('malformed shape children', () => {
 			readonly shape: ContractShape
 			readonly path: readonly string[]
 		}> = [
-			{ shape: JSON.parse('{"type":"string","pattern":"x"}'), path: ['pattern'] },
-			{ shape: JSON.parse('{"type":"raw","schema":[]}'), path: ['schema'] },
+			{ shape: JSON.parse('{"category":"string","pattern":"x"}'), path: ['pattern'] },
+			{ shape: JSON.parse('{"category":"raw","schema":[]}'), path: ['schema'] },
 		]
 
 		for (const entry of cases) {
@@ -2201,28 +2201,28 @@ describe('malformed shape children', () => {
 		// declaration-POLICY families that corpus never reaches. Every code family
 		// the shared gate owns is drawn here, and every message is compared against
 		// the first door's rather than against itself.
-		const cyclic: ContractShape = { type: 'array', items: { type: 'string' } }
+		const cyclic: ContractShape = { category: 'array', items: { category: 'string' } }
 		Reflect.set(cyclic, 'items', cyclic)
-		let deep: ContractShape = { type: 'string' }
+		let deep: ContractShape = { category: 'string' }
 		for (let level = 0; level <= COMPILE_DEPTH_LIMIT + 1; level += 1) {
-			deep = { type: 'array', items: deep }
+			deep = { category: 'array', items: deep }
 		}
 		const cases: ReadonlyArray<{ readonly name: string; readonly shape: ContractShape }> = [
-			{ name: 'optional placement', shape: { type: 'array', items: optionalShape(stringShape()) } },
-			{ name: 'integer range', shape: { type: 'number', integer: true, min: 0.2, max: 0.8 } },
-			{ name: 'string min domain', shape: { type: 'string', min: -1 } },
-			{ name: 'string range', shape: { type: 'string', min: 3, max: 1 } },
-			{ name: 'array min domain', shape: { type: 'array', items: { type: 'string' }, min: -1 } },
-			{ name: 'number min domain', shape: { type: 'number', min: Number.POSITIVE_INFINITY } },
-			{ name: 'flagged pattern', shape: { type: 'string', pattern: /a/i } },
-			{ name: 'empty union', shape: { type: 'union', variants: [] } },
-			{ name: 'empty literal', shape: { type: 'literal', values: [] } },
+			{ name: 'optional placement', shape: { category: 'array', items: optionalShape(stringShape()) } },
+			{ name: 'integer range', shape: { category: 'number', integer: true, min: 0.2, max: 0.8 } },
+			{ name: 'string min domain', shape: { category: 'string', min: -1 } },
+			{ name: 'string range', shape: { category: 'string', min: 3, max: 1 } },
+			{ name: 'array min domain', shape: { category: 'array', items: { category: 'string' }, min: -1 } },
+			{ name: 'number min domain', shape: { category: 'number', min: Number.POSITIVE_INFINITY } },
+			{ name: 'flagged pattern', shape: { category: 'string', pattern: /a/i } },
+			{ name: 'empty union', shape: { category: 'union', variants: [] } },
+			{ name: 'empty literal', shape: { category: 'literal', values: [] } },
 			{
 				name: 'non-finite literal',
-				shape: { type: 'literal', values: [Number.POSITIVE_INFINITY] },
+				shape: { category: 'literal', values: [Number.POSITIVE_INFINITY] },
 			},
-			{ name: 'union mode', shape: JSON.parse('{"type":"union","variants":[],"mode":"allOf"}') },
-			{ name: 'raw keyword', shape: { type: 'raw', schema: JSON.parse('{"nope":1}') } },
+			{ name: 'union mode', shape: JSON.parse('{"category":"union","variants":[],"mode":"allOf"}') },
+			{ name: 'raw keyword', shape: { category: 'raw', schema: JSON.parse('{"nope":1}') } },
 			{ name: 'cycle', shape: cyclic },
 			{ name: 'depth', shape: deep },
 		]
@@ -2278,33 +2278,33 @@ describe('malformed shape children', () => {
 		// on it: a rewrite the capture cannot copy is an ownership refusal, and one
 		// that lands in the captured graph is a declaration refusal from the gate
 		// that owns the rule.
-		const misplaced: Record<string, unknown> = { type: 'string' }
-		const misplacedHost: Record<string, unknown> = { type: 'array', items: misplaced }
+		const misplaced: Record<string, unknown> = { category: 'string' }
+		const misplacedHost: Record<string, unknown> = { category: 'array', items: misplaced }
 		const placement = new LateMutation({ a: misplacedHost }, () => {
-			Reflect.set(misplaced, 'type', 'optional')
-			Reflect.set(misplaced, 'inner', { type: 'string' })
+			Reflect.set(misplaced, 'category', 'optional')
+			Reflect.set(misplaced, 'inner', { category: 'string' })
 		})
-		const looped: Record<string, unknown> = { type: 'string' }
-		const loopedHost: Record<string, unknown> = { type: 'array', items: looped }
+		const looped: Record<string, unknown> = { category: 'string' }
+		const loopedHost: Record<string, unknown> = { category: 'array', items: looped }
 		const cycle = new LateMutation({ a: loopedHost }, () => {
-			Reflect.set(looped, 'type', 'array')
+			Reflect.set(looped, 'category', 'array')
 			Reflect.set(looped, 'items', loopedHost)
 		})
-		const narrowed: Record<string, unknown> = { type: 'number' }
+		const narrowed: Record<string, unknown> = { category: 'number' }
 		const range = new LateMutation({ a: narrowed }, () => {
 			Reflect.set(narrowed, 'integer', true)
 			Reflect.set(narrowed, 'min', 0.2)
 			Reflect.set(narrowed, 'max', 0.8)
 		})
-		const unreadableHost: Record<string, unknown> = { type: 'array', items: { type: 'string' } }
+		const unreadableHost: Record<string, unknown> = { category: 'array', items: { category: 'string' } }
 		const unreadable = new LateMutation({ a: unreadableHost }, () => {
 			Reflect.set(unreadableHost, 'items', createRevokedProxy())
 		})
-		let tower: ContractShape = { type: 'string' }
+		let tower: ContractShape = { category: 'string' }
 		for (let level = 0; level <= COMPILE_DEPTH_LIMIT; level += 1) {
-			tower = { type: 'array', items: tower }
+			tower = { category: 'array', items: tower }
 		}
-		const deepHost: Record<string, unknown> = { type: 'array', items: { type: 'string' } }
+		const deepHost: Record<string, unknown> = { category: 'array', items: { category: 'string' } }
 		const depth = new LateMutation({ a: deepHost }, () => {
 			Reflect.set(deepHost, 'items', tower)
 		})
@@ -2347,23 +2347,23 @@ describe('malformed shape children', () => {
 		// The control the observation above is worthless without: a source that does
 		// NOT change between enumerations compiles, so the five findings are the
 		// mutation's doing rather than the instrument's.
-		const stable = new LateMutation({ a: { type: 'string' } }, () => undefined)
+		const stable = new LateMutation({ a: { category: 'string' } }, () => undefined)
 		expect(() => createContract(stable.shape)).not.toThrow()
 	})
 
 	it('refuses every launderable declaration at all eleven named shape entry points', () => {
-		const mapped: ContractShape = JSON.parse('{"type":"object","properties":{}}')
+		const mapped: ContractShape = JSON.parse('{"category":"object","properties":{}}')
 		Object.defineProperty(mapped, 'properties', { value: new Map(), enumerable: true })
 		const inherited: ContractShape = JSON.parse('{}')
-		Object.setPrototypeOf(inherited, { type: 'string' })
+		Object.setPrototypeOf(inherited, { category: 'string' })
 		const accessorType: ContractShape = JSON.parse('{}')
-		Object.defineProperty(accessorType, 'type', {
+		Object.defineProperty(accessorType, 'category', {
 			enumerable: true,
 			get() {
 				return 'string'
 			},
 		})
-		const accessorMin: ContractShape = JSON.parse('{"type":"string"}')
+		const accessorMin: ContractShape = JSON.parse('{"category":"string"}')
 		Object.defineProperty(accessorMin, 'min', {
 			enumerable: true,
 			get() {
@@ -2382,13 +2382,13 @@ describe('malformed shape children', () => {
 		}> = [
 			{
 				name: 'array properties',
-				shape: JSON.parse('{"type":"object","properties":[]}'),
+				shape: JSON.parse('{"category":"object","properties":[]}'),
 			},
 			{ name: 'Map properties', shape: mapped },
-			{ name: 'record variants', shape: JSON.parse('{"type":"union","variants":{}}') },
+			{ name: 'record variants', shape: JSON.parse('{"category":"union","variants":{}}') },
 			{
 				name: 'array-like variants',
-				shape: JSON.parse('{"type":"union","variants":{"length":0}}'),
+				shape: JSON.parse('{"category":"union","variants":{"length":0}}'),
 			},
 			{ name: 'inherited type', shape: inherited },
 			{ name: 'accessor type', shape: accessorType },
@@ -2401,7 +2401,7 @@ describe('malformed shape children', () => {
 			},
 			{
 				name: 'class child',
-				shape: { type: 'array', items: new StringDeclaration() },
+				shape: { category: 'array', items: new StringDeclaration() },
 				path: ['items'],
 				message: 'validateShape: every structural child must be a shape',
 			},
@@ -2413,7 +2413,7 @@ describe('malformed shape children', () => {
 			},
 			{
 				name: 'reparented class child',
-				shape: { type: 'array', items: new NullBaseDeclaration() },
+				shape: { category: 'array', items: new NullBaseDeclaration() },
 				path: ['items'],
 				message: 'validateShape: every structural child must be a shape',
 			},
@@ -2486,7 +2486,7 @@ describe('malformed shape children', () => {
 			}
 		}
 
-		const nullPrototype: ContractShape = { type: 'string' }
+		const nullPrototype: ContractShape = { category: 'string' }
 		Object.setPrototypeOf(nullPrototype, null)
 		const stable = /a/
 		Object.defineProperties(stable, {
@@ -2499,9 +2499,9 @@ describe('malformed shape children', () => {
 			stringShape(),
 			nullPrototype,
 			createForeignStringShape(),
-			{ type: 'string', pattern: /a/ },
-			{ type: 'string', pattern: stable },
-			{ type: 'string', pattern: foreignPattern },
+			{ category: 'string', pattern: /a/ },
+			{ category: 'string', pattern: stable },
+			{ category: 'string', pattern: foreignPattern },
 			stringShape({ pattern: /a/ }),
 		]) {
 			const controls = [
@@ -2558,8 +2558,8 @@ describe('malformed shape children', () => {
 				via: 'pollution',
 			},
 		]
-		const malformed: ContractShape = { type: 'object', properties: {} }
-		Reflect.set(malformed.type === 'object' ? malformed.properties : {}, 'name', null)
+		const malformed: ContractShape = { category: 'object', properties: {} }
+		Reflect.set(malformed.category === 'object' ? malformed.properties : {}, 'name', null)
 		const escaped: string[] = []
 
 		for (const intrinsic of intrinsics) {
@@ -2663,7 +2663,7 @@ describe('malformed shape children', () => {
 			}
 			if (Object.hasOwn(owned, 'escape')) refused.push(`${subject.name} published class behavior`)
 			if (!Object.isFrozen(owned)) refused.push(`${subject.name} published an unfrozen root`)
-			expect(owned).toEqual({ type: 'string', min: 1 })
+			expect(owned).toEqual({ category: 'string', min: 1 })
 		}
 
 		expect(refused).toEqual([])
@@ -2672,7 +2672,7 @@ describe('malformed shape children', () => {
 	it('carries a genuine foreign pattern through validation, all six compilers, and contract ownership', () => {
 		const pattern = createForeignRegExp('^a+$')
 		if (!isRegExp(pattern)) throw new Error('expected a genuine foreign RegExp')
-		const shape: ContractShape = { type: 'string', pattern }
+		const shape: ContractShape = { category: 'string', pattern }
 
 		expect(() => validateShape(shape)).not.toThrow()
 		const schema = compileSchema(shape)
@@ -2723,7 +2723,7 @@ describe('malformed shape children', () => {
 			new Proxy(/proxied/, {}),
 			revoked.proxy,
 		]) {
-			const shape: ContractShape = JSON.parse('{"type":"string"}')
+			const shape: ContractShape = JSON.parse('{"category":"string"}')
 			Object.defineProperty(shape, 'pattern', { value: pattern, enumerable: true })
 			const validation = captureContractError(() => validateShape(shape))
 			const clone = captureContractError(() => cloneShape(shape))
@@ -2743,15 +2743,15 @@ describe('malformed shape children', () => {
 	})
 
 	it('refuses only an unfrozen accessor result among valid pattern declaration forms', () => {
-		const data: ContractShape = { type: 'string', pattern: /^[a-z0-9]*$/ }
-		const ownedAccessor: ContractShape = JSON.parse('{"type":"string"}')
+		const data: ContractShape = { category: 'string', pattern: /^[a-z0-9]*$/ }
+		const ownedAccessor: ContractShape = JSON.parse('{"category":"string"}')
 		Object.defineProperty(ownedAccessor, 'pattern', {
 			enumerable: true,
 			get() {
 				return Object.freeze(/^[a-z0-9]*$/)
 			},
 		})
-		const unownedAccessor: ContractShape = JSON.parse('{"type":"string"}')
+		const unownedAccessor: ContractShape = JSON.parse('{"category":"string"}')
 		Object.defineProperty(unownedAccessor, 'pattern', {
 			enumerable: true,
 			get() {
@@ -2797,28 +2797,28 @@ describe('malformed shape children', () => {
 		const source: { readonly child: ContractShape } = JSON.parse('{}')
 		const missing = source.child
 		const malformed: ContractShape = JSON.parse('{}')
-		const malformedObject: ContractShape = JSON.parse('{"type":"object"}')
-		const malformedUnion: ContractShape = JSON.parse('{"type":"union"}')
-		let deep: ContractShape = { type: 'nullable', inner: missing }
-		for (let level = 0; level < 64; level += 1) deep = { type: 'array', items: deep }
+		const malformedObject: ContractShape = JSON.parse('{"category":"object"}')
+		const malformedUnion: ContractShape = JSON.parse('{"category":"union"}')
+		let deep: ContractShape = { category: 'nullable', inner: missing }
+		for (let level = 0; level < 64; level += 1) deep = { category: 'array', items: deep }
 
 		const nested = captureContractError(() =>
 			compileGuard({
-				type: 'object',
-				properties: { values: { type: 'array', items: missing } },
+				category: 'object',
+				properties: { values: { category: 'array', items: missing } },
 			}),
 		)
 		const additional = captureContractError(() =>
-			compileAuditor({ type: 'object', properties: {}, additionalProperties: malformed }, {}),
+			compileAuditor({ category: 'object', properties: {}, additionalProperties: malformed }, {}),
 		)
 		const discriminant = captureContractError(() =>
-			compileParser({ type: 'object', properties: { value: malformed } }),
+			compileParser({ category: 'object', properties: { value: malformed } }),
 		)
 		const properties = captureContractError(() =>
-			compileSchema({ type: 'object', properties: { value: malformedObject } }),
+			compileSchema({ category: 'object', properties: { value: malformedObject } }),
 		)
 		const variants = captureContractError(() =>
-			compileGenerator({ type: 'object', properties: { value: malformedUnion } }, () => 0),
+			compileGenerator({ category: 'object', properties: { value: malformedUnion } }, () => 0),
 		)
 		const depth = captureContractError(() => compileReporter(deep, undefined))
 
@@ -2847,12 +2847,12 @@ describe('JSON Schema vocabulary safety', () => {
 			readonly shape: ContractShape
 			readonly code: 'empty' | 'literal'
 		}> = [
-			{ shape: JSON.parse('{"type":"union","variants":[]}'), code: 'empty' },
-			{ shape: JSON.parse('{"type":"union","variants":[],"mode":"oneOf"}'), code: 'empty' },
-			{ shape: JSON.parse('{"type":"literal","values":[]}'), code: 'empty' },
-			{ shape: { type: 'literal', values: [Number.NaN] }, code: 'literal' },
-			{ shape: { type: 'literal', values: [Number.POSITIVE_INFINITY] }, code: 'literal' },
-			{ shape: { type: 'literal', values: [Number.NEGATIVE_INFINITY] }, code: 'literal' },
+			{ shape: JSON.parse('{"category":"union","variants":[]}'), code: 'empty' },
+			{ shape: JSON.parse('{"category":"union","variants":[],"mode":"oneOf"}'), code: 'empty' },
+			{ shape: JSON.parse('{"category":"literal","values":[]}'), code: 'empty' },
+			{ shape: { category: 'literal', values: [Number.NaN] }, code: 'literal' },
+			{ shape: { category: 'literal', values: [Number.POSITIVE_INFINITY] }, code: 'literal' },
+			{ shape: { category: 'literal', values: [Number.NEGATIVE_INFINITY] }, code: 'literal' },
 		]
 
 		for (const entry of cases) {
@@ -2996,7 +2996,7 @@ describe('compileSchema', () => {
 			type: 'object',
 			properties: { value: child },
 		}
-		const shape: RawShape = Object.freeze({ type: 'raw', schema })
+		const shape: RawShape = Object.freeze({ category: 'raw', schema })
 		const compiled = compileSchema(shape)
 
 		Reflect.set(schema, 'type', 'number')
@@ -4598,16 +4598,16 @@ describe('compileGenerator', () => {
 		for (const shape of generation) {
 			const error = captureContractError(() => compileGenerator(shape, () => 0))
 			expect(error.code).toBe('generate')
-			expect(error.context?.shape).toBe(shape.type)
+			expect(error.context?.shape).toBe(shape.category)
 		}
 		const malformed: readonly ContractShape[] = [
-			JSON.parse('{"type":"literal","values":[]}'),
-			JSON.parse('{"type":"union","variants":[]}'),
+			JSON.parse('{"category":"literal","values":[]}'),
+			JSON.parse('{"category":"union","variants":[]}'),
 		]
 		for (const shape of malformed) {
 			const error = captureContractError(() => compileGenerator(shape, () => 0))
 			expect(error.code).toBe('empty')
-			expect(error.context?.shape).toBe(shape.type)
+			expect(error.context?.shape).toBe(shape.category)
 		}
 	})
 
@@ -4641,13 +4641,13 @@ describe('compileGenerator', () => {
 
 describe('createContract fail-fast', () => {
 	it('throws at creation time for a degenerate shape, not at use', () => {
-		expect(() => createContract({ type: 'string', min: 5, max: 1 })).toThrow(
+		expect(() => createContract({ category: 'string', min: 5, max: 1 })).toThrow(
 			'validateShape: a string shape has min greater than max',
 		)
-		expect(() => createContract(JSON.parse('{"type":"union","variants":[]}'))).toThrow(
+		expect(() => createContract(JSON.parse('{"category":"union","variants":[]}'))).toThrow(
 			'validateShape: a union shape needs at least one variant',
 		)
-		expect(() => createContract(JSON.parse('{"type":"literal","values":[]}'))).toThrow(
+		expect(() => createContract(JSON.parse('{"category":"literal","values":[]}'))).toThrow(
 			'validateShape: a literal shape needs at least one value',
 		)
 		expect(() => createContract(integerShape({ min: 2.5, max: 2.6 }))).toThrow(
@@ -4685,16 +4685,16 @@ describe('createContract', () => {
 
 	it('owns one immutable snapshot of a hand-authored mutable shape graph', () => {
 		const values: LiteralValue[] = ['stable']
-		const items = { type: 'literal', values } satisfies ContractShape
-		const array = { type: 'array', items } satisfies ContractShape
+		const items = { category: 'literal', values } satisfies ContractShape
+		const array = { category: 'array', items } satisfies ContractShape
 		const variants: ContractShape[] = [array]
-		const shape: ContractShape = { type: 'union', variants }
+		const shape: ContractShape = { category: 'union', variants }
 		const contract = createContract<ContractShape>(shape)
 		const schema = contract.schema
 
 		values[0] = 'drift'
-		array.items = { type: 'literal', values: ['drift'] }
-		variants[0] = { type: 'number' }
+		array.items = { category: 'literal', values: ['drift'] }
+		variants[0] = { category: 'number' }
 
 		expect(contract.schema).toBe(schema)
 		expect(contract.schema).toEqual({
@@ -4733,8 +4733,8 @@ describe('createContract', () => {
 describe('compiler shape ownership', () => {
 	it('owns an unfrozen caller graph at every compiler entry point', () => {
 		const values: LiteralValue[] = ['stable']
-		const items: ContractShape = { type: 'literal', values }
-		const shape: ContractShape = { type: 'array', items }
+		const items: ContractShape = { category: 'literal', values }
+		const shape: ContractShape = { category: 'array', items }
 
 		const schema = compileSchema(shape)
 		const guard = compileGuard(shape)
@@ -5327,7 +5327,7 @@ describe('R3 — the canonical door matrix', () => {
 			JSON.parse('null'),
 			JSON.parse('true'),
 			JSON.parse('[]'),
-			JSON.parse('[{"type":"string"}]'),
+			JSON.parse('[{"category":"string"}]'),
 		]
 
 		const messages: string[] = []
@@ -5446,7 +5446,7 @@ describe('R3 — the canonical door matrix', () => {
 			},
 		)
 
-		const contract = createContract({ type: 'object', properties })
+		const contract = createContract({ category: 'object', properties })
 		const generated = contract.generate(seededRandom(3))
 
 		expect(reads).toBe(2)

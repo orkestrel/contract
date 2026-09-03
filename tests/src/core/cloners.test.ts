@@ -469,25 +469,25 @@ describe('cloneShape', () => {
 	})
 
 	it('creates fresh roots and re-observes the source on every eager call', () => {
-		const child: { type: 'string'; min?: number } = { type: 'string', min: 1 }
-		const source: ContractShape = { type: 'object', properties: { child } }
+		const child: { category: 'string'; min?: number } = { category: 'string', min: 1 }
+		const source: ContractShape = { category: 'object', properties: { child } }
 
 		const first = cloneShape(source)
 		child.min = 2
 		const second = cloneShape(source)
 
 		expect(first).not.toBe(second)
-		if (first.type !== 'object' || second.type !== 'object') {
+		if (first.category !== 'object' || second.category !== 'object') {
 			throw new Error('expected object snapshots')
 		}
 		expect(first.properties.child).not.toBe(second.properties.child)
-		expect(first.properties.child).toEqual({ type: 'string', min: 1 })
-		expect(second.properties.child).toEqual({ type: 'string', min: 2 })
+		expect(first.properties.child).toEqual({ category: 'string', min: 1 })
+		expect(second.properties.child).toEqual({ category: 'string', min: 2 })
 	})
 
 	it('creates a fresh contained failure on every eager call', () => {
 		const cause = new Error('hostile minimum')
-		const target: ContractShape = { type: 'number' }
+		const target: ContractShape = { category: 'number' }
 		const source = new Proxy(target, {
 			getOwnPropertyDescriptor() {
 				throw cause
@@ -509,7 +509,7 @@ describe('cloneShape', () => {
 		const shapes: readonly ContractShape[] = [
 			stringShape({ pattern: /^stable$/ }),
 			objectShape({ first: shared, second: shared }),
-			unionShape(stringShape(), { type: 'raw', schema: { type: 'number' } }),
+			unionShape(stringShape(), { category: 'raw', schema: { type: 'number' } }),
 		]
 
 		for (const shape of shapes) {
@@ -526,7 +526,7 @@ describe('ownShape', () => {
 	it('prefers a frozen source validation ContractError over the original clone failure', () => {
 		const cause = new Error('first minimum read')
 		let reads = 0
-		const target: ContractShape = { type: 'number' }
+		const target: ContractShape = { category: 'number' }
 		Object.defineProperty(target, 'min', {
 			enumerable: true,
 			get() {
@@ -553,7 +553,7 @@ describe('ownShape', () => {
 
 	it('keeps an unfrozen eager clone failure unchanged', () => {
 		const cause = new Error('hostile minimum')
-		const target: ContractShape = { type: 'number' }
+		const target: ContractShape = { category: 'number' }
 		const source = new Proxy(target, {
 			getOwnPropertyDescriptor() {
 				throw cause
@@ -567,13 +567,13 @@ describe('ownShape', () => {
 	})
 
 	it('returns independent successful snapshots for frozen and unfrozen sources', () => {
-		const child: ContractShape = { type: 'string' }
+		const child: ContractShape = { category: 'string' }
 		const unfrozen: ContractShape = {
-			type: 'object',
+			category: 'object',
 			properties: { first: child, second: child },
 		}
 		const frozen = Object.freeze({
-			type: 'object',
+			category: 'object',
 			properties: { first: child, second: child },
 		}) satisfies ContractShape
 
@@ -583,7 +583,7 @@ describe('ownShape', () => {
 
 			expect(first).not.toBe(source)
 			expect(first).not.toBe(second)
-			if (first.type !== 'object' || second.type !== 'object') {
+			if (first.category !== 'object' || second.category !== 'object') {
 				throw new Error('expected object snapshots')
 			}
 			expect(first.properties.first).toBe(first.properties.second)
@@ -638,10 +638,10 @@ describe('eager ownership boundaries — reparented class brands', () => {
 		})
 
 		expect(observed).toEqual([
-			{ name: 'cloneShape', accepted: true, value: { type: 'string', min: 1 } },
-			{ name: 'ownShape', accepted: true, value: { type: 'string', min: 1 } },
-			{ name: 'cloneJSONValue', accepted: true, value: { type: 'string', min: 1 } },
-			{ name: 'cloneJSONRecord', accepted: true, value: { type: 'string', min: 1 } },
+			{ name: 'cloneShape', accepted: true, value: { category: 'string', min: 1 } },
+			{ name: 'ownShape', accepted: true, value: { category: 'string', min: 1 } },
+			{ name: 'cloneJSONValue', accepted: true, value: { category: 'string', min: 1 } },
+			{ name: 'cloneJSONRecord', accepted: true, value: { category: 'string', min: 1 } },
 		])
 	})
 
@@ -650,9 +650,11 @@ describe('eager ownership boundaries — reparented class brands', () => {
 		// brand: it snapshots an arbitrary readable graph, and its output is
 		// already an owned null-prototype record, so nothing class-branded
 		// survives the call.
-		const owned = cloneSchema(new NullBaseDeclaration())
+		// A shape declaration is not a JSON Schema, so this door is driven reflectively to put
+		// the same reparented instance the shape doors refuse through the schema door.
+		const owned: JSONSchema = Reflect.apply(cloneSchema, undefined, [new NullBaseDeclaration()])
 
-		expect(owned).toEqual({ type: 'string', min: 1 })
+		expect(owned).toEqual({ category: 'string', min: 1 })
 		expect(Object.getPrototypeOf(owned)).toBeNull()
 		expect(Object.isFrozen(owned)).toBe(true)
 	})

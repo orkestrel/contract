@@ -573,7 +573,7 @@ describe('shape builders', () => {
 			createUndefinedSchema('items'),
 			createUndefinedSchema('additionalProperties'),
 		] satisfies readonly JSONSchema[]) {
-			expect(rawShape(schema).type).toBe('raw')
+			expect(rawShape(schema).category).toBe('raw')
 		}
 
 		const flagged = captureContractError(() => stringShape({ min: 2, max: 1, pattern: /a/i }))
@@ -780,10 +780,10 @@ describe('shape builders', () => {
 	})
 
 	it('stringShape carries length / pattern / description', () => {
-		expect(stringShape()).toMatchObject({ type: 'string' })
+		expect(stringShape()).toMatchObject({ category: 'string' })
 		const pattern = /^a+$/
 		expect(stringShape({ min: 1, max: 8, pattern, description: 'name' })).toMatchObject({
-			type: 'string',
+			category: 'string',
 			min: 1,
 			max: 8,
 			pattern,
@@ -792,21 +792,21 @@ describe('shape builders', () => {
 	})
 
 	it('numberShape and integerShape set the integer flag appropriately', () => {
-		expect(numberShape({ min: 0, max: 10 })).toMatchObject({ type: 'number', min: 0, max: 10 })
+		expect(numberShape({ min: 0, max: 10 })).toMatchObject({ category: 'number', min: 0, max: 10 })
 		expect(numberShape().integer).toBeUndefined()
-		expect(integerShape({ min: 0 })).toMatchObject({ type: 'number', integer: true, min: 0 })
+		expect(integerShape({ min: 0 })).toMatchObject({ category: 'number', integer: true, min: 0 })
 	})
 
 	it('booleanShape carries its description', () => {
 		expect(booleanShape({ description: 'flag' })).toMatchObject({
-			type: 'boolean',
+			category: 'boolean',
 			description: 'flag',
 		})
 	})
 
 	it('literalShape preserves the value tuple', () => {
 		expect(literalShape(['admin', 'guest'])).toMatchObject({
-			type: 'literal',
+			category: 'literal',
 			values: ['admin', 'guest'],
 		})
 	})
@@ -846,7 +846,7 @@ describe('shape builders', () => {
 
 	it('literalShape attaches the description via options', () => {
 		expect(literalShape(['admin', 'guest'], { description: 'the user role' })).toEqual({
-			type: 'literal',
+			category: 'literal',
 			values: ['admin', 'guest'],
 			description: 'the user role',
 		})
@@ -854,23 +854,23 @@ describe('shape builders', () => {
 
 	it('arrayShape wraps an element shape with bounds', () => {
 		const shape = arrayShape(stringShape(), { max: 3 })
-		expect(shape.type).toBe('array')
-		expect(shape.items).toMatchObject({ type: 'string' })
+		expect(shape.category).toBe('array')
+		expect(shape.items).toMatchObject({ category: 'string' })
 		expect(shape.max).toBe(3)
 	})
 
 	it('objectShape carries properties + additionalProperties', () => {
 		const shape = objectShape({ name: stringShape() }, { additionalProperties: false })
-		expect(shape.type).toBe('object')
-		expect(shape.properties.name).toMatchObject({ type: 'string' })
+		expect(shape.category).toBe('object')
+		expect(shape.properties.name).toMatchObject({ category: 'string' })
 		expect(shape.additionalProperties).toBe(false)
 	})
 
 	it('recordShape is an open object validated by its value shape', () => {
 		const shape = recordShape(numberShape())
-		expect(shape.type).toBe('object')
+		expect(shape.category).toBe('object')
 		expect(shape.properties).toEqual({})
-		expect(shape.additionalProperties).toMatchObject({ type: 'number' })
+		expect(shape.additionalProperties).toMatchObject({ category: 'number' })
 	})
 
 	it('rejects a missing record value shape instead of building a closed empty object', () => {
@@ -889,18 +889,18 @@ describe('shape builders', () => {
 
 	it('optionalShape / nullableShape wrap an inner shape', () => {
 		expect(optionalShape(stringShape())).toMatchObject({
-			type: 'optional',
-			inner: { type: 'string' },
+			category: 'optional',
+			inner: { category: 'string' },
 		})
 		expect(nullableShape(numberShape())).toMatchObject({
-			type: 'nullable',
-			inner: { type: 'number' },
+			category: 'nullable',
+			inner: { category: 'number' },
 		})
 	})
 
 	it('rawShape embeds a schema fragment verbatim', () => {
 		expect(rawShape({ type: 'string', description: 'any' })).toEqual({
-			type: 'raw',
+			category: 'raw',
 			schema: { type: 'string', description: 'any' },
 		})
 	})
@@ -985,17 +985,17 @@ describe('shape builders', () => {
 	})
 
 	it('nullShape returns a bare null shape and threads its description', () => {
-		expect(nullShape()).toEqual({ type: 'null' })
+		expect(nullShape()).toEqual({ category: 'null' })
 		expect(nullShape({ description: 'nothing' })).toEqual({
-			type: 'null',
+			category: 'null',
 			description: 'nothing',
 		})
 	})
 
 	it('jsonShape returns a bare json shape and threads its description', () => {
-		expect(jsonShape()).toEqual({ type: 'json' })
+		expect(jsonShape()).toEqual({ category: 'json' })
 		expect(jsonShape({ description: 'any JSON value' })).toEqual({
-			type: 'json',
+			category: 'json',
 			description: 'any JSON value',
 		})
 	})
@@ -1465,11 +1465,11 @@ describe('hand-authored shapes keep their strict semantics — only inference wi
 
 describe('schemaToShape — keyword semantics', () => {
 	it('maps each primitive type keyword to its matching shape', () => {
-		expect(schemaToShape({ type: 'string' })).toMatchObject({ type: 'string' })
-		expect(schemaToShape({ type: 'number' })).toMatchObject({ type: 'number' })
-		expect(schemaToShape({ type: 'integer' })).toMatchObject({ type: 'number', integer: true })
-		expect(schemaToShape({ type: 'boolean' })).toMatchObject({ type: 'boolean' })
-		expect(schemaToShape({ type: 'null' })).toMatchObject({ type: 'null' })
+		expect(schemaToShape({ type: 'string' })).toMatchObject({ category: 'string' })
+		expect(schemaToShape({ type: 'number' })).toMatchObject({ category: 'number' })
+		expect(schemaToShape({ type: 'integer' })).toMatchObject({ category: 'number', integer: true })
+		expect(schemaToShape({ type: 'boolean' })).toMatchObject({ category: 'boolean' })
+		expect(schemaToShape({ type: 'null' })).toMatchObject({ category: 'null' })
 	})
 
 	it('enum maps to a literal shape that accepts listed values and rejects others', () => {
@@ -1662,10 +1662,10 @@ describe('schemaToShape — format and pattern are never asserted', () => {
 	it('a pattern keyword is ignored and never compiled into a RegExp (instant, any string accepted)', () => {
 		// A classic ReDoS-shaped pattern — if this were ever compiled, a hostile
 		// input would hang the process. Construction and validation must be instant.
-		const start = Date.now()
+		const start = performance.now()
 		const guard = compileGuard(schemaToShape({ type: 'string', pattern: '^(a+)+$' }))
 		expect(guard(`${'a'.repeat(40)}!`)).toBe(true)
-		expect(Date.now() - start).toBeLessThan(100)
+		expect(performance.now() - start).toBeLessThan(100)
 	})
 })
 
@@ -1673,14 +1673,14 @@ describe('schemaToShape — hostile schema triad', () => {
 	it('does not stack-overflow or throw on a cyclic schema graph (self-referential properties)', () => {
 		// JSON.parse returns an untyped structure; mutate it before pinning the
 		// declared type to JSONSchema — no type assertion needed (AGENTS §1).
-		const raw = JSON.parse('{"type":"object","properties":{"child":{"type":"string"}}}')
+		const raw = JSON.parse('{"category":"object","properties":{"child":{"category":"string"}}}')
 		raw.properties.child = raw
 		const schema: JSONSchema = raw
 		expect(() => createContract(schemaToShape(schema))).not.toThrow()
 	})
 
 	it('does not stack-overflow or throw on a cyclic schema graph (self-referential items)', () => {
-		const raw = JSON.parse('{"type":"array"}')
+		const raw = JSON.parse('{"category":"array"}')
 		raw.items = raw
 		const schema: JSONSchema = raw
 		expect(() => createContract(schemaToShape(schema))).not.toThrow()
@@ -1854,14 +1854,14 @@ describe('schemaToShape — performance guard', () => {
 		for (let level = 0; level < 20; level += 1) {
 			node = { type: 'object', properties: { a: node, b: node }, required: ['a', 'b'] }
 		}
-		const start = Date.now()
+		const start = performance.now()
 		const shape = schemaToShape(node)
-		expect(Date.now() - start).toBeLessThan(5000)
-		expect(shape.type).toBe('object')
+		expect(performance.now() - start).toBeLessThan(5000)
+		expect(shape.category).toBe('object')
 		// Both keys are `required`, so neither is optionalShape-wrapped — the
 		// memoized inner shape is returned by reference for both, proving the
 		// conversion dedupes the shared subtree instead of re-building it.
-		const properties = shape.type === 'object' ? shape.properties : undefined
+		const properties = shape.category === 'object' ? shape.properties : undefined
 		expect(properties?.a).toBe(properties?.b)
 	})
 
@@ -1871,15 +1871,17 @@ describe('schemaToShape — performance guard', () => {
 			properties[`key${index}`] = { type: 'string' }
 		}
 		const schema: JSONSchema = { type: 'object', properties }
-		const start = Date.now()
+		const start = performance.now()
 		expect(() => createContract(schemaToShape(schema))).not.toThrow()
-		expect(Date.now() - start).toBeLessThan(5000)
+		expect(performance.now() - start).toBeLessThan(5000)
 	})
 })
 
 describe('shape builders — reparented class brands', () => {
 	it('refuses a null-base class instance at every building door', () => {
-		const doors = [
+		// `rawShape` takes a JSON Schema rather than a declaration, so that one door is driven
+		// reflectively and the corpus still puts one instance through every building door.
+		const doors: ReadonlyArray<{ readonly name: string; readonly operation: () => unknown }> = [
 			{ name: 'arrayShape', operation: () => arrayShape(new NullBaseDeclaration()) },
 			{ name: 'objectShape', operation: () => objectShape({ value: new NullBaseDeclaration() }) },
 			{ name: 'recordShape', operation: () => recordShape(new NullBaseDeclaration()) },
@@ -1887,7 +1889,10 @@ describe('shape builders — reparented class brands', () => {
 			{ name: 'oneOfShape', operation: () => oneOfShape(new NullBaseDeclaration()) },
 			{ name: 'optionalShape', operation: () => optionalShape(new NullBaseDeclaration()) },
 			{ name: 'nullableShape', operation: () => nullableShape(new NullBaseDeclaration()) },
-			{ name: 'rawShape', operation: () => rawShape(new NullBaseDeclaration()) },
+			{
+				name: 'rawShape',
+				operation: () => Reflect.apply(rawShape, undefined, [new NullBaseDeclaration()]),
+			},
 		]
 
 		const observed = doors.map((door) => {
@@ -1920,8 +1925,14 @@ describe('shape builders — reparented class brands', () => {
 	it('widens a null-base class instance to an accept-anything raw shape during inversion', () => {
 		const node = new NullBaseDeclaration()
 
-		expect(schemaToShape(node)).toEqual(rawShape({}))
-		expect(schemaToShape({ type: 'object', properties: { nested: node } })).toEqual(
+		// A declaration is not a JSON Schema, so the inversion door is driven reflectively.
+		const widened: ContractShape = Reflect.apply(schemaToShape, undefined, [node])
+		const nested: ContractShape = Reflect.apply(schemaToShape, undefined, [
+			{ type: 'object', properties: { nested: node } },
+		])
+
+		expect(widened).toEqual(rawShape({}))
+		expect(nested).toEqual(
 			objectShape({ nested: optionalShape(rawShape({})) }, { additionalProperties: true }),
 		)
 	})

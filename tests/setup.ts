@@ -136,7 +136,7 @@ import {
 	whereOf,
 } from '@src/core'
 import * as core from '@src/core'
-import { afterEach, expect, vi } from 'vitest'
+import { afterEach, vi } from 'vitest'
 
 afterEach(() => {
 	vi.restoreAllMocks()
@@ -1682,7 +1682,7 @@ export function publicDoors(): readonly PublicDoor[] {
  *
  * @example
  * ```ts
- * const late = new LateMutation({ a: array }, () => Reflect.set(item, 'type', 'optional'))
+ * const late = new LateMutation({ a: array }, () => Reflect.set(item, 'category', 'optional'))
  * captureContractError(() => createContract(late.shape)).message
  * ```
  */
@@ -1700,7 +1700,7 @@ export class LateMutation {
 	 */
 	constructor(properties: Readonly<Record<string, unknown>>, mutate: () => void) {
 		this.#mutate = mutate
-		const source: ContractShape = JSON.parse('{"type":"object"}')
+		const source: ContractShape = JSON.parse('{"category":"object"}')
 		Object.defineProperty(source, 'properties', {
 			value: new Proxy(properties, { ownKeys: (target) => this.#enumerate(target) }),
 			enumerable: true,
@@ -1813,7 +1813,7 @@ export function forgeBlankBrand(prototype: object): object {
 
 /** A structurally valid string declaration with a non-record class brand. */
 export class StringDeclaration implements StringShape {
-	readonly type = 'string'
+	readonly category = 'string'
 	readonly min = 1
 }
 
@@ -1822,7 +1822,7 @@ export class StringDeclaration implements StringShape {
  * to `null`, so its instances satisfy the retired two-link brand test.
  */
 export class NullBaseDeclaration implements StringShape {
-	readonly type = 'string'
+	readonly category = 'string'
 	readonly min = 1
 }
 
@@ -1857,7 +1857,7 @@ Object.setPrototypeOf(NullBaseDeclaration.prototype, null)
  * still draw.
  */
 export class ForgedBrandDeclaration implements StringShape {
-	readonly type = 'string'
+	readonly category = 'string'
 	readonly min = 1
 
 	/** Reachable class behavior that survives the forgery. */
@@ -1882,7 +1882,7 @@ forgeRecordBrand(ForgedBrandDeclaration.prototype)
  * cost without changing what passes.
  */
 export class StrippedBrandDeclaration implements StringShape {
-	readonly type = 'string'
+	readonly category = 'string'
 	readonly min = 1
 	/** Reachable class behavior carried by the instance, not the prototype. */
 	readonly escape = (): string => 'live'
@@ -1902,7 +1902,7 @@ forgeRecordBrand(StrippedBrandDeclaration.prototype)
  * never varied.
  */
 export class BlankBrandDeclaration implements StringShape {
-	readonly type = 'string'
+	readonly category = 'string'
 	readonly min = 1
 
 	/** Reachable class behavior the blank forgery would have carried. */
@@ -1918,7 +1918,7 @@ forgeBlankBrand(BlankBrandDeclaration.prototype)
  * built it — the untouched control for {@link createProxiedBrandDeclaration}.
  */
 export class ProxiedBrandDeclaration implements StringShape {
-	readonly type = 'string'
+	readonly category = 'string'
 	readonly min = 1
 
 	/** Reachable class behavior the proxied route preserves. */
@@ -2023,11 +2023,11 @@ export class PatternFixture {
 		this.#field = field
 		this.carrier = new PatternCarrier(field === 'source' ? 'a' : '')
 		if (!accessor) {
-			this.shape = { type: 'string', pattern: this.#pattern(false) }
+			this.shape = { category: 'string', pattern: this.#pattern(false) }
 			return
 		}
 
-		const shape: StringShape = { type: 'string' }
+		const shape: StringShape = { category: 'string' }
 		Object.defineProperty(shape, 'pattern', {
 			configurable: true,
 			enumerable: true,
@@ -2063,10 +2063,10 @@ export class SingleReadPattern {
 	constructor(accessor: boolean) {
 		this.#reads = 0
 		if (!accessor) {
-			this.shape = { type: 'string', pattern: this.#pattern() }
+			this.shape = { category: 'string', pattern: this.#pattern() }
 			return
 		}
-		const shape: StringShape = { type: 'string' }
+		const shape: StringShape = { category: 'string' }
 		Object.defineProperty(shape, 'pattern', {
 			configurable: true,
 			enumerable: true,
@@ -2142,10 +2142,10 @@ export function createShapeRetention(
 	label: string,
 	invalid: boolean,
 ): RetentionFixture<ContractShape, Record<string, ContractShape>> {
-	const child: ContractShape = { type: 'string', description: label.repeat(200_000) }
+	const child: ContractShape = { category: 'string', description: label.repeat(200_000) }
 	const properties: Record<string, ContractShape> = { child }
 	if (invalid) {
-		properties.bad = { type: 'string' }
+		properties.bad = { category: 'string' }
 		Reflect.set(properties, 'bad', null)
 	}
 	return new RetentionFixture(
@@ -2153,7 +2153,7 @@ export function createShapeRetention(
 		properties,
 		(read) =>
 			new Proxy<ContractShape>(
-				{ type: 'object', properties: {} },
+				{ category: 'object', properties: {} },
 				{
 					get: (target, key, receiver) =>
 						key === 'properties' ? read() : Reflect.get(target, key, receiver),
@@ -2188,10 +2188,10 @@ export function createVariantRetention(
 	label: string,
 	invalid: boolean,
 ): RetentionFixture<ContractShape, ContractShape[]> {
-	const child: ContractShape = { type: 'string', description: label.repeat(200_000) }
+	const child: ContractShape = { category: 'string', description: label.repeat(200_000) }
 	const variants: ContractShape[] = [child]
 	if (invalid) {
-		variants.push({ type: 'string' })
+		variants.push({ category: 'string' })
 		Reflect.set(variants, 1, null)
 	}
 	return new RetentionFixture(
@@ -2199,7 +2199,7 @@ export function createVariantRetention(
 		variants,
 		(read) =>
 			new Proxy<ContractShape>(
-				{ type: 'union', variants: [] },
+				{ category: 'union', variants: [] },
 				{
 					get: (target, key, receiver) =>
 						key === 'variants' ? read() : Reflect.get(target, key, receiver),
@@ -3134,11 +3134,11 @@ export type ShapeValidationDefect = 'domain' | 'cycle' | 'structure'
  * @returns A fresh caller-owned shape graph
  */
 export function createShapeValidationCase(order: readonly ShapeValidationDefect[]): ContractShape {
-	const root: ContractShape = { type: 'object', properties: {} }
-	if (root.type !== 'object') return root
+	const root: ContractShape = { category: 'object', properties: {} }
+	if (root.category !== 'object') return root
 	for (const defect of order) {
 		if (defect === 'domain') {
-			Reflect.set(root.properties, defect, { type: 'string', min: -1 })
+			Reflect.set(root.properties, defect, { category: 'string', min: -1 })
 			continue
 		}
 		if (defect === 'cycle') {
@@ -3166,7 +3166,7 @@ export interface ShapeSeparation {
 /**
  * Exhaustive test-only evidence for every contract-shape kind's parse-versus-guard separation.
  */
-export const SHAPE_SEPARATIONS: Readonly<Record<ContractShape['type'], ShapeSeparation>> =
+export const SHAPE_SEPARATIONS: Readonly<Record<ContractShape['category'], ShapeSeparation>> =
 	Object.freeze({
 		string: Object.freeze({ shape: stringShape(), witness: 42 }),
 		number: Object.freeze({ shape: numberShape(), witness: '42' }),
@@ -3305,12 +3305,12 @@ export function compositeShape(depth = 2): ContractShape {
 //
 // Small, curated (honest — not generator-derived) valid/invalid samples per
 // leaf kind, keyed by the shape's `type`. Covers the leaf kinds where a
-// static sample set is meaningful; containers/wrappers are exercised via
-// generated values instead (see expectLockstep / expectJSONRoundtrip).
+// static sample set is meaningful; containers/wrappers are exercised through
+// generated values instead (see buildLockstep / buildJSONRoundtrip).
 
 /** A small curated set of values that satisfy an unconstrained shape of the given leaf kind. */
 export function validSamplesFor(shape: ContractShape): readonly unknown[] {
-	switch (shape.type) {
+	switch (shape.category) {
 		case 'string':
 			return ['a', 'hello', '']
 		case 'number':
@@ -3330,7 +3330,7 @@ export function validSamplesFor(shape: ContractShape): readonly unknown[] {
 
 /** A small curated set of values that violate an unconstrained shape of the given leaf kind. */
 export function invalidSamplesFor(shape: ContractShape): readonly unknown[] {
-	switch (shape.type) {
+	switch (shape.category) {
 		case 'string':
 			return [42, true, null, undefined, {}]
 		case 'number':
@@ -3390,52 +3390,80 @@ export type Expect<T extends true> = T
 
 // === Roundtrip helpers
 
-/**
- * Assert the generate → is → parse lockstep for one shape and seed.
- *
- * @remarks
- * `generate` must satisfy `is`; `parse` of a generated (guard-valid) value
- * must deep-equal that value (the parser rebuilds objects/arrays, so equality
- * is structural, not identity — primitives are naturally identical); the
- * parsed result must itself satisfy `is`.
- *
- * @param shape - The shape to compile and exercise
- * @param seed - The seed for the deterministic generator
- */
-export function expectLockstep<S extends ContractShape>(shape: S, seed: number): void {
-	const contract: ContractInterface<unknown> = createContract(shape)
-	const value = contract.generate(seededRandom(seed))
-	expect(contract.is(value)).toBe(true)
-	const parsed = contract.parse(value)
-	expect(parsed).toEqual(value)
-	expect(parsed !== undefined && contract.is(parsed)).toBe(true)
+/** The generate → is → parse readings a caller asserts the lockstep from. */
+export interface LockstepResult {
+	/** True if the generated value satisfies `is`; false otherwise. */
+	readonly guarded: boolean
+	/** The generated value. */
+	readonly value: unknown
+	/** What `parse` returned for the generated value. */
+	readonly parsed: unknown
+	/** True if the parsed result is present and satisfies `is`; false otherwise. */
+	readonly reparsed: boolean
 }
 
 /**
- * Assert byte-for-byte JSON roundtrip fidelity for one shape and seed.
+ * Drives the generate → is → parse lockstep for one shape and seed and returns its readings.
  *
  * @remarks
- * generate → `JSON.stringify` → `JSON.parse` → `is` → `parse` →
- * `JSON.stringify` must reproduce the ORIGINAL stringified text exactly.
- * Every shape kind reachable through `leafShapeVariations` / `compositeShape`
- * generates JSON-safe values (the `json` leaf and `nullable`'s `null` case
- * included), and an absent optional property is simply omitted by
- * `JSON.stringify` on both sides — so no shape kind here needs a documented
- * exception (e.g. `-0`, which the bounded generators never produce: the
- * default and every configured `min` in these shapes is `>= 0` or the range
- * excludes an exact zero draw at `random() === 0`).
+ * A sound declaration reports `guarded` and `reparsed` true, and `parsed` deep-equals `value`
+ * (the parser rebuilds objects and arrays, so equality is structural rather than identity —
+ * primitives are naturally identical). A declaration whose contract cannot generate refuses
+ * from `generate` and that refusal reaches the caller.
  *
  * @param shape - The shape to compile and exercise
  * @param seed - The seed for the deterministic generator
+ * @returns The lockstep readings for that shape and seed
+ * @throws Thrown when the compiled contract refuses to generate a value for the shape.
  */
-export function expectJSONRoundtrip<S extends ContractShape>(shape: S, seed: number): void {
+export function buildLockstep<S extends ContractShape>(shape: S, seed: number): LockstepResult {
+	const contract: ContractInterface<unknown> = createContract(shape)
+	const value = contract.generate(seededRandom(seed))
+	const parsed = contract.parse(value)
+	return {
+		guarded: contract.is(value),
+		value,
+		parsed,
+		reparsed: parsed !== undefined && contract.is(parsed),
+	}
+}
+
+/** The JSON roundtrip readings a caller asserts byte-for-byte fidelity from. */
+export interface JSONRoundtripResult {
+	/** True if the revived value satisfies `is`; false otherwise. */
+	readonly guarded: boolean
+	/** The stringified generated value. */
+	readonly text: string
+	/** The stringified result of parsing the revived value. */
+	readonly reencoded: string
+}
+
+/**
+ * Drives one shape and seed through the JSON roundtrip and returns its readings.
+ *
+ * @remarks
+ * generate → `JSON.stringify` → `JSON.parse` → `is` → `parse` → `JSON.stringify`, so a
+ * byte-for-byte roundtrip reports `guarded` true and `reencoded` equal to `text`. Every shape
+ * kind reachable through `leafShapeVariations` and `compositeShape` generates JSON-safe values
+ * (the `json` leaf and `nullable`'s `null` case included), and `JSON.stringify` omits an absent
+ * optional property on both sides — so no shape kind here needs a documented exception (for
+ * example `-0`, which the bounded generators never produce: the default and every configured
+ * `min` in these shapes is `>= 0` or the range excludes an exact zero draw at `random() === 0`).
+ *
+ * @param shape - The shape to compile and exercise
+ * @param seed - The seed for the deterministic generator
+ * @returns The roundtrip readings for that shape and seed
+ * @throws Thrown when the compiled contract refuses to generate a value for the shape.
+ */
+export function buildJSONRoundtrip<S extends ContractShape>(
+	shape: S,
+	seed: number,
+): JSONRoundtripResult {
 	const contract: ContractInterface<unknown> = createContract(shape)
 	const value = contract.generate(seededRandom(seed))
 	const text = JSON.stringify(value)
 	const revived: unknown = JSON.parse(text)
-	expect(contract.is(revived)).toBe(true)
-	const reparsed = contract.parse(revived)
-	expect(JSON.stringify(reparsed)).toBe(text)
+	return { guarded: contract.is(revived), text, reencoded: JSON.stringify(contract.parse(revived)) }
 }
 
 /**
@@ -3496,7 +3524,7 @@ export class ObservedShape {
 	#reads = 0
 
 	constructor() {
-		const shape: StringShape = { type: 'string' }
+		const shape: StringShape = { category: 'string' }
 		Object.defineProperty(shape, 'pattern', {
 			configurable: true,
 			enumerable: true,
@@ -3538,10 +3566,10 @@ export function buildStaircaseShape(child: ContractShape, levels: number): Contr
 	const properties: Record<string, ContractShape> = {}
 	for (let level = 0; level < levels; level += 1) {
 		let node: ContractShape = child
-		for (let step = 0; step < level; step += 1) node = { type: 'array', items: node }
+		for (let step = 0; step < level; step += 1) node = { category: 'array', items: node }
 		properties[`k${String(level)}`] = node
 	}
-	return { type: 'object', properties }
+	return { category: 'object', properties }
 }
 
 /**
@@ -3576,7 +3604,7 @@ export class ReentrantShape {
 	 */
 	constructor(reenter: () => unknown) {
 		this.#reenter = reenter
-		const shape: StringShape = { type: 'string' }
+		const shape: StringShape = { category: 'string' }
 		Object.defineProperty(shape, 'pattern', {
 			configurable: true,
 			enumerable: true,

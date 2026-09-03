@@ -28,7 +28,7 @@ import { isLiteralValue, isRecord, isRegExp } from './validators.js'
  *
  * @example
  * ```ts
- * const validator = new ShapeValidator({ type: 'string', min: 1 })
+ * const validator = new ShapeValidator({ category: 'string', min: 1 })
  * validator.validate()
  * ```
  */
@@ -72,7 +72,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	#index = new ShapeValidator.#weakMap<ContractShape, number>()
 	#captures: Array<{
 		readonly shape: ContractShape
-		readonly category: ContractShape['type'] | undefined
+		readonly category: ContractShape['category'] | undefined
 		readonly children: ReadonlyArray<{
 			readonly shape: ContractShape | undefined
 			readonly optional: boolean
@@ -103,7 +103,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 		readonly first: string
 		readonly second?: string
 	}> = []
-	#category: ContractShape['type'] | undefined
+	#category: ContractShape['category'] | undefined
 	#raw = 0
 	#structure: ContractError | undefined
 	#cycle: ContractError | undefined
@@ -297,12 +297,12 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	}
 
 	#observe(current: ContractShape, depth: number): boolean {
-		const descriptor = INTRINSICS.describe(current, 'type')
+		const descriptor = INTRINSICS.describe(current, 'category')
 		if (descriptor === undefined || !INTRINSICS.own(descriptor, 'value')) {
 			return this.#refuse('validateShape: every node must be a recognized shape')
 		}
-		const category = current.type
-		if (current.type !== category || descriptor.value !== category) {
+		const category = current.category
+		if (current.category !== category || descriptor.value !== category) {
 			return this.#refuse('validateShape: every node must be a recognized shape')
 		}
 		const fields = this.#recognize(category)
@@ -354,7 +354,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 		return this.#populate(current)
 	}
 
-	#recognize(category: ContractShape['type']): readonly string[] | undefined {
+	#recognize(category: ContractShape['category']): readonly string[] | undefined {
 		switch (category) {
 			case 'string':
 				return ['min', 'max', 'pattern', 'description']
@@ -419,15 +419,15 @@ export class ShapeValidator implements ShapeValidatorInterface {
 
 	#constrain(current: ContractShape): boolean {
 		if (
-			current.type !== 'optional' &&
-			current.type !== 'nullable' &&
-			current.type !== 'raw' &&
+			current.category !== 'optional' &&
+			current.category !== 'nullable' &&
+			current.category !== 'raw' &&
 			current.description !== undefined &&
 			typeof current.description !== 'string'
 		) {
 			return this.#refuse('validateShape: description must be a string', 'description')
 		}
-		if (current.type === 'string') {
+		if (current.category === 'string') {
 			if (current.min !== undefined && typeof current.min !== 'number') {
 				return this.#refuse('validateShape: string min must be a number', 'min')
 			}
@@ -458,7 +458,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 				this.#restrict(current)
 			}
 		}
-		if (current.type === 'number') {
+		if (current.category === 'number') {
 			if (current.min !== undefined && typeof current.min !== 'number') {
 				return this.#refuse('validateShape: number min must be a number', 'min')
 			}
@@ -524,14 +524,14 @@ export class ShapeValidator implements ShapeValidatorInterface {
 				}
 			}
 		}
-		if (current.type === 'array' && current.min !== undefined && typeof current.min !== 'number') {
+		if (current.category === 'array' && current.min !== undefined && typeof current.min !== 'number') {
 			return this.#refuse('validateShape: array min must be a number', 'min')
 		}
-		if (current.type === 'array' && current.max !== undefined && typeof current.max !== 'number') {
+		if (current.category === 'array' && current.max !== undefined && typeof current.max !== 'number') {
 			return this.#refuse('validateShape: array max must be a number', 'max')
 		}
 		if (
-			current.type === 'array' &&
+			current.category === 'array' &&
 			this.#domain === undefined &&
 			current.min !== undefined &&
 			(!INTRINSICS.safe(current.min) || current.min < 0)
@@ -550,7 +550,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			)
 		}
 		if (
-			current.type === 'array' &&
+			current.category === 'array' &&
 			this.#domain === undefined &&
 			current.max !== undefined &&
 			(!INTRINSICS.safe(current.max) || current.max < 0)
@@ -569,7 +569,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			)
 		}
 		if (
-			current.type === 'array' &&
+			current.category === 'array' &&
 			this.#domain === undefined &&
 			current.min !== undefined &&
 			current.max !== undefined &&
@@ -581,7 +581,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 			})
 		}
 		if (
-			current.type === 'union' &&
+			current.category === 'union' &&
 			current.mode !== undefined &&
 			current.mode !== 'anyOf' &&
 			current.mode !== 'oneOf'
@@ -934,7 +934,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	}
 
 	#populate(current: ContractShape): boolean {
-		switch (current.type) {
+		switch (current.category) {
 			case 'array':
 				this.#children[this.#children.length] = {
 					shape: current.items,

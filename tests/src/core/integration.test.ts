@@ -65,8 +65,8 @@ import {
 	compositeShape,
 	createInertOutcome,
 	createWorkBound,
-	expectJSONRoundtrip,
-	expectLockstep,
+	buildJSONRoundtrip,
+	buildLockstep,
 	findInstallationControls,
 	findVacuousControls,
 	fingerprintOwnership,
@@ -91,15 +91,20 @@ describe('per-primitive roundtrips', () => {
 	for (const [label, shape] of leafShapeVariations()) {
 		describe(`${label}`, () => {
 			it('is lockstep-sound across seeds', () => {
-				expect(() => {
-					for (const seed of SEEDS) expectLockstep(shape, seed)
-				}).not.toThrow()
+				for (const seed of SEEDS) {
+					const lockstep = buildLockstep(shape, seed)
+					expect(lockstep.guarded).toBe(true)
+					expect(lockstep.parsed).toEqual(lockstep.value)
+					expect(lockstep.reparsed).toBe(true)
+				}
 			})
 
 			it('roundtrips through JSON byte-for-byte across seeds', () => {
-				expect(() => {
-					for (const seed of SEEDS) expectJSONRoundtrip(shape, seed)
-				}).not.toThrow()
+				for (const seed of SEEDS) {
+					const roundtrip = buildJSONRoundtrip(shape, seed)
+					expect(roundtrip.guarded).toBe(true)
+					expect(roundtrip.reencoded).toBe(roundtrip.text)
+				}
 			})
 		})
 	}
@@ -113,26 +118,32 @@ describe('container / wrapper roundtrips', () => {
 			arrayShape(booleanShape()),
 			arrayShape(nullShape(), { min: 2, max: 2 }),
 		]
-		expect(() => {
-			for (const shape of shapes) {
-				for (const seed of SEEDS) {
-					expectLockstep(shape, seed)
-					expectJSONRoundtrip(shape, seed)
-				}
+		for (const shape of shapes) {
+			for (const seed of SEEDS) {
+				const lockstep = buildLockstep(shape, seed)
+				expect(lockstep.guarded).toBe(true)
+				expect(lockstep.parsed).toEqual(lockstep.value)
+				expect(lockstep.reparsed).toBe(true)
+				const roundtrip = buildJSONRoundtrip(shape, seed)
+				expect(roundtrip.guarded).toBe(true)
+				expect(roundtrip.reencoded).toBe(roundtrip.text)
 			}
-		}).not.toThrow()
+		}
 	})
 
 	it('recordShape dictionaries', () => {
 		const shapes = [recordShape(integerShape({ min: 0 })), recordShape(stringShape({ max: 5 }))]
-		expect(() => {
-			for (const shape of shapes) {
-				for (const seed of SEEDS) {
-					expectLockstep(shape, seed)
-					expectJSONRoundtrip(shape, seed)
-				}
+		for (const shape of shapes) {
+			for (const seed of SEEDS) {
+				const lockstep = buildLockstep(shape, seed)
+				expect(lockstep.guarded).toBe(true)
+				expect(lockstep.parsed).toEqual(lockstep.value)
+				expect(lockstep.reparsed).toBe(true)
+				const roundtrip = buildJSONRoundtrip(shape, seed)
+				expect(roundtrip.guarded).toBe(true)
+				expect(roundtrip.reencoded).toBe(roundtrip.text)
 			}
-		}).not.toThrow()
+		}
 	})
 
 	it('unionShape / oneOfShape mixed variants', () => {
@@ -140,26 +151,32 @@ describe('container / wrapper roundtrips', () => {
 			unionShape(stringShape(), integerShape(), booleanShape()),
 			oneOfShape(nullShape(), stringShape({ min: 1 })),
 		]
-		expect(() => {
-			for (const shape of shapes) {
-				for (const seed of SEEDS) {
-					expectLockstep(shape, seed)
-					expectJSONRoundtrip(shape, seed)
-				}
+		for (const shape of shapes) {
+			for (const seed of SEEDS) {
+				const lockstep = buildLockstep(shape, seed)
+				expect(lockstep.guarded).toBe(true)
+				expect(lockstep.parsed).toEqual(lockstep.value)
+				expect(lockstep.reparsed).toBe(true)
+				const roundtrip = buildJSONRoundtrip(shape, seed)
+				expect(roundtrip.guarded).toBe(true)
+				expect(roundtrip.reencoded).toBe(roundtrip.text)
 			}
-		}).not.toThrow()
+		}
 	})
 
 	it('nullableShape over leaves', () => {
 		const shapes = [nullableShape(stringShape()), nullableShape(integerShape({ min: 0, max: 5 }))]
-		expect(() => {
-			for (const shape of shapes) {
-				for (const seed of SEEDS) {
-					expectLockstep(shape, seed)
-					expectJSONRoundtrip(shape, seed)
-				}
+		for (const shape of shapes) {
+			for (const seed of SEEDS) {
+				const lockstep = buildLockstep(shape, seed)
+				expect(lockstep.guarded).toBe(true)
+				expect(lockstep.parsed).toEqual(lockstep.value)
+				expect(lockstep.reparsed).toBe(true)
+				const roundtrip = buildJSONRoundtrip(shape, seed)
+				expect(roundtrip.guarded).toBe(true)
+				expect(roundtrip.reencoded).toBe(roundtrip.text)
 			}
-		}).not.toThrow()
+		}
 	})
 
 	it('optionalShape inside objectShape — present and absent key handling through parse', () => {
@@ -171,12 +188,15 @@ describe('container / wrapper roundtrips', () => {
 		const parsed = contract.parse({ name: 'Ada' })
 		expect(parsed).toEqual({ name: 'Ada' })
 		expect(parsed !== undefined && Object.hasOwn(parsed, 'bio')).toBe(false)
-		expect(() => {
-			for (const seed of SEEDS) {
-				expectLockstep(shape, seed)
-				expectJSONRoundtrip(shape, seed)
-			}
-		}).not.toThrow()
+		for (const seed of SEEDS) {
+			const lockstep = buildLockstep(shape, seed)
+			expect(lockstep.guarded).toBe(true)
+			expect(lockstep.parsed).toEqual(lockstep.value)
+			expect(lockstep.reparsed).toBe(true)
+			const roundtrip = buildJSONRoundtrip(shape, seed)
+			expect(roundtrip.guarded).toBe(true)
+			expect(roundtrip.reencoded).toBe(roundtrip.text)
+		}
 	})
 
 	it('additionalProperties open objects', () => {
@@ -187,34 +207,43 @@ describe('container / wrapper roundtrips', () => {
 		const contract = createContract(shape)
 		expect(contract.is({ id: 'a', extra: 1 })).toBe(true)
 		expect(contract.is({ id: 'a', extra: 'nope' })).toBe(false)
-		expect(() => {
-			for (const seed of SEEDS) {
-				expectLockstep(shape, seed)
-				expectJSONRoundtrip(shape, seed)
-			}
-		}).not.toThrow()
+		for (const seed of SEEDS) {
+			const lockstep = buildLockstep(shape, seed)
+			expect(lockstep.guarded).toBe(true)
+			expect(lockstep.parsed).toEqual(lockstep.value)
+			expect(lockstep.reparsed).toBe(true)
+			const roundtrip = buildJSONRoundtrip(shape, seed)
+			expect(roundtrip.guarded).toBe(true)
+			expect(roundtrip.reencoded).toBe(roundtrip.text)
+		}
 	})
 })
 
 describe('large composite contracts', () => {
 	it('compositeShape(2) is lockstep-sound and byte-for-byte across seeds', () => {
 		const shape = compositeShape(2)
-		expect(() => {
-			for (const seed of MANY_SEEDS) {
-				expectLockstep(shape, seed)
-				expectJSONRoundtrip(shape, seed)
-			}
-		}).not.toThrow()
+		for (const seed of MANY_SEEDS) {
+			const lockstep = buildLockstep(shape, seed)
+			expect(lockstep.guarded).toBe(true)
+			expect(lockstep.parsed).toEqual(lockstep.value)
+			expect(lockstep.reparsed).toBe(true)
+			const roundtrip = buildJSONRoundtrip(shape, seed)
+			expect(roundtrip.guarded).toBe(true)
+			expect(roundtrip.reencoded).toBe(roundtrip.text)
+		}
 	})
 
 	it('compositeShape(3) is lockstep-sound and byte-for-byte across seeds', () => {
 		const shape = compositeShape(3)
-		expect(() => {
-			for (const seed of MANY_SEEDS) {
-				expectLockstep(shape, seed)
-				expectJSONRoundtrip(shape, seed)
-			}
-		}).not.toThrow()
+		for (const seed of MANY_SEEDS) {
+			const lockstep = buildLockstep(shape, seed)
+			expect(lockstep.guarded).toBe(true)
+			expect(lockstep.parsed).toEqual(lockstep.value)
+			expect(lockstep.reparsed).toBe(true)
+			const roundtrip = buildJSONRoundtrip(shape, seed)
+			expect(roundtrip.guarded).toBe(true)
+			expect(roundtrip.reencoded).toBe(roundtrip.text)
+		}
 	})
 
 	it('a kitchen-sink contract combining every shape kind is lockstep-sound and byte-for-byte', () => {
@@ -234,12 +263,15 @@ describe('large composite contracts', () => {
 			rec: recordShape(booleanShape()),
 			json: jsonShape(),
 		})
-		expect(() => {
-			for (const seed of MANY_SEEDS) {
-				expectLockstep(shape, seed)
-				expectJSONRoundtrip(shape, seed)
-			}
-		}).not.toThrow()
+		for (const seed of MANY_SEEDS) {
+			const lockstep = buildLockstep(shape, seed)
+			expect(lockstep.guarded).toBe(true)
+			expect(lockstep.parsed).toEqual(lockstep.value)
+			expect(lockstep.reparsed).toBe(true)
+			const roundtrip = buildJSONRoundtrip(shape, seed)
+			expect(roundtrip.guarded).toBe(true)
+			expect(roundtrip.reencoded).toBe(roundtrip.text)
+		}
 	})
 
 	it('determinism: the same seed produces deep-equal output across contracts of the same shape', () => {
@@ -424,8 +456,8 @@ describe('caller-reachable dispatch on a path whose contract forbids failure', (
 		// extra value writes the caller's text into a refusal this package
 		// authored.
 		const hostile = Object.freeze({
-			type: 'object',
-			properties: Object.freeze({ a: Object.freeze({ type: 'string', min: -1 }) }),
+			category: 'object',
+			properties: Object.freeze({ a: Object.freeze({ category: 'string', min: -1 }) }),
 		})
 		const lie = TERMINAL_LIES.find((row) => row.key === Symbol.iterator)
 		expect(lie).toBeDefined()

@@ -142,7 +142,7 @@ export function cloneSchema(schema: JSONSchema): JSONSchema {
  * ```ts
  * const child = arrayShape(stringShape())
  * const clone = cloneShape(objectShape({ first: child, second: child }))
- * clone.type === 'object' && clone.properties.first === clone.properties.second // true
+ * clone.category === 'object' && clone.properties.first === clone.properties.second // true
  * ```
  */
 export function cloneShape(shape: StringShape): StringShape

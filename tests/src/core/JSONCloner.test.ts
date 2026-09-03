@@ -566,9 +566,9 @@ describe('JSONCloner — bounded produced work (H9)', () => {
 		let excessive: unknown = { leaf: true }
 		for (let index = 0; index < 30; index += 1) excessive = { x: excessive, y: excessive }
 
-		const started = Date.now()
+		const started = performance.now()
 		const error = captureContractError(() => cloneJSONValue(excessive))
-		const elapsed = Date.now() - started
+		const elapsed = performance.now() - started
 
 		expect(error.code).toBe('clone')
 		expect(error.message).toBe('cloneJSONValue: snapshot exceeds the node limit')

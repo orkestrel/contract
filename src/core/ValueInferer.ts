@@ -214,7 +214,7 @@ export class ValueInferer {
 		const outcome = attempt(() => {
 			const snapshot = enumerableKeys(value)
 			if (snapshot === undefined) {
-				throw new INTRINSICS.error('valueToSchema: property enumeration failed')
+				throw new INTRINSICS.error('property enumeration failed')
 			}
 			const allKeys = sortValues(snapshot)
 			const keys = limitEntries(allKeys, this.#breadth)

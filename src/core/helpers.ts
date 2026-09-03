@@ -2298,7 +2298,7 @@ export function preview(value: unknown): string {
  *
  * @example
  * ```ts
- * buildStringFaults({ type: 'string', min: 3 }, 'ab', [])
+ * buildStringFaults({ category: 'string', min: 3 }, 'ab', [])
  * // [{ reason: 'constraint', path: [], expected: 'string', constraint: 'min', limit: 3, received: '"ab"' }]
  * ```
  */
@@ -2377,7 +2377,7 @@ export function buildStringFaults(
  *
  * @example
  * ```ts
- * buildNumberFaults({ type: 'number', integer: true }, 1.5, [])
+ * buildNumberFaults({ category: 'number', integer: true }, 1.5, [])
  * // [{ reason: 'constraint', path: [], expected: 'integer', constraint: 'integer', received: '1.5' }]
  * ```
  */
@@ -2446,7 +2446,7 @@ export function buildNumberFaults(
  *
  * @example
  * ```ts
- * buildArrayFaults({ type: 'array', items: { type: 'string' }, min: 2 }, 1, [])
+ * buildArrayFaults({ category: 'array', items: { category: 'string' }, min: 2 }, 1, [])
  * // [{ reason: 'constraint', path: [], expected: 'array', constraint: 'min', limit: 2, received: '1' }]
  * ```
  */
@@ -2554,7 +2554,7 @@ export function selectClosestFaults<T extends AuditFault>(
 export function shapeToKind(shape: ContractShape): FaultKind {
 	return readValue(
 		() => {
-			switch (shape.type) {
+			switch (shape.category) {
 				case 'string':
 					return 'string'
 				case 'number':

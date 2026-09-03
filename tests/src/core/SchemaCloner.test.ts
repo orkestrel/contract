@@ -487,12 +487,12 @@ describe('SchemaCloner', () => {
 		// `RangeError`.
 		let excessive: JSONSchema = { type: 'string' }
 		for (let index = 0; index < 20_000; index += 1) excessive = { items: excessive }
-		const started = Date.now()
+		const started = performance.now()
 		const error = captureContractError(() => new SchemaCloner(excessive).clone())
 		expect(error.code).toBe('depth')
 		expect(error.message).toBe('cloneSchema: schema exceeds the compilation depth limit')
 		expect(error.context?.limit).toBe(COMPILE_DEPTH_LIMIT)
-		expect(Date.now() - started).toBeLessThan(1_000)
+		expect(performance.now() - started).toBeLessThan(1_000)
 	})
 
 	it('refuses an array root rather than republishing it as a record', () => {

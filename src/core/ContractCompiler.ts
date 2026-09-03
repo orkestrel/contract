@@ -116,7 +116,7 @@ import { ShapeValidator } from './ShapeValidator.js'
  *
  * @example
  * ```ts
- * const compiler = new ContractCompiler({ type: 'string', min: 1 })
+ * const compiler = new ContractCompiler({ category: 'string', min: 1 })
  * compiler.guard('Ada') // true
  * compiler.guard === compiler.guard // true — every getter replays its exact root
  * ```
@@ -472,7 +472,7 @@ export class ContractCompiler<
 	// Children are pushed in REVERSE slot order so the walk discovers them in
 	// declaration order, which keeps node indices deterministic for one graph.
 	#schedule(shape: ContractShape): void {
-		switch (shape.type) {
+		switch (shape.category) {
 			case 'array':
 				this.#stack[this.#stack.length] = { operation: 'enter', shape: shape.items }
 				return
@@ -550,7 +550,7 @@ export class ContractCompiler<
 	// and only when — the graph actually holds one.
 	#unions(): boolean {
 		for (let index = 0; index < this.#nodes.length; index += 1) {
-			if (this.#nodes[index]?.type === 'union') return true
+			if (this.#nodes[index]?.category === 'union') return true
 		}
 		return false
 	}
@@ -586,9 +586,9 @@ export class ContractCompiler<
 	// would buy nothing and would replace the package's own guards and parsers in
 	// the artifacts a leaf-rooted declaration publishes.
 	#repeats(index: number): boolean {
-		const type = this.#node(index).type
-		if (type === 'array' || type === 'object' || type === 'union') return true
-		return type === 'optional' || type === 'nullable'
+		const category = this.#node(index).category
+		if (category === 'array' || category === 'object' || category === 'union') return true
+		return category === 'optional' || category === 'nullable'
 	}
 
 	#trackGuard(plan: Guard<unknown>): Guard<unknown> {
@@ -717,7 +717,7 @@ export class ContractCompiler<
 
 	#schemaOf(index: number): JSONSchema {
 		const owned = this.#node(index)
-		switch (owned.type) {
+		switch (owned.category) {
 			case 'string': {
 				// The pattern text is read through the CAPTURED `source` getter. It is an
 				// accessor on a shared prototype, so a replaced getter chose the
@@ -793,8 +793,8 @@ export class ContractCompiler<
 					if (key === undefined) continue
 					const child = owned.properties[key]
 					if (child === undefined) continue
-					properties[key] = this.#schemaAt(child.type === 'optional' ? child.inner : child)
-					if (child.type !== 'optional') required[required.length] = key
+					properties[key] = this.#schemaAt(child.category === 'optional' ? child.inner : child)
+					if (child.category !== 'optional') required[required.length] = key
 				}
 				const extra = owned.additionalProperties
 				const additionalProperties: boolean | JSONSchema =
@@ -875,7 +875,7 @@ export class ContractCompiler<
 
 	#guardOf(index: number): Guard<unknown> {
 		const owned = this.#node(index)
-		switch (owned.type) {
+		switch (owned.category) {
 			case 'string':
 				// `stringOf` returns bare `isString` when unrefined, else composes the
 				// length-bounds + pattern refinement — the same guard the parser re-applies.
@@ -922,7 +922,7 @@ export class ContractCompiler<
 					if (key === undefined) continue
 					const child = owned.properties[key]
 					if (child === undefined) continue
-					if (child.type === 'optional') {
+					if (child.category === 'optional') {
 						map[key] = this.#guardAt(child.inner)
 						optionalKeys[optionalKeys.length] = key
 					} else {
@@ -1078,7 +1078,7 @@ export class ContractCompiler<
 
 	#parserOf(index: number): Parser<unknown> {
 		const owned = this.#node(index)
-		switch (owned.type) {
+		switch (owned.category) {
 			case 'string': {
 				if (owned.min === undefined && owned.max === undefined && owned.pattern === undefined) {
 					return parseString
@@ -1183,7 +1183,7 @@ export class ContractCompiler<
 					if (key === undefined) continue
 					const child = owned.properties[key]
 					if (child === undefined) continue
-					const optional = child.type === 'optional'
+					const optional = child.category === 'optional'
 					entries[entries.length] = {
 						key,
 						parse: this.#parserAt(optional ? child.inner : child),
@@ -1415,7 +1415,7 @@ export class ContractCompiler<
 
 	#auditOf(index: number): (value: unknown, path: readonly string[]) => readonly AuditFault[] {
 		const owned = this.#node(index)
-		switch (owned.type) {
+		switch (owned.category) {
 			// A leaf's refinement fields are fixed when its plan is built, exactly as
 			// its `kind` is, so a declaration carrying none has no refinement report
 			// to build at all: the only question such a leaf asks is the type test
@@ -1526,7 +1526,7 @@ export class ContractCompiler<
 					if (key === undefined) continue
 					const child = owned.properties[key]
 					if (child === undefined) continue
-					const optional = child.type === 'optional'
+					const optional = child.category === 'optional'
 					const inner = optional ? child.inner : child
 					entries[entries.length] = {
 						key,
@@ -1744,7 +1744,7 @@ export class ContractCompiler<
 
 	#reportOf(index: number): (value: unknown, path: readonly string[]) => readonly Fault[] {
 		const owned = this.#node(index)
-		switch (owned.type) {
+		switch (owned.category) {
 			// The same compile-time gate the auditor's leaves carry, over the COERCED
 			// value: the two doors differ in how they obtain the primitive and not in
 			// what an unrefined declaration has to say about it.
@@ -1834,7 +1834,7 @@ export class ContractCompiler<
 					if (key === undefined) continue
 					const child = owned.properties[key]
 					if (child === undefined) continue
-					const optional = child.type === 'optional'
+					const optional = child.category === 'optional'
 					const inner = optional ? child.inner : child
 					entries[entries.length] = {
 						key,
@@ -2065,7 +2065,7 @@ export class ContractCompiler<
 
 	#seedOf(index: number): (random: RandomFunction) => unknown {
 		const owned = this.#node(index)
-		switch (owned.type) {
+		switch (owned.category) {
 			case 'string': {
 				const min = owned.min ?? 0
 				const max = owned.max ?? INTRINSICS.max(min, 12)
@@ -2163,7 +2163,7 @@ export class ContractCompiler<
 					if (key === undefined) continue
 					const child = owned.properties[key]
 					if (child === undefined) continue
-					const optional = child.type === 'optional'
+					const optional = child.category === 'optional'
 					entries[entries.length] = {
 						key,
 						seed: this.#seedAt(optional ? child.inner : child),

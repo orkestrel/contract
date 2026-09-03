@@ -7,29 +7,19 @@
 import type { SpawnSyncReturns } from 'node:child_process'
 import type { TestContext } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import {
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	readdirSync,
-	readFileSync,
-	rmSync,
-	statSync,
-	writeFileSync,
-} from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createScratch, destroyScratch } from '@orkestrel/test/server'
 import ts from 'typescript'
 import { afterAll, describe, expect, it } from 'vitest'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-// Windows needs a shell to launch a `.cmd`: Node refuses one directly since the
-// batch-argument hardening, and `spawnSync` returns `EINVAL` with a null status
-// rather than an exit code a caller can read. Every following argument is a literal or
-// a path this file built, so the shell has nothing to escape.
-const SHELL = process.platform === 'win32'
+// npm's own JavaScript entry, which `process.execPath` runs directly on every host. npm
+// sets this for every script it runs, so the `test:distribution` and `prepublishOnly`
+// chains that reach this proof supply it and a bare `vitest --project distribution`
+// supplies nothing; `openStage` reports that absence rather than launching a `.bin` shim.
+const NPM_ENTRY = process.env.npm_execpath
 // `prepublishOnly` runs this proof as `npm run test:distribution -- --mode release`.
 // Release is the publish gate, so evidence it cannot obtain fails there and skips
 // everywhere else: a gate that passes on missing evidence proves nothing.
@@ -210,12 +200,11 @@ function readOutput(result: SpawnSyncReturns<string>): string {
 	return `${result.stdout ?? ''}${result.stderr ?? ''}`.trim()
 }
 
-function runNpm(args: readonly string[], cwd: string): SpawnSyncReturns<string> {
-	return spawnSync(NPM, [...args], {
+function runNpm(npmEntry: string, args: readonly string[], cwd: string): SpawnSyncReturns<string> {
+	return spawnSync(process.execPath, [npmEntry, ...args], {
 		cwd,
 		encoding: 'utf8',
 		env: { ...process.env, npm_config_cache: CACHE },
-		shell: SHELL,
 		windowsHide: true,
 	})
 }
@@ -499,11 +488,11 @@ function driveRuntime(stage: Stage, specifier: string, driver: string): readonly
 // Pack this workspace, install the archive into an isolated consumer, and read the
 // published surface back off the installed tree. Every later claim reads this
 // result, so a failure here is raised where it happens rather than once per entry.
-function buildStage(): Stage {
+function buildStage(npmEntry: string): Stage {
 	const packed = join(SCRATCH, 'packed')
 	const consumer = join(SCRATCH, 'consumer')
 	mkdirSync(packed, { recursive: true })
-	const pack = runNpm(['pack', '--ignore-scripts', '--pack-destination', packed], ROOT)
+	const pack = runNpm(npmEntry, ['pack', '--ignore-scripts', '--pack-destination', packed], ROOT)
 	if (pack.status !== 0) throw new Error(`npm pack refused this workspace: ${readOutput(pack)}`)
 	const archives = readdirSync(packed).filter((name) => name.endsWith('.tgz'))
 	const archive = archives[0]
@@ -514,6 +503,7 @@ function buildStage(): Stage {
 	writeFile(join(consumer, ESM_DRIVER), ESM_DRIVER_SOURCE)
 	writeFile(join(consumer, CJS_DRIVER), CJS_DRIVER_SOURCE)
 	const install = runNpm(
+		npmEntry,
 		['install', '--ignore-scripts', '--no-audit', '--no-fund', join(packed, archive)],
 		consumer,
 	)
@@ -576,32 +566,45 @@ function buildStage(): Stage {
 	return { consumer, installed, archives, entries, subpaths, undeclared, excluded, targets }
 }
 
-const SCRATCH = mkdtempSync(join(tmpdir(), 'distribution-'))
-const CACHE = join(SCRATCH, 'cache')
-mkdirSync(CACHE, { recursive: true })
+const scratch = createScratch({ prefix: 'distribution-' })
+const SCRATCH = scratch.path
+const CACHE = scratch.ensure('cache')
 // The scratch tree holds the npm cache, the packed archive, and the installed
-// consumer, so its removal is registered before the first thing that can throw.
-afterAll(() => {
-	rmSync(SCRATCH, { force: true, recursive: true })
+// consumer, so its removal is registered before the first thing that can throw. A host
+// holds a just-stopped child's working directory for a short interval, so removal is
+// retried inside a bounded budget rather than attempted exactly once.
+afterAll(async () => {
+	await destroyScratch(scratch)
 })
 
-// Installing the packed archive resolves its own runtime dependencies, so an
-// unreachable registry leaves nothing to measure. Under release that is the gate
-// failing; anywhere else the suite skips and names the mechanism it wanted.
+// Installing the packed archive resolves its own runtime dependencies, so an unresolved
+// npm entry or an unreachable registry leaves nothing to measure. Under release either is
+// the gate failing; anywhere else the suite skips and names the mechanism it wanted.
 //
 // A module that throws while loading never reaches the `afterAll` it registered,
 // so every throw here removes the scratch tree on its way out.
 function openStage(): Stage | undefined {
 	try {
-		if (runNpm(PING, ROOT).status !== 0) {
+		if (NPM_ENTRY === undefined) {
+			if (!RELEASE) return undefined
+			throw new Error(
+				'The release gate resolves npm through `npm_execpath`, and the environment supplied none',
+			)
+		}
+		if (runNpm(NPM_ENTRY, PING, ROOT).status !== 0) {
 			if (!RELEASE) return undefined
 			throw new Error(
 				'The release gate requires a reachable npm registry, and npm ping did not answer',
 			)
 		}
-		return buildStage()
+		return buildStage(NPM_ENTRY)
 	} catch (error) {
-		rmSync(SCRATCH, { force: true, recursive: true })
+		try {
+			scratch.destroy()
+		} catch {
+			// The original error is what a reader needs; a removal the host refuses on the way
+			// out must not replace it. `afterAll` never runs for a module that threw while loading.
+		}
 		throw error
 	}
 }
@@ -681,7 +684,9 @@ describe('distribution classifiers', () => {
 // carries no reason, so the gate sits here where the test context can state one.
 function requireStage(context: TestContext): Stage {
 	if (!STAGED) {
-		return context.skip('`npm ping` did not answer, so nothing was packed or installed')
+		return context.skip(
+			'`npm_execpath` named no entry or `npm ping` did not answer, so nothing was packed or installed',
+		)
 	}
 	return STAGE
 }

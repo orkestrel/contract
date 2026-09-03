@@ -26,7 +26,7 @@ describe('foreign realm sources', () => {
 		expect(Object.getPrototypeOf(record).constructor).not.toBe(Object)
 
 		const shape = createForeignStringShape()
-		expect(shape).toEqual({ type: 'string' })
+		expect(shape).toEqual({ category: 'string' })
 		expect(shape instanceof Object).toBe(false)
 	})
 

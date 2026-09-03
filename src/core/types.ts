@@ -531,7 +531,7 @@ export interface SampleMemo {
  * the compilers turn into a guard, a parser, a JSON Schema, and a generator.
  *
  * @remarks
- * A discriminated union keyed on `type`. Shapes nest (an `ArrayShape` holds an
+ * A discriminated union keyed on `category`. Shapes nest (an `ArrayShape` holds an
  * element shape, an `ObjectShape` a map of them). {@link validateShape}
  * enforces an acyclic graph within {@link COMPILE_DEPTH_LIMIT}.
  */
@@ -551,7 +551,7 @@ export type ContractShape =
 
 /** Describes a string with optional length and pattern constraints. */
 export interface StringShape {
-	readonly type: 'string'
+	readonly category: 'string'
 	readonly min?: number
 	readonly max?: number
 	/**
@@ -564,7 +564,7 @@ export interface StringShape {
 
 /** Describes a number with optional bounds; `integer` restricts to whole numbers. */
 export interface NumberShape {
-	readonly type: 'number'
+	readonly category: 'number'
 	readonly min?: number
 	readonly max?: number
 	readonly integer?: boolean
@@ -573,26 +573,26 @@ export interface NumberShape {
 
 /** Describes a boolean — accepts only `true` or `false`. */
 export interface BooleanShape {
-	readonly type: 'boolean'
+	readonly category: 'boolean'
 	readonly description?: string
 }
 
 /** Describes a null value — accepts only `null`. */
 export interface NullShape {
-	readonly type: 'null'
+	readonly category: 'null'
 	readonly description?: string
 }
 
 /** Describes a literal — accepts exactly one of a fixed set of primitive values. */
 export interface LiteralShape<T extends readonly LiteralValue[] = readonly LiteralValue[]> {
-	readonly type: 'literal'
+	readonly category: 'literal'
 	readonly values: T
 	readonly description?: string
 }
 
 /** Describes an array with an element shape and optional length bounds. */
 export interface ArrayShape<S extends ContractShape = ContractShape> {
-	readonly type: 'array'
+	readonly category: 'array'
 	readonly items: S
 	readonly min?: number
 	readonly max?: number
@@ -616,7 +616,7 @@ export interface ObjectShape<
 	P extends Readonly<Record<string, ContractShape>> = Readonly<Record<string, ContractShape>>,
 	A extends boolean | ContractShape = boolean | ContractShape,
 > {
-	readonly type: 'object'
+	readonly category: 'object'
 	readonly properties: P
 	readonly additionalProperties?: A
 	readonly description?: string
@@ -631,7 +631,7 @@ export interface ObjectShape<
  * requires exactly one variant to match.
  */
 export interface UnionShape<V extends readonly ContractShape[] = readonly ContractShape[]> {
-	readonly type: 'union'
+	readonly category: 'union'
 	readonly variants: V
 	readonly mode?: 'anyOf' | 'oneOf'
 	readonly description?: string
@@ -639,13 +639,13 @@ export interface UnionShape<V extends readonly ContractShape[] = readonly Contra
 
 /** Wraps an inner shape that may be absent (`undefined`). */
 export interface OptionalShape<S extends ContractShape = ContractShape> {
-	readonly type: 'optional'
+	readonly category: 'optional'
 	readonly inner: S
 }
 
 /** Wraps an inner shape that may be `null`. */
 export interface NullableShape<S extends ContractShape = ContractShape> {
-	readonly type: 'nullable'
+	readonly category: 'nullable'
 	readonly inner: S
 }
 
@@ -660,7 +660,7 @@ export interface NullableShape<S extends ContractShape = ContractShape> {
  * guard accepts every defined value, this shape validates that a value is real JSON.
  */
 export interface JSONShape {
-	readonly type: 'json'
+	readonly category: 'json'
 	readonly description?: string
 }
 
@@ -681,7 +681,7 @@ export interface JSONShape {
  * verbatim as an owned deeply frozen copy.
  */
 export interface RawShape {
-	readonly type: 'raw'
+	readonly category: 'raw'
 	readonly schema: JSONSchema
 }
 
@@ -720,11 +720,11 @@ export type Infer<S extends ContractShape> = [ContractShape] extends [S]
 				? boolean
 				: S extends NullShape
 					? null
-					: S extends { readonly type: 'literal'; readonly values: infer V }
+					: S extends { readonly category: 'literal'; readonly values: infer V }
 						? V extends ReadonlyArray<infer L>
 							? L
 							: never
-						: S extends { readonly type: 'array'; readonly items: infer I }
+						: S extends { readonly category: 'array'; readonly items: infer I }
 							? I extends ContractShape
 								? ReadonlyArray<Infer<I>>
 								: never
@@ -734,15 +734,15 @@ export type Infer<S extends ContractShape> = [ContractShape] extends [S]
 										? InferObject<P, A>
 										: never
 									: never
-								: S extends { readonly type: 'union'; readonly variants: infer V }
+								: S extends { readonly category: 'union'; readonly variants: infer V }
 									? V extends readonly ContractShape[]
 										? InferUnion<V>
 										: never
-									: S extends { readonly type: 'optional'; readonly inner: infer I }
+									: S extends { readonly category: 'optional'; readonly inner: infer I }
 										? I extends ContractShape
 											? Infer<I> | undefined
 											: never
-										: S extends { readonly type: 'nullable'; readonly inner: infer I }
+										: S extends { readonly category: 'nullable'; readonly inner: infer I }
 											? I extends ContractShape
 												? Infer<I> | null
 												: never
@@ -775,10 +775,10 @@ export type InferObject<
 		: InferIndex<A>
 	: Readonly<
 			{
-				[K in keyof P as P[K] extends { readonly type: 'optional' } ? never : K]: Infer<P[K]>
+				[K in keyof P as P[K] extends { readonly category: 'optional' } ? never : K]: Infer<P[K]>
 			} & {
-				[K in keyof P as P[K] extends { readonly type: 'optional' } ? K : never]?: P[K] extends {
-					readonly type: 'optional'
+				[K in keyof P as P[K] extends { readonly category: 'optional' } ? K : never]?: P[K] extends {
+					readonly category: 'optional'
 					readonly inner: infer I
 				}
 					? I extends ContractShape
@@ -923,7 +923,7 @@ export interface RecordShapeOptions {
 
 // === Contract reporting
 
-/** Names the kind of value a {@link Fault} expected — the shape-projected counterpart of a `ContractShape`'s `type`. */
+/** Names the kind of value a {@link Fault} expected — the shape-projected counterpart of a `ContractShape`'s `category`. */
 export type FaultKind =
 	| 'string'
 	| 'number'

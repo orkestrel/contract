@@ -136,7 +136,7 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 			)
 		}
 		const shape: StringShape = {
-			type: 'string',
+			category: 'string',
 			...(safe?.min === undefined ? {} : { min: safe.min }),
 			...(safe?.max === undefined ? {} : { max: safe.max }),
 			...(patternSnapshot === undefined
@@ -183,7 +183,7 @@ export function numberShape(options?: NumberShapeOptions): NumberShape {
 			})
 		}
 		const result: NumberShape = {
-			type: 'number',
+			category: 'number',
 			...(safe?.min === undefined ? {} : { min: safe.min }),
 			...(safe?.max === undefined ? {} : { max: safe.max }),
 			...(safe?.integer === undefined ? {} : { integer: safe.integer }),
@@ -227,7 +227,7 @@ export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
 	return contain(() => {
 		const safe = readOptions(options, ['description'], 'booleanShape', 'boolean')
 		const shape: BooleanShape = {
-			type: 'boolean',
+			category: 'boolean',
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
 		new ShapeValidator(shape).validate()
@@ -250,7 +250,7 @@ export function nullShape(options?: NullShapeOptions): NullShape {
 	return contain(() => {
 		const safe = readOptions(options, ['description'], 'nullShape', 'null')
 		const shape: NullShape = {
-			type: 'null',
+			category: 'null',
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
 		new ShapeValidator(shape).validate()
@@ -322,7 +322,7 @@ export function literalShape(
 		}
 		const owned = INTRINSICS.freeze(literals)
 		const shape: LiteralShape = {
-			type: 'literal',
+			category: 'literal',
 			values: owned,
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
@@ -373,7 +373,7 @@ export function arrayShape<S extends ContractShape>(
 			})
 		}
 		const shape: ArrayShape<S> = {
-			type: 'array',
+			category: 'array',
 			items,
 			...(safe?.min === undefined ? {} : { min: safe.min }),
 			...(safe?.max === undefined ? {} : { max: safe.max }),
@@ -450,7 +450,7 @@ export function objectShape<
 			})
 		}
 		const shape: ObjectShape<P, A> = {
-			type: 'object',
+			category: 'object',
 			properties: copied.snapshot,
 			...(safe?.additionalProperties === undefined
 				? {}
@@ -493,7 +493,7 @@ export function recordShape<S extends ContractShape>(
 		}
 		const safe = readOptions(options, ['description'], 'recordShape', 'object')
 		const shape: ObjectShape<Record<never, never>, S> = {
-			type: 'object',
+			category: 'object',
 			properties: INTRINSICS.freeze({}),
 			additionalProperties: values,
 			...(safe?.description === undefined ? {} : { description: safe.description }),
@@ -521,9 +521,9 @@ export function unionShape<V extends readonly ContractShape[]>(
 	...variants: V
 ): UnionShape<Readonly<V>> {
 	return contain(() => {
-		const shape: UnionShape<V> = { type: 'union', variants }
+		const shape: UnionShape<V> = { category: 'union', variants }
 		new ShapeValidator(shape).validate()
-		return INTRINSICS.freeze({ type: 'union', variants: INTRINSICS.freeze(variants) })
+		return INTRINSICS.freeze({ category: 'union', variants: INTRINSICS.freeze(variants) })
 	}, 'unionShape')
 }
 
@@ -564,7 +564,7 @@ export function oneOfShape<V extends readonly ContractShape[]>(
 ): UnionShape<Readonly<V>> {
 	return contain(() => {
 		const shape: UnionShape<V> = {
-			type: 'union',
+			category: 'union',
 			variants,
 			mode: 'oneOf',
 		}
@@ -585,8 +585,8 @@ export function oneOfShape<V extends readonly ContractShape[]>(
  */
 export function optionalShape<S extends ContractShape>(inner: S): OptionalShape<S> {
 	return contain(() => {
-		const shape: OptionalShape<S> = { type: 'optional', inner }
-		new ShapeValidator({ type: 'object', properties: { value: shape } }).validate()
+		const shape: OptionalShape<S> = { category: 'optional', inner }
+		new ShapeValidator({ category: 'object', properties: { value: shape } }).validate()
 		return INTRINSICS.freeze(shape)
 	}, 'optionalShape')
 }
@@ -605,7 +605,7 @@ export function optionalShape<S extends ContractShape>(inner: S): OptionalShape<
  */
 export function nullableShape<S extends ContractShape>(inner: S): NullableShape<S> {
 	return contain(() => {
-		const shape: NullableShape<S> = { type: 'nullable', inner }
+		const shape: NullableShape<S> = { category: 'nullable', inner }
 		new ShapeValidator(shape).validate()
 		return INTRINSICS.freeze(shape)
 	}, 'nullableShape')
@@ -636,7 +636,7 @@ export function jsonShape(options?: JSONShapeOptions): JSONShape {
 	return contain(() => {
 		const safe = readOptions(options, ['description'], 'jsonShape', 'json')
 		const shape: JSONShape = {
-			type: 'json',
+			category: 'json',
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
 		new ShapeValidator(shape).validate()
@@ -674,10 +674,10 @@ export function jsonShape(options?: JSONShapeOptions): JSONShape {
  */
 export function rawShape(schema: JSONSchema): RawShape {
 	return contain(() => {
-		new ShapeValidator({ type: 'raw', schema }).validate()
+		new ShapeValidator({ category: 'raw', schema }).validate()
 		const owned = cloneSchema(schema)
-		new ShapeValidator({ type: 'raw', schema: owned }).validate()
-		return INTRINSICS.freeze({ type: 'raw', schema: owned })
+		new ShapeValidator({ category: 'raw', schema: owned }).validate()
+		return INTRINSICS.freeze({ category: 'raw', schema: owned })
 	}, 'rawShape')
 }
 

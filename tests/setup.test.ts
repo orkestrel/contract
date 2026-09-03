@@ -65,8 +65,8 @@ import {
 	createWorkBound,
 	denyRecognition,
 	DriftedMethods,
-	expectJSONRoundtrip,
-	expectLockstep,
+	buildJSONRoundtrip,
+	buildLockstep,
 	faultsToConstraints,
 	findInstallationControls,
 	findVacuousControls,
@@ -630,7 +630,7 @@ describe('record brand forgeries', () => {
 			new BlankBrandDeclaration(),
 			new ProxiedBrandDeclaration(),
 		]) {
-			expect(instance.type).toBe('string')
+			expect(instance.category).toBe('string')
 			expect(instance.min).toBe(1)
 		}
 
@@ -895,20 +895,20 @@ describe('structural fixtures', () => {
 
 describe('shape factories', () => {
 	it('nests one array level per requested depth', () => {
-		expect(buildDeepShape(0)).toEqual({ type: 'string' })
+		expect(buildDeepShape(0)).toEqual({ category: 'string' })
 		let node: ContractShape = buildDeepShape(3)
 		let levels = 0
-		for (let step = 0; step < 8 && node.type === 'array'; step += 1) {
+		for (let step = 0; step < 8 && node.category === 'array'; step += 1) {
 			node = node.items
 			levels += 1
 		}
 		expect(levels).toBe(3)
-		expect(node.type).toBe('string')
+		expect(node.category).toBe('string')
 	})
 
 	it('binds one child into both properties of every level', () => {
 		const dag = buildSharedDagShape(3)
-		if (dag.type !== 'object')
+		if (dag.category !== 'object')
 			throw new Error('buildSharedDagShape: the root must be an object shape')
 		expect(Object.keys(dag.properties)).toEqual(['left', 'right'])
 		expect(Reflect.get(dag.properties, 'left')).toBe(Reflect.get(dag.properties, 'right'))
@@ -921,7 +921,7 @@ describe('shape factories', () => {
 			const node = pending.pop()
 			if (node === undefined) continue
 			emitted += 1
-			if (node.type === 'object')
+			if (node.category === 'object')
 				for (const child of Object.values(node.properties)) pending.push(child)
 		}
 		expect(emitted).toBe(2 ** 4 - 1)
@@ -930,14 +930,14 @@ describe('shape factories', () => {
 	it('reaches one child through an edge per level, each a level deeper', () => {
 		const child = stringShape({ description: 'shared' })
 		const staircase = buildStaircaseShape(child, 3)
-		if (staircase.type !== 'object')
+		if (staircase.category !== 'object')
 			throw new Error('buildStaircaseShape: the root must be an object shape')
 		expect(Object.keys(staircase.properties)).toEqual(['k0', 'k1', 'k2'])
 		expect(Reflect.get(staircase.properties, 'k0')).toBe(child)
 
 		let node: ContractShape | undefined = Reflect.get(staircase.properties, 'k2')
 		let wrappers = 0
-		for (let step = 0; step < 8 && node !== undefined && node.type === 'array'; step += 1) {
+		for (let step = 0; step < 8 && node !== undefined && node.category === 'array'; step += 1) {
 			node = node.items
 			wrappers += 1
 		}
@@ -972,7 +972,7 @@ describe('shape factories', () => {
 			throw new Error('buildCountedSlots: the value root must be a record')
 		expect(captured.get(root, 'left')).toBe(captured.get(root, 'right'))
 		const declaration: ContractShape = shared.shape
-		if (declaration.type !== 'object')
+		if (declaration.category !== 'object')
 			throw new Error('buildCountedSlots: the root must be an object shape')
 		expect(captured.get(declaration.properties, 'left')).toBe(
 			captured.get(declaration.properties, 'right'),
@@ -995,7 +995,7 @@ describe('shape factories', () => {
 
 	it('combines every shape kind and wraps the previous level per depth', () => {
 		const flat = compositeShape(1)
-		if (flat.type !== 'object')
+		if (flat.category !== 'object')
 			throw new Error('compositeShape: the composite must be an object shape')
 		expect(Object.keys(flat.properties)).toEqual([
 			'str',
@@ -1012,7 +1012,7 @@ describe('shape factories', () => {
 			'rec',
 			'json',
 		])
-		expect(Object.values(flat.properties).map((child) => child.type)).toEqual([
+		expect(Object.values(flat.properties).map((child) => child.category)).toEqual([
 			'string',
 			'number',
 			'number',
@@ -1029,30 +1029,30 @@ describe('shape factories', () => {
 		])
 
 		const deep = compositeShape(3)
-		if (deep.type !== 'object')
+		if (deep.category !== 'object')
 			throw new Error('compositeShape: the composite must be an object shape')
 		expect(Object.keys(deep.properties)).toEqual(['nested', 'list', 'dict'])
 		const level: ContractShape = Reflect.get(deep.properties, 'nested')
-		if (level.type !== 'object')
+		if (level.category !== 'object')
 			throw new Error('compositeShape: the nested level must be an object shape')
 		expect(Object.keys(level.properties)).toEqual(['nested', 'list', 'dict'])
 		const leaf: ContractShape = Reflect.get(level.properties, 'nested')
-		if (leaf.type !== 'object') throw new Error('compositeShape: the leaf must be an object shape')
+		if (leaf.category !== 'object') throw new Error('compositeShape: the leaf must be an object shape')
 		expect(Object.keys(leaf.properties)).toEqual(Object.keys(flat.properties))
 	})
 
 	it('plants each requested declaration defect in the order its caller named', () => {
 		const root = createShapeValidationCase(['domain', 'cycle', 'structure'])
-		if (root.type !== 'object')
+		if (root.category !== 'object')
 			throw new Error('createShapeValidationCase: the root must be an object shape')
 		expect(Object.keys(root.properties)).toEqual(['domain', 'cycle', 'structure'])
-		expect(Reflect.get(root.properties, 'domain')).toEqual({ type: 'string', min: -1 })
+		expect(Reflect.get(root.properties, 'domain')).toEqual({ category: 'string', min: -1 })
 		expect(Reflect.get(root.properties, 'cycle')).toBe(root)
 		expect(Object.hasOwn(root.properties, 'structure')).toBe(true)
 		expect(Reflect.get(root.properties, 'structure')).toBeUndefined()
 
 		const reordered = createShapeValidationCase(['cycle', 'domain'])
-		if (reordered.type !== 'object')
+		if (reordered.category !== 'object')
 			throw new Error('createShapeValidationCase: the root must be an object shape')
 		expect(Object.keys(reordered.properties)).toEqual(['cycle', 'domain'])
 		// Each call owns its graph, so one case's cycle can never reach another's.
@@ -1065,9 +1065,9 @@ describe('shape factories', () => {
 		expect(
 			Object.entries(SHAPE_SEPARATIONS)
 				.filter(([kind, row]) => {
-					if (row.shape.type === kind) return false
-					if (row.shape.type !== 'object') return true
-					return Object.values(row.shape.properties).some((child) => child.type !== kind)
+					if (row.shape.category === kind) return false
+					if (row.shape.category !== 'object') return true
+					return Object.values(row.shape.properties).some((child) => child.category !== kind)
 				})
 				.map(([kind]) => kind),
 		).toEqual([])
@@ -1321,20 +1321,30 @@ describe('guide comparison fixtures', () => {
 	})
 })
 
-describe('roundtrip assertions', () => {
-	it('drives a sound declaration through and propagates a failure rather than swallowing it', () => {
-		expect(expectLockstep(stringShape(), 7)).toBeUndefined()
-		expect(expectJSONRoundtrip(stringShape(), 7)).toBeUndefined()
-		expect(expectLockstep(compositeShape(2), 7)).toBeUndefined()
-		expect(expectJSONRoundtrip(compositeShape(2), 7)).toBeUndefined()
+describe('roundtrip readings', () => {
+	it('reports a sound declaration in lockstep and propagates a generator refusal rather than swallowing it', () => {
+		const leaf = buildLockstep(stringShape(), 7)
+		expect(leaf.guarded).toBe(true)
+		expect(leaf.parsed).toEqual(leaf.value)
+		expect(leaf.reparsed).toBe(true)
+		const leafText = buildJSONRoundtrip(stringShape(), 7)
+		expect(leafText.guarded).toBe(true)
+		expect(leafText.reencoded).toBe(leafText.text)
+		const composite = buildLockstep(compositeShape(2), 7)
+		expect(composite.guarded).toBe(true)
+		expect(composite.parsed).toEqual(composite.value)
+		expect(composite.reparsed).toBe(true)
+		const compositeText = buildJSONRoundtrip(compositeShape(2), 7)
+		expect(compositeText.guarded).toBe(true)
+		expect(compositeText.reencoded).toBe(compositeText.text)
 
 		// A declaration whose contract cannot serve the roundtrip must reach the
-		// caller as a failure; a helper that reported nothing here would certify
-		// every shape it was handed.
-		expect(() => expectLockstep(stringShape({ pattern: /^[a-z]+$/ }), 7)).toThrow(
+		// caller as the generator's own refusal; a helper that swallowed it would
+		// certify every shape it was handed.
+		expect(() => buildLockstep(stringShape({ pattern: /^[a-z]+$/ }), 7)).toThrow(
 			'a pattern-constrained string shape cannot be auto-generated',
 		)
-		expect(() => expectJSONRoundtrip(stringShape({ pattern: /^[a-z]+$/ }), 7)).toThrow(
+		expect(() => buildJSONRoundtrip(stringShape({ pattern: /^[a-z]+$/ }), 7)).toThrow(
 			'a pattern-constrained string shape cannot be auto-generated',
 		)
 	})

@@ -51,7 +51,7 @@ import { ShapeValidator } from './ShapeValidator.js'
  *
  * @example
  * ```ts
- * const cloner = new ShapeCloner({ type: 'string', min: 1 })
+ * const cloner = new ShapeCloner({ category: 'string', min: 1 })
  * const clone = cloner.clone()
  * cloner.clone() === clone // true
  * ```
@@ -241,15 +241,15 @@ export class ShapeCloner implements ShapeClonerInterface {
 				context: { path },
 			})
 		}
-		const descriptor = INTRINSICS.describe(source, 'type')
+		const descriptor = INTRINSICS.describe(source, 'category')
 		if (descriptor === undefined || !INTRINSICS.own(descriptor, 'value')) {
 			throw this.#create('cloneShape: every node needs an own data discriminant', {
 				code: 'structure',
 				context: { path },
 			})
 		}
-		const category = source.type
-		const repeated = source.type
+		const category = source.category
+		const repeated = source.category
 		if (!INTRINSICS.same(descriptor.value, category) || !INTRINSICS.same(repeated, category)) {
 			throw this.#create('cloneShape: every node needs an own data discriminant', {
 				code: 'structure',
@@ -448,7 +448,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		// came to name a different rule at a different path than the shared gate
 		// for one declaration. One rule, one arbiter.
 		const fields: StringShape = {
-			type: 'string',
+			category: 'string',
 			...(min === undefined ? {} : { min }),
 			...(max === undefined ? {} : { max }),
 			...(description === undefined ? {} : { description }),
@@ -472,7 +472,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		// Domain rules belong to the single gate on the carried clone; see
 		// `#captureString`.
 		return {
-			type: 'number',
+			category: 'number',
 			...(min === undefined ? {} : { min }),
 			...(max === undefined ? {} : { max }),
 			...(integer === undefined ? {} : { integer }),
@@ -487,12 +487,12 @@ export class ShapeCloner implements ShapeClonerInterface {
 	): BooleanShape | NullShape | JSONShape {
 		const description = this.#captureField(source, 'description', path)
 		if (category === 'boolean') {
-			return { type: 'boolean', ...(description === undefined ? {} : { description }) }
+			return { category: 'boolean', ...(description === undefined ? {} : { description }) }
 		}
 		if (category === 'null') {
-			return { type: 'null', ...(description === undefined ? {} : { description }) }
+			return { category: 'null', ...(description === undefined ? {} : { description }) }
 		}
-		return { type: 'json', ...(description === undefined ? {} : { description }) }
+		return { category: 'json', ...(description === undefined ? {} : { description }) }
 	}
 
 	#captureLiteral(source: LiteralShape, path: readonly string[]): LiteralShape {
@@ -500,7 +500,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		const description = this.#captureField(source, 'description', path)
 		const entries = this.#captureLiterals(values, path)
 		return {
-			type: 'literal',
+			category: 'literal',
 			values: entries,
 			...(description === undefined ? {} : { description }),
 		}
@@ -522,7 +522,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 			})
 		}
 		return {
-			type: 'array',
+			category: 'array',
 			items,
 			...(min === undefined ? {} : { min }),
 			...(max === undefined ? {} : { max }),
@@ -543,7 +543,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		this.#captureProperties(source, propertySource, path)
 		const properties: Record<string, ContractShape> = INTRINSICS.create(null)
 		return {
-			type: 'object',
+			category: 'object',
 			properties,
 			...(additional === undefined ? {} : { additionalProperties: additional }),
 			...(description === undefined ? {} : { description }),
@@ -556,7 +556,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		const description = this.#captureField(source, 'description', path)
 		this.#captureVariants(source, variantSource, path)
 		return {
-			type: 'union',
+			category: 'union',
 			variants: [],
 			...(mode === undefined ? {} : { mode }),
 			...(description === undefined ? {} : { description }),
@@ -575,7 +575,9 @@ export class ShapeCloner implements ShapeClonerInterface {
 				context: { path: pathOf(path, 'inner') },
 			})
 		}
-		return category === 'optional' ? { type: 'optional', inner } : { type: 'nullable', inner }
+		return category === 'optional'
+			? { category: 'optional', inner }
+			: { category: 'nullable', inner }
 	}
 
 	#captureRaw(source: RawShape, path: readonly string[]): RawShape {
@@ -586,7 +588,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 				context: { path: pathOf(path, 'schema') },
 			})
 		}
-		this.#validateShape({ type: 'raw', schema })
+		this.#validateShape({ category: 'raw', schema })
 		const outcome = attempt(() => new SchemaCloner(schema).clone())
 		if (!outcome.success) {
 			if (isContractError(outcome.error)) {
@@ -594,7 +596,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 			}
 			throw outcome.error
 		}
-		return { type: 'raw', schema: outcome.value }
+		return { category: 'raw', schema: outcome.value }
 	}
 
 	#captureLiterals(
@@ -768,7 +770,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		path: readonly string[],
 		depth: number,
 	): void {
-		switch (clone.type) {
+		switch (clone.category) {
 			case 'array':
 				this.#registerChild(clone.items, pathOf(path, 'items'), depth)
 				break
@@ -837,7 +839,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 			const clone = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [source])
 			if (clone === undefined) continue
 			const path = INTRINSICS.reflect.apply(INTRINSICS.fetch, paths, [source]) ?? []
-			switch (clone.type) {
+			switch (clone.category) {
 				case 'array':
 					this.#wireArray(clone, path)
 					break

@@ -54,10 +54,10 @@ export function createForeignRegExp(source: string, flags = ''): unknown {
 /**
  * Create a minimal string declaration in a genuine foreign JavaScript realm.
  *
- * @returns A foreign-realm `{ type: 'string' }` record as `unknown`
+ * @returns A foreign-realm `{ category: 'string' }` record as `unknown`
  */
 export function createForeignStringShape(): unknown {
-	return runInNewContext("({ type: 'string' })")
+	return runInNewContext("({ category: 'string' })")
 }
 
 /**
