@@ -2138,36 +2138,51 @@ describe('configuration helpers', () => {
 
 	it('reads the compiler scope and fixed extractor override a declaration roll-up requires', () => {
 		const compiler = createRequire(import.meta.url).resolve('typescript/bin/tsc')
-		const project = resolve(root, 'configs/src/tsconfig.core.json')
+		// The order mirrors ENVIRONMENTS in src/core/constants.ts; a server-only workspace vendors
+		// no core project, so this walks to the first face the workspace actually carries.
+		const faces = ['core', 'browser', 'server']
+		const face = faces.find((candidate) =>
+			existsSync(resolve(root, `configs/src/tsconfig.${candidate}.json`)),
+		)
+		if (face === undefined) throw new Error('The workspace declares no face project')
+		const project = resolve(root, `configs/src/tsconfig.${face}.json`)
 		const declared: unknown = JSON.parse(readFileSync(project, 'utf8'))
 		if (typeof declared !== 'object' || declared === null) {
-			throw new Error('The core project is not a TypeScript configuration record')
+			throw new Error(`The ${face} project is not a TypeScript configuration record`)
 		}
 		const declaredOptions: unknown = Object.getOwnPropertyDescriptor(
 			declared,
 			'compilerOptions',
 		)?.value
 		if (typeof declaredOptions !== 'object' || declaredOptions === null) {
-			throw new Error('The core project carries no compiler options')
+			throw new Error(`The ${face} project carries no compiler options`)
 		}
 		const declaredLib: unknown = Object.getOwnPropertyDescriptor(declaredOptions, 'lib')?.value
 		const declaredTypes: unknown = Object.getOwnPropertyDescriptor(declaredOptions, 'types')?.value
 		if (!configHelpers.isStringList(declaredLib) || !configHelpers.isStringList(declaredTypes)) {
-			throw new Error('The core project declares no lib or types')
+			throw new Error(`The ${face} project declares no lib or types`)
 		}
+		const declaredRootDir: unknown = Object.getOwnPropertyDescriptor(
+			declaredOptions,
+			'rootDir',
+		)?.value
+		if (typeof declaredRootDir !== 'string') {
+			throw new Error(`The ${face} project declares no rootDir`)
+		}
+		const expectedRoot = resolve(dirname(project), declaredRootDir)
 
 		const scope = configHelpers.parseProjectScope(
 			configHelpers.readCompilerOutput(compiler, ['--showConfig', '-p', project]),
 			project,
 		)
-		if (scope === undefined) throw new Error('The core project resolved no compiler scope')
+		if (scope === undefined) throw new Error(`The ${face} project resolved no compiler scope`)
 		// The compiler lowercases every resolved library name, so the committed project is the
 		// second mechanism this reading is compared against rather than the reading itself.
 		expect(scope.lib.map((entry) => entry.toLowerCase())).toStrictEqual(
 			declaredLib.map((entry) => entry.toLowerCase()),
 		)
 		expect(scope.types).toStrictEqual(declaredTypes)
-		expect(scope.root).toBe(resolve(root, 'src/core'))
+		expect(scope.root).toBe(expectedRoot)
 
 		expect(configHelpers.parseProjectScope('not a configuration', project)).toBeUndefined()
 		expect(
