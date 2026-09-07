@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/contract",
-	"version": "0.0.16",
+	"version": "0.0.17",
 	"description": "Zero-dependency contract toolkit — type guards, combinators, parsers, and a shape DSL that compiles one contract shape into schema, is, parse, audit, explain, and generate. The foundation package of the @orkestrel line.",
 	"keywords": [
 		"contract",
@@ -68,7 +68,8 @@
 		"test:distribution": "vitest run --config vite.config.ts --no-cache --reporter=dot --project distribution",
 		"test:probe": "vitest run --config vite.config.ts --no-cache --reporter=verbose --project probe",
 		"test:bench": "vitest bench --config vite.config.ts --no-cache --project probe",
-		"test:setup": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup"
+		"test:setup": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup",
+		"docs": "node --experimental-strip-types scripts/docs.ts"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.0",

@@ -2123,8 +2123,8 @@ describe('samplesToSchema — bounded work on shared references (H9, H10-B)', ()
 		expect(valueToSchema(source, budget)).toEqual(expected)
 		expect(compileGuard(schemaToShape(samplesToSchema([source], budget)))(source)).toBe(true)
 
-		// Control: a valid budget is used verbatim, so sanitization did not simply
-		// discard the caller's number.
+		// Control: a valid budget is used verbatim, so sanitization did not discard
+		// the caller's number.
 		expect(samplesToSchema([source], { limits: { depth: 32, properties: 1 } })).toEqual({
 			type: 'object',
 			properties: { a: { type: 'integer' } },

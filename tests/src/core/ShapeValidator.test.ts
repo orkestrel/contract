@@ -761,7 +761,7 @@ describe('ShapeValidator', () => {
 		// The traversal is contained, and the containment asks ONE question about
 		// the contained failure: did this package author it? Answering that with
 		// `instanceof` routes the question through `Symbol.hasInstance`, a
-		// caller-writable hook — so a caller who simply answers `false` makes the
+		// caller-writable hook — so a caller who answers `false` makes the
 		// validator fail to recognize its OWN error, rewrap it as an unreadable
 		// reflection failure, and lose the path that names the defect.
 		const source: ContractShape = {

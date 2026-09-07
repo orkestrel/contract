@@ -2154,7 +2154,7 @@ export function sanitizeDepth(value: number | undefined): number {
 // === Reporting
 
 /**
- * Renders a short, safe, TOTAL preview of an unknown value for a {@link Fault}'s
+ * Renders an unknown value as a short, safe, TOTAL string for a {@link Fault}'s
  * `received` field.
  *
  * @remarks

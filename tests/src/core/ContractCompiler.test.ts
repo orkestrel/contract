@@ -218,7 +218,7 @@ describe('ContractCompiler', () => {
 	it('poisons the nested read, the interrupted read, and every later read on reentry', () => {
 		// The only reachable reentry: ownership invokes a declaration's `pattern`
 		// getter — the one accessor it is documented to run — and that getter reads
-		// a getter of the compiler currently owning the same declaration.
+		// a getter of the compiler owning the same declaration.
 		const holder: { compiler?: ContractCompiler<StringShape> } = {}
 		const fixture = new ReentrantShape(() => holder.compiler?.schema)
 		holder.compiler = new ContractCompiler(fixture.shape)

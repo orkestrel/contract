@@ -3169,7 +3169,7 @@ describe('compileGuard', () => {
 		// Object.prototype itself must be untouched by the walk.
 		expect(Object.getPrototypeOf({})).toBe(Object.prototype)
 
-		// 'constructor' is likewise just another own key — its value ('x') fails
+		// 'constructor' is likewise another own key — its value ('x') fails
 		// integerShape, so the object is rejected, not treated specially.
 		expect(guard({ constructor: 'x' })).toBe(false)
 		expect(parse({ constructor: 'x' })).toBeUndefined()
@@ -3624,8 +3624,8 @@ describe('compileParser', () => {
 
 	it('union returns a guard-valid value unchanged rather than coerced by an earlier variant', () => {
 		const parse = compileParser(unionShape(stringShape(), integerShape()))
-		expect(parse(37)).toBe(37) // guard-valid via integer variant — not coerced to '37'
-		expect(parse('37')).toBe('37') // already guard-valid via string variant — unchanged
+		expect(parse(37)).toBe(37) // guard-valid through the integer variant — not coerced to '37'
+		expect(parse('37')).toBe('37') // already guard-valid through the string variant — unchanged
 		expect(parse(true)).toBeUndefined() // guard-invalid against every variant
 	})
 
@@ -3846,7 +3846,7 @@ describe('compileReporter — array faults', () => {
 		const shape = arrayShape(stringShape())
 		// A finite number coerces to a string (parseString mirrors bidirectional
 		// number<->string coercion), so only the genuinely non-coercible entries
-		// (a boolean) fault — index 1 ('1' via coercion) stays clean.
+		// (a boolean) fault — index 1 ('1' through coercion) stays clean.
 		const faults = compileReporter(shape, ['a', 1, 'c', true])
 		expect(faults).toEqual([{ reason: 'type', path: ['3'], expected: 'string', received: 'true' }])
 	})
@@ -5453,7 +5453,7 @@ describe('R3 — the canonical door matrix', () => {
 		// Row 8 in its strongest form. The property entry answers a DIFFERENT child
 		// from its third read onward, so any member compiled from a later reading
 		// would disagree with the members compiled from the captured one. The whole
-		// bundle is asked here, not just schema/is/parse: one ownership population
+		// bundle is asked here, not schema/is/parse alone: one ownership population
 		// governs the whole contract or none of it does.
 		const captured = integerShape({ min: 0, max: 9 })
 		const later = stringShape({ min: 8 })

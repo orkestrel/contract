@@ -1562,9 +1562,10 @@ describe('schemaToShape — keyword semantics', () => {
 		const schema: JSONSchema = { type: 'object', properties, additionalProperties: false }
 		expect(() => createContract(schemaToShape(schema))).not.toThrow()
 		const guard = compileGuard(schemaToShape(schema))
-		// A key past the INFER_BREADTH_LIMIT sampling cap (e.g. the last one) is
-		// dropped from `properties`, so it can only pass if additionalProperties
-		// was forced open rather than inheriting the schema's `false`.
+		// A key past the INFER_BREADTH_LIMIT sampling cap (for example the last
+		// one) is dropped from `properties`, so it can only pass if
+		// additionalProperties was forced open rather than inheriting the schema's
+		// `false`.
 		expect(guard(value)).toBe(true)
 	})
 
@@ -1787,8 +1788,9 @@ describe('schemaToShape — hostile validated values', () => {
 })
 
 describe('schemaToShape — createContract never throws (malformed schema sweep)', () => {
-	// Each entry is built via JSON.parse (untyped) then pinned to JSONSchema on
-	// assignment — deliberately malformed keyword values with no type assertion.
+	// Each entry is built through JSON.parse (untyped) then pinned to JSONSchema
+	// on assignment — deliberately malformed keyword values with no type
+	// assertion.
 	const malformedSchemas: ReadonlyArray<{ readonly label: string; readonly schema: JSONSchema }> = [
 		{ label: 'enum with only object entries', schema: JSON.parse('{"enum":[{"nested":true}]}') },
 		{ label: 'empty enum', schema: JSON.parse('{"enum":[]}') },
