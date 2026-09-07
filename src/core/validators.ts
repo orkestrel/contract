@@ -414,6 +414,11 @@ export function isDate(value: unknown): value is Date {
 
 /** Determines whether a value is a `RegExp`.
  *
+ * @remarks
+ * A total native internal-slot brand check rather than a property read: it accepts a
+ * genuine pattern from this realm and from another, and refuses a proxy or a hand-built
+ * forgery without reading an advertised field.
+ *
  * @param value - The value to inspect
  * @returns True if the value is a `RegExp`; false otherwise
  *
@@ -498,6 +503,10 @@ export function isPromiseLike<T = unknown>(
 }
 
 /** Determines whether a value is an `ArrayBuffer`.
+ *
+ * @remarks
+ * Checks the container alone — no element is inspected. Use {@link arrayOf} to check
+ * every element against a guard.
  *
  * @param value - The value to inspect
  * @returns True if the value is an `ArrayBuffer`; false otherwise

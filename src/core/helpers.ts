@@ -256,6 +256,13 @@ export function collectMembers(values: readonly unknown[]): Set<unknown> {
  * Determines whether a value is a member of a collected vocabulary, by
  * SameValueZero.
  *
+ * @remarks
+ * Dispatched through the captured `Set.prototype.has` onto a collection no caller
+ * holds, and asked as a MODULE BINDING rather than as a property: `set.has(value)` asks
+ * a member every caller can rewrite, and moving that read onto an exported class's
+ * `has` method reproduced the identical defect one prototype higher, because every
+ * public class method is dispatched through a reachable prototype.
+ *
  * @param members - The vocabulary to ask, built by {@link collectMembers}
  * @param value - The value to test for membership
  * @returns True if the value was collected; false otherwise
@@ -271,6 +278,10 @@ export function matchesMember(members: ReadonlySet<unknown>, value: unknown): bo
 
 /**
  * Collects one more member into a vocabulary that grows as a walk proceeds.
+ *
+ * @remarks
+ * Collects through the captured adder, for a vocabulary that grows as a walk proceeds —
+ * a uniqueness gate, a de-duplicating key population.
  *
  * @param members - The vocabulary to extend
  * @param value - The value to admit
@@ -316,6 +327,10 @@ export function matchesVisited(visited: WeakSet<object>, value: object): boolean
 /**
  * Records an object as entered on a traversal's active path.
  *
+ * @remarks
+ * Records through the captured `WeakSet.prototype.add`, on the same terms {@link
+ * matchesVisited} states for the membership answer.
+ *
  * @param visited - The active-path set this traversal owns
  * @param value - The object being entered
  *
@@ -330,6 +345,10 @@ export function admitVisited(visited: WeakSet<object>, value: object): void {
 
 /**
  * Records an object as exited from a traversal's active path.
+ *
+ * @remarks
+ * Records through the captured `WeakSet.prototype.delete`, on the same terms {@link
+ * matchesVisited} states for the membership answer.
  *
  * @param visited - The active-path set this traversal owns
  * @param value - The object being exited
@@ -552,6 +571,10 @@ export function readPatternSource(pattern: unknown): string | undefined {
 
 /**
  * Reads a regular expression's flag text through the captured accessor.
+ *
+ * @remarks
+ * The flags half of {@link readPatternSource}, on the same captured-accessor terms and
+ * for the same reason.
  *
  * @param pattern - The candidate regular expression to read
  * @returns The pattern's flag text, or `undefined` when it cannot be read as a string
@@ -930,6 +953,11 @@ export function contain<T>(callback: () => T, door: string, options?: ContainOpt
 
 /**
  * Invokes a predicate through the sanctioned never-throw boundary.
+ *
+ * @remarks
+ * Backs the `instanceof`-based validators and every container combinator's element
+ * walk. The answer is `true` only for the boolean literal `true`; a throw and every
+ * other return are `false`.
  *
  * @param callback - The predicate to invoke with no arguments
  * @returns True if the callback returns the boolean value `true`; false otherwise
@@ -1321,6 +1349,15 @@ export function readOptions<T extends object>(
 
 /**
  * Draws and validates one generator random sample.
+ *
+ * @remarks
+ * A broken source is a fault of the SOURCE rather than of the shape, so the refusal
+ * carries code `random` and never the `generate` code, and {@link compileGenerator}
+ * rethrows it at whatever draw depth it happened instead of rotating to the next union
+ * variant. The diagnostic names the consuming shape category, the `[0, 1)` limit, and a
+ * total non-coercing {@link preview} of the offending sample (or `threw`), so a hostile
+ * object runs no conversion hook while the diagnostic is built and a primitive symbol
+ * renders without consulting mutable `Symbol.prototype.toString`.
  *
  * @param random - The caller-supplied random source
  * @param shape - The shape category consuming the sample

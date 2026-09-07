@@ -9,6 +9,7 @@ import {
 	createSource,
 	createSourceManager,
 	extractFenceImports,
+	findDrift,
 	findMissing,
 	findMissingSymbols,
 	findUnexampled,
@@ -39,6 +40,8 @@ import { DriftedMethods, SMUGGLED_KEY, SmuggledMember } from './setup.js'
 const FENCE_LANGUAGES = Object.freeze(['text', 'ts'])
 /** The fence language whose blocks count as worked examples. */
 const EXAMPLE_LANGUAGE = 'ts'
+/** The one guide this package sources, whose tagline the README pitch equals. */
+const GUIDE_SPEC = 'guides/contract.md'
 /** Each import specifier this package's own guides may resolve against. */
 const MODULES = Object.freeze({ '@orkestrel/contract': 'src/core', '@src/core': 'src/core' })
 /**
@@ -55,8 +58,8 @@ const INTERNAL: readonly string[] = Object.freeze([
 	'class ValueInferer',
 ])
 
-/** Root-level files this package's guides link to. `readInventory` walks directories only. */
-const ROOT_FILES = Object.freeze(['AGENTS.md'])
+/** Root-level files these checks read. `readInventory` walks directories only. */
+const ROOT_FILES = Object.freeze(['AGENTS.md', 'README.md'])
 
 const root = new URL('../', import.meta.url)
 const files: Record<string, string> = {
@@ -68,9 +71,55 @@ const manifest = parseManifest(
 	'guides',
 )
 const sources = createSourceManager({ files, modules: MODULES })
+const own = requireValue(
+	manifest.find((entry) => entry.spec === GUIDE_SPEC),
+	`Missing manifest row: ${GUIDE_SPEC}`,
+)
 
 it('manifest lists at least one guide', () => {
 	expect(manifest.length).toBeGreaterThan(0)
+})
+
+// The example half of the equality case is silent over an empty population: with no
+// title on both sides `findDrift` compares no pair and the case passes on the summaries
+// alone. This pins the population this repository's own guide contributes, so removing
+// every `@example` title reddens the suite instead of quietly retiring half the gate.
+// The failure names both title sets, because a pin reporting only its own emptiness
+// leaves the reader to work out which side dropped the title.
+it('pairs at least one example title across the guide and the source', () => {
+	const guide = createGuide(requireValue(files[GUIDE_SPEC], `Missing file: ${GUIDE_SPEC}`))
+	const source = createSource({ files, module: own.source })
+	const declared = source
+		.examples()
+		.map((example) => example.title)
+		.filter((title) => title !== undefined)
+	const titled = new Set(declared)
+	const fences = guide.fences()
+	const headings = fences.map((fence) => fence.title).filter((title) => title !== undefined)
+	const paired = fences.filter((fence) => fence.title !== undefined && titled.has(fence.title))
+	const unpaired =
+		paired.length > 0
+			? []
+			: [
+					`${GUIDE_SPEC} pairs: guide ${JSON.stringify(headings)} source ${JSON.stringify(declared)}`,
+				]
+	expect(unpaired).toEqual([])
+})
+
+// The README's pitch and the guide's tagline are one text, each read as the blockquote
+// under its file's H1. `README.md` is outside the concept index, so the reader is
+// applied to it directly rather than through a manifest row. Each side is guarded
+// against `undefined` first, so a file that lost its blockquote reports that rather
+// than reporting two absences as agreement.
+it('opens the README with the guide tagline', () => {
+	const pitch = createGuide(requireValue(files['README.md'], 'Missing file: README.md')).tagline()
+	const tagline = createGuide(
+		requireValue(files[GUIDE_SPEC], `Missing file: ${GUIDE_SPEC}`),
+	).tagline()
+
+	expect(pitch).not.toBeUndefined()
+	expect(tagline).not.toBeUndefined()
+	expect(pitch).toBe(tagline)
 })
 
 for (const entry of manifest) {
@@ -133,6 +182,28 @@ for (const entry of manifest) {
 				})
 			})
 		}
+
+		// The equality gate: a `Summary` cell against its export's description paragraph, a
+		// titled fence against the `@example` of that title. `findDrift` owns the comparison
+		// and names both sides; converge the two sides with `npm run docs`, never by
+		// weakening this assertion. `findDrift` pairs an example only where a title is
+		// present on both sides, so an untitled `@example` block is outside this case. Each
+		// collected line is the spec, the key, and each side's text or `absent` — the same
+		// worklist `npm run docs` prints, so a failure here is read the way that command's
+		// output is.
+		// `findDrift` measured 5.6 s on this guide alone on an idle host — it takes one
+		// source lookup per compared row, over every line this package declares — so the
+		// default 5-second budget cannot hold it. This budget clears that reading with room
+		// for a contended host, and the cost is the reader's rather than this package's.
+		it('keeps every compared summary and example equal to its source', () => {
+			const disagreeing: string[] = []
+			for (const drift of findDrift(guide, source)) {
+				const left = drift.guide === undefined ? 'absent' : JSON.stringify(drift.guide)
+				const right = drift.source === undefined ? 'absent' : JSON.stringify(drift.source)
+				disagreeing.push(`${entry.spec} ${drift.key}: guide ${left} source ${right}`)
+			}
+			expect(disagreeing).toEqual([])
+		}, 30_000)
 
 		it('documents an example for every Surface function', () => {
 			const fences = guide
@@ -208,7 +279,6 @@ for (const entry of manifest) {
 // every declaration in the tree and still disagree with the object the package
 // actually ships. These read the real prototypes instead, and the text half and
 // the runtime half answer different questions — which is why each is here.
-const CORE_GUIDE = 'guides/contract.md'
 const RUNTIME_CLASSES = [
 	{ name: 'ContractCompiler', value: ContractCompiler },
 	{ name: 'ContractError', value: ContractError },
@@ -243,7 +313,7 @@ function readMembers(prototype: object): {
 }
 
 describe('runtime parity', () => {
-	const guideText = requireValue(files[CORE_GUIDE], `Missing file: ${CORE_GUIDE}`)
+	const guideText = requireValue(files[GUIDE_SPEC], `Missing file: ${GUIDE_SPEC}`)
 	const contractGuide = createGuide(guideText)
 	const documented = new Map<string, readonly string[]>()
 	for (const group of contractGuide.methods())
@@ -309,7 +379,7 @@ describe('runtime parity', () => {
 // values their comments claim. Change a fence, change the transcription beside
 // it.
 describe('flagship fences', () => {
-	const guideText = requireValue(files[CORE_GUIDE], `Missing file: ${CORE_GUIDE}`)
+	const guideText = requireValue(files[GUIDE_SPEC], `Missing file: ${GUIDE_SPEC}`)
 
 	it('answers from a compiled guard that no live compiler is behind', () => {
 		// Transcribed from the compiling-a-contract passage, which tells a reader

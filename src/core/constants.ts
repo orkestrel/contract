@@ -301,7 +301,7 @@ export const CONTRACT_CODES: readonly ContractCode[] = Object.freeze([
 // `ContractInterface.explain` / `ContractInterface.audit`).
 
 /**
- * Caps the number of {@link Fault} / {@link AuditFault} entries a single
+ * Caps at `64` the number of {@link Fault} / {@link AuditFault} entries a single
  * `explain` or `audit` report ever returns, frozen.
  *
  * @remarks
@@ -316,7 +316,7 @@ export const CONTRACT_CODES: readonly ContractCode[] = Object.freeze([
 export const FAULT_LIMIT = 64
 
 /**
- * Caps the character length of a {@link preview}-rendered string, frozen.
+ * Caps at `64` the character length of a {@link preview}-rendered string, frozen.
  *
  * @remarks
  * A previewed string longer than this is clipped with a trailing `…` so a
@@ -345,7 +345,7 @@ export const PREVIEW_LIMIT = 64
 export const GUARD_DEPTH_LIMIT = 512
 
 /**
- * Caps the supported nesting depth of a compiled contract shape, frozen.
+ * Caps at `512` the supported nesting depth of a compiled contract shape, frozen.
  *
  * @remarks
  * {@link validateShape} rejects the next level
@@ -361,7 +361,8 @@ export const GUARD_DEPTH_LIMIT = 512
 export const COMPILE_DEPTH_LIMIT = 512
 
 /**
- * Caps the number of nodes a compiled artifact may expand a shape into, frozen.
+ * Caps at `16384` the number of nodes a compiled artifact may expand a shape into,
+ * frozen.
  *
  * @remarks
  * A shape graph is a DAG; every compiled artifact is a TREE. A declaration may
@@ -397,7 +398,7 @@ export const COMPILE_DEPTH_LIMIT = 512
 export const COMPILE_NODE_LIMIT = 16_384
 
 /**
- * Caps the number of object keys one compiled presence mask carries, frozen.
+ * Caps at `31` the number of object keys one compiled presence mask carries, frozen.
  *
  * @remarks
  * A compiled object plan decides which declared keys a value carries. The keys
@@ -422,7 +423,7 @@ export const COMPILE_NODE_LIMIT = 16_384
 export const PRESENCE_MASK_LIMIT = 31
 
 /**
- * Caps the number of nodes one JSON snapshot may produce, frozen.
+ * Caps at `262144` the number of nodes one JSON snapshot may produce, frozen.
  *
  * @remarks
  * JSON persistence is a TREE, so `cloneJSONValue` / `cloneJSONRecord`
@@ -450,8 +451,8 @@ export const PRESENCE_MASK_LIMIT = 31
 export const CLONE_NODE_LIMIT = 262_144
 
 /**
- * Caps the number of candidate-generation attempts for a constrained
- * generated value, frozen.
+ * Caps at `32` the number of candidate-generation attempts for a constrained generated
+ * value, frozen.
  *
  * @remarks
  * Provides one deterministic work bound for generators that must retry a
@@ -467,7 +468,7 @@ export const GENERATION_ATTEMPT_LIMIT = 32
 // Value-to-schema inference bounds (`valueToSchema` / `samplesToSchema`).
 
 /**
- * Caps the object/array nesting depth {@link valueToSchema} walks, frozen.
+ * Caps at `32` the object/array nesting depth {@link valueToSchema} walks, frozen.
  *
  * @remarks
  * Bounds inference against adversarial or cyclic runtime input — once the
@@ -486,8 +487,8 @@ export const GENERATION_ATTEMPT_LIMIT = 32
 export const INFER_DEPTH_LIMIT = 32
 
 /**
- * Caps by default the number of object properties / array elements
- * {@link valueToSchema} samples per container, frozen.
+ * Caps by default at `256` the number of object properties / array elements {@link
+ * valueToSchema} samples per container, frozen.
  *
  * @remarks
  * Bounds the work (and the emitted schema's size) against a wide record or a
@@ -497,7 +498,7 @@ export const INFER_DEPTH_LIMIT = 32
 export const INFER_BREADTH_LIMIT = 256
 
 /**
- * Caps by default the number of distinct values a multi-sample slot may hold
+ * Caps by default at `12` the number of distinct values a multi-sample slot may hold
  * before enum inference gives up and falls back to a bare `type`, frozen.
  *
  * @remarks
@@ -509,7 +510,7 @@ export const INFER_BREADTH_LIMIT = 256
 export const INFER_ENUM_LIMIT = 12
 
 /**
- * Caps the string length {@link stringToFormat} attempts to classify, frozen.
+ * Caps at `128` the string length {@link stringToFormat} attempts to classify, frozen.
  *
  * @remarks
  * Bounds per-string format-detection work: a value longer than this returns

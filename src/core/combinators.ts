@@ -242,6 +242,11 @@ export function literalOf(
  * Verifies that `ctor` is a real constructor (through {@link isConstructor}) first,
  * so passing an arrow function does not silently produce a broken guard.
  *
+ * A CALLABLE instance passes. The only exclusion is a bad CONSTRUCTOR, never a callable
+ * VALUE: an `isObject` pre-filter made `instanceOf(Function)(() => {})` answer `false`
+ * while {@link isInstance}, the helper this is built on, answered `true` for the same
+ * pair.
+ *
  * @param ctor - The constructor whose instances the guard accepts
  * @returns A guard narrowing to that constructor's instance type
  *
@@ -268,6 +273,10 @@ export function instanceOf<C extends abstract new (...args: never) => object>(
 /**
  * Builds a guard from a native `enum` or any object whose values are strings or
  * numbers.
+ *
+ * @remarks
+ * An unreadable enumeration is refused at factory time with the shared `structure` read
+ * refusal; the returned guard stays total.
  *
  * @param enumeration - The readable enumeration whose values the guard accepts
  * @returns A guard accepting one enumeration value
@@ -598,6 +607,10 @@ export function keyOf<const O extends Readonly<Record<PropertyKey, unknown>>>(
  * Builds a new guard shape by keeping only the listed keys — the structural
  * equivalent of `Pick<T, K>`. Produces a shape for {@link recordOf}, not a guard.
  *
+ * @remarks
+ * An unreadable `keys` list and an unreadable `shape` are refused separately, each
+ * under its own name, so a caller reads which argument failed.
+ *
  * @param shape - The guard shape to narrow
  * @param keys - The keys to keep
  * @returns A guard shape carrying only the kept keys
@@ -652,6 +665,10 @@ export function pickOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 /**
  * Builds a new guard shape by removing the listed keys — the structural
  * equivalent of `Omit<T, K>`. Produces a shape for {@link recordOf}, not a guard.
+ *
+ * @remarks
+ * An unreadable `keys` list and an unreadable `shape` are refused separately, each
+ * under its own name, for the reason {@link pickOf} states.
  *
  * @param shape - The guard shape to narrow
  * @param keys - The keys to remove
@@ -739,6 +756,11 @@ export function andOf(
  * Combines `left` and `right` with logical OR — passes when at least one passes.
  * Prefer {@link unionOf} for a wider set of variants.
  *
+ * @remarks
+ * Each member is contained SEPARATELY, so a throwing member is a non-match rather than
+ * a veto over its sibling. One containment around the whole disjunction made `orOf(a,
+ * b)` and `orOf(b, a)` answer differently for one value.
+ *
  * @param left - The guard tested first
  * @param right - The guard tested only after `left` fails
  * @returns A guard accepting a value either accepts
@@ -773,6 +795,10 @@ export function orOf(
  * Typed as `Guard<unknown>` because `Exclude<unknown, T>` is not useful; use
  * {@link complementOf} when you need the narrowed `Exclude<TBase, TExcluded>`.
  *
+ * The negation applies to the CONTAINED verdict, so a throwing guard is a non-match and
+ * its negation passes. Containing the negation instead made a guard and its `notOf`
+ * both reject the same value, which broke `orOf(g, notOf(g))` as a tautology.
+ *
  * @param guard - The guard or predicate to negate
  * @returns A guard accepting exactly the values `guard` rejects
  *
@@ -792,6 +818,10 @@ export function notOf(guard: (value: unknown) => boolean): Guard<unknown> {
 /**
  * Builds a guard for `Exclude<TBase, TExcluded>` — accepts values that pass
  * `base` but not `excluded`.
+ *
+ * @remarks
+ * The base and the exclusion are contained separately, for the reason {@link notOf}
+ * states: a throwing EXCLUSION is a non-match, so the complement passes.
  *
  * @param base - The guard establishing the accepted domain
  * @param excluded - The guard whose accepted values are removed from that domain
@@ -824,6 +854,11 @@ export function complementOf<TBase, TExcluded extends TBase>(
  * Builds a guard that accepts values matching at least one of the provided
  * guards — the variadic form of {@link orOf}.
  *
+ * @remarks
+ * Zero guards yield a guard that always answers `false`. Each member is contained
+ * separately, exactly as {@link orOf} contains its two, so a throwing member cannot
+ * erase a later passing one and the answer does not depend on argument order.
+ *
  * @param guards - The guards tried in order
  * @returns A guard accepting a value at least one guard accepts
  *
@@ -852,6 +887,10 @@ export function unionOf(...guards: ReadonlyArray<(value: unknown) => boolean>): 
 /**
  * Builds a guard that accepts values matching ALL of the provided guards — the
  * variadic form of {@link andOf}.
+ *
+ * @remarks
+ * Zero guards yield a guard that always answers `true`, the identity of an
+ * intersection.
  *
  * @param guards - The guards every accepted value must satisfy
  * @returns A guard accepting a value every guard accepts

@@ -2,11 +2,14 @@ import type { ContractErrorContext, ContractErrorOptions } from './types.js'
 import { CONTRACT_CODES, CONTRACT_ERROR_BRAND, INTRINSICS } from './constants.js'
 
 /**
- * Carries a machine-readable contract category, optional context, and an exact
- * optional cause. Omitting `cause` omits the own property; explicitly
- * supplying `cause: undefined` retains an own property with that value. Both
- * optional options are read as OWN properties, so a construction never consults
- * the caller-writable prototype chain of the container it was handed.
+ * Carries a machine-readable contract category, optional context, and an exact optional
+ * cause.
+ *
+ * @remarks
+ * Omitting `cause` omits the own property; explicitly supplying `cause: undefined`
+ * retains an own property with that value. Both optional options are read as OWN
+ * properties, so a construction never consults the caller-writable prototype chain of
+ * the container it was handed.
  *
  * @example
  * ```ts

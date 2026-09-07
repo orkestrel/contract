@@ -152,6 +152,11 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 /**
  * Builds a numeric {@link NumberShape}.
  *
+ * @remarks
+ * A present `min` or `max` must be FINITE. `NaN` and `±Infinity` throw a `bound` {@link
+ * ContractError} at construction, because no finite value satisfies them and no JSON
+ * Schema keyword expresses them.
+ *
  * @param options - Optional bounds (`min` / `max`), `integer`, and `description`
  * @returns A number shape
  * @throws {ContractError} When a present bound is not finite
@@ -623,6 +628,9 @@ export function nullableShape<S extends ContractShape>(inner: S): NullableShape<
  * schema is the empty accept-anything `{}`, so here the schema claims MORE than
  * the compiled guard accepts — `NaN`, a `Map`, and a class instance all satisfy
  * `{}` and all fail `isJSONValue`.
+ *
+ * This is the shape an author writes to mean "any JSON value". Inference never produces
+ * it: {@link schemaToShape} widening always lands on {@link RawShape} instead.
  *
  * @param options - Optional `description`
  * @returns A JSON passthrough shape

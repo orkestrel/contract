@@ -1,9 +1,15 @@
 # @orkestrel/contract
 
-The zero-dependency contract toolkit — runtime type guards, guard combinators, coerce-and-extract
-parsers, and a shape DSL that compiles once into a JSON Schema, a guard, a parser, a strict audit, a
-parse report, and a generator, every one of them derived from a single owned snapshot of the
-declaration. The foundation package of the `@orkestrel` line.
+> The zero-dependency contract toolkit — runtime type guards, guard combinators,
+> coerce-and-extract parsers, and a shape DSL that compiles one declaration into a JSON
+> Schema, a guard, a parser, a strict audit, a parse report, and a generator, every one of
+> them derived from a single owned snapshot of that declaration.
+
+Declare a value's shape once with the shape builders, compile it with the `createContract`
+function, and take the member each call site needs: `is` to narrow, `parse` to coerce, `audit` and
+`explain` to diagnose, `schema` to publish, and `generate` to seed a fixture. Where a whole
+declaration is more than the job needs, take a bare guard, combinator, or parser instead. The
+foundation package of the `@orkestrel` line.
 
 ## Install
 

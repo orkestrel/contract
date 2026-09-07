@@ -43,12 +43,24 @@ import { ContractCompiler } from './ContractCompiler.js'
  * @param shape - The shape to compile
  * @returns A contract bundling `schema` / `is` / `parse` / `audit` / `explain` / `generate`
  *
- * @example
+ * @example Compiling a contract
  * ```ts
- * const user = createContract(objectShape({ name: stringShape(), age: integerShape() }))
- * user.is({ name: 'Ada', age: 36 })        // true
- * user.parse({ name: 'Ada', age: '36' })   // { name: 'Ada', age: 36 }
- * user.schema                              // { type: 'object', properties: { … }, … }
+ * import {
+ * 	createContract,
+ * 	integerShape,
+ * 	objectShape,
+ * 	seededRandom,
+ * 	stringShape,
+ * } from '@orkestrel/contract'
+ *
+ * const user = createContract(objectShape({ name: stringShape({ min: 1 }), age: integerShape() }))
+ *
+ * user.is({ name: 'Ada', age: 36 }) // true — a typed guard (narrows to Infer<typeof shape>)
+ * user.parse({ name: 'Ada', age: '36' }) // { name: 'Ada', age: 36 } — coerces, or undefined
+ * user.parse({ name: '', age: 36 }) // undefined — '' violates name min:1 (parse enforces refinements, like is)
+ * user.explain({ name: '', age: 36 }) // [{ reason: 'constraint', path: ['name'], expected: 'string', constraint: 'min', limit: 1, received: '""' }]
+ * user.schema // the owned, deeply frozen { type: 'object', properties: { … }, required: ['name', 'age'], additionalProperties: false }
+ * user.generate(seededRandom(42)) // reproducible seed data; omit the arg for a wall-clock-seeded source
  * ```
  */
 export function createContract<S extends ContractShape>(shape: S): ContractInterface<Infer<S>>
