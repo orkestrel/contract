@@ -671,7 +671,7 @@ describe('the redirection instruments can report a failure', () => {
 		// only sound answer is `false`, and the instrument doing the running is
 		// itself controlled: a deliberately vacuous row, substituting the honest
 		// member for itself and answering `true` regardless, must be NAMED. Without
-		// that second expectation this test passes just as well when the sweep is
+		// that second expectation this test passes equally well when the sweep is
 		// broken and finds nothing.
 		const vacuous: TerminalLie = Object.freeze({
 			label: 'a control that answers true against the honest member',

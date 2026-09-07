@@ -9,33 +9,25 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, matchesGlob } from 'node:path'
-import * as ts from 'typescript'
+import { stripPolicyCode, textToPolicyHits } from '../configs/policy.js'
 
-/** A rule the fleet placement instrument can decide from syntax and a file path. */
+/** Names a rule the fleet sweep decides from workspace text and paths. */
 export type PolicyRule =
 	| 'bridge'
-	| 'class'
-	| 'constant'
-	| 'data'
-	| 'domain'
-	| 'export'
-	| 'factory'
-	| 'function'
 	| 'mirror'
-	| 'parser'
 	| 'portability'
+	| 'prose'
 	| 'rules'
 	| 'skill'
 	| 'suppression'
-	| 'type'
 
-/** One TypeScript source supplied to the placement instrument. */
+/** Describes one workspace file a physical control writes. */
 export interface PolicySource {
 	readonly path: string
 	readonly content: string
 }
 
-/** One placement failure reported by the instrument. */
+/** Describes one policy failure the sweep reports. */
 export interface PolicyViolation {
 	readonly rule: PolicyRule
 	readonly path: string
@@ -43,7 +35,7 @@ export interface PolicyViolation {
 	readonly message: string
 }
 
-/** One physical negative control, including the population boundary it attacks. */
+/** Describes one physical negative control, including the population boundary it attacks. */
 export interface PolicyControl {
 	readonly label: string
 	readonly membership: string
@@ -91,7 +83,7 @@ export function createPolicyScratch(options: { readonly prefix: string }): Polic
 	}
 }
 
-/** Parsed skill frontmatter and the exact scalar source used for bridge comparison. */
+/** Holds parsed skill frontmatter and the exact scalar source used for bridge comparison. */
 export interface SkillFrontmatter {
 	readonly keys: readonly string[]
 	readonly name: string | undefined
@@ -102,113 +94,29 @@ export interface SkillFrontmatter {
 	}
 }
 
-/** The directory whose immediate child directories form the complete skill family. */
+/** Names the directory whose immediate child directories form the complete skill family. */
 export const SKILL_FAMILY_ROOT = '.agents/skills'
 
-/** The directory whose immediate child directories form the Claude skill bridge family. */
+/** Names the directory whose immediate child directories form the Claude skill bridge family. */
 export const SKILL_BRIDGE_ROOT = '.claude/skills'
 
-/** Minimal valid skill text for physical family controls. */
+/** Holds the minimal valid skill text for physical family controls. */
 export const SKILL_POLICY_TEXT =
 	'---\nname: sample\ndescription: Use this skill for a policy fixture.\n---\n\n# Skill\n'
 
-/** Skill text naming one reference for physical family controls. */
+/** Holds skill text naming one reference for physical family controls. */
 export const SKILL_REFERENCE_TEXT = `${SKILL_POLICY_TEXT}\nRead references/example.md.\n`
 
-/** Minimal valid provider bridge text for physical bridge controls. */
+/** Holds the minimal valid provider bridge text for physical bridge controls. */
 export const SKILL_BRIDGE_TEXT = `${SKILL_POLICY_TEXT}\nRead \`.agents/skills/sample/SKILL.md\`.\n`
 
-/** Canonical skill metadata whose values each carry YAML's escaped apostrophe. */
+/** Holds canonical skill metadata whose values each carry YAML's escaped apostrophe. */
 export const SKILL_APOSTROPHE_METADATA =
 	"interface:\n  display_name: 'Owner''s Fixture'\n" +
 	"  short_description: 'Exercise the family''s apostrophe rule'\n" +
 	"  default_prompt: 'Use $sample for this fixture''s value.'\n"
 
-/** Every centralized module named by the architecture kind table. */
-export const CENTRAL_SOURCE_FILES: readonly string[] = Object.freeze([
-	'cloners.ts',
-	'combinators.ts',
-	'compilers.ts',
-	'constants.ts',
-	'contracts.ts',
-	'errors.ts',
-	'factories.ts',
-	'handlers.ts',
-	'helpers.ts',
-	'index.ts',
-	'inferers.ts',
-	'middlewares.ts',
-	'parsers.ts',
-	'relations.ts',
-	'routes.ts',
-	'schemas.ts',
-	'seeders.ts',
-	'shapers.ts',
-	'templates.ts',
-	'types.ts',
-	'validators.ts',
-])
-
-/** The exhaustive centralized-file set that permits module functions. */
-export const FUNCTION_SOURCE_FILES: readonly string[] = Object.freeze([
-	'cloners.ts',
-	'combinators.ts',
-	'compilers.ts',
-	'errors.ts',
-	'factories.ts',
-	'handlers.ts',
-	'helpers.ts',
-	'inferers.ts',
-	'middlewares.ts',
-	'parsers.ts',
-	'relations.ts',
-	'schemas.ts',
-	'seeders.ts',
-	'shapers.ts',
-	'validators.ts',
-])
-
-/** Centralized files that permit module data by declaration syntax. */
-export const DATA_SOURCE_FILES: readonly string[] = Object.freeze([
-	'combinators.ts',
-	'constants.ts',
-	'contracts.ts',
-	'relations.ts',
-	'routes.ts',
-	'schemas.ts',
-	'shapers.ts',
-	'templates.ts',
-	'validators.ts',
-])
-
-/**
- * Files excluded from the module-data rule because their namespace values hold helper behavior.
- * This exclusion also permits unrelated module data such as `export const RETRIES = 3`.
- */
-export const DATA_EXEMPT_FILES: readonly string[] = Object.freeze(['helpers.ts'])
-
-/** Fleet-registered folders whose direct modules each contain one named function. */
-export const FUNCTION_DOMAIN_FOLDERS: readonly string[] = Object.freeze([
-	'app/browser/composables',
-	'src/server/execution',
-])
-
-/** Every ambient declaration suffix the source glob collects and the parsed population excludes. */
-export const POLICY_AMBIENT_SUFFIXES: readonly string[] = Object.freeze([
-	'.d.cts',
-	'.d.mts',
-	'.d.ts',
-])
-
-/** TypeScript source extensions whose declaration syntax the sweep reads. */
-export const POLICY_SOURCE_EXTENSIONS: readonly string[] = Object.freeze([
-	'cts',
-	'mts',
-	'ts',
-	'tsx',
-])
-
-/** Every extension through which a mirrored test can name a module. */
+/** Lists every extension through which a mirrored test can name a module. */
 export const POLICY_MODULE_EXTENSIONS: readonly string[] = Object.freeze([
 	'cts',
 	'mts',
@@ -219,42 +127,45 @@ export const POLICY_MODULE_EXTENSIONS: readonly string[] = Object.freeze([
 	'css',
 ])
 
-/** Module extensions whose extensionless stem can resolve a leading-underscore partial. */
+/**
+ * Lists the module extensions whose extensionless stem can resolve a leading-underscore partial.
+ */
 export const POLICY_PARTIAL_EXTENSIONS: readonly string[] = Object.freeze(['scss', 'css'])
 
-/** The reserved stem prefix whose mirrored module can resolve inside the tests axis. */
+/** Names the reserved stem prefix whose mirrored module can resolve inside the tests axis. */
 export const POLICY_TESTS_MODULE_PREFIX = 'setup'
 
-/** The complete parsed TypeScript source population under either workspace axis. */
-export const POLICY_SOURCE_GLOB = `{app,src}/**/*.{${POLICY_SOURCE_EXTENSIONS.join(',')}}`
-
-/** The complete module population available to mirrored tests under either workspace axis. */
+/**
+ * Matches the complete module population available to mirrored tests under either workspace axis.
+ */
 export const POLICY_MODULE_GLOB = `{app,src}/**/*.{${POLICY_MODULE_EXTENSIONS.join(',')}}`
 
-/** The tests-axis setup module population available to mirrored tests. */
+/** Matches the tests-axis setup module population available to mirrored tests. */
 export const POLICY_TESTS_MODULE_GLOB = `tests/**/${POLICY_TESTS_MODULE_PREFIX}*.ts`
 
-/** The mirrored module-test population inspected under either workspace axis. */
+/** Matches the mirrored module-test population inspected under either workspace axis. */
 export const POLICY_TEST_GLOB = 'tests/{app,src}/**/*.test.ts'
 
 // Compose suppression tokens so the instrument does not report its own definitions or controls.
 export const POLICY_SUPPRESSION_DIRECTIVE = ['oxlint', '-disable'].join('')
 
-/** Source, test, config, and script files inspected for lint suppression directives. */
+/** Matches the source, test, config, and script files inspected for lint suppression directives. */
 export const POLICY_SUPPRESSION_GLOB: readonly string[] = Object.freeze([
 	'{src,app,tests,configs,scripts}/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}',
 	'*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}',
 ])
 
-/** Rules whose workspace-wide lint wiring must not be weakened by configuration. */
+/** Lists the rules whose workspace-wide lint wiring must not be weakened by configuration. */
 export const POLICY_WIRING_RULES: readonly string[] = Object.freeze([
 	'policy/no-mocking',
 	'policy/no-keyword-privacy',
+	'policy/no-malformed-summary',
+	'policy/no-banned-term',
 	'typescript/parameter-properties',
 	'typescript/explicit-member-accessibility',
 ])
 
-/** Linted workspace roots that ignore patterns must not reach. */
+/** Lists the linted workspace roots that ignore patterns must not reach. */
 export const POLICY_WIRING_ROOTS: readonly string[] = Object.freeze([
 	'src',
 	'app',
@@ -262,13 +173,16 @@ export const POLICY_WIRING_ROOTS: readonly string[] = Object.freeze([
 	'configs',
 ])
 
-/** Either lint suppression token the text sweep refuses. */
+/** Matches either lint suppression token the text sweep refuses. */
 export const POLICY_SUPPRESSION_PATTERN = new RegExp(
 	[['eslint', '-disable'].join(''), POLICY_SUPPRESSION_DIRECTIVE].join('|'),
 	'u',
 )
 
-/** The workspace-authored path population inspected for a name a Windows checkout cannot hold. */
+/**
+ * Matches the workspace-authored path population inspected for a name a Windows checkout cannot
+ * hold.
+ */
 export const POLICY_PORTABILITY_GLOB: readonly string[] = Object.freeze([
 	'{src,app,configs,tests,scripts,guides}/**/*',
 	'{.agents,.claude,.codex,.cursor,.github}/**/*',
@@ -276,10 +190,7 @@ export const POLICY_PORTABILITY_GLOB: readonly string[] = Object.freeze([
 	'.*',
 ])
 
-/** The TypeScript source population parsed for host-specific line-ending handling. */
-export const POLICY_PORTABILITY_SOURCE_GLOB = '{src,app,configs}/**/*.ts'
-
-/** Every device name Windows reserves, whatever extension the segment carries. */
+/** Lists every device name Windows reserves, whatever extension the segment carries. */
 export const POLICY_RESERVED_NAMES: readonly string[] = Object.freeze([
 	'aux',
 	'com1',
@@ -305,26 +216,59 @@ export const POLICY_RESERVED_NAMES: readonly string[] = Object.freeze([
 	'prn',
 ])
 
-/** Every character Windows refuses inside a path segment. */
+/** Matches every character Windows refuses inside a path segment. */
 export const POLICY_RESERVED_PATTERN = /[<>:"|?*]/u
 
-/** A shell script named as a complete path token inside a manifest script. */
+/** Matches a shell script named as a complete path token inside a manifest script. */
 export const POLICY_SHELL_PATTERN = /\.sh\b/u
 
-/** The directory whose direct Markdown files form the complete rule family. */
+/** Names the directory whose direct Markdown files form the complete rule family. */
 export const POLICY_RULE_ROOT = '.claude/rules'
 
-/** The root instruction file whose rule map registers the rule family. */
+/** Names the root instruction file whose rule map registers the rule family. */
 export const POLICY_RULE_MAP_FILE = 'AGENTS.md'
 
-/** The heading that opens the root instruction file's rule map table. */
+/** Names the heading that opens the root instruction file's rule map table. */
 export const POLICY_RULE_MAP_HEADING = '## Rule map'
 
-/** The workspace manifest whose scripts run on every supported host. */
+/** Names the workspace manifest whose scripts run on every supported host. */
 export const POLICY_MANIFEST_FILE = 'package.json'
 
+/** Lists the directory names the prose sweep never descends into. */
+export const POLICY_PROSE_EXCLUSIONS: readonly string[] = Object.freeze([
+	'.git',
+	'.orkestrel',
+	'dist',
+	'node_modules',
+	'tmp',
+])
+
+/** Matches a top-level guide path and captures the package short name it is written for. */
+export const POLICY_MIRROR_PATTERN = /^guides\/([^/]+)\.md$/u
+
+/** Names the guide a workspace holds as its own index rather than as a mirror. */
+export const POLICY_GUIDE_MAP = 'README'
+
+/** Names the rule file whose substitution table is the denylist's source. */
+export const POLICY_TERM_FILE = '.claude/rules/writing.md'
+
+/** Names the heading that opens the substitution table. */
+export const POLICY_TERM_HEADING = '## Substitutions'
+
 /**
- * Normalize platform separators for stable matching and diagnostics.
+ * Names the catalog agent file whose table registers every fleet package.
+ *
+ * @remarks
+ * The path is written here rather than read from the scaffold constant that plans it, because this
+ * module is vendored byte-identical into every workspace and imports nothing from the package.
+ */
+export const POLICY_CATALOG_FILE = '.claude/agents/orkestrel.md'
+
+/** Names the heading that opens the package catalog. */
+export const POLICY_CATALOG_HEADING = '## Package catalog'
+
+/**
+ * Normalizes platform separators for stable matching and diagnostics.
  *
  * @param path - The workspace-relative path to normalize.
  * @returns The path with forward slashes and no duplicate separators.
@@ -334,484 +278,33 @@ export function normalizePolicyPath(path: string): string {
 }
 
 /**
- * Whether a declaration carries a specified TypeScript modifier.
- *
- * @param node - The declaration to inspect.
- * @param modifier - The modifier syntax to find.
- * @returns `true` when the declaration carries the modifier.
+ * Reports whether a parsed configuration value is a plain record rather than an array or a
+ * primitive.
  */
-export function hasPolicyModifier(node: ts.Node, modifier: ts.SyntaxKind): boolean {
-	return (
-		ts.canHaveModifiers(node) &&
-		ts.getModifiers(node)?.some((candidate) => candidate.kind === modifier) === true
-	)
+export function isPolicyRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /**
- * Return the one-based line where a syntax node begins.
- *
- * @param node - The syntax node to locate.
- * @returns Its one-based source line.
- */
-export function getPolicyLine(node: ts.Node): number {
-	const position = node.getSourceFile().getLineAndCharacterOfPosition(node.getStart())
-	return position.line + 1
-}
-
-/**
- * Whether a path is a direct module of a fleet-registered function domain.
- *
- * @param path - The workspace-relative source path to inspect.
- * @returns `true` when the path has the registered function-module shape.
- */
-export function isFunctionDomainPath(path: string): boolean {
-	const normalized = normalizePolicyPath(path)
-	const file = basename(normalized)
-	return (
-		FUNCTION_DOMAIN_FOLDERS.includes(dirname(normalized).replaceAll('\\', '/')) &&
-		/^[a-z][A-Za-z0-9]*\.ts$/u.test(file) &&
-		file !== 'index.ts' &&
-		file !== 'main.ts' &&
-		!CENTRAL_SOURCE_FILES.includes(file)
-	)
-}
-
-/**
- * Read the function expression an expression holds directly, through any parentheses.
- *
- * @param expression - The expression to unwrap.
- * @returns The arrow or function expression it holds directly, or `undefined` for anything else.
- */
-export function expressionToPolicyFunction(
-	expression: ts.Expression | undefined,
-): ts.ArrowFunction | ts.FunctionExpression | undefined {
-	let current = expression
-	while (current !== undefined && ts.isParenthesizedExpression(current)) {
-		current = current.expression
-	}
-	if (current === undefined) return undefined
-	return ts.isArrowFunction(current) || ts.isFunctionExpression(current) ? current : undefined
-}
-
-/**
- * Whether a variable initializer is directly a function expression.
- *
- * @param initializer - The initializer to inspect.
- * @returns `true` for a direct arrow or function expression.
- */
-export function isPolicyFunctionInitializer(initializer: ts.Expression | undefined): boolean {
-	return expressionToPolicyFunction(initializer) !== undefined
-}
-
-/**
- * Whether a module region holds a module policy function.
- *
- * A module region is syntax outside every permitted function. A permitted function's parameters and
- * the arguments of a call sitting inside one are read under this same rule, because the law grants
- * those positions nothing extra.
- *
- * @param node - The module region to inspect.
- * @returns `true` when the region holds an arrow or function expression the law does not permit.
- * An arrow or function expression passed directly as a call or `new` argument is exempt itself, and
- * reports only for what its parameters and body nest. A class expression is never function syntax.
- */
-export function hasModulePolicyFunction(node: ts.Node | undefined): boolean {
-	if (node === undefined) return false
-	if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return true
-	if (ts.isClassExpression(node)) return false
-	if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
-		if (hasModulePolicyFunction(node.expression)) return true
-		if (node.arguments !== undefined) {
-			for (const argument of node.arguments) {
-				const permitted = expressionToPolicyFunction(argument)
-				if (permitted === undefined) {
-					if (hasModulePolicyFunction(argument)) return true
-				} else if (nestsPolicyFunction(permitted)) return true
-			}
-		}
-		return false
-	}
-	let found = false
-	ts.forEachChild(node, (child) => {
-		if (!found && hasModulePolicyFunction(child)) found = true
-	})
-	return found
-}
-
-/**
- * Whether a permitted function nests a policy function the law does not permit.
- *
- * The function is exempt in its own right. Its parameters read as a module region, and its body
- * reads as the region inside a permitted function, where a nested function keeps permission only by
- * qualifying independently as a direct callback or result.
- *
- * @param node - The permitted callback or returned function to inspect.
- * @returns `true` when its parameters or body nest function syntax the law does not permit.
- */
-export function nestsPolicyFunction(node: ts.ArrowFunction | ts.FunctionExpression): boolean {
-	for (const parameter of node.parameters) {
-		if (hasModulePolicyFunction(parameter)) return true
-	}
-	if (!ts.isBlock(node.body)) {
-		const returned = expressionToPolicyFunction(node.body)
-		if (returned !== undefined) return nestsPolicyFunction(returned)
-	}
-	return hasNestedPolicyFunction(node.body)
-}
-
-/**
- * Whether a region inside a permitted function holds a nested policy function.
- *
- * A direct return keeps its permission through control flow. Every other nested function reports
- * unless it independently qualifies as a direct callback. Class-expression members stay outside
- * the instrument's reach.
- *
- * @param node - The region inside a permitted function to inspect.
- * @returns `true` when the region holds function syntax the law does not permit.
- */
-export function hasNestedPolicyFunction(node: ts.Node): boolean {
-	if (ts.isFunctionDeclaration(node)) return true
-	if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return true
-	if (ts.isClassExpression(node)) return false
-	if (ts.isReturnStatement(node)) {
-		const returned = expressionToPolicyFunction(node.expression)
-		return returned === undefined
-			? hasModulePolicyFunction(node.expression)
-			: nestsPolicyFunction(returned)
-	}
-	if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
-		return hasModulePolicyFunction(node)
-	}
-	let found = false
-	ts.forEachChild(node, (child) => {
-		if (!found && hasNestedPolicyFunction(child)) found = true
-	})
-	return found
-}
-
-/**
- * Create one stable violation for an inspection result.
+ * Creates one stable violation for an inspection result.
  *
  * @param rule - The rule that failed.
  * @param path - The workspace-relative source path.
  * @param message - The failure text.
- * @param node - The syntax node that failed, when one exists.
+ * @param line - The one-based source line the violation occurred on, when known.
  * @returns The stable violation record.
  */
 export function createPolicyViolation(
 	rule: PolicyRule,
 	path: string,
 	message: string,
-	node?: ts.Node,
+	line?: number,
 ): PolicyViolation {
-	return {
-		rule,
-		path,
-		...(node === undefined ? {} : { line: getPolicyLine(node) }),
-		message,
-	}
+	return line === undefined ? { rule, path, message } : { rule, path, line, message }
 }
 
 /**
- * Inspect a registered function module's exact declaration shape.
- *
- * @param path - The workspace-relative source path.
- * @param source - The parsed TypeScript source.
- * @returns A domain-shape violation when the module is malformed.
- */
-export function inspectFunctionDomain(
-	path: string,
-	source: ts.SourceFile,
-): readonly PolicyViolation[] {
-	const expected = basename(path, '.ts')
-	const declarations = source.statements.filter(ts.isFunctionDeclaration)
-	const implementations = declarations.filter((declaration) => declaration.body !== undefined)
-	const invalid = source.statements.filter(
-		(statement) => !ts.isImportDeclaration(statement) && !ts.isFunctionDeclaration(statement),
-	)
-	const valid =
-		implementations.length === 1 &&
-		invalid.length === 0 &&
-		declarations.length > 0 &&
-		declarations.every(
-			(declaration) =>
-				declaration.name?.text === expected &&
-				hasPolicyModifier(declaration, ts.SyntaxKind.ExportKeyword) &&
-				!hasPolicyModifier(declaration, ts.SyntaxKind.DefaultKeyword),
-		)
-	return valid
-		? []
-		: [
-				createPolicyViolation(
-					'domain',
-					path,
-					'registered function modules contain imports and one matching named export',
-				),
-			]
-}
-
-/**
- * Inspect parser and factory function names without inferring their meaning.
- *
- * @param path - The workspace-relative source path.
- * @param file - The source filename.
- * @param name - The declared function name, when present.
- * @param node - The function declaration or binding.
- * @returns A parser or factory name violation when the prefix is wrong.
- */
-export function inspectPolicyFunctionName(
-	path: string,
-	file: string,
-	name: string | undefined,
-	node: ts.Node,
-): readonly PolicyViolation[] {
-	if (file === 'parsers.ts' && (name === undefined || !name.startsWith('parse'))) {
-		return [createPolicyViolation('parser', path, 'parser functions use the parse prefix', node)]
-	}
-	if (file === 'factories.ts' && (name === undefined || !name.startsWith('create'))) {
-		return [createPolicyViolation('factory', path, 'factory functions use the create prefix', node)]
-	}
-	return []
-}
-
-/**
- * Inspect one variable statement for data and function placement.
- *
- * @param path - The workspace-relative source path.
- * @param file - The source filename.
- * @param statement - The variable statement to inspect.
- * @param functionDomain - Whether the path is a registered function module.
- * @returns Every data, function, parser, and factory violation in declaration order.
- */
-export function inspectPolicyVariables(
-	path: string,
-	file: string,
-	statement: ts.VariableStatement,
-	functionDomain: boolean,
-): readonly PolicyViolation[] {
-	const violations: PolicyViolation[] = []
-	for (const declaration of statement.declarationList.declarations) {
-		const directFunction = isPolicyFunctionInitializer(declaration.initializer)
-		const containsFunction = hasModulePolicyFunction(declaration.initializer)
-		if (!directFunction && !DATA_SOURCE_FILES.includes(file) && !DATA_EXEMPT_FILES.includes(file)) {
-			violations.push(
-				createPolicyViolation('data', path, 'module data sits in a data-kind file', declaration),
-			)
-		}
-		if (containsFunction && !functionDomain && !FUNCTION_SOURCE_FILES.includes(file)) {
-			violations.push(
-				createPolicyViolation(
-					'function',
-					path,
-					'module function syntax sits in a function-kind file',
-					declaration,
-				),
-			)
-		}
-		if (directFunction && ts.isIdentifier(declaration.name)) {
-			violations.push(...inspectPolicyFunctionName(path, file, declaration.name.text, declaration))
-		}
-	}
-	return violations
-}
-
-/**
- * Inspect the const, name, and bare-collection rules for constants.ts.
- *
- * @param path - The workspace-relative source path.
- * @param statement - The variable statement to inspect.
- * @returns Every constants.ts syntax violation in declaration order.
- */
-export function inspectPolicyConstants(
-	path: string,
-	statement: ts.VariableStatement,
-): readonly PolicyViolation[] {
-	const violations: PolicyViolation[] = []
-	if ((statement.declarationList.flags & ts.NodeFlags.Const) === 0) {
-		violations.push(
-			createPolicyViolation(
-				'constant',
-				path,
-				'constants.ts permits only const declarations',
-				statement,
-			),
-		)
-	}
-	for (const declaration of statement.declarationList.declarations) {
-		if (!ts.isIdentifier(declaration.name) || !/^[A-Z][A-Z0-9_]*$/u.test(declaration.name.text)) {
-			violations.push(
-				createPolicyViolation(
-					'constant',
-					path,
-					'constants.ts names declarations in UPPER_SNAKE_CASE',
-					declaration,
-				),
-			)
-		}
-		if (
-			declaration.initializer !== undefined &&
-			(ts.isArrayLiteralExpression(declaration.initializer) ||
-				ts.isObjectLiteralExpression(declaration.initializer))
-		) {
-			violations.push(
-				createPolicyViolation(
-					'constant',
-					path,
-					'constants.ts forbids bare collection literals',
-					declaration,
-				),
-			)
-		}
-	}
-	return violations
-}
-
-/**
- * Whether a top-level statement declares a centralized symbol.
- *
- * @param statement - The top-level statement to classify.
- * @returns `true` when the statement declares a symbol governed by the export rule.
- */
-export function isPolicyDeclaration(statement: ts.Statement): boolean {
-	return (
-		ts.isClassDeclaration(statement) ||
-		ts.isEnumDeclaration(statement) ||
-		ts.isFunctionDeclaration(statement) ||
-		ts.isInterfaceDeclaration(statement) ||
-		ts.isModuleDeclaration(statement) ||
-		ts.isTypeAliasDeclaration(statement) ||
-		ts.isVariableStatement(statement)
-	)
-}
-
-/**
- * Inspect one source file against the fleet's syntactic placement register.
- *
- * @param source - The path and TypeScript text to inspect.
- * @returns Every syntactic placement violation in source order.
- */
-export function inspectPolicySource(source: PolicySource): readonly PolicyViolation[] {
-	const path = normalizePolicyPath(source.path)
-	const file = basename(path)
-	const syntax = ts.createSourceFile(path, source.content, ts.ScriptTarget.Latest, true)
-	const violations: PolicyViolation[] = []
-	const functionDomain = isFunctionDomainPath(path)
-	const domainNames = FUNCTION_DOMAIN_FOLDERS.map((folder) => basename(folder))
-
-	if (domainNames.includes(basename(file, '.ts'))) {
-		violations.push(
-			createPolicyViolation(
-				'domain',
-				path,
-				'a registered function domain is a folder rather than a source file',
-			),
-		)
-	}
-
-	for (const statement of syntax.statements) {
-		if (
-			CENTRAL_SOURCE_FILES.includes(file) &&
-			isPolicyDeclaration(statement) &&
-			!hasPolicyModifier(statement, ts.SyntaxKind.ExportKeyword)
-		) {
-			violations.push(
-				createPolicyViolation(
-					'export',
-					path,
-					'every centralized declaration is exported',
-					statement,
-				),
-			)
-		}
-
-		if (
-			(ts.isEnumDeclaration(statement) ||
-				ts.isInterfaceDeclaration(statement) ||
-				ts.isModuleDeclaration(statement) ||
-				ts.isTypeAliasDeclaration(statement)) &&
-			file !== 'types.ts'
-		) {
-			violations.push(
-				createPolicyViolation('type', path, 'type declarations sit in types.ts', statement),
-			)
-		}
-
-		if (ts.isFunctionDeclaration(statement)) {
-			if (!functionDomain && !FUNCTION_SOURCE_FILES.includes(file)) {
-				violations.push(
-					createPolicyViolation(
-						'function',
-						path,
-						'module functions sit in a function-kind file',
-						statement,
-					),
-				)
-			}
-			violations.push(...inspectPolicyFunctionName(path, file, statement.name?.text, statement))
-		}
-
-		if (ts.isVariableStatement(statement)) {
-			violations.push(...inspectPolicyVariables(path, file, statement, functionDomain))
-			if (file === 'constants.ts') violations.push(...inspectPolicyConstants(path, statement))
-		}
-
-		if (ts.isClassDeclaration(statement)) {
-			const expected = basename(file, '.ts')
-			if (
-				file !== 'errors.ts' &&
-				(!/^[A-Z][A-Za-z0-9]*\.ts$/u.test(file) || statement.name?.text !== expected)
-			) {
-				violations.push(
-					createPolicyViolation(
-						'class',
-						path,
-						'classes sit in their matching implementation or errors file',
-						statement,
-					),
-				)
-			}
-		}
-	}
-
-	if (functionDomain) violations.push(...inspectFunctionDomain(path, syntax))
-	return violations
-}
-
-/**
- * Inspect an explicit parsed population through the same per-file route as the workspace sweep.
- *
- * @param sources - The TypeScript files to inspect.
- * @returns Every syntactic placement violation in source order.
- */
-export function inspectPolicySources(sources: readonly PolicySource[]): readonly PolicyViolation[] {
-	const violations: PolicyViolation[] = []
-	for (const source of sources) violations.push(...inspectPolicySource(source))
-	return violations
-}
-
-/**
- * Read the parsed TypeScript source population beneath one workspace.
- *
- * @param root - The workspace root to read.
- * @param glob - The population to read. Default: the src and app placement population.
- * @returns Every non-ambient TypeScript source the population names, sorted by path.
- */
-export function readPolicySources(
-	root: string,
-	glob: string | readonly string[] = POLICY_SOURCE_GLOB,
-): readonly PolicySource[] {
-	return globSync(glob, { cwd: root })
-		.map(normalizePolicyPath)
-		.filter((path) => !POLICY_AMBIENT_SUFFIXES.some((suffix) => basename(path).endsWith(suffix)))
-		.sort()
-		.map((path) => ({
-			path,
-			content: readFileSync(join(root, path), 'utf8'),
-		}))
-}
-
-/**
- * Derive the extensionless module stem for one mirrored module test.
+ * Derives the extensionless module stem for one mirrored module test.
  *
  * @param path - The workspace-relative test path.
  * @returns The extensionless module stem, or `undefined` for a reserved scope test.
@@ -824,7 +317,7 @@ export function testToPolicyStem(path: string): string | undefined {
 }
 
 /**
- * The candidate set is every module name a registered language resolves for a stem.
+ * Lists every module name a registered language resolves for a stem.
  *
  * @param stem - The extensionless workspace-relative module stem.
  * @returns Direct modules, partial modules, then a matching tests-axis setup module.
@@ -842,7 +335,7 @@ export function stemToPolicyCandidates(stem: string): readonly string[] {
 }
 
 /**
- * Inspect mirrored test paths against an explicit module-path population.
+ * Inspects mirrored test paths against an explicit module-path population.
  *
  * @param tests - The module-test paths to inspect.
  * @param modules - The existing module paths in every registered language.
@@ -872,7 +365,7 @@ export function inspectPolicyMirrorPaths(
 }
 
 /**
- * Inspect every mirrored module test beneath one workspace.
+ * Inspects every mirrored module test beneath one workspace.
  *
  * @param root - The workspace root to inspect.
  * @returns Every missing mirror violation in test-path order.
@@ -887,7 +380,7 @@ export function inspectPolicyMirrors(root: string): readonly PolicyViolation[] {
 }
 
 /**
- * Inspect code-shaped workspace files for lint suppression directives.
+ * Inspects code-shaped workspace files for lint suppression directives.
  *
  * @param root - The workspace root to inspect.
  * @returns Every suppression occurrence in path and line order.
@@ -900,12 +393,14 @@ export function inspectPolicySuppressions(root: string): readonly PolicyViolatio
 		for (let index = 0; index < lines.length; index += 1) {
 			const line = lines[index]
 			if (line !== undefined && POLICY_SUPPRESSION_PATTERN.test(line)) {
-				violations.push({
-					rule: 'suppression',
-					path,
-					line: index + 1,
-					message: 'file carries a lint suppression directive',
-				})
+				violations.push(
+					createPolicyViolation(
+						'suppression',
+						path,
+						'file carries a lint suppression directive',
+						index + 1,
+					),
+				)
 			}
 		}
 	}
@@ -913,23 +408,22 @@ export function inspectPolicySuppressions(root: string): readonly PolicyViolatio
 }
 
 /**
- * Inspect the lint configuration that keeps policy rules active across the workspace.
+ * Inspects the lint configuration that keeps policy rules active across the workspace.
  *
  * @param configuration - The parsed Oxlint configuration to inspect.
  * @returns Every wiring violation in rule and configuration order.
  */
 export function inspectPolicyConfiguration(configuration: unknown): readonly string[] {
 	const violations: string[] = []
-	if (typeof configuration !== 'object' || configuration === null || Array.isArray(configuration)) {
+	if (!isPolicyRecord(configuration)) {
 		return ['Oxlint configuration must be a record']
 	}
 
 	const rules: unknown = Object.getOwnPropertyDescriptor(configuration, 'rules')?.value
 	for (const rule of POLICY_WIRING_RULES) {
-		const setting =
-			typeof rules === 'object' && rules !== null && !Array.isArray(rules)
-				? Object.getOwnPropertyDescriptor(rules, rule)?.value
-				: undefined
+		const setting = isPolicyRecord(rules)
+			? Object.getOwnPropertyDescriptor(rules, rule)?.value
+			: undefined
 		const severity = Array.isArray(setting) ? setting[0] : setting
 		if (severity !== 'error') violations.push(`${rule} must have top-level error severity`)
 	}
@@ -960,17 +454,12 @@ export function inspectPolicyConfiguration(configuration: unknown): readonly str
 		violations.push('overrides must be an array when declared')
 	} else if (Array.isArray(overrides)) {
 		for (const override of overrides) {
-			if (typeof override !== 'object' || override === null || Array.isArray(override)) {
+			if (!isPolicyRecord(override)) {
 				violations.push('override entries must be records')
 				continue
 			}
 			const overrideRules: unknown = Object.getOwnPropertyDescriptor(override, 'rules')?.value
-			if (
-				overrideRules === undefined ||
-				typeof overrideRules !== 'object' ||
-				overrideRules === null ||
-				Array.isArray(overrideRules)
-			) {
+			if (!isPolicyRecord(overrideRules)) {
 				continue
 			}
 			for (const rule of POLICY_WIRING_RULES) {
@@ -985,7 +474,56 @@ export function inspectPolicyConfiguration(configuration: unknown): readonly str
 }
 
 /**
- * Resolve an exact-case directory beneath a physical root.
+ * Inspects the lint configuration that keeps every named rule and population wired.
+ *
+ * @param configuration - The parsed Oxlint configuration to inspect.
+ * @param rules - Every rule id that some top-level or override rules record must enable.
+ * @param populations - Every glob population some override's files list must declare exactly.
+ * @returns One violation line per unenabled rule, then one per undeclared population.
+ */
+export function inspectPolicyWiring(
+	configuration: unknown,
+	rules: readonly string[],
+	populations: ReadonlyArray<readonly string[]>,
+): readonly string[] {
+	if (!isPolicyRecord(configuration)) {
+		return ['Oxlint configuration must be a record']
+	}
+
+	const records: unknown[] = [Object.getOwnPropertyDescriptor(configuration, 'rules')?.value]
+	const declaredPopulations: string[] = []
+	const overrides: unknown = Object.getOwnPropertyDescriptor(configuration, 'overrides')?.value
+	if (Array.isArray(overrides)) {
+		for (const entry of overrides) {
+			if (!isPolicyRecord(entry)) continue
+			records.push(Object.getOwnPropertyDescriptor(entry, 'rules')?.value)
+			const files: unknown = Object.getOwnPropertyDescriptor(entry, 'files')?.value
+			if (Array.isArray(files)) declaredPopulations.push(files.join(' '))
+		}
+	}
+
+	const enabled = new Set<string>()
+	for (const record of records) {
+		if (!isPolicyRecord(record)) continue
+		for (const name of Object.getOwnPropertyNames(record)) enabled.add(name)
+	}
+
+	const violations: string[] = []
+	for (const rule of rules) {
+		if (!enabled.has(rule))
+			violations.push(`${rule} is enabled by no top-level or override rules record`)
+	}
+	for (const population of populations) {
+		const joined = population.join(' ')
+		if (!declaredPopulations.includes(joined)) {
+			violations.push(`no override files list declares the population exactly: ${joined}`)
+		}
+	}
+	return violations
+}
+
+/**
+ * Resolves an exact-case directory beneath a physical root.
  *
  * @param root - The physical directory from which resolution starts.
  * @param path - The relative directory path to resolve.
@@ -1006,7 +544,7 @@ export function resolvePolicyDirectory(root: string, path: string): string | und
 }
 
 /**
- * Whether an exact-case path resolves to a regular file beneath a physical root.
+ * Reports whether an exact-case path resolves to a regular file beneath a physical root.
  *
  * @param root - The physical directory from which resolution starts.
  * @param path - The relative file path to inspect.
@@ -1023,7 +561,7 @@ export function isPolicyFile(root: string, path: string): boolean {
 }
 
 /**
- * Read the immediate child directories beneath one workspace-relative path.
+ * Reads the immediate child directories beneath one workspace-relative path.
  *
  * @param root - The workspace root to inspect.
  * @param path - The workspace-relative parent directory.
@@ -1039,7 +577,7 @@ export function readPolicyDirectories(root: string, path: string): readonly stri
 }
 
 /**
- * Discover the skill family from immediate directories in the workspace tree.
+ * Discovers the skill family from immediate directories in the workspace tree.
  *
  * @param root - The workspace root to inspect.
  * @returns The sorted directory names that belong to the skill family.
@@ -1049,7 +587,7 @@ export function readSkillFamily(root: string): readonly string[] {
 }
 
 /**
- * Parse one skill document's frontmatter without interpreting arbitrary body lines as keys.
+ * Parses one skill document's frontmatter without interpreting arbitrary body lines as keys.
  *
  * @param content - The raw SKILL.md text.
  * @returns The parsed fields and exact scalar source, or `undefined` for an unsupported shape.
@@ -1134,7 +672,7 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter | undef
 }
 
 /**
- * Test whether a description carries a sentence that begins with the case-sensitive word `Use`.
+ * Reports whether a description carries a sentence that begins with the case-sensitive word `Use`.
  *
  * @param description - The parsed skill description.
  * @returns True when the description contains the canonical trigger sentence.
@@ -1144,7 +682,7 @@ export function matchesSkillTrigger(description: string): boolean {
 }
 
 /**
- * Read the direct Markdown files owned by one skill's references directory.
+ * Reads the direct Markdown files owned by one skill's references directory.
  *
  * @param root - The workspace root to inspect.
  * @param name - The discovered skill directory name.
@@ -1160,7 +698,7 @@ export function readSkillReferences(root: string, name: string): readonly string
 }
 
 /**
- * Create metadata in the canonical skill interface shape.
+ * Creates metadata in the canonical skill interface shape.
  *
  * @param name - The skill token the default prompt invokes.
  * @returns Canonical skill interface metadata ending in one newline.
@@ -1177,7 +715,7 @@ export function createSkillMetadata(name: string): string {
 }
 
 /**
- * Parse the default prompt from the canonical skill interface shape.
+ * Parses the default prompt from the canonical skill interface shape.
  *
  * Each value is a non-empty single-quoted scalar in which `''` carries an apostrophe.
  *
@@ -1198,7 +736,7 @@ export function parseSkillPrompt(content: string): string | undefined {
 }
 
 /**
- * Test whether a default prompt names one skill's token in complete form.
+ * Reports whether a default prompt names one skill's token in complete form.
  *
  * A skill directory name is lowercase letters and hyphens, so a match followed by either continues
  * a longer name and names a different skill.
@@ -1217,7 +755,7 @@ export function matchesSkillToken(prompt: string, name: string): boolean {
 }
 
 /**
- * Extract the direct Markdown reference paths named in one skill document.
+ * Extracts the direct Markdown reference paths named in one skill document.
  *
  * @param content - The raw SKILL.md text.
  * @returns Each distinct references/name.md token in sorted order.
@@ -1278,12 +816,9 @@ export function inspectSkillTemplateTODOs(
 				todo !== -1 && todo < end;
 				todo = line.indexOf('TODO', todo + 4)
 			) {
-				violations.push({
-					rule,
-					path,
-					line: index + 1,
-					message: 'skill documents contain no template TODOs',
-				})
+				violations.push(
+					createPolicyViolation(rule, path, 'skill documents contain no template TODOs', index + 1),
+				)
 			}
 			if (openingBacktick === -1) break
 			const closingBacktick = line.indexOf('`', openingBacktick + 1)
@@ -1294,7 +829,7 @@ export function inspectSkillTemplateTODOs(
 }
 
 /**
- * Inspect one discovered skill's required files, metadata, token, and references.
+ * Inspects one discovered skill's required files, metadata, token, and references.
  *
  * @param root - The workspace root to inspect.
  * @param name - The discovered skill directory name.
@@ -1484,7 +1019,7 @@ export function inspectSkill(root: string, name: string): readonly PolicyViolati
 }
 
 /**
- * Inspect every immediate member of the discovered skill family.
+ * Inspects every immediate member of the discovered skill family.
  *
  * @param root - The workspace root to inspect.
  * @returns Every skill-family violation in directory and invariant order.
@@ -1496,7 +1031,7 @@ export function inspectSkillFamily(root: string): readonly PolicyViolation[] {
 }
 
 /**
- * Inspect one provider bridge against its canonical skill twin.
+ * Inspects one provider bridge against its canonical skill twin.
  *
  * @param root - The workspace root to inspect.
  * @param name - The shared canonical and bridge directory name.
@@ -1584,7 +1119,7 @@ export function inspectBridge(root: string, name: string): readonly PolicyViolat
 }
 
 /**
- * Inspect the provider bridge set and every bridge shared with the canonical skill family.
+ * Inspects the provider bridge set and every bridge shared with the canonical skill family.
  *
  * @param root - The workspace root to inspect.
  * @returns Every bridge-set and bridge-content violation in directory order.
@@ -1623,7 +1158,7 @@ export function inspectSkillBridges(root: string): readonly PolicyViolation[] {
 }
 
 /**
- * Read every rule path the root instruction file's rule map registers.
+ * Reads every rule path the root instruction file's rule map registers.
  *
  * @param content - The raw root instruction text.
  * @returns Each backticked first cell beneath the rule map heading, in table order.
@@ -1643,7 +1178,7 @@ export function readPolicyRuleMap(content: string): readonly string[] {
 }
 
 /**
- * Inspect the discovered rule family against the root instruction file's rule map.
+ * Inspects the discovered rule family against the root instruction file's rule map.
  *
  * A workspace with no rule file has no rule map to keep, so the population is empty there.
  *
@@ -1679,7 +1214,7 @@ export function inspectPolicyRuleMap(root: string): readonly PolicyViolation[] {
 }
 
 /**
- * Inspect an explicit path population for a name a Windows checkout cannot hold.
+ * Inspects an explicit path population for a name a Windows checkout cannot hold.
  *
  * Each path is read through its own final segment, because the population lists every directory as
  * its own entry. A Windows host refuses the reserved characters and folds a case collision into one
@@ -1736,7 +1271,7 @@ export function inspectPolicyFilenamePaths(paths: readonly string[]): readonly P
 }
 
 /**
- * Read the workspace-authored path population, directories included.
+ * Reads the workspace-authored path population, directories included.
  *
  * @param root - The workspace root to read.
  * @returns Every authored path, sorted by path.
@@ -1746,7 +1281,7 @@ export function readPolicyPaths(root: string): readonly string[] {
 }
 
 /**
- * Inspect the workspace-authored path population for a name a Windows checkout cannot hold.
+ * Inspects the workspace-authored path population for a name a Windows checkout cannot hold.
  *
  * @param root - The workspace root to inspect.
  * @returns Every unusable-name and case-collision violation in path order.
@@ -1756,7 +1291,7 @@ export function inspectPolicyFilenames(root: string): readonly PolicyViolation[]
 }
 
 /**
- * Parse the manifest's script record without interpreting any other manifest field.
+ * Parses the manifest's script record without interpreting any other manifest field.
  *
  * @param content - The raw package.json text.
  * @returns Each script name and its command, in manifest order.
@@ -1769,9 +1304,9 @@ export function parsePolicyScripts(content: string): ReadonlyMap<string, string>
 	} catch {
 		return scripts
 	}
-	if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) return scripts
+	if (!isPolicyRecord(manifest)) return scripts
 	const record: unknown = Object.getOwnPropertyDescriptor(manifest, 'scripts')?.value
-	if (typeof record !== 'object' || record === null || Array.isArray(record)) return scripts
+	if (!isPolicyRecord(record)) return scripts
 	for (const name of Object.getOwnPropertyNames(record)) {
 		const command: unknown = Object.getOwnPropertyDescriptor(record, name)?.value
 		if (typeof command === 'string') scripts.set(name, command)
@@ -1780,7 +1315,7 @@ export function parsePolicyScripts(content: string): ReadonlyMap<string, string>
 }
 
 /**
- * Inspect every manifest script for a shell file no Windows host runs.
+ * Inspects every manifest script for a shell file no Windows host runs.
  *
  * @param root - The workspace root to inspect.
  * @returns Every shell-script violation in manifest order.
@@ -1804,155 +1339,236 @@ export function inspectPolicyScripts(root: string): readonly PolicyViolation[] {
 }
 
 /**
- * Whether a call trims a whole payload before splitting it on a line feed.
+ * Reads every authored Markdown path in one workspace, sorted by path.
  *
- * @param node - The syntax node to inspect.
- * @returns True when the node is the split chain that leaves a carriage return on each line but
- * the last; false otherwise.
+ * @remarks
+ * The walk descends the whole tree apart from the directory names
+ * {@link POLICY_PROSE_EXCLUSIONS} lists, which hold installed packages, built output, scratch
+ * work, and campaign records rather than prose this workspace authors.
+ *
+ * @param root - The workspace root to read.
+ * @returns Every workspace-relative Markdown path, sorted by path.
  */
-export function matchesPolicySplit(node: ts.Node): boolean {
-	if (!ts.isCallExpression(node) || node.arguments.length !== 1) return false
-	const split = node.expression
-	if (!ts.isPropertyAccessExpression(split) || split.name.text !== 'split') return false
-	const argument = node.arguments[0]
-	if (argument === undefined) return false
-	if (!ts.isStringLiteral(argument) && !ts.isNoSubstitutionTemplateLiteral(argument)) return false
-	if (argument.text !== '\n') return false
-	const trim = split.expression
-	return (
-		ts.isCallExpression(trim) &&
-		trim.arguments.length === 0 &&
-		ts.isPropertyAccessExpression(trim.expression) &&
-		trim.expression.name.text === 'trim'
-	)
+export function readPolicyProse(root: string): readonly string[] {
+	const paths: string[] = []
+	const pending: string[] = ['']
+	while (pending.length > 0) {
+		const relative = pending.pop() ?? ''
+		for (const entry of readdirSync(join(root, relative), { withFileTypes: true })) {
+			const path = relative === '' ? entry.name : `${relative}/${entry.name}`
+			if (entry.isDirectory()) {
+				if (!POLICY_PROSE_EXCLUSIONS.includes(entry.name)) pending.push(path)
+				continue
+			}
+			if (entry.name.endsWith('.md')) paths.push(normalizePolicyPath(path))
+		}
+	}
+	return paths.sort()
 }
 
 /**
- * Whether an expression reads the host line ending from a binding named os.
+ * Reads the short name one workspace manifest declares, its scope removed.
  *
- * @param node - The syntax node to inspect.
- * @returns True for an EOL member read on a binding named os; false otherwise.
+ * @param root - The workspace root to read.
+ * @returns The manifest name after its scope, or undefined where no manifest declares one.
  */
-export function matchesPolicyTerminator(node: ts.Node): boolean {
-	return (
-		ts.isPropertyAccessExpression(node) &&
-		node.name.text === 'EOL' &&
-		ts.isIdentifier(node.expression) &&
-		node.expression.text === 'os'
-	)
+export function readPolicyPackage(root: string): string | undefined {
+	if (!isPolicyFile(root, POLICY_MANIFEST_FILE)) return undefined
+	let manifest: unknown
+	try {
+		manifest = JSON.parse(readFileSync(join(root, POLICY_MANIFEST_FILE), 'utf8'))
+	} catch {
+		return undefined
+	}
+	if (!isPolicyRecord(manifest)) return undefined
+	const name: unknown = Object.getOwnPropertyDescriptor(manifest, 'name')?.value
+	if (typeof name !== 'string') return undefined
+	return name.slice(name.lastIndexOf('/') + 1)
 }
 
 /**
- * Whether an import declaration takes the EOL member from the host module.
+ * Reads every package short name the catalog table registers.
  *
- * @param node - The syntax node to inspect.
- * @returns True for a named EOL import from node:os or os; false otherwise.
+ * @remarks
+ * A workspace holds this file because the `catalog` verb refuses a target that lacks it, and a
+ * workspace that has not received one yet registers no package, so the read yields an empty list
+ * there rather than failing.
+ *
+ * @param root - The workspace root to read.
+ * @returns Each catalog row's package short name, its scope removed, in table order.
  */
-export function importsPolicyTerminator(node: ts.Node): boolean {
-	if (!ts.isImportDeclaration(node)) return false
-	const specifier = node.moduleSpecifier
-	if (!ts.isStringLiteral(specifier)) return false
-	if (specifier.text !== 'node:os' && specifier.text !== 'os') return false
-	const bindings = node.importClause?.namedBindings
-	if (bindings === undefined || !ts.isNamedImports(bindings)) return false
-	return bindings.elements.some((element) => (element.propertyName ?? element.name).text === 'EOL')
+export function readPolicyCatalog(root: string): readonly string[] {
+	if (!isPolicyFile(root, POLICY_CATALOG_FILE)) return []
+	const lines = readFileSync(join(root, POLICY_CATALOG_FILE), 'utf8')
+		.replaceAll('\r\n', '\n')
+		.split('\n')
+	const heading = lines.indexOf(POLICY_CATALOG_HEADING)
+	if (heading === -1) return []
+	const names: string[] = []
+	for (let index = heading + 1; index < lines.length; index += 1) {
+		const line = lines[index]
+		if (line === undefined || line.startsWith('## ')) break
+		const cell = line.match(/^\|\s*`([^`]+)`\s*\|/u)?.[1]
+		if (cell !== undefined) names.push(cell.slice(cell.lastIndexOf('/') + 1))
+	}
+	return names
 }
 
 /**
- * Inspect one syntax node and its descendants for host-specific line-ending handling.
+ * Reads the guide name one prose path carries when that guide is another package's to account for.
  *
- * @param path - The workspace-relative source path.
- * @param node - The syntax node to inspect.
- * @returns Every line-ending violation in source order.
+ * @remarks
+ * A top-level `guides/<name>.md` path yields its name unless the name is the guide index or this
+ * workspace's own package; every other path yields undefined. {@link isPolicyMirror} and
+ * {@link isPolicyStray} split that name by catalog membership.
+ *
+ * @param root - The workspace root the path belongs to.
+ * @param path - The workspace-relative prose path to read.
+ * @returns The guide's name, or undefined where the path is not a top-level guide another package
+ * could own.
  */
-export function inspectPolicyEndingNode(path: string, node: ts.Node): readonly PolicyViolation[] {
+export function readPolicyGuide(root: string, path: string): string | undefined {
+	const name = normalizePolicyPath(path).match(POLICY_MIRROR_PATTERN)?.[1]
+	if (name === undefined || name === POLICY_GUIDE_MAP) return undefined
+	return name === readPolicyPackage(root) ? undefined : name
+}
+
+/**
+ * Reports whether one prose path is a top-level guide the catalog registers to another package.
+ *
+ * @remarks
+ * A mirror is fetched bytes rather than authored prose, so the term sweep leaves it to the package
+ * that wrote it. The catalog table is the evidence, and it is the only evidence: the workspace's own
+ * guide and the guide index are authored here, and a top-level guide the catalog does not register
+ * is a finding rather than a silent exclusion.
+ *
+ * @param root - The workspace root the path belongs to.
+ * @param path - The workspace-relative prose path to judge.
+ * @returns True if the path is a top-level guide the catalog registers to a package other than this
+ * one; false otherwise.
+ */
+export function isPolicyMirror(root: string, path: string): boolean {
+	const name = readPolicyGuide(root, path)
+	return name !== undefined && readPolicyCatalog(root).includes(name)
+}
+
+/**
+ * Reports whether one prose path is a top-level guide no evidence accounts for.
+ *
+ * @param root - The workspace root the path belongs to.
+ * @param path - The workspace-relative prose path to judge.
+ * @returns True if the path is a top-level guide that is neither this package's own, nor the index,
+ * nor a catalog row; false otherwise.
+ */
+export function isPolicyStray(root: string, path: string): boolean {
+	const name = readPolicyGuide(root, path)
+	return name !== undefined && !readPolicyCatalog(root).includes(name)
+}
+
+/**
+ * Inspects every authored Markdown file for a term the substitution table bans unconditionally.
+ *
+ * @remarks
+ * Each file is stripped of its fenced blocks, its inline code spans, its link tags, and its URLs
+ * before the match, by the same reader the comment rule uses, so a term inside one of those regions
+ * is not prose. Stripping holds every offset, so the reported line is the line in the file.
+ *
+ * A top-level guide the catalog registers to another package is a mirror and is skipped, and a
+ * top-level guide no evidence accounts for reports instead, so an exclusion is never silent.
+ *
+ * @param root - The workspace root to inspect.
+ * @returns Every unaccounted-guide violation, then every banned-term violation in path and offset
+ * order.
+ */
+export function inspectPolicyProse(root: string): readonly PolicyViolation[] {
 	const violations: PolicyViolation[] = []
-	if (matchesPolicySplit(node)) {
-		violations.push(
-			createPolicyViolation(
-				'portability',
-				path,
-				'sources split arrived text before trimming each line',
-				node,
-			),
-		)
+	for (const path of readPolicyProse(root)) {
+		if (isPolicyStray(root, path)) {
+			violations.push(
+				createPolicyViolation(
+					'prose',
+					path,
+					"guide is the package's own, the map, or a catalog row",
+				),
+			)
+		}
+		if (isPolicyMirror(root, path)) continue
+		const prose = stripPolicyCode(readFileSync(join(root, path), 'utf8'))
+		for (const hit of textToPolicyHits(prose)) {
+			violations.push(
+				createPolicyViolation(
+					'prose',
+					path,
+					`prose carries no banned term: ${hit.term.term} (${hit.term.replacement})`,
+					prose.slice(0, hit.index).split('\n').length,
+				),
+			)
+		}
 	}
-	if (matchesPolicyTerminator(node) || importsPolicyTerminator(node)) {
-		violations.push(
-			createPolicyViolation(
-				'portability',
-				path,
-				'sources emit a line feed rather than the host line ending',
-				node,
-			),
-		)
-	}
-	ts.forEachChild(node, (child) => {
-		violations.push(...inspectPolicyEndingNode(path, child))
-	})
 	return violations
 }
 
 /**
- * Inspect one parsed source for host-specific line-ending handling.
+ * Reads every term the substitution table's first column registers.
  *
- * @param source - The path and TypeScript text to inspect.
- * @returns Every line-ending violation in source order.
- */
-export function inspectPolicyEndingSource(source: PolicySource): readonly PolicyViolation[] {
-	const path = normalizePolicyPath(source.path)
-	const syntax = ts.createSourceFile(path, source.content, ts.ScriptTarget.Latest, true)
-	return inspectPolicyEndingNode(path, syntax)
-}
-
-/**
- * Inspect every source axis the portability population covers for line-ending handling.
+ * @remarks
+ * Each row's first cell carries its terms as code spans, so the read takes the backticked tokens
+ * and drops the parenthetical qualifier a row writes beside one.
  *
- * @param root - The workspace root to inspect.
- * @returns Every line-ending violation in path and source order.
+ * @param content - The raw rule text carrying the substitution table.
+ * @returns Each registered term, in table order.
  */
-export function inspectPolicyEndings(root: string): readonly PolicyViolation[] {
-	const violations: PolicyViolation[] = []
-	for (const source of readPolicySources(root, POLICY_PORTABILITY_SOURCE_GLOB)) {
-		violations.push(...inspectPolicyEndingSource(source))
+export function readPolicyTerms(content: string): readonly string[] {
+	const lines = content.replaceAll('\r\n', '\n').split('\n')
+	const heading = lines.indexOf(POLICY_TERM_HEADING)
+	if (heading === -1) return []
+	const terms: string[] = []
+	for (let index = heading + 1; index < lines.length; index += 1) {
+		const line = lines[index]
+		if (line === undefined || line.startsWith('## ')) break
+		const cell = line.match(/^\|([^|]*)\|/u)?.[1]
+		if (cell === undefined) continue
+		for (const match of cell.matchAll(/`([^`]+)`/gu)) {
+			const term = match[1]
+			if (term !== undefined) terms.push(term)
+		}
 	}
-	return violations
+	return terms
 }
 
 /**
- * Inspect every host portability rule across one workspace.
+ * Inspects every host portability rule across one workspace.
  *
  * @param root - The workspace root to inspect.
- * @returns Every rule-map, filename, manifest-script, and line-ending violation.
+ * @returns Every rule-map, filename, and manifest-script violation.
  */
 export function inspectPolicyPortability(root: string): readonly PolicyViolation[] {
 	return [
 		...inspectPolicyRuleMap(root),
 		...inspectPolicyFilenames(root),
 		...inspectPolicyScripts(root),
-		...inspectPolicyEndings(root),
 	]
 }
 
 /**
- * Inspect every policy rule across one workspace.
+ * Inspects every policy rule across one workspace.
  *
  * @param root - The workspace root to inspect.
- * @returns Every source, mirror, suppression, skill, bridge, and portability violation.
+ * @returns Every mirror, suppression, skill, bridge, portability, and prose violation.
  */
 export function inspectPolicyWorkspace(root: string): readonly PolicyViolation[] {
 	return [
-		...inspectPolicySources(readPolicySources(root)),
 		...inspectPolicyMirrors(root),
 		...inspectPolicySuppressions(root),
 		...inspectSkillFamily(root),
 		...inspectSkillBridges(root),
 		...inspectPolicyPortability(root),
+		...inspectPolicyProse(root),
 	]
 }
 
 /**
- * Write a control to a real temporary workspace and run the production sweep over it.
+ * Writes a control to a real temporary workspace and runs the production sweep over it.
  *
  * The control's rule selects the sweep: `skill` inspects the canonical family, `bridge` inspects
  * provider bridges, and every other rule inspects the whole workspace route.
@@ -1979,7 +1595,7 @@ export function inspectPolicyControl(control: PolicyControl): readonly PolicyVio
 	}
 }
 
-/** Physical negative controls, one for each rule the instrument claims to enforce. */
+/** Lists the physical negative controls, one for each rule the sweep claims to enforce. */
 export const POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 	{
 		label: 'rejects a suppression directive in a scanned source file',
@@ -2001,96 +1617,6 @@ export const POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 				path: 'probeRoot.tsx',
 				content: `// ${POLICY_SUPPRESSION_DIRECTIVE}\ndebugger\n`,
 			},
-		],
-	},
-	{
-		label: 'rejects a type outside types.ts',
-		membership: 'top-level type declarations whose filename is not types.ts',
-		rule: 'type',
-		files: [{ path: 'src/mobile/helpers.ts', content: 'export interface ValueInterface {}\n' }],
-	},
-	{
-		label: 'rejects an inline function in routes.ts',
-		membership: 'module-level function syntax whose filename is absent from the function register',
-		rule: 'function',
-		files: [
-			{
-				path: 'src/worker/routes.ts',
-				content: 'export const ROUTES = Object.freeze([{ handler: () => undefined }])\n',
-			},
-		],
-	},
-	{
-		label: 'rejects data in handlers.ts',
-		membership: 'module data whose filename is absent from the data register',
-		rule: 'data',
-		files: [{ path: 'app/edge/handlers.ts', content: "export const STATUS = 'ready'\n" }],
-	},
-	{
-		label: 'rejects a hidden centralized declaration',
-		membership: 'centralized declarations without an export modifier',
-		rule: 'export',
-		files: [{ path: 'src/worker/helpers.ts', content: 'function buildValue(): void {}\n' }],
-	},
-	{
-		label: 'rejects a class that differs from its file',
-		membership: 'class declarations outside errors.ts whose names differ from their filename',
-		rule: 'class',
-		files: [{ path: 'app/desktop/Widget.ts', content: 'export class Other {}\n' }],
-	},
-	{
-		label: 'rejects mutable constants',
-		membership: 'variable statements in constants.ts that are not const',
-		rule: 'constant',
-		files: [{ path: 'src/worker/constants.ts', content: 'export let COUNT = 1\n' }],
-	},
-	{
-		label: 'rejects lower-case constants',
-		membership: 'declarations in constants.ts whose names are not UPPER_SNAKE_CASE',
-		rule: 'constant',
-		files: [{ path: 'src/worker/constants.ts', content: 'export const count = 1\n' }],
-	},
-	{
-		label: 'rejects bare collection constants',
-		membership: 'declarations in constants.ts with direct array or object literal initializers',
-		rule: 'constant',
-		files: [{ path: 'src/worker/constants.ts', content: 'export const VALUES = []\n' }],
-	},
-	{
-		label: 'rejects a parser without the parse prefix',
-		membership: 'function declarations in parsers.ts whose names do not start with parse',
-		rule: 'parser',
-		files: [{ path: 'app/edge/parsers.ts', content: 'export function coerceValue(): void {}\n' }],
-	},
-	{
-		label: 'rejects a factory without the create prefix',
-		membership: 'function declarations in factories.ts whose names do not start with create',
-		rule: 'factory',
-		files: [{ path: 'app/edge/factories.ts', content: 'export function buildValue(): void {}\n' }],
-	},
-	{
-		label: 'rejects a malformed registered function module',
-		membership: 'direct camelCase modules in a registered function-domain folder',
-		rule: 'domain',
-		files: [
-			{
-				path: 'app/browser/composables/useTheme.ts',
-				content: 'export function useMode(): void {}\n',
-			},
-		],
-	},
-	{
-		label: 'rejects a file named for a function domain',
-		membership: 'source files whose stem is registered as a function-domain folder name',
-		rule: 'domain',
-		files: [{ path: 'app/edge/composables.ts', content: '' }],
-	},
-	{
-		label: 'rejects a function in an unregistered domain',
-		membership: 'function modules whose parent path is absent from the domain register',
-		rule: 'function',
-		files: [
-			{ path: 'src/worker/jobs/runTask.ts', content: 'export function runTask(): void {}\n' },
 		],
 	},
 	{
@@ -2137,97 +1663,9 @@ export const POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 			{ path: 'tests/app/core/widget.test.ts', content: '' },
 		],
 	},
-	{
-		label: 'rejects a type in a non-ambient env module',
-		membership: 'non-ambient TypeScript modules whose filename is not types.ts',
-		rule: 'type',
-		files: [{ path: 'app/browser/env.ts', content: 'export interface EnvironmentInterface {}\n' }],
-	},
-	{
-		label: 'rejects a property-held arrow in constants.ts',
-		membership: 'module-level function syntax not passed directly as an argument',
-		rule: 'function',
-		files: [
-			{
-				path: 'app/edge/constants.ts',
-				content: 'export const HANDLERS = Object.freeze({ run: () => undefined })\n',
-			},
-		],
-	},
-	{
-		label: 'rejects a callback parameter default function',
-		membership: 'function expressions in callback parameter defaults',
-		rule: 'function',
-		files: [
-			{
-				path: 'app/edge/constants.ts',
-				content: 'export const VALUES = Object.freeze(C.map((c = () => 1) => c))\n',
-			},
-		],
-	},
-	{
-		label: 'rejects a destructured callback parameter default function',
-		membership: 'function expressions in destructured callback parameter defaults',
-		rule: 'function',
-		files: [
-			{
-				path: 'app/edge/constants.ts',
-				content: 'export const VALUES = Object.freeze(C.map(({ f = () => 1 }) => f))\n',
-			},
-		],
-	},
-	{
-		label: 'rejects an assignment inside callback control flow',
-		membership: 'function assignments inside callback control-flow branches',
-		rule: 'function',
-		files: [
-			{
-				path: 'app/edge/constants.ts',
-				content:
-					'export const VALUES = Object.freeze(C.map((c) => { if (c) { const f = () => 1; return f() } return 2 }))\n',
-			},
-		],
-	},
-	{
-		label: 'rejects an assignment inside a direct callback',
-		membership: 'function assignments inside the body of a callback passed directly as an argument',
-		rule: 'function',
-		files: [
-			{
-				path: 'app/edge/constants.ts',
-				content:
-					'export const VALUES = Object.freeze(C.map((c) => { const f = () => c; return f() }))\n',
-			},
-		],
-	},
-	{
-		label: 'rejects a declaration inside a direct callback',
-		membership:
-			'function declarations inside the body of a callback passed directly as an argument',
-		rule: 'function',
-		files: [
-			{
-				path: 'app/edge/constants.ts',
-				content:
-					'export const LABELS = Object.freeze(COLUMNS.map((column) => { function format() { return column.label } return format() }))\n',
-			},
-		],
-	},
-	{
-		label: 'rejects an assignment two direct callbacks down',
-		membership: 'function assignments inside a callback the outer callback passes directly',
-		rule: 'function',
-		files: [
-			{
-				path: 'app/edge/constants.ts',
-				content:
-					'export const VALUES = Object.freeze(C.map((c) => wrap((d) => { const g = () => d; return g() })))\n',
-			},
-		],
-	},
 ])
 
-/** Physical in-family controls for every skill-family assertion class. */
+/** Lists the physical in-family controls for every skill-family assertion class. */
 export const SKILL_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 	{
 		label: 'rejects a SKILL.md without frontmatter',
@@ -2503,7 +1941,7 @@ export const SKILL_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 	},
 ])
 
-/** Physical controls for provider-bridge assertions. */
+/** Lists the physical controls for provider-bridge assertions. */
 export const BRIDGE_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 	{
 		label: 'rejects a canonical skill without a provider bridge',
@@ -2632,7 +2070,9 @@ export const BRIDGE_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 	},
 ])
 
-/** An in-family skill whose metadata values carry escaped apostrophes, proving they parse. */
+/**
+ * Describes an in-family skill whose metadata values carry escaped apostrophes, proving they parse.
+ */
 export const SKILL_POLICY_APOSTROPHE: PolicyControl = Object.freeze({
 	label: 'accepts escaped apostrophes in agents/openai.yaml values',
 	membership: 'immediate directories beneath .agents/skills',
@@ -2643,7 +2083,9 @@ export const SKILL_POLICY_APOSTROPHE: PolicyControl = Object.freeze({
 	],
 })
 
-/** A folded description containing a colon, proving continuation lines do not become keys. */
+/**
+ * Describes a folded description containing a colon, proving continuation lines do not become keys.
+ */
 export const SKILL_POLICY_FOLDED: PolicyControl = Object.freeze({
 	label: 'accepts a folded description containing a colon',
 	membership: 'folded description scalars in discovered skill frontmatter',
@@ -2658,7 +2100,7 @@ export const SKILL_POLICY_FOLDED: PolicyControl = Object.freeze({
 	],
 })
 
-/** A healthy skill reference whose prose carries the documented backticked TODO form. */
+/** Describes a healthy skill reference whose prose carries the documented backticked TODO form. */
 export const SKILL_POLICY_BACKTICKED: PolicyControl = Object.freeze({
 	label: 'accepts a backticked TODO in skill prose',
 	membership: 'TODO occurrences inside matched inline backtick spans in discovered skill documents',
@@ -2673,7 +2115,7 @@ export const SKILL_POLICY_BACKTICKED: PolicyControl = Object.freeze({
 	],
 })
 
-/** A healthy skill whose fenced example carries a template-TODO spelling. */
+/** Describes a healthy skill whose fenced example carries a template-TODO spelling. */
 export const SKILL_POLICY_FENCED: PolicyControl = Object.freeze({
 	label: 'accepts a TODO in a three-space-indented fenced skill example',
 	membership:
@@ -2690,7 +2132,7 @@ export const SKILL_POLICY_FENCED: PolicyControl = Object.freeze({
 	],
 })
 
-/** A folded description whose blank scalar line separates its paragraphs. */
+/** Describes a folded description whose blank scalar line separates its paragraphs. */
 export const SKILL_POLICY_PARAGRAPHS: PolicyControl = Object.freeze({
 	label: 'accepts a folded description containing two paragraphs',
 	membership: 'folded description scalars in discovered skill frontmatter',
@@ -2705,7 +2147,9 @@ export const SKILL_POLICY_PARAGRAPHS: PolicyControl = Object.freeze({
 	],
 })
 
-/** A bridge skill outside the discovered family, used to prove the membership boundary. */
+/**
+ * Describes a bridge skill outside the discovered family, used to prove the membership boundary.
+ */
 export const SKILL_POLICY_EXCLUSION: PolicyControl = Object.freeze({
 	label: 'excludes .claude/skills from the skill family',
 	membership: 'directories outside .agents/skills',
@@ -2714,7 +2158,7 @@ export const SKILL_POLICY_EXCLUSION: PolicyControl = Object.freeze({
 })
 
 /**
- * Create root instruction text whose rule map names an explicit rule set.
+ * Creates root instruction text whose rule map names an explicit rule set.
  *
  * @param rules - The workspace-relative rule paths the map registers.
  * @returns Root instruction text carrying one rule map table.
@@ -2733,7 +2177,27 @@ export function createPolicyRuleMap(rules: readonly string[]): string {
 	)
 }
 
-/** Physical controls for every rule-map parity assertion the workspace route reaches. */
+/**
+ * Creates catalog agent text whose package table names an explicit package set.
+ *
+ * @param names - The package short names the catalog registers.
+ * @returns Catalog agent text carrying one package table.
+ */
+export function createPolicyCatalog(names: readonly string[]): string {
+	return (
+		[
+			'# Orkestrel',
+			'',
+			POLICY_CATALOG_HEADING,
+			'',
+			'| Package | Version |',
+			'| ------- | ------- |',
+			...names.map((name) => `| \`@orkestrel/${name}\` | \`0.0.1\` |`),
+		].join('\n') + '\n'
+	)
+}
+
+/** Lists the physical controls for every rule-map parity assertion the workspace route reaches. */
 export const RULES_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 	{
 		label: 'rejects a rule file the rule map omits',
@@ -2763,7 +2227,141 @@ export const RULES_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 	},
 ])
 
-/** Physical controls for every portability assertion the workspace route reaches. */
+/** Holds the manifest one prose control writes, naming the package its own guide belongs to. */
+export const PROSE_POLICY_MANIFEST = '{\n\t"name": "@orkestrel/sample"\n}\n'
+
+/**
+ * Lists the physical controls for every prose-population boundary the workspace route reaches.
+ *
+ * @remarks
+ * Each control that attacks an exclusion also writes the arrival file, whose different term proves
+ * the sweep ran over the control workspace rather than reporting nothing because it found nothing.
+ */
+export const PROSE_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
+	{
+		label: 'rejects a banned term in the workspace front page',
+		membership: 'authored Markdown outside the excluded directories and the guide mirrors',
+		rule: 'prose',
+		line: 3,
+		message: 'prose carries no banned term: should (must, can, might, or the imperative)',
+		files: [
+			{ path: POLICY_MANIFEST_FILE, content: PROSE_POLICY_MANIFEST },
+			{ path: 'README.md', content: '# Front page\n\nA reader should meet this term.\n' },
+		],
+	},
+	{
+		label: 'rejects a banned term in the package guide',
+		membership: 'the top-level guide whose name matches the manifest name',
+		rule: 'prose',
+		line: 3,
+		message: 'prose carries no banned term: should (must, can, might, or the imperative)',
+		files: [
+			{ path: POLICY_MANIFEST_FILE, content: PROSE_POLICY_MANIFEST },
+			{ path: 'guides/sample.md', content: '# Sample\n\nA reader should meet this term.\n' },
+		],
+	},
+	{
+		label: 'rejects a banned term in a rule file',
+		membership: 'authored Markdown below a dot directory the sweep descends into',
+		rule: 'prose',
+		line: 3,
+		message: 'prose carries no banned term: should (must, can, might, or the imperative)',
+		files: [
+			{ path: POLICY_MANIFEST_FILE, content: PROSE_POLICY_MANIFEST },
+			{
+				path: `${POLICY_RULE_ROOT}/sample.md`,
+				content: '# Sample\n\nA reader should meet this term.\n',
+			},
+			{
+				path: POLICY_RULE_MAP_FILE,
+				content: createPolicyRuleMap([`${POLICY_RULE_ROOT}/sample.md`]),
+			},
+		],
+	},
+	{
+		label: 'accepts a banned term inside a fenced block',
+		membership: 'fenced regions, whose lines are code rather than prose',
+		rule: 'prose',
+		line: 3,
+		message: 'prose carries no banned term: via (through, by using)',
+		files: [
+			{ path: POLICY_MANIFEST_FILE, content: PROSE_POLICY_MANIFEST },
+			{ path: 'README.md', content: '# Front page\n\nA reader arrives via this term.\n' },
+			{
+				path: 'guides/README.md',
+				content: '# Index\n\n```text\nshould inside a fence\n```\n',
+			},
+		],
+	},
+	{
+		label: 'accepts a banned term inside a code span a line break runs through',
+		membership: 'inline code spans, whose text is a token rather than prose',
+		rule: 'prose',
+		line: 3,
+		message: 'prose carries no banned term: via (through, by using)',
+		files: [
+			{ path: POLICY_MANIFEST_FILE, content: PROSE_POLICY_MANIFEST },
+			{ path: 'README.md', content: '# Front page\n\nA reader arrives via this term.\n' },
+			{
+				path: 'guides/README.md',
+				content: '# Index\n\nA span `that\nspans lines with should` here.\n',
+			},
+		],
+	},
+	{
+		label: 'accepts a banned term in a guide the catalog registers to another package',
+		membership: 'top-level guides the catalog registers to a package other than this one',
+		rule: 'prose',
+		line: 3,
+		message: 'prose carries no banned term: via (through, by using)',
+		files: [
+			{ path: POLICY_MANIFEST_FILE, content: PROSE_POLICY_MANIFEST },
+			{ path: POLICY_CATALOG_FILE, content: createPolicyCatalog(['other', 'sample']) },
+			{ path: 'README.md', content: '# Front page\n\nA reader arrives via this term.\n' },
+			{ path: 'guides/other.md', content: '# Other\n\nA reader should meet this term.\n' },
+		],
+	},
+	{
+		label: 'rejects a top-level guide the catalog does not register',
+		membership: 'top-level guides that are neither this package, nor the index, nor a catalog row',
+		rule: 'prose',
+		message: "guide is the package's own, the map, or a catalog row",
+		files: [
+			{ path: POLICY_MANIFEST_FILE, content: PROSE_POLICY_MANIFEST },
+			{ path: POLICY_CATALOG_FILE, content: createPolicyCatalog(['other', 'sample']) },
+			{ path: 'guides/stray.md', content: '# Stray\n\nA reader reads this guide.\n' },
+		],
+	},
+	{
+		label: 'accepts a banned term inside an installed package',
+		membership: 'Markdown below a directory name the sweep never descends into',
+		rule: 'prose',
+		line: 3,
+		message: 'prose carries no banned term: via (through, by using)',
+		files: [
+			{ path: POLICY_MANIFEST_FILE, content: PROSE_POLICY_MANIFEST },
+			{ path: 'README.md', content: '# Front page\n\nA reader arrives via this term.\n' },
+			{
+				path: 'node_modules/sample/README.md',
+				content: '# Installed\n\nA reader should meet this term.\n',
+			},
+		],
+	},
+	{
+		label: 'accepts a banned term inside scratch work',
+		membership: 'Markdown below a directory name the sweep never descends into',
+		rule: 'prose',
+		line: 3,
+		message: 'prose carries no banned term: via (through, by using)',
+		files: [
+			{ path: POLICY_MANIFEST_FILE, content: PROSE_POLICY_MANIFEST },
+			{ path: 'README.md', content: '# Front page\n\nA reader arrives via this term.\n' },
+			{ path: 'tmp/notes.md', content: '# Notes\n\nA reader should meet this term.\n' },
+		],
+	},
+])
+
+/** Lists the physical controls for every portability assertion the workspace route reaches. */
 export const PORTABILITY_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 	{
 		label: 'rejects a reserved device name',
@@ -2797,103 +2395,5 @@ export const PORTABILITY_POLICY_CONTROLS: readonly PolicyControl[] = Object.free
 				content: '{\n\t"scripts": {\n\t\t"prepare": "bash scripts/prepare.sh"\n\t}\n}\n',
 			},
 		],
-	},
-	{
-		label: 'rejects a payload trimmed before it is split',
-		membership: 'split calls carrying a line-feed string literal in the parsed source axes',
-		rule: 'portability',
-		message: 'sources split arrived text before trimming each line',
-		files: [
-			{
-				path: 'src/worker/helpers.ts',
-				content:
-					"export function readLines(text: string): readonly string[] {\n\treturn text.trim().split('\\n')\n}\n",
-			},
-		],
-	},
-	{
-		label: 'rejects a read of the host line ending',
-		membership: 'EOL member reads on a binding named os in the parsed source axes',
-		rule: 'portability',
-		message: 'sources emit a line feed rather than the host line ending',
-		files: [
-			{
-				path: 'configs/helpers.ts',
-				content:
-					"import * as os from 'node:os'\nexport function endLine(): string {\n\treturn os.EOL\n}\n",
-			},
-		],
-	},
-	{
-		label: 'rejects an EOL import from node:os',
-		membership: 'named import specifiers from node:os in the parsed source axes',
-		rule: 'portability',
-		message: 'sources emit a line feed rather than the host line ending',
-		files: [
-			{
-				path: 'configs/helpers.ts',
-				content:
-					"import { EOL } from 'node:os'\nexport function endLine(): string {\n\treturn EOL\n}\n",
-			},
-		],
-	},
-])
-
-/** A trimmed split outside the parsed source axes, proving the population boundary. */
-export const PORTABILITY_POLICY_EXCLUSION: PolicyControl = Object.freeze({
-	label: 'excludes a script module from the parsed source axes',
-	membership: 'TypeScript modules outside the src, app, and configs axes',
-	rule: 'portability',
-	files: [
-		{
-			path: 'scripts/read.ts',
-			content:
-				"export function readLines(text: string): readonly string[] {\n\treturn text.trim().split('\\n')\n}\n",
-		},
-	],
-})
-
-/** A locally declared line-ending constant, which the host line-ending rule leaves legal. */
-export const PORTABILITY_POLICY_LOCAL: PolicyControl = Object.freeze({
-	label: 'accepts a locally declared EOL constant',
-	membership: 'EOL identifiers that neither read a binding named os nor import from node:os',
-	rule: 'portability',
-	files: [{ path: 'src/worker/constants.ts', content: "export const EOL = '\\n'\n" }],
-})
-
-/** A split on the host-independent line-ending pattern, which the split rule leaves legal. */
-export const PORTABILITY_POLICY_SPLIT: PolicyControl = Object.freeze({
-	label: 'accepts a split on the line-ending pattern',
-	membership: 'split calls whose argument is not a line-feed string literal',
-	rule: 'portability',
-	files: [
-		{
-			path: 'src/worker/helpers.ts',
-			content:
-				'export function readLines(text: string): readonly string[] {\n\treturn text.trim().split(/\\r\\n|\\n/u)\n}\n',
-		},
-	],
-})
-
-/** A differently shaped workspace with app, browser, and worker environments but no core. */
-export const GENERIC_POLICY_SOURCES: readonly PolicySource[] = Object.freeze([
-	{
-		path: 'src/worker/types.ts',
-		content: 'export interface TaskInterface { readonly id: string }\n',
-	},
-	{ path: 'src/worker/Worker.ts', content: 'export class Worker {}\n' },
-	{
-		path: 'app/browser/composables/useTheme.ts',
-		content: 'export function useTheme(): void {}\n',
-	},
-	{ path: 'app/browser/handlers.ts', content: 'export function open(): void {}\n' },
-	{
-		path: 'app/browser/routes.ts',
-		content:
-			"import { open } from './handlers.js'\nexport const ROUTES = Object.freeze([{ method: 'GET', path: '/', handler: open }])\n",
-	},
-	{
-		path: 'src/worker/constants.ts',
-		content: "export const LABELS = Object.freeze(['ready'])\n",
 	},
 ])

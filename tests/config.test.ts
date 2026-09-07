@@ -7,24 +7,70 @@ import {
 	globSync,
 	mkdtempSync,
 	mkdirSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
 	writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build, createServer, loadConfigFromFile } from 'vite'
 import { RuleTester } from 'oxlint/plugins-dev'
 import * as configHelpers from '../configs/helpers.js'
-import { MOCKING_RULE, NESTED_RULE, PRIVACY_RULE } from '../configs/policy.js'
+import policyPlugin, {
+	CENTRAL_SOURCE_FILES,
+	CLASS_RULE,
+	CONSTANT_RULE,
+	DATA_RULE,
+	DATA_SOURCE_FILES,
+	DOMAIN_RULE,
+	ENDING_RULE,
+	FACTORY_RULE,
+	FUNCTION_RULE,
+	FUNCTION_SOURCE_FILES,
+	HIDDEN_RULE,
+	MOCKING_RULE,
+	NESTED_RULE,
+	PARSER_RULE,
+	POLICY_BANNED_TERMS,
+	POLICY_ENDING_GLOBS,
+	POLICY_JUDGED_TERMS,
+	POLICY_PLACEMENT_GLOBS,
+	POLICY_VOICE_STOPWORDS,
+	PRIVACY_RULE,
+	TERM_RULE,
+	TYPE_RULE,
+	VOICE_RULE,
+	blankPolicyText,
+	commentToPolicyParagraph,
+	isPolicyVoiced,
+	paragraphToPolicyOpener,
+	stripPolicyCode,
+	textToPolicyHits,
+} from '../configs/policy.js'
 import configuration, { resolveWorkspacePath } from '../vite.config.js'
 import tsconfig from '../tsconfig.json' with { type: 'json' }
-import { createPolicyScratch, inspectPolicyConfiguration } from './setupPolicy.js'
+import {
+	createPolicyScratch,
+	inspectPolicyConfiguration,
+	inspectPolicyWiring,
+	normalizePolicyPath,
+} from './setupPolicy.js'
 import { describe, expect, it } from 'vitest'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+
+// A declaration roll-up loads the extractor package, which only a workspace publishing source from
+// `src` installs. The resolution below is the mechanism its proof is conditioned on.
+let extractorPath: string | undefined
+try {
+	extractorPath = createRequire(import.meta.url).resolve('@microsoft/api-extractor')
+} catch {
+	extractorPath = undefined
+}
 
 describe('root configuration', () => {
 	it('resolves every declared alias to its real entry', () => {
@@ -886,6 +932,821 @@ describe('policy plugin', () => {
 		],
 	})
 
+	tester.run('no-hidden-declaration', HIDDEN_RULE, {
+		valid: [
+			{
+				name: 'accepts an exported centralized declaration',
+				filename: 'src/worker/helpers.ts',
+				code: 'export function buildValue(): void {}',
+			},
+			{
+				name: 'accepts a hidden declaration outside a centralized file',
+				filename: 'src/worker/Widget.ts',
+				code: 'function buildValue(): void {}',
+			},
+		],
+		invalid: [
+			{
+				name: 'rejects a hidden helper [membership: declarations in a centralized file without an export]',
+				filename: 'src/worker/helpers.ts',
+				code: 'function buildValue(): void {}',
+				errors: [{ messageId: 'hidden' }],
+			},
+			{
+				name: 'rejects a hidden constant [membership: declarations in a centralized file without an export]',
+				filename: 'src/worker/constants.ts',
+				code: 'const COUNT = 1',
+				errors: [{ messageId: 'hidden' }],
+			},
+		],
+	})
+
+	tester.run('no-misplaced-type', TYPE_RULE, {
+		valid: [
+			{
+				name: 'accepts an interface in types.ts',
+				filename: 'src/mobile/types.ts',
+				code: 'export interface ValueInterface { readonly id: string }',
+			},
+			{
+				name: 'accepts an interface in an ambient declaration file',
+				filename: 'app/browser/env.d.ts',
+				code: 'export interface EnvironmentInterface { readonly mode: string }',
+			},
+			{
+				name: 'accepts an interface in an ambient module declaration file',
+				filename: 'app/browser/env.d.mts',
+				code: 'export interface EnvironmentInterface { readonly mode: string }',
+			},
+			{
+				name: 'accepts an interface in an ambient CommonJS declaration file',
+				filename: 'app/browser/env.d.cts',
+				code: 'export interface EnvironmentInterface { readonly mode: string }',
+			},
+		],
+		invalid: [
+			{
+				name: 'rejects an interface beside helpers [membership: top-level type declarations outside types.ts]',
+				filename: 'src/mobile/helpers.ts',
+				code: 'export interface ValueInterface { readonly id: string }',
+				errors: [{ messageId: 'type' }],
+			},
+			{
+				name: 'rejects a type alias in an environment module [membership: top-level type declarations outside types.ts]',
+				filename: 'app/browser/env.ts',
+				code: "export type Mode = 'dark' | 'light'",
+				errors: [{ messageId: 'type' }],
+			},
+		],
+	})
+
+	tester.run('no-misplaced-class', CLASS_RULE, {
+		valid: [
+			{
+				name: 'accepts a class in the file named for it',
+				filename: 'app/desktop/Widget.ts',
+				code: 'export class Widget {}',
+			},
+			{
+				name: 'accepts an error class in errors.ts',
+				filename: 'app/desktop/errors.ts',
+				code: 'export class WidgetError extends Error {}',
+			},
+		],
+		invalid: [
+			{
+				name: 'rejects a class that differs from its file [membership: classes outside errors.ts whose name differs from the filename]',
+				filename: 'app/desktop/Widget.ts',
+				code: 'export class Other {}',
+				errors: [{ messageId: 'class' }],
+			},
+			{
+				name: 'rejects a class in a camelCase file [membership: classes outside errors.ts whose name differs from the filename]',
+				filename: 'app/desktop/helpers.ts',
+				code: 'export class Widget {}',
+				errors: [{ messageId: 'class' }],
+			},
+		],
+	})
+
+	tester.run('no-misplaced-data', DATA_RULE, {
+		valid: [
+			{
+				name: 'accepts module data in constants.ts',
+				filename: 'app/edge/constants.ts',
+				code: "export const STATUS = 'ready'",
+			},
+			{
+				name: 'accepts a helper namespace in helpers.ts',
+				filename: 'app/edge/helpers.ts',
+				code: 'export const formatters = Object.freeze({ money: build(fmt) })',
+			},
+		],
+		invalid: [
+			{
+				name: 'rejects data beside handlers [membership: module data whose file is absent from the data register]',
+				filename: 'app/edge/handlers.ts',
+				code: "export const STATUS = 'ready'",
+				errors: [{ messageId: 'data' }],
+			},
+			{
+				name: 'rejects data in an implementation file [membership: module data whose file is absent from the data register]',
+				filename: 'app/edge/Widget.ts',
+				code: 'export const LIMIT = 4',
+				errors: [{ messageId: 'data' }],
+			},
+		],
+	})
+
+	tester.run('no-misplaced-function', FUNCTION_RULE, {
+		valid: [
+			{
+				name: 'accepts a function in a function-kind file',
+				filename: 'src/worker/helpers.ts',
+				code: 'export function buildValue(): void {}',
+			},
+			{
+				name: 'accepts a module in a registered function domain',
+				filename: 'app/browser/composables/useTheme.ts',
+				code: 'export function useTheme(): void {}',
+			},
+			{
+				name: 'accepts a callback passed directly as an argument',
+				filename: 'app/edge/constants.ts',
+				code: 'export const LABELS = Object.freeze(COLUMNS.map((column) => column.label))',
+			},
+			{
+				name: 'accepts a function returned directly through a concise body',
+				filename: 'app/edge/constants.ts',
+				code: 'export const WRAPPED = wrap(() => () => 1)',
+			},
+			{
+				name: 'accepts functions returned directly through callback control flow',
+				filename: 'app/edge/constants.ts',
+				code: 'export const VALUES = Object.freeze(C.map((c) => { if (c) return () => 1; return () => 2 }))',
+			},
+			{
+				name: 'accepts a function returned by a return statement inside a callback',
+				filename: 'app/edge/constants.ts',
+				code: 'export const LABELS = Object.freeze(COLUMNS.map((column) => { return () => column.label }))',
+			},
+			{
+				name: 'accepts a method of a top-level class',
+				filename: 'app/edge/Widget.ts',
+				code: 'export class Widget { read() { return 1 } }',
+			},
+		],
+		invalid: [
+			{
+				name: 'rejects a function module in an unregistered folder [membership: module function syntax whose file is absent from the function register]',
+				filename: 'src/worker/jobs/runTask.ts',
+				code: 'export function runTask(): void {}',
+				errors: [{ messageId: 'function' }],
+			},
+			{
+				name: 'rejects a property-held arrow in a route table [membership: module function syntax whose file is absent from the function register]',
+				filename: 'src/worker/routes.ts',
+				code: 'export const ROUTES = Object.freeze([{ handler: () => undefined }])',
+				errors: [{ messageId: 'function' }],
+			},
+			{
+				name: 'rejects a callback parameter default function [membership: module function syntax that is neither a direct callback nor a direct result]',
+				filename: 'app/edge/constants.ts',
+				code: 'export const VALUES = Object.freeze(C.map((c = () => 1) => c))',
+				errors: [{ messageId: 'function' }],
+			},
+			{
+				name: 'rejects an assignment inside a direct callback [membership: module function syntax that is neither a direct callback nor a direct result]',
+				filename: 'app/edge/constants.ts',
+				code: 'export const VALUES = Object.freeze(C.map((c) => { const f = () => c; return f() }))',
+				errors: [{ messageId: 'function' }],
+			},
+			{
+				name: 'rejects a destructured callback parameter default function [membership: module function syntax that is neither a direct callback nor a direct result]',
+				filename: 'app/edge/constants.ts',
+				code: 'export const VALUES = Object.freeze(C.map(({ f = () => 1 }) => f))',
+				errors: [{ messageId: 'function' }],
+			},
+			{
+				name: 'rejects an assignment inside callback control flow [membership: module function syntax that is neither a direct callback nor a direct result]',
+				filename: 'app/edge/constants.ts',
+				code: 'export const VALUES = Object.freeze(C.map((c) => { if (c) { const f = () => 1; return f() } return 2 }))',
+				errors: [{ messageId: 'function' }],
+			},
+			{
+				name: 'rejects a declaration inside a direct callback [membership: module function syntax that is neither a direct callback nor a direct result]',
+				filename: 'app/edge/constants.ts',
+				code: 'export const LABELS = Object.freeze(COLUMNS.map((column) => { function format() { return column.label } return format() }))',
+				errors: [{ messageId: 'function' }],
+			},
+			{
+				name: 'rejects an assignment two direct callbacks down [membership: module function syntax that is neither a direct callback nor a direct result]',
+				filename: 'app/edge/constants.ts',
+				code: 'export const VALUES = Object.freeze(C.map((c) => wrap((d) => { const g = () => d; return g() })))',
+				errors: [{ messageId: 'function' }],
+			},
+			{
+				name: 'rejects a function in a nested folder whose suffix matches a registered domain [membership: module function syntax whose file is absent from the function register]',
+				filename: 'src/server/execution/nested/src/server/execution/thing.ts',
+				code: 'export function run(): void {}',
+				errors: [{ messageId: 'function' }],
+			},
+		],
+	})
+
+	tester.run('no-malformed-constant', CONSTANT_RULE, {
+		valid: [
+			{
+				name: 'accepts a frozen upper-case constant',
+				filename: 'src/worker/constants.ts',
+				code: "export const LABELS = Object.freeze(['ready'])",
+			},
+			{
+				name: 'accepts a lower-case binding outside constants.ts',
+				filename: 'src/worker/helpers.ts',
+				code: 'export const count = 1',
+			},
+		],
+		invalid: [
+			{
+				name: 'rejects a mutable constant [membership: variable statements in constants.ts that are not const]',
+				filename: 'src/worker/constants.ts',
+				code: 'export let COUNT = 1',
+				errors: [{ messageId: 'mutable' }],
+			},
+			{
+				name: 'rejects a lower-case constant [membership: declarations in constants.ts outside UPPER_SNAKE_CASE]',
+				filename: 'src/worker/constants.ts',
+				code: 'export const count = 1',
+				errors: [{ messageId: 'naming' }],
+			},
+			{
+				name: 'rejects a bare collection constant [membership: declarations in constants.ts with a direct array or object literal]',
+				filename: 'src/worker/constants.ts',
+				code: 'export const VALUES = []',
+				errors: [{ messageId: 'collection' }],
+			},
+		],
+	})
+
+	tester.run('no-misnamed-parser', PARSER_RULE, {
+		valid: [
+			{
+				name: 'accepts a parse-prefixed coercer',
+				filename: 'app/edge/parsers.ts',
+				code: 'export function parseValue(): void {}',
+			},
+			{
+				name: 'accepts an unprefixed function outside parsers.ts',
+				filename: 'app/edge/helpers.ts',
+				code: 'export function coerceValue(): void {}',
+			},
+		],
+		invalid: [
+			{
+				name: 'rejects an unprefixed coercer [membership: parsers.ts functions whose name does not start with parse]',
+				filename: 'app/edge/parsers.ts',
+				code: 'export function coerceValue(): void {}',
+				errors: [{ messageId: 'parser' }],
+			},
+			{
+				name: 'rejects an unprefixed assigned coercer [membership: parsers.ts functions whose name does not start with parse]',
+				filename: 'app/edge/parsers.ts',
+				code: 'export const coerceValue = () => undefined',
+				errors: [{ messageId: 'parser' }],
+			},
+		],
+	})
+
+	tester.run('no-misnamed-factory', FACTORY_RULE, {
+		valid: [
+			{
+				name: 'accepts a create-prefixed factory',
+				filename: 'app/edge/factories.ts',
+				code: 'export const createValue = () => undefined',
+			},
+			{
+				name: 'accepts an unprefixed function outside factories.ts',
+				filename: 'app/edge/helpers.ts',
+				code: 'export function buildValue(): void {}',
+			},
+		],
+		invalid: [
+			{
+				name: 'rejects an unprefixed factory [membership: factories.ts functions whose name does not start with create]',
+				filename: 'app/edge/factories.ts',
+				code: 'export function buildValue(): void {}',
+				errors: [{ messageId: 'factory' }],
+			},
+			{
+				name: 'rejects an unprefixed assigned factory [membership: factories.ts functions whose name does not start with create]',
+				filename: 'app/edge/factories.ts',
+				code: 'export const buildValue = () => undefined',
+				errors: [{ messageId: 'factory' }],
+			},
+		],
+	})
+
+	tester.run('no-malformed-domain', DOMAIN_RULE, {
+		valid: [
+			{
+				name: 'accepts a registered function module carrying imports and one named export',
+				filename: 'app/browser/composables/useTheme.ts',
+				code: ["import { ref } from 'vue'", 'export function useTheme(): void { void ref }'].join(
+					'\n',
+				),
+			},
+			{
+				name: 'accepts a module outside every registered domain',
+				filename: 'app/edge/helpers.ts',
+				code: 'export function buildValue(): void {}',
+			},
+			{
+				name: 'accepts a nested folder whose suffix matches a registered domain',
+				filename: 'src/server/execution/nested/src/server/execution/thing.ts',
+				code: 'export const VALUE = 1',
+			},
+		],
+		invalid: [
+			{
+				name: 'rejects a module whose function differs from its file [membership: direct camelCase modules in a registered function-domain folder]',
+				filename: 'app/browser/composables/useTheme.ts',
+				code: 'export function useMode(): void {}',
+				errors: [{ messageId: 'module' }],
+			},
+			{
+				name: 'rejects a hidden domain function [membership: direct camelCase modules in a registered function-domain folder]',
+				filename: 'app/browser/composables/useTheme.ts',
+				code: 'function useTheme(): void {}',
+				errors: [{ messageId: 'module' }],
+			},
+			{
+				name: 'rejects a file named for a registered domain [membership: source files whose stem is a registered function-domain name]',
+				filename: 'app/edge/composables.ts',
+				code: 'export function buildValue(): void {}',
+				errors: [{ messageId: 'file' }],
+			},
+		],
+	})
+
+	tester.run('no-host-line-endings', ENDING_RULE, {
+		valid: [
+			{
+				name: 'accepts a split on the line-ending pattern',
+				filename: 'src/worker/helpers.ts',
+				code: 'export const lines = text.trim().split(/\\r\\n|\\n/u)',
+			},
+			{
+				name: 'accepts a locally declared line-ending constant',
+				filename: 'src/worker/constants.ts',
+				code: "export const EOL = '\\n'",
+			},
+			{
+				name: 'accepts a namespace import that reads no line ending',
+				filename: 'configs/helpers.ts',
+				code: ["import * as os from 'node:os'", 'export const root = os.tmpdir()'].join('\n'),
+			},
+		],
+		invalid: [
+			{
+				name: 'rejects a payload trimmed before it is split [membership: split calls carrying a line-feed literal]',
+				filename: 'src/worker/helpers.ts',
+				code: "export const lines = text.trim().split('\\n')",
+				errors: [{ messageId: 'split' }],
+			},
+			{
+				name: 'rejects a templated line-feed split [membership: split calls carrying a line-feed literal]',
+				filename: 'src/worker/helpers.ts',
+				code: 'export const lines = text.trim().split(`\\n`)',
+				errors: [{ messageId: 'split' }],
+			},
+			{
+				name: 'rejects a read of the host line ending [membership: EOL reads on a binding named os]',
+				filename: 'configs/helpers.ts',
+				code: ["import * as os from 'node:os'", 'export const end = os.EOL'].join('\n'),
+				errors: [{ messageId: 'terminator' }],
+			},
+			{
+				name: 'rejects an EOL import from the host module [membership: named EOL specifiers imported from node:os]',
+				filename: 'configs/helpers.ts',
+				code: ["import { EOL } from 'node:os'", 'export const end = EOL'].join('\n'),
+				errors: [{ messageId: 'terminator' }],
+			},
+		],
+	})
+
+	tester.run('no-malformed-summary', VOICE_RULE, {
+		valid: [
+			{
+				name: 'accepts a third-person opener',
+				code: ['/** Creates a control. */', 'export const CONTROL = 1'].join('\n'),
+			},
+			{
+				name: 'accepts a whether clause',
+				code: ['/** Checks whether the reader is ready. */', 'export const READY = true'].join(
+					'\n',
+				),
+			},
+			{
+				name: 'accepts a two-letter third-person opener',
+				code: ['/** Is the value a reader receives. */', 'export const CONTROL = 1'].join('\n'),
+			},
+			{
+				name: 'accepts a reporting opener',
+				code: ['/** Reports whether the reader is ready. */', 'export const READY = true'].join(
+					'\n',
+				),
+			},
+			{
+				name: 'accepts an anonymous default export',
+				code: ['/** Declares the fixture plugin. */', 'export default { meta: 1 }'].join('\n'),
+			},
+			{
+				name: 'accepts a doc block on a declaration no export reaches',
+				code: ['/** The opener, a noun phrase. */', 'const CONTROL = 1', 'void CONTROL'].join('\n'),
+			},
+			{
+				name: 'accepts a doc block on a class member',
+				code: [
+					'/** Holds one value. */',
+					'export class Holder {',
+					'\t/** The member value, a noun phrase. */',
+					'\tvalue = 1',
+					'}',
+				].join('\n'),
+			},
+			{
+				name: 'accepts a single-star block comment before an export',
+				code: ['/* The opener, a noun phrase. */', 'export const CONTROL = 1'].join('\n'),
+			},
+			{
+				name: 'accepts a word from the stop set after the opener',
+				code: ['/** Reports whether this process passes. */', 'export const READY = true'].join(
+					'\n',
+				),
+			},
+			{
+				name: 'accepts a block tag naming the symbol after the description [membership: text before the first block tag]',
+				code: [
+					'/**',
+					' * Creates a control',
+					' *',
+					' * @param value - The value readControl reads.',
+					' */',
+					'export function readControl(value: number): number {',
+					'\treturn value',
+					'}',
+				].join('\n'),
+			},
+			{ name: 'accepts an export carrying no doc block', code: 'export const CONTROL = 1' },
+		],
+		invalid: [
+			{
+				name: 'rejects a noun-phrase opener [membership: doc blocks directly above a top-level export]',
+				code: ['/** The opener, a noun phrase. */', 'export const CONTROL = 1'].join('\n'),
+				errors: [{ messageId: 'voice' }],
+			},
+			{
+				name: 'rejects an imperative opener [membership: doc blocks directly above a top-level export]',
+				code: ['/** Create a control. */', 'export function createControl(): void {}'].join('\n'),
+				errors: [{ messageId: 'voice' }],
+			},
+			{
+				name: 'rejects an opener from the stop set [membership: opening words ending in s that name no verb]',
+				code: ['/** This holds one value. */', 'export const CONTROL = 1'].join('\n'),
+				errors: [{ messageId: 'voice' }],
+			},
+			{
+				name: 'rejects a first sentence naming its own class [membership: the declared identifier inside the first sentence]',
+				code: ['/** Returns the value ControlTwo carries. */', 'export class ControlTwo {}'].join(
+					'\n',
+				),
+				errors: [{ messageId: 'name', data: { name: 'ControlTwo' } }],
+			},
+			{
+				name: 'rejects a first sentence naming its own constant [membership: the declared identifier inside the first sentence]',
+				code: ['/** Returns the value CONTROL carries. */', 'export const CONTROL = 1'].join('\n'),
+				errors: [{ messageId: 'name', data: { name: 'CONTROL' } }],
+			},
+			{
+				name: 'rejects an empty doc block [membership: description paragraphs, the empty one included]',
+				code: ['/** */', 'export const CONTROL = 1'].join('\n'),
+				errors: [{ messageId: 'voice' }],
+			},
+			{
+				name: 'rejects a doc block a blank line separates from its export [membership: doc blocks whitespace alone separates from a top-level export]',
+				code: ['/** The opener, a noun phrase. */', '', 'export const CONTROL = 1'].join('\n'),
+				errors: [{ messageId: 'voice' }],
+			},
+		],
+	})
+
+	tester.run('no-banned-term', TERM_RULE, {
+		valid: [
+			{ name: 'accepts a term inside a code span', code: '// A `should` token names one row.' },
+			{
+				name: 'accepts a term inside a fenced example',
+				code: [
+					'/**',
+					' * Reads one value.',
+					' *',
+					' * @example',
+					' * ```text',
+					' * should stay',
+					' * ```',
+					' */',
+					'export const CONTROL = 1',
+				].join('\n'),
+			},
+			{
+				name: 'accepts a term inside a link target',
+				code: '/** Reports the state. {@link Example.should} */',
+			},
+			{
+				name: 'accepts a term inside an address',
+				code: '// Read https://example.test/should/row for the shape.',
+			},
+			{
+				name: 'accepts a term inside a code span a line break runs through',
+				code: ['/**', ' * A span `that', ' * spans lines with should` here.', ' */'].join('\n'),
+			},
+			{ name: 'accepts a judged term', code: '// The new value is read once now.' },
+			{
+				name: 'accepts a longer word carrying a term',
+				code: '// A justice viable pleased reader.',
+			},
+			{ name: 'accepts prose carrying no term', code: '// Reads the value a reader receives.' },
+		],
+		invalid: [
+			{
+				name: 'rejects should [membership: comment prose outside code, tags, and addresses]',
+				code: '// A reader should meet this row.',
+				errors: [
+					{
+						messageId: 'term',
+						data: { term: 'should', replacement: 'must, can, might, or the imperative' },
+					},
+				],
+			},
+			{
+				name: 'rejects should in a block comment [membership: block and line comments alike]',
+				code: '/** Reports the state a reader should meet. */',
+				errors: [
+					{
+						messageId: 'term',
+						data: { term: 'should', replacement: 'must, can, might, or the imperative' },
+					},
+				],
+			},
+			{
+				name: 'rejects simply [membership: comment prose outside code, tags, and addresses]',
+				code: '// The reader simply reads.',
+				errors: [{ messageId: 'term', data: { term: 'simply', replacement: 'delete' } }],
+			},
+			{
+				name: 'rejects easy [membership: comment prose outside code, tags, and addresses]',
+				code: '// The path is easy.',
+				errors: [{ messageId: 'term', data: { term: 'easy', replacement: 'delete' } }],
+			},
+			{
+				name: 'rejects easiest [membership: the inflections one row reaches]',
+				code: '// The path is easiest.',
+				errors: [{ messageId: 'term', data: { term: 'easy', replacement: 'delete' } }],
+			},
+			{
+				name: 'rejects just [membership: comment prose outside code, tags, and addresses]',
+				code: '// The reader just reads.',
+				errors: [{ messageId: 'term', data: { term: 'just', replacement: 'delete' } }],
+			},
+			{
+				name: 'rejects currently [membership: comment prose outside code, tags, and addresses]',
+				code: '// The reader currently reads.',
+				errors: [
+					{
+						messageId: 'term',
+						data: { term: 'currently', replacement: 'delete, or give the date' },
+					},
+				],
+			},
+			{
+				name: 'rejects utilizes [membership: the inflections one row reaches]',
+				code: '// The reader utilizes the path.',
+				errors: [{ messageId: 'term', data: { term: 'utilize', replacement: 'use' } }],
+			},
+			{
+				name: 'rejects utilizing [membership: the inflections one row reaches]',
+				code: '// The reader is utilizing the path.',
+				errors: [{ messageId: 'term', data: { term: 'utilize', replacement: 'use' } }],
+			},
+			{
+				name: 'rejects leverages [membership: the inflections one row reaches]',
+				code: '// The reader leverages the path.',
+				errors: [{ messageId: 'term', data: { term: 'leverage', replacement: 'use' } }],
+			},
+			{
+				name: 'rejects leveraged [membership: the inflections one row reaches]',
+				code: '// The reader leveraged the path.',
+				errors: [{ messageId: 'term', data: { term: 'leverage', replacement: 'use' } }],
+			},
+			{
+				name: 'rejects via [membership: comment prose outside code, tags, and addresses]',
+				code: '// The reader arrives via the path.',
+				errors: [{ messageId: 'term', data: { term: 'via', replacement: 'through, by using' } }],
+			},
+			{
+				name: 'rejects in order to [membership: comment prose outside code, tags, and addresses]',
+				code: '// The reader reads in order to learn.',
+				errors: [{ messageId: 'term', data: { term: 'in order to', replacement: 'to' } }],
+			},
+			{
+				name: 'rejects the abbreviated for example [membership: dotted rows read with their dots]',
+				code: '// The reader reads one path, e.g. the front page.',
+				errors: [{ messageId: 'term', data: { term: 'e.g.', replacement: 'for example' } }],
+			},
+			{
+				name: 'rejects the abbreviated that is [membership: dotted rows read with their dots]',
+				code: '// The reader reads one path, i.e. the front page.',
+				errors: [{ messageId: 'term', data: { term: 'i.e.', replacement: 'that is' } }],
+			},
+			{
+				name: 'rejects the abbreviated list ending [membership: dotted rows read with their dots]',
+				code: '// The reader reads paths, files, etc.',
+				errors: [
+					{
+						messageId: 'term',
+						data: { term: 'etc.', replacement: 'bound the list, or recast the sentence' },
+					},
+				],
+			},
+			{
+				name: 'rejects performant [membership: comment prose outside code, tags, and addresses]',
+				code: '// The path is performant.',
+				errors: [
+					{ messageId: 'term', data: { term: 'performant', replacement: 'the measured property' } },
+				],
+			},
+			{
+				name: 'rejects robust [membership: comment prose outside code, tags, and addresses]',
+				code: '// The path is robust.',
+				errors: [
+					{ messageId: 'term', data: { term: 'robust', replacement: 'the measured property' } },
+				],
+			},
+			{
+				name: 'rejects robustness [membership: the inflections one row reaches]',
+				code: '// The path has robustness.',
+				errors: [
+					{ messageId: 'term', data: { term: 'robust', replacement: 'the measured property' } },
+				],
+			},
+			{
+				name: 'rejects allows you to [membership: comment prose outside code, tags, and addresses]',
+				code: '// The path allows you to read.',
+				errors: [{ messageId: 'term', data: { term: 'allows you to', replacement: 'lets you' } }],
+			},
+			{
+				name: 'rejects the conjunction pair [membership: comment prose outside code, tags, and addresses]',
+				code: '// The reader reads a path and/or a file.',
+				errors: [{ messageId: 'term', data: { term: 'and/or', replacement: 'and, or, or both' } }],
+			},
+			{
+				name: 'rejects please [membership: comment prose outside code, tags, and addresses]',
+				code: '// Read the path, please.',
+				errors: [{ messageId: 'term', data: { term: 'please', replacement: 'delete' } }],
+			},
+			{
+				name: 'rejects the hyphenated quick check [membership: rows written with a space or a hyphen]',
+				code: '// Run a sanity-check over the path.',
+				errors: [{ messageId: 'term', data: { term: 'sanity check', replacement: 'quick check' } }],
+			},
+			{
+				name: 'rejects dummy [membership: comment prose outside code, tags, and addresses]',
+				code: '// The path names a dummy value.',
+				errors: [{ messageId: 'term', data: { term: 'dummy', replacement: 'placeholder' } }],
+			},
+			{
+				name: 'rejects dummies [membership: the inflections one row reaches]',
+				code: '// The path names two dummies.',
+				errors: [{ messageId: 'term', data: { term: 'dummy', replacement: 'placeholder' } }],
+			},
+			{
+				name: 'rejects the refused list name [membership: comment prose outside code, tags, and addresses]',
+				code: '// The path reads a blacklist.',
+				errors: [{ messageId: 'term', data: { term: 'blacklist', replacement: 'denylist' } }],
+			},
+			{
+				name: 'rejects the refused permit name [membership: comment prose outside code, tags, and addresses]',
+				code: '// The path reads a whitelist.',
+				errors: [{ messageId: 'term', data: { term: 'whitelist', replacement: 'allowlist' } }],
+			},
+			{
+				name: 'rejects the refused replica name [membership: comment prose outside code, tags, and addresses]',
+				code: '// The path names a slave copy.',
+				errors: [{ messageId: 'term', data: { term: 'slave', replacement: 'replica' } }],
+			},
+		],
+	})
+
+	it('blanks a matched region without moving a line break', () => {
+		expect(blankPolicyText('abc')).toBe('   ')
+		expect(blankPolicyText('ab\ncd')).toBe('  \n  ')
+	})
+
+	it('blanks every code, tag, and address region while holding each later offset', () => {
+		const text = [
+			'A `should` span.',
+			'```text',
+			'should stay',
+			'```',
+			'A {@link Example.should} tag.',
+			'Read https://example.test/should/row here.',
+			'A reader should meet this row.',
+		].join('\n')
+		const stripped = stripPolicyCode(text)
+		expect(stripped).toHaveLength(text.length)
+		expect(stripped.split('\n')).toHaveLength(text.split('\n').length)
+		const hits = textToPolicyHits(stripped)
+		expect(hits.map((hit) => hit.term.term)).toEqual(['should'])
+		expect(text.slice(hits[0]?.index ?? -1, (hits[0]?.index ?? 0) + 6)).toBe('should')
+	})
+
+	it('reads every banned-term hit in offset order with the row it matched', () => {
+		const hits = textToPolicyHits('The reader utilizes a path and arrives via a file.')
+		expect(hits.map((hit) => hit.term.term)).toEqual(['utilize', 'via'])
+		expect(hits.map((hit) => hit.term.replacement)).toEqual(['use', 'through, by using'])
+		expect(hits[0]?.index).toBeLessThan(hits[1]?.index ?? 0)
+		expect(textToPolicyHits('The reader reads one path.')).toEqual([])
+	})
+
+	it('reads a description paragraph up to its first block tag', () => {
+		expect(
+			commentToPolicyParagraph({
+				type: 'Block',
+				value: '*\n * Creates a control.\n *\n * @param value - Reports the state.\n ',
+				range: [0, 0],
+			}),
+		).toBe('Creates a control.')
+		expect(
+			commentToPolicyParagraph({ type: 'Block', value: '* Creates a control. ', range: [0, 0] }),
+		).toBe('Creates a control.')
+		expect(commentToPolicyParagraph({ type: 'Block', value: '* ', range: [0, 0] })).toBe('')
+	})
+
+	it('reads the opening word of a paragraph as its letters alone', () => {
+		expect(paragraphToPolicyOpener('Creates a control.')).toBe('Creates')
+		expect(paragraphToPolicyOpener('"Creates" a control.')).toBe('Creates')
+		expect(paragraphToPolicyOpener('')).toBe('')
+	})
+
+	it('admits a third-person opener and refuses a registered non-verb', () => {
+		expect(isPolicyVoiced('Creates')).toBe(true)
+		expect(isPolicyVoiced('Is')).toBe(true)
+		expect(isPolicyVoiced('This')).toBe(false)
+		expect(isPolicyVoiced('Status')).toBe(false)
+		expect(isPolicyVoiced('Create')).toBe(false)
+		expect(isPolicyVoiced('')).toBe(false)
+		expect(POLICY_VOICE_STOPWORDS.every((word) => /^[A-Z][a-z]*s$/u.test(word))).toBe(true)
+	})
+
+	it('keeps the matched and judged term sets disjoint and frozen', () => {
+		const matched = POLICY_BANNED_TERMS.map((entry) => entry.term)
+		expect(matched.filter((term) => POLICY_JUDGED_TERMS.includes(term))).toEqual([])
+		expect(new Set(matched).size).toBe(matched.length)
+		expect(Object.isFrozen(POLICY_BANNED_TERMS)).toBe(true)
+		expect(Object.isFrozen(POLICY_JUDGED_TERMS)).toBe(true)
+		expect(Object.isFrozen(POLICY_VOICE_STOPWORDS)).toBe(true)
+		// Every judged row reaches this file as prose, so a pattern that matched one would red the
+		// workspace sweep on the rule file that names it.
+		for (const term of POLICY_JUDGED_TERMS) {
+			expect(textToPolicyHits(`The reader reads ${term} here.`)).toEqual([])
+		}
+	})
+
+	it('registers handlers as a function kind and routes as a data kind', () => {
+		expect(FUNCTION_SOURCE_FILES).toContain('handlers.ts')
+		expect(FUNCTION_SOURCE_FILES).not.toContain('routes.ts')
+		expect(DATA_SOURCE_FILES).toContain('routes.ts')
+		expect(CENTRAL_SOURCE_FILES).toContain('handlers.ts')
+	})
+
+	it('enables every plugin rule over the population its law names', () => {
+		const parsed: unknown = JSON.parse(readFileSync(resolve(root, '.oxlintrc.json'), 'utf8'))
+		const rules: unknown = Object.getOwnPropertyDescriptor(policyPlugin, 'rules')?.value
+		if (typeof rules !== 'object' || rules === null) {
+			throw new Error('The policy plugin declares no rules')
+		}
+		const declared = Object.getOwnPropertyNames(rules)
+		expect(declared).toContain('no-misplaced-function')
+		expect(declared).toContain('no-host-line-endings')
+		expect(
+			inspectPolicyWiring(
+				parsed,
+				declared.map((name) => `policy/${name}`),
+				[POLICY_PLACEMENT_GLOBS, POLICY_ENDING_GLOBS],
+			),
+		).toEqual([])
+	})
+
 	it('loads every configured policy rule through the real binary', () => {
 		const scratch = createPolicyScratch({ prefix: 'orkestrel-config-policy-' })
 		try {
@@ -894,11 +1755,19 @@ describe('policy plugin', () => {
 			scratch.write(
 				'src/violations/fixture.ts',
 				[
+					'// A reader should meet this term.',
 					"vi.mock('./x')",
 					'class PrivateMember { private value = 1 }',
 					'class ParameterMember { constructor(readonly value: string) {} }',
 					'class PublicMember { public value = 1 }',
 					'function OuterFunction() { const nested = () => undefined; return nested() }',
+					"import * as os from 'node:os'",
+					"import { EOL } from 'node:os'",
+					'export interface ValueInterface { readonly id: string }',
+					'/** The opener, a noun phrase. */',
+					"export const STATUS = 'ready'",
+					"export const lines = text.trim().split('\\n')",
+					'export const ending = os.EOL + EOL',
 					'void PrivateMember',
 					'void ParameterMember',
 					'void PublicMember',
@@ -906,13 +1775,36 @@ describe('policy plugin', () => {
 				].join('\n'),
 			)
 			scratch.write(
-				'src/clean/fixture.ts',
+				'src/violations/helpers.ts',
+				['function buildValue(): void {}', 'void buildValue'].join('\n'),
+			)
+			scratch.write('src/violations/parsers.ts', 'export function coerceValue(): void {}\n')
+			scratch.write('src/violations/factories.ts', 'export function buildValue(): void {}\n')
+			scratch.write('src/violations/constants.ts', 'export const values = []\n')
+			scratch.write('src/violations/composables.ts', "export const READY = 'yes'\n")
+			scratch.write('app/browser/composables/useTheme.ts', 'export function useMode(): void {}\n')
+			// The line-ending population reaches src, app, and configs alone, so this module
+			// outside them carries the same defect and must draw no diagnostic. The `debugger`
+			// statement is the arrival control the root `no-debugger` rule reports, which proves
+			// the file entered the run the following absence assertion reads.
+			scratch.write(
+				'scripts/read.ts',
 				[
-					'class CleanMember {',
+					'export function readLines(text: string): readonly string[] {',
+					'\tdebugger',
+					"\treturn text.trim().split('\\n')",
+					'}',
+				].join('\n'),
+			)
+			scratch.write(
+				'src/clean/CleanMember.ts',
+				[
+					'// Reads the value a caller receives.',
+					'/** Holds one runtime-private value. */',
+					'export class CleanMember {',
 					'\t#value = 1',
 					'\tvalue(): number { return this.#value }',
 					'}',
-					'void CleanMember',
 				].join('\n'),
 			)
 
@@ -941,7 +1833,7 @@ describe('policy plugin', () => {
 			const config = resolve(scratch.path, '.oxlintrc.json')
 			const violations = spawnSync(
 				process.execPath,
-				[binary, '--config', config, '--format', 'json', 'src/violations'],
+				[binary, '--config', config, '--format', 'json', 'src/violations', 'app', 'scripts'],
 				{ cwd: scratch.path, encoding: 'utf8', timeout: 15_000 },
 			)
 			const clean = spawnSync(
@@ -964,10 +1856,11 @@ describe('policy plugin', () => {
 						throw new Error('Oxlint returned a malformed diagnostic')
 					}
 					const code: unknown = Object.getOwnPropertyDescriptor(diagnostic, 'code')?.value
-					if (typeof code !== 'string') {
-						throw new Error('Oxlint returned a diagnostic without a rule id')
+					const filename: unknown = Object.getOwnPropertyDescriptor(diagnostic, 'filename')?.value
+					if (typeof code !== 'string' || typeof filename !== 'string') {
+						throw new Error('Oxlint returned a diagnostic without a rule id and a file')
 					}
-					codes.push(code)
+					codes.push(`${code} ${normalizePolicyPath(filename)}`)
 				}
 				reports.push(codes)
 			}
@@ -978,15 +1871,30 @@ describe('policy plugin', () => {
 				throw new Error('Oxlint returned no fixture reports')
 			}
 			expect(violations.status).toBe(1)
-			for (const rule of [
-				'policy(no-mocking)',
-				'policy(no-keyword-privacy)',
-				'policy(no-nested-functions)',
-				'typescript(parameter-properties)',
-				'typescript(explicit-member-accessibility)',
+			for (const reported of [
+				'policy(no-mocking) src/violations/fixture.ts',
+				'policy(no-keyword-privacy) src/violations/fixture.ts',
+				'policy(no-nested-functions) src/violations/fixture.ts',
+				'policy(no-misplaced-type) src/violations/fixture.ts',
+				'policy(no-misplaced-data) src/violations/fixture.ts',
+				'policy(no-misplaced-function) src/violations/fixture.ts',
+				'policy(no-misplaced-class) src/violations/fixture.ts',
+				'policy(no-host-line-endings) src/violations/fixture.ts',
+				'policy(no-hidden-declaration) src/violations/helpers.ts',
+				'policy(no-misnamed-parser) src/violations/parsers.ts',
+				'policy(no-misnamed-factory) src/violations/factories.ts',
+				'policy(no-malformed-constant) src/violations/constants.ts',
+				'policy(no-malformed-domain) src/violations/composables.ts',
+				'policy(no-malformed-domain) app/browser/composables/useTheme.ts',
+				'policy(no-banned-term) src/violations/fixture.ts',
+				'policy(no-malformed-summary) src/violations/fixture.ts',
+				'typescript(parameter-properties) src/violations/fixture.ts',
+				'typescript(explicit-member-accessibility) src/violations/fixture.ts',
 			]) {
-				expect(violationCodes).toContain(rule)
+				expect(violationCodes).toContain(reported)
 			}
+			expect(violationCodes).toContain('eslint(no-debugger) scripts/read.ts')
+			expect(violationCodes).not.toContain('policy(no-host-line-endings) scripts/read.ts')
 			expect(clean.status).toBe(0)
 			expect(cleanCodes).toHaveLength(0)
 		} finally {
@@ -1001,8 +1909,10 @@ describe('configuration helpers', () => {
 			'ENVIRONMENT_MODULE_BYTES',
 			'PACKAGE_MANIFEST_BYTES',
 			'WORKSPACE_ROOT',
+			'buildExtractorOverride',
 			'containedPath',
 			'decodeAssetSource',
+			'declarationRollup',
 			'enforceBuildLog',
 			'enforceOutputPath',
 			'environmentAssetSources',
@@ -1012,8 +1922,10 @@ describe('configuration helpers', () => {
 			'fileSystemPath',
 			'hasAsciiUrlControl',
 			'isBoundaryExemptModule',
+			'isExtractorModule',
 			'isOutsideWorkspacePath',
 			'isPackageBoundary',
+			'isStringList',
 			'isStylesheetPath',
 			'isWorkspaceBoundaryModule',
 			'outputBoundary',
@@ -1021,8 +1933,11 @@ describe('configuration helpers', () => {
 			'packageNameOf',
 			'packageRootForResolved',
 			'packageRootOf',
+			'parseProjectScope',
 			'physicalPath',
 			'readBoundedFile',
+			'readCompilerOutput',
+			'rewriteCoreSpecifier',
 			'sourceFallback',
 			'trustedPackageRootFor',
 			'workspacePath',
@@ -1220,4 +2135,259 @@ describe('configuration helpers', () => {
 			rmSync(workspace, { recursive: true, force: true })
 		}
 	})
+
+	it('reads the compiler scope and fixed extractor override a declaration roll-up requires', () => {
+		const compiler = createRequire(import.meta.url).resolve('typescript/bin/tsc')
+		// The order mirrors ENVIRONMENTS in src/core/constants.ts; a server-only workspace vendors
+		// no core project, so this walks to the first face the workspace actually carries.
+		const faces = ['core', 'browser', 'server']
+		const face = faces.find((candidate) =>
+			existsSync(resolve(root, `configs/src/tsconfig.${candidate}.json`)),
+		)
+		if (face === undefined) throw new Error('The workspace declares no face project')
+		const project = resolve(root, `configs/src/tsconfig.${face}.json`)
+		const declared: unknown = JSON.parse(readFileSync(project, 'utf8'))
+		if (typeof declared !== 'object' || declared === null) {
+			throw new Error(`The ${face} project is not a TypeScript configuration record`)
+		}
+		const declaredOptions: unknown = Object.getOwnPropertyDescriptor(
+			declared,
+			'compilerOptions',
+		)?.value
+		if (typeof declaredOptions !== 'object' || declaredOptions === null) {
+			throw new Error(`The ${face} project carries no compiler options`)
+		}
+		const declaredLib: unknown = Object.getOwnPropertyDescriptor(declaredOptions, 'lib')?.value
+		const declaredTypes: unknown = Object.getOwnPropertyDescriptor(declaredOptions, 'types')?.value
+		if (!configHelpers.isStringList(declaredLib) || !configHelpers.isStringList(declaredTypes)) {
+			throw new Error(`The ${face} project declares no lib or types`)
+		}
+		const declaredRootDir: unknown = Object.getOwnPropertyDescriptor(
+			declaredOptions,
+			'rootDir',
+		)?.value
+		if (typeof declaredRootDir !== 'string') {
+			throw new Error(`The ${face} project declares no rootDir`)
+		}
+		const expectedRoot = resolve(dirname(project), declaredRootDir)
+
+		const scope = configHelpers.parseProjectScope(
+			configHelpers.readCompilerOutput(compiler, ['--showConfig', '-p', project]),
+			project,
+		)
+		if (scope === undefined) throw new Error(`The ${face} project resolved no compiler scope`)
+		// The compiler lowercases every resolved library name, so the committed project is the
+		// second mechanism this reading is compared against rather than the reading itself.
+		expect(scope.lib.map((entry) => entry.toLowerCase())).toStrictEqual(
+			declaredLib.map((entry) => entry.toLowerCase()),
+		)
+		expect(scope.types).toStrictEqual(declaredTypes)
+		expect(scope.root).toBe(expectedRoot)
+
+		expect(configHelpers.parseProjectScope('not a configuration', project)).toBeUndefined()
+		expect(
+			configHelpers.parseProjectScope('{"compilerOptions":{"lib":[],"types":[]}}', project),
+		).toBeUndefined()
+		expect(
+			configHelpers.parseProjectScope('{"compilerOptions":{"lib":[1],"rootDir":"."}}', project),
+		).toBeUndefined()
+		expect(() =>
+			configHelpers.readCompilerOutput(compiler, [
+				'--showConfig',
+				'-p',
+				resolve(root, 'configs/src/tsconfig.absent.json'),
+			]),
+		).toThrow('The declaration compiler failed')
+
+		expect(configHelpers.isStringList(['a', 'b'])).toBe(true)
+		expect(configHelpers.isStringList([])).toBe(true)
+		expect(configHelpers.isStringList(['a', 1])).toBe(false)
+		expect(configHelpers.isStringList('a')).toBe(false)
+
+		// The extractor runs its own bundled engine, so this override is the whole option set the
+		// roll-up may hand it: passing more leaves that engine unable to follow a symbol.
+		expect(
+			configHelpers.buildExtractorOverride('/w/dist/index.d.ts', ['esnext'], ['node']),
+		).toStrictEqual({
+			compilerOptions: {
+				types: ['node'],
+				lib: ['esnext'],
+				target: 'ESNext',
+				module: 'ESNext',
+				moduleResolution: 'bundler',
+				skipLibCheck: true,
+				strict: true,
+			},
+			files: ['/w/dist/index.d.ts'],
+		})
+
+		const name = configHelpers.packageManifestName(configHelpers.WORKSPACE_ROOT)
+		if (name === undefined) throw new Error('The workspace manifest names no package')
+		expect(configHelpers.rewriteCoreSpecifier("from '@src/core'")).toBe(`from '${name}'`)
+		expect(configHelpers.rewriteCoreSpecifier("from '../../core/index.js'")).toBe(`from '${name}'`)
+		expect(configHelpers.rewriteCoreSpecifier("from './sibling.js'")).toBe("from './sibling.js'")
+
+		// The mechanism the roll-up proof's skip reads: an absent package rejects resolution.
+		expect(() => createRequire(import.meta.url).resolve('@absent/declaration-extractor')).toThrow(
+			'Cannot find module',
+		)
+
+		expect(configHelpers.isExtractorModule(undefined)).toBe(false)
+		expect(configHelpers.isExtractorModule({ Extractor: {}, ExtractorConfig: {} })).toBe(false)
+		expect(
+			configHelpers.isExtractorModule({
+				Extractor: () => undefined,
+				ExtractorConfig: () => undefined,
+			}),
+		).toBe(false)
+		expect(
+			configHelpers.isExtractorModule({
+				Extractor: Object.assign(() => undefined, { invoke: () => undefined }),
+				ExtractorConfig: Object.assign(() => undefined, { prepare: () => undefined }),
+			}),
+		).toBe(true)
+
+		// The guard reads `invoke` and `prepare` through the prototype chain, as its remarks state.
+		expect(
+			configHelpers.isExtractorModule({
+				Extractor: Object.setPrototypeOf(() => undefined, { invoke: () => undefined }),
+				ExtractorConfig: Object.setPrototypeOf(() => undefined, { prepare: () => undefined }),
+			}),
+		).toBe(true)
+	})
+
+	// A hoisted install can place the extractor anywhere `require.resolve` reaches, so the skip
+	// control compares against the path resolution actually returned rather than a fixed layout.
+	it.skipIf(extractorPath === undefined)('finds the resolved extractor on disk', () => {
+		if (extractorPath === undefined) throw new Error('The extractor resolution left no path')
+		expect(existsSync(extractorPath)).toBe(true)
+	})
+
+	it.skipIf(extractorPath !== undefined)('rejects resolving the unavailable extractor', () => {
+		expect(() => createRequire(import.meta.url).resolve('@microsoft/api-extractor')).toThrow(
+			'Cannot find module',
+		)
+	})
+
+	// The roll-up loads the declaration extractor, which only a workspace publishing source from
+	// `src` installs. Where `require.resolve` rejects that package, this proof does not apply.
+	it.skipIf(extractorPath === undefined)(
+		'rolls one face into a single declaration and rewrites its core specifier',
+		async () => {
+			const scratch = createPolicyScratch({ prefix: 'orkestrel-config-rollup-' })
+			// The hook's temporary declaration emit is proven removed: no name beginning
+			// `orkestrel-declarations-` present after the builds that was absent before them.
+			const before = new Set(
+				readdirSync(tmpdir()).filter((entry) => entry.startsWith('orkestrel-declarations-')),
+			)
+			try {
+				const workspace = scratch.path
+				const project = join(workspace, 'tsconfig.json')
+				const source = join(workspace, 'source', 'server', 'index.ts')
+				scratch.write(
+					'tsconfig.json',
+					JSON.stringify({
+						compilerOptions: {
+							target: 'ESNext',
+							module: 'ESNext',
+							moduleResolution: 'bundler',
+							lib: ['ESNext'],
+							types: [],
+							strict: true,
+							verbatimModuleSyntax: true,
+							skipLibCheck: true,
+							declaration: true,
+							emitDeclarationOnly: true,
+							noEmit: false,
+							rootDir: './source',
+							outDir: './emit',
+							paths: { '@src/core': ['./source/core/index.ts'] },
+						},
+						include: ['./source/server/**/*.ts'],
+					}),
+				)
+				scratch.write(
+					'source/core/index.ts',
+					'export interface FixtureLabel {\n\treadonly label: string\n}\n',
+				)
+				scratch.write(
+					'source/server/index.ts',
+					"import type { FixtureLabel } from '@src/core'\n\nexport interface FixtureRecord {\n\treadonly label: FixtureLabel\n\treadonly count: number\n}\n",
+				)
+
+				const name = configHelpers.packageManifestName(configHelpers.WORKSPACE_ROOT)
+				if (name === undefined) throw new Error('The workspace manifest names no package')
+				const rewritten = join(workspace, 'rewritten')
+				const kept = join(workspace, 'kept')
+				const builds = [
+					{ output: rewritten, rewrite: true },
+					{ output: kept, rewrite: false },
+				]
+				for (const face of builds) {
+					await build({
+						root: workspace,
+						configFile: false,
+						logLevel: 'silent',
+						publicDir: false,
+						plugins: [
+							configHelpers.declarationRollup(
+								face.rewrite
+									? { project, rewrite: configHelpers.rewriteCoreSpecifier }
+									: { project },
+							),
+						],
+						build: {
+							write: true,
+							outDir: face.output,
+							lib: {
+								entry: source,
+								formats: ['es'],
+								fileName: () => 'index.js',
+							},
+							rolldownOptions: { external: [/^node:/u, /^@orkestrel\//u] },
+						},
+					})
+				}
+
+				const idle = join(workspace, 'idle')
+				const serving = configHelpers.declarationRollup({
+					project,
+					rewrite: configHelpers.rewriteCoreSpecifier,
+				})
+				const configure = serving.configResolved
+				const close = serving.closeBundle
+				if (typeof configure !== 'function' || typeof close !== 'function') {
+					throw new Error('The declaration roll-up exposes no build hooks')
+				}
+				Reflect.apply(configure, undefined, [
+					{ command: 'serve', root: workspace, build: { outDir: idle, lib: { entry: source } } },
+				])
+				await Reflect.apply(close, undefined, [])
+
+				const after = readdirSync(tmpdir()).filter((entry) =>
+					entry.startsWith('orkestrel-declarations-'),
+				)
+				expect(after.every((entry) => before.has(entry))).toBe(true)
+
+				// The face ships exactly one declaration: the emit's scratch tree leaves with it.
+				expect(globSync('**/*.d.ts', { cwd: rewritten })).toStrictEqual(['index.d.ts'])
+				expect(existsSync(join(rewritten, 'declarations'))).toBe(false)
+				expect(globSync('**/*.d.ts', { cwd: kept })).toStrictEqual(['index.d.ts'])
+				expect(existsSync(join(kept, 'declarations'))).toBe(false)
+				expect(existsSync(idle)).toBe(false)
+
+				const rolled = readFileSync(join(rewritten, 'index.d.ts'), 'utf8')
+				expect(rolled).toContain('FixtureRecord')
+				expect(rolled).toContain(`from '${name}'`)
+				expect(rolled).not.toContain('@src/core')
+
+				// The control: the same face without a rewrite ships the specifier the extractor kept.
+				const control = readFileSync(join(workspace, 'kept', 'index.d.ts'), 'utf8')
+				expect(control).toContain('@src/core')
+				expect(control).not.toContain(`from '${name}'`)
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
 })

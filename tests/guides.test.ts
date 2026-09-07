@@ -9,6 +9,7 @@ import {
 	createSource,
 	createSourceManager,
 	extractFenceImports,
+	findDrift,
 	findMissing,
 	findMissingSymbols,
 	findUnexampled,
@@ -30,6 +31,7 @@ import {
 	ShapeCloner,
 	ShapeValidator,
 	createContract,
+	integerShape,
 	objectShape,
 	stringShape,
 } from '@src/core'
@@ -39,6 +41,8 @@ import { DriftedMethods, SMUGGLED_KEY, SmuggledMember } from './setup.js'
 const FENCE_LANGUAGES = Object.freeze(['text', 'ts'])
 /** The fence language whose blocks count as worked examples. */
 const EXAMPLE_LANGUAGE = 'ts'
+/** The one guide this package sources, whose tagline the README pitch equals. */
+const GUIDE_SPEC = 'guides/contract.md'
 /** Each import specifier this package's own guides may resolve against. */
 const MODULES = Object.freeze({ '@orkestrel/contract': 'src/core', '@src/core': 'src/core' })
 /**
@@ -46,7 +50,7 @@ const MODULES = Object.freeze({ '@orkestrel/contract': 'src/core', '@src/core': 
  *
  * A class that one-class-per-file evicted from its single consumer cannot become a
  * local, so it stays exported without being public. Naming it here is what makes that
- * intentional rather than forgotten — and the second assertion below fails when a name
+ * intentional rather than forgotten — and the assertion that follows it fails when a name
  * here stops being stranded, so the list cannot rot.
  */
 const INTERNAL: readonly string[] = Object.freeze([
@@ -55,8 +59,8 @@ const INTERNAL: readonly string[] = Object.freeze([
 	'class ValueInferer',
 ])
 
-/** Root-level files this package's guides link to. `readInventory` walks directories only. */
-const ROOT_FILES = Object.freeze(['AGENTS.md'])
+/** Root-level files these checks read. `readInventory` walks directories only. */
+const ROOT_FILES = Object.freeze(['AGENTS.md', 'README.md'])
 
 const root = new URL('../', import.meta.url)
 const files: Record<string, string> = {
@@ -68,9 +72,59 @@ const manifest = parseManifest(
 	'guides',
 )
 const sources = createSourceManager({ files, modules: MODULES })
+const own = requireValue(
+	manifest.find((entry) => entry.spec === GUIDE_SPEC),
+	`Missing manifest row: ${GUIDE_SPEC}`,
+)
 
 it('manifest lists at least one guide', () => {
 	expect(manifest.length).toBeGreaterThan(0)
+})
+
+// The example half of the equality case is silent over an empty population: with no
+// title on both sides `findDrift` compares no pair and the case passes on the summaries
+// alone. This pins the population this repository's own guide contributes, so removing
+// every `@example` title reddens the suite instead of quietly retiring half the gate.
+// The failure names both title sets, because a pin reporting only its own emptiness
+// leaves the reader to work out which side dropped the title.
+it('pairs at least one example title across the guide and the source', () => {
+	const guide = createGuide(requireValue(files[GUIDE_SPEC], `Missing file: ${GUIDE_SPEC}`))
+	const source = createSource({ files, module: own.source })
+	const declared = source
+		.examples()
+		.map((example) => example.title)
+		.filter((title) => title !== undefined)
+	const titled = new Set(declared)
+	const headings: string[] = []
+	const paired: string[] = []
+	for (const fence of guide.fences()) {
+		if (fence.title === undefined) continue
+		headings.push(fence.title)
+		if (titled.has(fence.title)) paired.push(fence.title)
+	}
+	const unpaired =
+		paired.length > 0
+			? []
+			: [
+					`${GUIDE_SPEC} pairs: guide ${JSON.stringify(headings)} source ${JSON.stringify(declared)}`,
+				]
+	expect(unpaired).toEqual([])
+})
+
+// The README's pitch and the guide's tagline are one text, each read as the blockquote
+// under its file's H1. `README.md` is outside the concept index, so the reader is
+// applied to it directly rather than through a manifest row. Each side is guarded
+// against `undefined` first, so a file that lost its blockquote reports that rather
+// than reporting two absences as agreement.
+it('opens the README with the guide tagline', () => {
+	const pitch = createGuide(requireValue(files['README.md'], 'Missing file: README.md')).tagline()
+	const tagline = createGuide(
+		requireValue(files[GUIDE_SPEC], `Missing file: ${GUIDE_SPEC}`),
+	).tagline()
+
+	expect(pitch).not.toBeUndefined()
+	expect(tagline).not.toBeUndefined()
+	expect(pitch).toBe(tagline)
 })
 
 for (const entry of manifest) {
@@ -108,25 +162,53 @@ for (const entry of manifest) {
 		})
 
 		for (const group of guide.methods()) {
-			const members = source.methods(group.interface)
+			const members = source.methods(group.interface).map((method) => method.name)
+			const documented = group.methods.map((method) => method.name)
 			const entity = group.interface.replace(/Interface$/, '')
 			describe(`${group.interface}`, () => {
 				it('documents at least one method', () => {
 					expect(group.methods.length).toBeGreaterThan(0)
 				})
 				it('documents every interface method', () => {
-					expect(findMissing(members, group.methods)).toEqual([])
+					expect(findMissing(members, documented)).toEqual([])
 				})
 				it('documents no phantom method', () => {
-					expect(findMissing(group.methods, members)).toEqual([])
+					expect(findMissing(documented, members)).toEqual([])
 				})
 				it(`${entity} exposes no undocumented method`, () => {
 					const extra =
-						entity === group.interface ? [] : findMissing(source.methods(entity), group.methods)
+						entity === group.interface
+							? []
+							: findMissing(
+									source.methods(entity).map((method) => method.name),
+									documented,
+								)
 					expect(extra).toEqual([])
 				})
 			})
 		}
+
+		// The equality gate: a `Summary` cell against its export's description paragraph, a
+		// titled fence against the `@example` of that title. `findDrift` owns the comparison
+		// and names both sides; converge the two sides with `npm run docs`, never by
+		// weakening this assertion. `findDrift` pairs an example only where a title is
+		// present on both sides, so an untitled `@example` block is outside this case. Each
+		// collected line is the spec, the key, and each side's text or `absent` — the same
+		// worklist `npm run docs` prints, so a failure here is read the way that command's
+		// output is.
+		// `findDrift` measured 5.6 s on this guide alone on an idle host — it takes one
+		// source lookup per compared row, over every line this package declares — so the
+		// default 5-second budget cannot hold it. This budget clears that reading with room
+		// for a contended host, and the cost is the reader's rather than this package's.
+		it('keeps every compared summary and example equal to its source', () => {
+			const disagreeing: string[] = []
+			for (const drift of findDrift(guide, source)) {
+				const left = drift.guide === undefined ? 'absent' : JSON.stringify(drift.guide)
+				const right = drift.source === undefined ? 'absent' : JSON.stringify(drift.source)
+				disagreeing.push(`${entry.spec} ${drift.key}: guide ${left} source ${right}`)
+			}
+			expect(disagreeing).toEqual([])
+		}, 30_000)
 
 		it('documents an example for every Surface function', () => {
 			const fences = guide
@@ -137,22 +219,32 @@ for (const entry of manifest) {
 				.surface()
 				.filter((symbol) => symbol.keyword === 'function')
 				.map((symbol) => symbol.name)
-			expect(findUnexampled(names, fences, source.examples())).toEqual([])
+			expect(
+				findUnexampled(
+					names,
+					fences,
+					source.examples().map((example) => example.name),
+				),
+			).toEqual([])
 		})
 
 		for (const group of guide.methods()) {
 			const entity = group.interface.replace(/Interface$/, '')
+			const documented = group.methods.map((method) => method.name)
+			const examples =
+				entity === group.interface
+					? source.examples(group.interface).map((example) => example.name)
+					: source
+							.examples(group.interface)
+							.map((example) => example.name)
+							.concat(source.examples(entity).map((example) => example.name))
 			describe(`${group.interface} examples`, () => {
 				it('documents an example for every method', () => {
 					const fences = guide
 						.fences()
 						.filter((fence) => fence.language === EXAMPLE_LANGUAGE)
 						.map((fence) => fence.code)
-					const examples =
-						entity === group.interface
-							? source.examples(group.interface)
-							: source.examples(group.interface).concat(source.examples(entity))
-					expect(findUnexampled(group.methods, fences, examples)).toEqual([])
+					expect(findUnexampled(documented, fences, examples)).toEqual([])
 				})
 			})
 		}
@@ -192,7 +284,6 @@ for (const entry of manifest) {
 // every declaration in the tree and still disagree with the object the package
 // actually ships. These read the real prototypes instead, and the text half and
 // the runtime half answer different questions — which is why each is here.
-const CORE_GUIDE = 'guides/contract.md'
 const RUNTIME_CLASSES = [
 	{ name: 'ContractCompiler', value: ContractCompiler },
 	{ name: 'ContractError', value: ContractError },
@@ -227,10 +318,14 @@ function readMembers(prototype: object): {
 }
 
 describe('runtime parity', () => {
-	const guideText = requireValue(files[CORE_GUIDE], `Missing file: ${CORE_GUIDE}`)
+	const guideText = requireValue(files[GUIDE_SPEC], `Missing file: ${GUIDE_SPEC}`)
 	const contractGuide = createGuide(guideText)
 	const documented = new Map<string, readonly string[]>()
-	for (const group of contractGuide.methods()) documented.set(group.interface, group.methods)
+	for (const group of contractGuide.methods())
+		documented.set(
+			group.interface,
+			group.methods.map((method) => method.name),
+		)
 
 	it('enumerates every class the barrel publishes', () => {
 		// The per-class checks below are worth exactly as much as this list is
@@ -289,7 +384,7 @@ describe('runtime parity', () => {
 // values their comments claim. Change a fence, change the transcription beside
 // it.
 describe('flagship fences', () => {
-	const guideText = requireValue(files[CORE_GUIDE], `Missing file: ${CORE_GUIDE}`)
+	const guideText = requireValue(files[GUIDE_SPEC], `Missing file: ${GUIDE_SPEC}`)
 
 	it('answers from a compiled guard that no live compiler is behind', () => {
 		// Transcribed from the compiling-a-contract passage, which tells a reader
@@ -312,6 +407,46 @@ describe('flagship fences', () => {
 		)
 		expect(guideText).toContain("isTicket({ id: 'T-1' }) // true")
 		expect(guideText).toContain("isTicket({ id: '' }) // false")
+	})
+
+	it('parses and explains the user contract the titled fence builds', () => {
+		// The titled `Compiling a contract` fence, executed. Its parse line claims the
+		// refinement is enforced on the parse side as well as the guard side, and its
+		// explain line claims the exact fault a violation produces, so each runs here
+		// rather than being read as text.
+		const user = createContract(objectShape({ name: stringShape({ min: 1 }), age: integerShape() }))
+
+		expect(user.is({ name: 'Ada', age: 36 })).toBe(true)
+		expect(user.parse({ name: 'Ada', age: '36' })).toEqual({ name: 'Ada', age: 36 })
+		expect(user.parse({ name: '', age: 36 })).toBeUndefined()
+		expect(user.explain({ name: '', age: 36 })).toEqual([
+			{
+				reason: 'constraint',
+				path: ['name'],
+				expected: 'string',
+				constraint: 'min',
+				limit: 1,
+				received: '""',
+			},
+		])
+	})
+
+	it('carries the user fence lines the transcription copies', () => {
+		expect(guideText).toContain(
+			'const user = createContract(objectShape({ name: stringShape({ min: 1 }), age: integerShape() }))',
+		)
+		expect(guideText).toContain(
+			"user.is({ name: 'Ada', age: 36 }) // true — a typed guard (narrows to Infer<typeof shape>)",
+		)
+		expect(guideText).toContain(
+			"user.parse({ name: 'Ada', age: '36' }) // { name: 'Ada', age: 36 } — coerces, or undefined",
+		)
+		expect(guideText).toContain(
+			"user.parse({ name: '', age: 36 }) // undefined — '' violates name min:1 (parse enforces refinements, like is)",
+		)
+		expect(guideText).toContain(
+			`user.explain({ name: '', age: 36 }) // [{ reason: 'constraint', path: ['name'], expected: 'string', constraint: 'min', limit: 1, received: '""' }]`,
+		)
 	})
 
 	it('answers from a contract whose members disagree about one undeclared key', () => {

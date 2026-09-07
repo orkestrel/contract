@@ -155,7 +155,7 @@ export const VALIDATION_BENCH_OBJECT: ContractShape = Object.freeze({
 })
 
 /**
- * Run an operation expected to throw a {@link ContractError} and return that
+ * Runs an operation expected to throw a {@link ContractError} and returns that
  * error, already narrowed.
  *
  * @remarks
@@ -190,7 +190,7 @@ export function captureContractError(operation: () => unknown): ContractError {
 }
 
 /**
- * One caller-reachable property a terminal path must never depend on.
+ * Names one caller-reachable property a terminal path must never depend on.
  *
  * @remarks
  * The membership rule is deliberately wider than "a member the intrinsic
@@ -217,8 +217,8 @@ export interface TerminalIntrinsic {
 }
 
 /**
- * Replace one data-valued intrinsic member for a synchronous operation and
- * restore its exact own descriptor afterward.
+ * Replaces one data-valued intrinsic member for a synchronous operation and
+ * restores its exact own descriptor afterward.
  *
  * @remarks
  * THE shared intrinsic-redirection instrument. A caller who can reach a mutable
@@ -265,7 +265,7 @@ export function replaceIntrinsic<T>(
 }
 
 /**
- * Build a thrower that raises one exact caller value.
+ * Builds a thrower that raises one exact caller value.
  *
  * @remarks
  * The redirection instruments install a function that must throw a value the
@@ -294,7 +294,7 @@ export function throwSentinel(sentinel: unknown): () => never {
 }
 
 /**
- * A caller-installed protocol hook that refuses every value.
+ * Refuses every value, as a caller-installed protocol hook.
  *
  * @remarks
  * The SILENT half of protocol-hook redirection, and the half a thrower cannot
@@ -317,8 +317,8 @@ export function denyRecognition(): boolean {
 }
 
 /**
- * The outcome an instrument's UNARMED pass reports so the armed pass alone
- * decides the sweep's verdict.
+ * Returns the outcome an instrument's UNARMED pass reports, so the armed pass
+ * alone decides the sweep's verdict.
  *
  * @remarks
  * Every redirection instrument runs its operation twice — once with the
@@ -344,8 +344,8 @@ export function createInertOutcome<T>(value: T): Result<T> {
 }
 
 /**
- * The replaceable global constructors a terminal path may not build its own
- * working state through.
+ * Lists the replaceable global constructors a terminal path may not build its
+ * own working state through.
  *
  * @remarks
  * Drawn because capturing a prototype MEMBER and capturing the CONSTRUCTOR are
@@ -353,7 +353,7 @@ export function createInertOutcome<T>(value: T): Result<T> {
  * `.add` rows reports green for an engine that still reaches
  * `globalThis.WeakSet` — the constructor call happens before the first member
  * dispatch, so the member rows never run. `Map` and `WeakMap` sit inside the
- * same rule and were simply undrawn.
+ * same rule and were undrawn.
  */
 export const TERMINAL_CONSTRUCTORS: readonly TerminalIntrinsic[] = Object.freeze([
 	Object.freeze({
@@ -383,8 +383,8 @@ export const TERMINAL_CONSTRUCTORS: readonly TerminalIntrinsic[] = Object.freeze
 ])
 
 /**
- * The symbol-keyed protocol hooks a terminal path may not dispatch through
- * unguarded.
+ * Lists the symbol-keyed protocol hooks a terminal path may not dispatch
+ * through unguarded.
  *
  * @remarks
  * The third hostile shape, and the one a string-keyed corpus could not write
@@ -430,8 +430,8 @@ export const TERMINAL_HOOKS: readonly TerminalIntrinsic[] = Object.freeze([
 ])
 
 /**
- * Install an accessor for a property a prototype does not own, for one
- * synchronous operation, and remove it afterward.
+ * Installs an accessor for a property a prototype does not own, for one
+ * synchronous operation, and removes it afterward.
  *
  * @remarks
  * THE prototype-pollution instrument, and the half of the redirection surface
@@ -477,8 +477,8 @@ export function pollutePrototype<T>(
 }
 
 /**
- * A prototype pollution a caller-supplied source arms from inside its own
- * reflective trap, once the operation walking it has already begun.
+ * Arms a prototype pollution from inside a caller-supplied source's own
+ * reflective trap, after the operation walking it has already begun.
  *
  * @remarks
  * The control drawn from OUTSIDE {@link TerminalIntrinsic}'s membership rule.
@@ -542,7 +542,7 @@ export class ReentrantPollution {
 }
 
 /**
- * Redirect one {@link TerminalIntrinsic} to a throwing sentinel for the
+ * Redirects one {@link TerminalIntrinsic} to a throwing sentinel for the
  * duration of a synchronous operation.
  *
  * @remarks
@@ -578,7 +578,7 @@ export function redirectIntrinsic<T>(
 }
 
 /**
- * The reflective operations every redirection instrument performs, captured
+ * Holds the reflective operations every redirection instrument performs, taken
  * while this setup module evaluates.
  *
  * @remarks
@@ -607,8 +607,8 @@ export const captured = Object.freeze({
 })
 
 /**
- * Replaceable string-keyed members of the host intrinsics, drawn as one
- * population rather than sampled by kind.
+ * Lists the replaceable string-keyed members of the host intrinsics, drawn as
+ * one population rather than sampled by kind.
  *
  * @remarks
  * Membership rule: *a string-keyed member of a host intrinsic object or a host
@@ -763,8 +763,8 @@ export const TERMINAL_MEMBERS: readonly TerminalIntrinsic[] = Object.freeze(
 // preserved as an instrument that can pass without exercising recognition.
 
 /**
- * Caller-writable members on the PROTOTYPES of the classes this package
- * exports, derived by reflection rather than listed.
+ * Collects the caller-writable members on the PROTOTYPES of the classes this
+ * package exports, derived by reflection rather than listed.
  *
  * @remarks
  * Membership rule: *a writable own member of the `prototype` of any value the
@@ -825,8 +825,8 @@ export const OWNED_MEMBERS: readonly TerminalIntrinsic[] = Object.freeze(
 )
 
 /**
- * Replace the getter of an EXISTING accessor member for one synchronous
- * operation and restore its exact descriptor afterward.
+ * Replaces the getter of an EXISTING accessor member for one synchronous
+ * operation and restores its exact descriptor afterward.
  *
  * @remarks
  * The third redirection shape. {@link replaceIntrinsic} needs a DATA descriptor
@@ -869,7 +869,7 @@ export function replaceAccessor<T>(
 	}
 }
 
-/** A lying membership answer that refuses once a fixed amount of work has happened. */
+/** Represents a lying membership answer that refuses after a fixed amount of work. */
 export interface WorkBoundInterface {
 	/** The lying answer, which throws the overflow value once the bound is passed. */
 	readonly deny: () => boolean
@@ -878,7 +878,7 @@ export interface WorkBoundInterface {
 }
 
 /**
- * Build a work-bounded lying membership answer.
+ * Builds a work-bounded lying membership answer.
  *
  * @remarks
  * The corpus shape no existing instrument can express. Every redirection
@@ -886,7 +886,7 @@ export interface WorkBoundInterface {
  * `lieIntrinsic` hand back the operation's result, `fingerprintOwnership`
  * fingerprints a returned value, `contain` classifies a thrown one — so a
  * redirect whose damage is that the door never returns at all is invisible to
- * all of them, and a suite that arms one simply hangs. This makes
+ * all of them, and a suite that arms one hangs. This makes
  * non-termination a reportable verdict: the substitute answers the lie until
  * the bound is passed and then throws a value the test can compare by identity,
  * so a door that lost its termination guarantee names itself in bounded time.
@@ -914,7 +914,7 @@ export function createWorkBound(limit: number, overflow: unknown): WorkBoundInte
 }
 
 /**
- * One redirect that answers plausibly instead of throwing.
+ * Represents one redirect that answers plausibly instead of throwing.
  *
  * @remarks
  * The fourth hostile shape, and the one enumerated by EFFECT rather than by
@@ -1276,8 +1276,8 @@ export const TERMINAL_LIES: readonly TerminalLie[] = Object.freeze([
 ])
 
 /**
- * Install one {@link TerminalLie} for the duration of a synchronous operation
- * and restore the exact own descriptor afterward.
+ * Installs one {@link TerminalLie} for the duration of a synchronous operation
+ * and restores the exact own descriptor afterward.
  *
  * @remarks
  * Arming, observation, and restoration all run through {@link captured}, so a
@@ -1310,7 +1310,7 @@ export function lieIntrinsic<T>(lie: TerminalLie, operation: (armed: boolean) =>
 }
 
 /**
- * Name every row whose control answers `true` while that row is NOT armed.
+ * Names every row whose control answers `true` while that row is NOT armed.
  *
  * @remarks
  * Membership rule, stated because this instrument shipped without one while
@@ -1355,7 +1355,7 @@ export function findVacuousControls(lies: readonly TerminalLie[]): readonly stri
 }
 
 /**
- * Name every row whose control reports a lie while the member behaves honestly.
+ * Names every row whose control reports a lie while the member behaves honestly.
  *
  * @remarks
  * Membership rule: *a {@link TerminalLie} row whose `control()` answers truthy
@@ -1411,7 +1411,7 @@ export function findInstallationControls(lies: readonly TerminalLie[]): readonly
 }
 
 /**
- * Fingerprint a published value's ownership facts through captured reflection.
+ * Fingerprints a published value's ownership facts through captured reflection.
  *
  * @remarks
  * The fidelity question a throwing corpus never asks: not "did anything
@@ -1453,8 +1453,8 @@ export function fingerprintOwnership(value: unknown, ancestors: readonly object[
 }
 
 /**
- * One public entry of the core barrel, paired with what its contract permits it
- * to publish when its path fails.
+ * Represents one public entry of the core barrel, paired with what its contract
+ * permits it to publish when its path fails.
  *
  * @remarks
  * A sweep is only as wide as its door population, and a door population sampled
@@ -1471,7 +1471,7 @@ export interface PublicDoor {
 }
 
 /**
- * Build the public-door registry every redirection sweep drives.
+ * Builds the public-door registry every redirection sweep drives.
  *
  * @remarks
  * Enumerated from `src/core/index.ts` rather than sampled, and built fresh per
@@ -1680,8 +1680,8 @@ export function publicDoors(): readonly PublicDoor[] {
 }
 
 /**
- * An object declaration whose property map rewrites the graph the SECOND time
- * it is enumerated.
+ * Provides an object declaration whose property map rewrites the graph the
+ * SECOND time it is enumerated.
  *
  * @remarks
  * The only instrument that can make a multi-walk door's walks disagree.
@@ -1733,9 +1733,10 @@ export class LateMutation {
 }
 
 /**
- * The own members ECMA-262 20.1.3 requires on every realm's `Object.prototype`
- * — the exact anchor `matchesRecordBrand` identifies a foreign realm by, and
- * therefore the exact set a prototype forgery has to carry.
+ * Lists the own members ECMA-262 20.1.3 requires on every realm's
+ * `Object.prototype` — the exact anchor `matchesRecordBrand` identifies a
+ * foreign realm by, and therefore the exact set a prototype forgery has to
+ * carry.
  */
 export const RECORD_BRAND_MEMBERS: readonly string[] = Object.freeze([
 	'constructor',
@@ -1748,8 +1749,8 @@ export const RECORD_BRAND_MEMBERS: readonly string[] = Object.freeze([
 ])
 
 /**
- * Stamp a prototype with this realm's REAL value for every mandated member it
- * does not already own, and reparent it to `null`, so it satisfies the record
+ * Stamps a prototype with this realm's REAL value for every mandated member it
+ * does not already own, and reparents it to `null`, so it satisfies the record
  * brand the way an actual attacker would.
  *
  * @remarks
@@ -1790,8 +1791,8 @@ export function forgeRecordBrand(prototype: object): object {
 }
 
 /**
- * Stamp a prototype with `undefined`-valued mandated members and reparent it to
- * `null` — the cheapest forgery, retained as a named control.
+ * Stamps a prototype with `undefined`-valued mandated members and reparents it
+ * to `null` — the cheapest forgery, retained as a named control.
  *
  * @remarks
  * Kept precisely because {@link forgeRecordBrand} no longer produces it. A
@@ -1823,15 +1824,16 @@ export function forgeBlankBrand(prototype: object): object {
 	return prototype
 }
 
-/** A structurally valid string declaration with a non-record class brand. */
+/** Represents a structurally valid string declaration with a non-record class brand. */
 export class StringDeclaration implements StringShape {
 	readonly category = 'string'
 	readonly min = 1
 }
 
 /**
- * A structurally valid string declaration whose class prototype is reparented
- * to `null`, so its instances satisfy the retired two-link brand test.
+ * Represents a structurally valid string declaration whose class prototype is
+ * reparented to `null`, so its instances satisfy the retired two-link brand
+ * test.
  */
 export class NullBaseDeclaration implements StringShape {
 	readonly category = 'string'
@@ -1845,8 +1847,9 @@ export class NullBaseDeclaration implements StringShape {
 Object.setPrototypeOf(NullBaseDeclaration.prototype, null)
 
 /**
- * A string declaration whose class prototype is reparented AND stamped with the
- * mandated realm members, while a live prototype method survives on it.
+ * Represents a string declaration whose class prototype is reparented AND
+ * stamped with the mandated realm members, while a live prototype method
+ * survives on it.
  *
  * @remarks
  * The residual population the record brand cannot refuse. It is not a
@@ -1881,8 +1884,9 @@ export class ForgedBrandDeclaration implements StringShape {
 forgeRecordBrand(ForgedBrandDeclaration.prototype)
 
 /**
- * A string declaration whose forged prototype owns EXACTLY the mandated realm
- * members, with its live behavior carried on the instance instead.
+ * Represents a string declaration whose forged prototype owns EXACTLY the
+ * mandated realm members, with its live behavior carried on the instance
+ * instead.
  *
  * @remarks
  * The control that decides what an own-key rule on the prototype could buy. A
@@ -1903,8 +1907,8 @@ export class StrippedBrandDeclaration implements StringShape {
 forgeRecordBrand(StrippedBrandDeclaration.prototype)
 
 /**
- * A string declaration whose forged prototype carries the mandated names with
- * NO values — the control the function-value rule must refuse.
+ * Represents a string declaration whose forged prototype carries the mandated
+ * names with NO values — the control the function-value rule must refuse.
  *
  * @remarks
  * The forgery corpus's membership rule is "a prototype made to answer the seven
@@ -1926,8 +1930,9 @@ export class BlankBrandDeclaration implements StringShape {
 forgeBlankBrand(BlankBrandDeclaration.prototype)
 
 /**
- * A string declaration whose class prototype is left exactly as JavaScript
- * built it — the untouched control for {@link createProxiedBrandDeclaration}.
+ * Represents a string declaration whose class prototype is left exactly as
+ * JavaScript built it — the untouched control for
+ * {@link createProxiedBrandDeclaration}.
  */
 export class ProxiedBrandDeclaration implements StringShape {
 	readonly category = 'string'
@@ -1940,7 +1945,7 @@ export class ProxiedBrandDeclaration implements StringShape {
 }
 
 /**
- * Create a string declaration whose prototype is a `Proxy` over an UNTOUCHED
+ * Creates a string declaration whose prototype is a `Proxy` over an UNTOUCHED
  * class prototype that answers the brand's questions as a realm would.
  *
  * @remarks
@@ -1989,7 +1994,7 @@ export function createProxiedBrandDeclaration(): StringShape {
 	return value
 }
 
-/** Mutable scalar carrier used to detect forbidden RegExp coercion and retention. */
+/** Carries a mutable scalar that detects forbidden RegExp coercion and retention. */
 export class PatternCarrier {
 	#text: string
 	#count: number
@@ -2025,7 +2030,7 @@ export class PatternCarrier {
 	}
 }
 
-/** A type-correct string shape carrying one hostile RegExp scalar population. */
+/** Represents a type-correct string shape carrying one hostile RegExp scalar population. */
 export class PatternFixture {
 	readonly carrier: PatternCarrier
 	readonly shape: StringShape
@@ -2059,8 +2064,8 @@ export class PatternFixture {
 }
 
 /**
- * A type-correct string shape whose genuine frozen `RegExp` scalars answer one
- * `source` observation each and refuse every later one.
+ * Represents a type-correct string shape whose genuine frozen `RegExp` scalars
+ * answer one `source` observation each and refuse every later one.
  *
  * @remarks
  * The population that separates a capture schedule from a reread: a scalar pair
@@ -2108,12 +2113,12 @@ export class SingleReadPattern {
 	}
 }
 
-/** Factory callback that gives a fixture source access to its live population. */
+/** Represents a factory callback giving a fixture source access to its live population. */
 export type RetentionFactory<TSource, TPopulation extends object> = (
 	read: () => TPopulation,
 ) => TSource
 
-/** Stateful caller-owned population whose retained target can be released. */
+/** Holds a stateful caller-owned population whose retained target can be released. */
 export class RetentionFixture<TSource, TPopulation extends object> {
 	readonly reference: WeakRef<object>
 	readonly source: TSource
@@ -2144,7 +2149,7 @@ export class RetentionFixture<TSource, TPopulation extends object> {
 }
 
 /**
- * Create a shape population for terminal working-state retention proofs.
+ * Creates a shape population for terminal working-state retention proofs.
  *
  * @param label - Large child description seed
  * @param invalid - Whether one property is an invalid structural child
@@ -2184,7 +2189,7 @@ export function createShapeRetention(
 }
 
 /**
- * Create a union population for terminal working-state retention proofs.
+ * Creates a union population for terminal working-state retention proofs.
  *
  * @remarks
  * The object population reaches a cloner's property map but never its variant
@@ -2229,14 +2234,14 @@ export function createVariantRetention(
 	)
 }
 
-/** Schema retention fixture with its exact genuine traversal failure. */
+/** Pairs a schema retention fixture with its exact genuine traversal failure. */
 export interface SchemaRetentionFixture {
 	readonly fixture: RetentionFixture<JSONSchema, { readonly child: JSONSchema }>
 	readonly reason: Error
 }
 
 /**
- * Create a schema population for terminal working-state retention proofs.
+ * Creates a schema population for terminal working-state retention proofs.
  *
  * @param label - Large child description seed
  * @param invalid - Whether enumeration advertises one failing property read
@@ -2266,7 +2271,7 @@ export function createSchemaRetention(label: string, invalid: boolean): SchemaRe
 }
 
 /**
- * Execute one synchronous operation with a replacement string-iterator getter.
+ * Executes one synchronous operation with a replacement string-iterator getter.
  *
  * @param replacement - Getter installed for the mutable iterator property
  * @param operation - Operation to execute while the getter is installed
@@ -2295,7 +2300,7 @@ export function replaceStringIterator<T>(replacement: () => unknown, operation: 
 }
 
 /**
- * Execute one synchronous operation with a replacement string-slice getter.
+ * Executes one synchronous operation with a replacement string-slice getter.
  *
  * @param replacement - Getter installed for the mutable slice property
  * @param operation - Operation to execute while the getter is installed
@@ -2324,7 +2329,7 @@ export function replaceStringSlice<T>(replacement: () => unknown, operation: () 
 }
 
 /**
- * Create a schema with one present-but-undefined structural keyword.
+ * Creates a schema with one present-but-undefined structural keyword.
  *
  * @param keyword - Structural keyword to populate
  * @returns A schema carrying the hostile keyword through reflected mutation
@@ -2336,7 +2341,7 @@ export function createUndefinedSchema(keyword: 'items' | 'additionalProperties')
 }
 
 /**
- * A genuine `Array` exotic object that is also a `JSONSchema`.
+ * Represents a genuine `Array` exotic object that is also a `JSONSchema`.
  *
  * @remarks
  * `Array.isArray` answers `true` for an instance because it IS an array, and an
@@ -2359,7 +2364,7 @@ export class ArrayRootSchema extends Array<JSONSchema> implements JSONSchema {
 }
 
 /**
- * A `SampleMemo` carried by a class instance rather than by the plain record
+ * Carries a `SampleMemo` on a class instance rather than on the plain record
  * `buildSampleMemo` returns.
  *
  * @remarks
@@ -2374,7 +2379,7 @@ export class ClassSampleMemo implements SampleMemo {
 	readonly schemas: Map<string, JSONSchema> = new Map()
 }
 
-/** A generic readonly tree used by cross-module integration fixtures. */
+/** Represents a generic readonly tree used by cross-module integration fixtures. */
 export interface Tree<T> {
 	/** Value stored at this node. */
 	readonly value: T
@@ -2383,7 +2388,7 @@ export interface Tree<T> {
 }
 
 /**
- * Build a complete two-child tree from a value callback.
+ * Builds a complete two-child tree from a value callback.
  *
  * @param value - Callback producing each node value
  * @param depth - Number of child levels below the root
@@ -2397,7 +2402,7 @@ export function buildTree<T>(value: () => T, depth: number): Tree<T> {
 }
 
 /**
- * Throw from a deliberately hostile fixture operation.
+ * Throws from a deliberately hostile fixture operation.
  *
  * @returns Never returns because hostile access always throws
  *
@@ -2411,7 +2416,7 @@ export function throwHostileAccess(): never {
 }
 
 /**
- * Advance an infinite numeric iterator by one entry.
+ * Advances an infinite numeric iterator by one entry.
  *
  * @returns An unfinished iterator result carrying zero
  *
@@ -2425,7 +2430,7 @@ export function advanceInfiniteIterable(): IteratorResult<number> {
 }
 
 /**
- * Return an infinite iterator from its iterable protocol method.
+ * Returns an infinite iterator from its iterable protocol method.
  *
  * @returns The iterator receiving the protocol call
  *
@@ -2440,7 +2445,7 @@ export function iterateInfiniteIterable(this: IterableIterator<number>): Iterabl
 }
 
 /**
- * Create an object Proxy whose access has been permanently revoked.
+ * Creates an object Proxy whose access has been permanently revoked.
  *
  * @returns A revoked Proxy that throws when inspected
  *
@@ -2457,7 +2462,7 @@ export function createRevokedProxy(): object {
 }
 
 /**
- * Create an array Proxy whose access has been permanently revoked.
+ * Creates an array Proxy whose access has been permanently revoked.
  *
  * @typeParam T - The array element type exposed to the caller
  * @returns A revoked array Proxy that throws when inspected
@@ -2476,7 +2481,7 @@ export function createRevokedArrayProxy<T = unknown>(): readonly T[] {
 }
 
 /**
- * Create a record with an own getter that throws whenever read.
+ * Creates a record with an own getter that throws whenever read.
  *
  * @remarks
  * The key is a parameter because a reader only observes the keys it consumes:
@@ -2502,7 +2507,7 @@ export function createThrowingGetter(key = 'value'): Readonly<Record<string, unk
 }
 
 /**
- * Create a JSON-readable object whose prototype inspection throws.
+ * Creates a JSON-readable object whose prototype inspection throws.
  *
  * @param reason - Exact value thrown by prototype inspection
  * @returns An ordinary-object Proxy hostile only to prototype inspection
@@ -2526,7 +2531,7 @@ export function createThrowingPrototype(reason: unknown): object {
 }
 
 /**
- * Create a record whose own getter returns a different value on every read.
+ * Creates a record whose own getter returns a different value on every read.
  *
  * @remarks
  * The unstable-read fixture: inference samples a value once and the compiled
@@ -2558,7 +2563,7 @@ export function createStatefulGetter(): Readonly<Record<string, unknown>> {
 }
 
 /**
- * Create an array whose own `slice` reports elements it does not hold.
+ * Creates an array whose own `slice` reports elements it does not hold.
  *
  * @remarks
  * The caller-defined method is outside the shared own-index lens. This fixture
@@ -2582,7 +2587,7 @@ export function createUnstableArray(): readonly unknown[] {
 }
 
 /**
- * Create an object whose own-key reflection traps always throw.
+ * Creates an object whose own-key reflection traps always throw.
  *
  * @returns A Proxy hostile to own-key and descriptor inspection
  *
@@ -2603,7 +2608,7 @@ export function createHostileKeys(): object {
 }
 
 /**
- * Build an alternating array-and-record nest around a string leaf.
+ * Builds an alternating array-and-record nest around a string leaf.
  *
  * @param depth - The number of container layers to add
  * @returns `'leaf'` wrapped in `depth` alternating container layers
@@ -2622,7 +2627,7 @@ export function buildDeepNest(depth: number): unknown {
 }
 
 /**
- * Build a machine-scale literal vocabulary — larger than the engine's
+ * Builds a machine-scale literal vocabulary — larger than the engine's
  * spread-argument limit.
  *
  * @remarks
@@ -2648,7 +2653,7 @@ export function buildWideVocabulary(count = 200_000): readonly string[] {
 }
 
 /**
- * Build a finite array-shape nest at an exact depth.
+ * Builds a finite array-shape nest at an exact depth.
  *
  * @param depth - The number of array wrappers around the string leaf
  * @returns The nested contract shape
@@ -2667,7 +2672,7 @@ export function buildDeepShape(depth: number): ContractShape {
 }
 
 /**
- * Build a shared-child shape DAG whose compiled expansion doubles per level.
+ * Builds a shared-child shape DAG whose compiled expansion doubles per level.
  *
  * @remarks
  * Each level binds the SAME child node into two properties, so `levels` authored
@@ -2692,7 +2697,7 @@ export function buildSharedDagShape(levels: number): ContractShape {
 	return shape
 }
 
-/** A declaration, a value graph walking it, and the tally of nodes the walk read. */
+/** Pairs a declaration, a value graph walking it, and the tally of nodes the walk read. */
 export interface CountedGraphInterface {
 	/** The declaration a door compiles. */
 	readonly shape: ContractShape
@@ -2703,7 +2708,7 @@ export interface CountedGraphInterface {
 }
 
 /**
- * Build a counted array/record value graph and the declaration that walks it.
+ * Builds a counted array/record value graph and the declaration that walks it.
  *
  * @remarks
  * The bounded-work instrument. Every level is an array holding two references,
@@ -2765,7 +2770,7 @@ export function buildCountedGraph(levels: number, shared: boolean): CountedGraph
 }
 
 /**
- * Build a two-slot object graph over one authored child node and the tally of
+ * Builds a two-slot object graph over one authored child node and the tally of
  * record reads the walk performs.
  *
  * @remarks
@@ -2811,7 +2816,7 @@ export function buildCountedSlots(shared: boolean): CountedGraphInterface {
 }
 
 /**
- * Create a plain record with one non-enumerable own property.
+ * Creates a plain record with one non-enumerable own property.
  *
  * @param key - The hidden property key
  * @param value - The hidden property value
@@ -2837,7 +2842,7 @@ export function createNonEnumerableRecord(
 }
 
 /**
- * Build a record whose `self` property points back to the record.
+ * Builds a record whose `self` property points back to the record.
  *
  * @returns A cyclic readonly record
  *
@@ -2854,7 +2859,7 @@ export function buildCyclicRecord(): Readonly<Record<string, unknown>> {
 }
 
 /**
- * Build an array whose only entry points back to the array.
+ * Builds an array whose only entry points back to the array.
  *
  * @returns A cyclic readonly array
  *
@@ -2871,7 +2876,7 @@ export function buildCyclicArray(): readonly unknown[] {
 }
 
 /**
- * Build a three-slot sparse array with only its middle entry populated.
+ * Builds a three-slot sparse array with only its middle entry populated.
  *
  * @returns A readonly sparse array containing `'value'` at index one
  *
@@ -2888,7 +2893,7 @@ export function buildSparseArray(): readonly unknown[] {
 	return value
 }
 
-/** Hostile native-maximum sparse-array fixture with its indexed source probes. */
+/** Pairs a hostile native-maximum sparse-array fixture with its indexed source probes. */
 export interface NativeMaximumSparseArrayFixture<T> {
 	/** Array-branded source advertising the native maximum length. */
 	readonly value: readonly T[]
@@ -2897,7 +2902,7 @@ export interface NativeMaximumSparseArrayFixture<T> {
 }
 
 /**
- * Create an array-branded hostile source that advertises the native maximum
+ * Creates an array-branded hostile source that advertises the native maximum
  * length while reflecting no indexed population.
  *
  * @remarks
@@ -2955,7 +2960,7 @@ export function createNativeMaximumSparseArray<T>(): NativeMaximumSparseArrayFix
 }
 
 /**
- * Create a record whose prototype is `null` — a plain record that no realm's
+ * Creates a record whose prototype is `null` — a plain record that no realm's
  * `Object.prototype` sits above.
  *
  * @returns A null-prototype record carrying one integer property
@@ -2973,7 +2978,7 @@ export function createNullPrototypeRecord(): Readonly<Record<string, unknown>> {
 }
 
 /**
- * Create an instance of a user-defined class — an exotic, non-plain object no
+ * Creates an instance of a user-defined class — an exotic, non-plain object no
  * JSON Schema keyword describes.
  *
  * @returns A class instance carrying one integer property
@@ -2991,7 +2996,7 @@ export function createClassInstance(): object {
 }
 
 /**
- * Create a self-iterating iterator that can be consumed only once.
+ * Creates a self-iterating iterator that can be consumed only once.
  *
  * @returns An iterator over `1`, `2`, and `3`
  *
@@ -3007,7 +3012,7 @@ export function createOneShotIterable(): IterableIterator<number> {
 }
 
 /**
- * Create an iterator that yields zero forever.
+ * Creates an iterator that yields zero forever.
  *
  * @returns A self-iterating infinite iterator
  *
@@ -3025,8 +3030,8 @@ export function createInfiniteIterable(): IterableIterator<number> {
 }
 
 /**
- * A broad, frozen spread of values for exercising the package's whole-value
- * invariants exhaustively — parse↔guard soundness (see
+ * Holds a broad, frozen spread of values for exercising the package's
+ * whole-value invariants exhaustively — parse↔guard soundness (see
  * {@link soundnessViolations}), `explain` ⟺ `parse`, and the inference round
  * trip `compileGuard(schemaToShape(valueToSchema(v)))(v)`.
  *
@@ -3111,7 +3116,7 @@ export const SOUNDNESS_SAMPLE: readonly unknown[] = Object.freeze([
 ])
 
 /**
- * Return the parse↔guard soundness violations of a (guard, parser) pair over
+ * Returns the parse↔guard soundness violations of a (guard, parser) pair over
  * {@link SOUNDNESS_SAMPLE} — an empty result means the pair is sound, as
  * `.claude/rules/patterns.md` § Validation and contracts requires:
  * - **A** — a guard-valid input is returned UNCHANGED (by identity), never rejected.
@@ -3137,11 +3142,11 @@ export function soundnessViolations<T>(
 
 // === Shape factories
 
-/** Deferred declaration defect used by the validator precedence corpus. */
+/** Names a deferred declaration defect used by the validator precedence corpus. */
 export type ShapeValidationDefect = 'domain' | 'cycle' | 'structure'
 
 /**
- * Build a fresh object-shape graph carrying the requested deferred defects.
+ * Builds a fresh object-shape graph carrying the requested deferred defects.
  *
  * @param order - Property insertion order for the requested defects
  * @returns A fresh caller-owned shape graph
@@ -3168,7 +3173,7 @@ export function createShapeValidationCase(order: readonly ShapeValidationDefect[
 // matrix and by the existing shape/compiler suites to avoid re-declaring the
 // same shapes locally.
 
-/** One shape kind's declared separation between its compiled parser's domain and its compiled guard's. */
+/** Declares one shape kind's separation between its compiled parser's domain and its compiled guard's. */
 export interface ShapeSeparation {
 	/** A representative shape of this kind, legal in the position the kind permits. */
 	readonly shape: ContractShape
@@ -3177,7 +3182,8 @@ export interface ShapeSeparation {
 }
 
 /**
- * Exhaustive test-only evidence for every contract-shape kind's parse-versus-guard separation.
+ * Records exhaustive test-only evidence for every contract-shape kind's
+ * parse-versus-guard separation.
  */
 export const SHAPE_SEPARATIONS: Readonly<Record<ContractShape['category'], ShapeSeparation>> =
 	Object.freeze({
@@ -3207,7 +3213,7 @@ export const SHAPE_SEPARATIONS: Readonly<Record<ContractShape['category'], Shape
 		raw: Object.freeze({ shape: rawShape({}) }),
 	})
 
-/** Every `stringShape` variation: plain, min-only, max-only, min+max, described. */
+/** Lists every `stringShape` variation: plain, min-only, max-only, min+max, described. */
 export function stringShapeVariations(): ReadonlyArray<readonly [string, ContractShape]> {
 	return [
 		['string:plain', stringShape()],
@@ -3219,8 +3225,9 @@ export function stringShapeVariations(): ReadonlyArray<readonly [string, Contrac
 }
 
 /**
- * Every `numberShape` / `integerShape` variation: plain, bounded, integer,
- * bounded integer, and an integer with fractional (but non-empty) bounds.
+ * Lists every `numberShape` / `integerShape` variation: plain, bounded,
+ * integer, bounded integer, and an integer with fractional (but non-empty)
+ * bounds.
  */
 export function numberShapeVariations(): ReadonlyArray<readonly [string, ContractShape]> {
 	return [
@@ -3232,17 +3239,17 @@ export function numberShapeVariations(): ReadonlyArray<readonly [string, Contrac
 	]
 }
 
-/** The single `booleanShape` variation. */
+/** Lists the single `booleanShape` variation. */
 export function booleanShapeVariations(): ReadonlyArray<readonly [string, ContractShape]> {
 	return [['boolean:plain', booleanShape({ description: 'a flag' })]]
 }
 
-/** The single `nullShape` variation. */
+/** Lists the single `nullShape` variation. */
 export function nullShapeVariations(): ReadonlyArray<readonly [string, ContractShape]> {
 	return [['null:plain', nullShape()]]
 }
 
-/** Every `literalShape` variation: single/multi string, number, boolean, mixed, described. */
+/** Lists every `literalShape` variation: single/multi string, number, boolean, mixed, described. */
 export function literalShapeVariations(): ReadonlyArray<readonly [string, ContractShape]> {
 	return [
 		['literal:single', literalShape(['only'])],
@@ -3254,13 +3261,13 @@ export function literalShapeVariations(): ReadonlyArray<readonly [string, Contra
 	]
 }
 
-/** The single `jsonShape` variation. */
+/** Lists the single `jsonShape` variation. */
 export function jsonShapeVariations(): ReadonlyArray<readonly [string, ContractShape]> {
 	return [['json:plain', jsonShape()]]
 }
 
 /**
- * Every leaf-kind × variation pair, flattened — string, number, boolean,
+ * Lists every leaf-kind × variation pair, flattened — string, number, boolean,
  * null, literal, and json, each with every knob combination named above.
  */
 export function leafShapeVariations(): ReadonlyArray<readonly [string, ContractShape]> {
@@ -3275,7 +3282,7 @@ export function leafShapeVariations(): ReadonlyArray<readonly [string, ContractS
 }
 
 /**
- * Build a nested, all-kinds composite shape — an object combining every
+ * Builds a nested, all-kinds composite shape — an object combining every
  * `ContractShape` kind (string / number / integer / boolean / null / literal
  * / array / union / oneOf / optional / nullable / record / json).
  *
@@ -3321,7 +3328,10 @@ export function compositeShape(depth = 2): ContractShape {
 // static sample set is meaningful; containers/wrappers are exercised through
 // generated values instead (see buildLockstep / buildJSONRoundtrip).
 
-/** A small curated set of values that satisfy an unconstrained shape of the given leaf kind. */
+/**
+ * Returns a small curated set of values that satisfy an unconstrained shape of
+ * the given leaf kind.
+ */
 export function validSamplesFor(shape: ContractShape): readonly unknown[] {
 	switch (shape.category) {
 		case 'string':
@@ -3341,7 +3351,10 @@ export function validSamplesFor(shape: ContractShape): readonly unknown[] {
 	}
 }
 
-/** A small curated set of values that violate an unconstrained shape of the given leaf kind. */
+/**
+ * Returns a small curated set of values that violate an unconstrained shape of
+ * the given leaf kind.
+ */
 export function invalidSamplesFor(shape: ContractShape): readonly unknown[] {
 	switch (shape.category) {
 		case 'string':
@@ -3364,10 +3377,10 @@ export function invalidSamplesFor(shape: ContractShape): readonly unknown[] {
 }
 
 /**
- * Compile a widened `ContractShape` into a contract without letting
+ * Compiles a widened `ContractShape` into a contract without letting
  * `createContract`'s generic `Infer<S>` overload resolve against the full
- * `ContractShape` union — a caller holding only the widened type (e.g. from
- * {@link compositeShape}) would otherwise trigger an excessively-deep type
+ * `ContractShape` union — a caller holding only the widened type (for example
+ * from {@link compositeShape}) would otherwise trigger an excessively-deep type
  * instantiation (TS2589) at the call site.
  *
  * @param shape - A shape whose static type is the widened `ContractShape` union
@@ -3384,12 +3397,12 @@ export function compileWidenedContract<S extends ContractShape>(
 // A precision oracle stronger than assignability: `expectTypeOf(...).toEqualTypeOf`
 // covers most cases, but a hand-rolled identity check is used where a type-level
 // `Expect<Equal<...>>` assertion reads more directly alongside a hand-written
-// expected type (e.g. a deep structural snapshot lock).
+// expected type (for example a deep structural snapshot lock).
 
 /**
- * Strict type-level equality — `true` only when `X` and `Y` are identical types
- * (mutual assignability is NOT enough; e.g. `{ a: string }` and `{ a: string; b?: never }`
- * are mutually assignable but not `Equal`).
+ * Compares two types for strict identity — `true` only when `X` and `Y` are the
+ * same type (mutual assignability is NOT enough; for example `{ a: string }`
+ * and `{ a: string; b?: never }` are mutually assignable but not identical).
  *
  * @remarks
  * The classic conditional-generic-identity trick: two distinct generic
@@ -3398,12 +3411,12 @@ export function compileWidenedContract<S extends ContractShape>(
 export type Equal<X, Y> =
 	(<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false
 
-/** Compile-time assertion — fails to typecheck unless `T` is exactly `true`. */
+/** Asserts at compile time — fails to typecheck unless `T` is exactly `true`. */
 export type Expect<T extends true> = T
 
 // === Roundtrip helpers
 
-/** The generate → is → parse readings a caller asserts the lockstep from. */
+/** Holds the generate → is → parse readings a caller asserts the lockstep from. */
 export interface LockstepResult {
 	/** True if the generated value satisfies `is`; false otherwise. */
 	readonly guarded: boolean
@@ -3441,7 +3454,7 @@ export function buildLockstep<S extends ContractShape>(shape: S, seed: number): 
 	}
 }
 
-/** The JSON roundtrip readings a caller asserts byte-for-byte fidelity from. */
+/** Holds the JSON roundtrip readings a caller asserts byte-for-byte fidelity from. */
 export interface JSONRoundtripResult {
 	/** True if the revived value satisfies `is`; false otherwise. */
 	readonly guarded: boolean
@@ -3480,7 +3493,7 @@ export function buildJSONRoundtrip<S extends ContractShape>(
 }
 
 /**
- * Build one inert `'type'` fault for a report fixture.
+ * Builds one inert `'type'` fault for a report fixture.
  *
  * @remarks
  * The smallest well-formed `Fault`, used where a test needs reports of a known
@@ -3496,7 +3509,7 @@ export function buildTypeFault(expected: FaultKind): Fault {
 }
 
 /**
- * Project a fault report to the refinement each entry violated.
+ * Projects a fault report to the refinement each entry violated.
  *
  * @remarks
  * A report is a discriminated union, so reading `constraint` off every entry is
@@ -3521,7 +3534,7 @@ export function faultsToConstraints(
 }
 
 /**
- * A valid string shape node that counts how often a walk observes it.
+ * Counts how often a walk observes a valid string shape node.
  *
  * @remarks
  * The one field a declaration walk may read through an accessor is `pattern`, so
@@ -3561,7 +3574,7 @@ export class ObservedShape {
 }
 
 /**
- * Build an object shape that reaches one child through `levels` incoming edges,
+ * Builds an object shape that reaches one child through `levels` incoming edges,
  * each one nesting level deeper than the last.
  *
  * @remarks
@@ -3586,16 +3599,17 @@ export function buildStaircaseShape(child: ContractShape, levels: number): Contr
 }
 
 /**
- * A valid string shape node whose one legal accessor re-enters the package.
+ * Provides a valid string shape node whose one legal accessor re-enters the
+ * package.
  *
  * @remarks
  * The only seam a caller has into a compilation in progress. Ownership invokes a
  * declaration's `pattern` getter — the documented single exception to the
- * accessor refusal — so a getter that calls back into the compiler that is
- * currently owning this declaration is the ONE reachable way to reach a
- * cross-getter reentry, and it is therefore the only honest instrument for the
- * reentry contract. The callback is supplied rather than captured so a test can
- * point it at a compiler that does not exist yet.
+ * accessor refusal — so a getter that calls back into the compiler owning this
+ * declaration is the ONE reachable way to reach a cross-getter reentry, and it
+ * is therefore the only honest instrument for the reentry contract. The callback
+ * is supplied rather than captured so a test can point it at a compiler that
+ * does not exist yet.
  *
  * @example
  * ```ts
@@ -3637,14 +3651,14 @@ export class ReentrantShape {
 }
 
 /**
- * The symbol key {@link SmuggledMember} hides its only prototype member behind.
+ * Names the symbol key {@link SmuggledMember} hides its only prototype member
+ * behind.
  */
 export const SMUGGLED_KEY: unique symbol = Symbol('SmuggledMember')
 
 /**
- * A class whose prototype carries one documentable method beside an
- * undocumented one — the controlled opposite for the runtime `## Methods`
- * comparison.
+ * Carries one documentable method beside an undocumented one on a class
+ * prototype — the controlled opposite for the runtime `## Methods` comparison.
  *
  * @remarks
  * A prototype reader that reports nothing looks exactly like a package whose
@@ -3668,7 +3682,7 @@ export class DriftedMethods {
 }
 
 /**
- * A class whose only prototype member is symbol-keyed — the control drawn from
+ * Hides its only prototype member behind a symbol key — the control drawn from
  * OUTSIDE the name-keyed population the runtime comparison walks.
  *
  * @remarks

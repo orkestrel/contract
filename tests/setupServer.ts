@@ -19,7 +19,7 @@ import { runInNewContext } from 'node:vm'
 import { setFlagsFromString } from 'node:v8'
 
 /**
- * Request collection of weakly referenced objects from the real V8 collector.
+ * Requests collection of weakly referenced objects from the real V8 collector.
  *
  * @param references - Weak references to request collection for
  * @returns A promise that settles after bounded pressure and collection rounds
@@ -52,7 +52,7 @@ export function createForeignRegExp(source: string, flags = ''): unknown {
 }
 
 /**
- * Create a minimal string declaration in a genuine foreign JavaScript realm.
+ * Creates a minimal string declaration in a genuine foreign JavaScript realm.
  *
  * @returns A foreign-realm `{ category: 'string' }` record as `unknown`
  */
@@ -61,7 +61,7 @@ export function createForeignStringShape(): unknown {
 }
 
 /**
- * Create a fresh foreign JavaScript realm's own `Object.prototype`.
+ * Creates a fresh foreign JavaScript realm's own `Object.prototype`.
  *
  * @remarks
  * Every call builds a new realm, so a test may install an inherited member on
@@ -85,7 +85,7 @@ export function createForeignPrototype(): object {
 }
 
 /**
- * Create an ordinary record in a genuine foreign JavaScript realm.
+ * Creates an ordinary record in a genuine foreign JavaScript realm.
  *
  * @returns A foreign-realm `{ value: 1 }` record as `unknown`
  *

@@ -195,6 +195,12 @@ export function parseNull(value: unknown): null | undefined {
 /**
  * Parses an unknown value to a plain record — the input reference, never cloned.
  *
+ * @remarks
+ * Probes the record's own enumerable values before returning the reference, so a
+ * hostile getter is met here rather than at the caller. A failed probe throws
+ * `ContractError { code: 'structure' }` carrying `parseRecord: value could not be
+ * read`; a readable non-record answers `undefined`.
+ *
  * @param value - The value to parse
  * @returns The record, or `undefined`
  * @throws {ContractError} When an object value cannot be read
