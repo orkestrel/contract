@@ -34,8 +34,10 @@ import {
 	replaceIntrinsic,
 	StringDeclaration,
 	TERMINAL_CONSTRUCTORS,
+	VALIDATION_BENCH_LEAF,
+	VALIDATION_BENCH_OBJECT,
 } from '../../setup.js'
-import { describe, expect, it } from 'vitest'
+import { bench, describe, expect, it } from 'vitest'
 
 describe('ShapeValidator', () => {
 	it('exposes only the accepted interface and prototype behavior', () => {
@@ -100,10 +102,13 @@ describe('ShapeValidator', () => {
 		const validator = new ShapeValidator(source)
 
 		validator.validate()
+		expect(validator.expansion).toBe(1)
 		Reflect.set(source, 'min', -1)
 		expect(captureContractError(() => validator.validate()).code).toBe('bound')
+		expect(validator.expansion).toBeUndefined()
 		Reflect.set(source, 'min', 1)
 		validator.validate()
+		expect(validator.expansion).toBe(1)
 	})
 
 	it('shares one caught reentrancy poison with every nested and outer call, then recovers', () => {
@@ -111,6 +116,11 @@ describe('ShapeValidator', () => {
 		const nested: unknown[] = []
 		let reenter = true
 		const validator = new ShapeValidator(source)
+		const peer = new ShapeValidator({ category: 'string', min: 1 })
+		validator.validate()
+		peer.validate()
+		expect(validator.expansion).toBe(1)
+		expect(peer.expansion).toBe(1)
 		Object.defineProperty(source, 'pattern', {
 			enumerable: true,
 			configurable: true,
@@ -136,9 +146,12 @@ describe('ShapeValidator', () => {
 		expect(outer.error.code).toBe('structure')
 		expect(outer.error.context).toEqual({ path: [] })
 		expect(Object.hasOwn(outer.error, 'cause')).toBe(false)
+		expect(validator.expansion).toBeUndefined()
+		expect(peer.expansion).toBe(1)
 
 		reenter = false
 		validator.validate()
+		expect(validator.expansion).toBe(1)
 	})
 
 	it('preserves an uncaught nested poison by exact identity', () => {
@@ -161,6 +174,10 @@ describe('ShapeValidator', () => {
 
 		expect(outer.success).toBe(false)
 		expect(outer.success ? undefined : outer.error).toBe(nested)
+		expect(validator.expansion).toBeUndefined()
+		expect(Reflect.deleteProperty(source, 'pattern')).toBe(true)
+		validator.validate()
+		expect(validator.expansion).toBe(1)
 	})
 
 	it('keeps the eager wrapper fresh and error-identical to the class', () => {
@@ -1409,3 +1426,47 @@ describe('the cyclic fallback agrees with an unmemoized walk (R6-A-fix)', () => 
 		expect(tally).toEqual({ accepted: 46, cycle: 283, depth: 71, other: 0 })
 	})
 })
+
+if (import.meta.env.MODE === 'benchmark') {
+	const retainedLeaf = new ShapeValidator(VALIDATION_BENCH_LEAF)
+	const retainedIdentity = new ShapeValidator(VALIDATION_BENCH_LEAF)
+	const retainedObject = new ShapeValidator(VALIDATION_BENCH_OBJECT)
+	const doubled = new ShapeValidator(VALIDATION_BENCH_LEAF)
+
+	bench(
+		'validates a retained refined leaf',
+		() => {
+			retainedLeaf.validate()
+		},
+		{ time: 1000 },
+	)
+	bench(
+		'constructs and validates a refined leaf',
+		() => {
+			new ShapeValidator(VALIDATION_BENCH_LEAF).validate()
+		},
+		{ time: 1000 },
+	)
+	bench(
+		'validates a retained five-key object',
+		() => {
+			retainedObject.validate()
+		},
+		{ time: 1000 },
+	)
+	bench(
+		'validates a retained identity leaf',
+		() => {
+			retainedIdentity.validate()
+		},
+		{ time: 1000 },
+	)
+	bench(
+		'validates a retained leaf twice',
+		() => {
+			doubled.validate()
+			doubled.validate()
+		},
+		{ time: 1000 },
+	)
+}

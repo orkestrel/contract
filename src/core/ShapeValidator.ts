@@ -165,7 +165,10 @@ export class ShapeValidator implements ShapeValidatorInterface {
 		const outcome = attempt(() => this.#execute())
 		const poison = this.#state.phase === 'active' ? this.#state.poison : undefined
 		this.#clear()
-		if (poison !== undefined) throw poison
+		if (poison !== undefined) {
+			this.#expansion = undefined
+			throw poison
+		}
 		if (outcome.success) return
 		// A contained failure this class did not author came from a caller-
 		// reachable dispatch on the traversal path — a replaced intrinsic member,
