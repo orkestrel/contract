@@ -365,7 +365,7 @@ export type JSONRecord = { readonly [key: string]: JSONValue }
 export type JSONValue = JSONPrimitive | readonly JSONValue[] | JSONRecord
 
 /**
- * Owns the state of one exact JSON snapshot operation.
+ * Settles one exact JSON snapshot of a retained source, then replays it.
  *
  * @remarks
  * Construction retains the source without observing it. The first
@@ -394,7 +394,7 @@ export interface JSONClonerInterface {
 }
 
 /**
- * Owns the state of one JSON Schema snapshot operation.
+ * Settles one JSON Schema snapshot of a retained schema, then replays it.
  *
  * @remarks
  * Construction retains the schema without observing it. The first
@@ -443,7 +443,7 @@ export interface ShapeProperty {
 }
 
 /**
- * Owns the state of one contract-shape snapshot operation.
+ * Settles one contract-shape snapshot of a retained shape, then replays it.
  *
  * @remarks
  * Construction retains the shape without observing it. The first
@@ -1305,14 +1305,14 @@ export interface ContractInterface<T> {
  * own and outlives the compiler that produced it. When one artifact is what you
  * want, keep the artifact and let the compiler go.
  *
- * It declares no call-signature member, so its whole surface is seven readonly data
+ * It declares no call-signature member, so its whole surface is the readonly data
  * properties: `schema` (a {@link JSONSchema}), `guard` (a `Guard<Infer<S>>`), `parser`
  * (a `Parser<Infer<S>>`), `auditor` (an {@link AuditorFunction}), `reporter` (a {@link
  * ReporterFunction}), `generator` (a `SeederFunction<Infer<S>>`), and `contract` (a
  * `ContractInterface<Infer<S>>`). `contract` is the frozen bundle whose own enumerable
  * keys are `schema`, `is`, `parse`, `audit`, `explain`, and `generate` in that order,
- * each holding the exact value the corresponding getter publishes — `contract.is` IS
- * `compiler.guard`, by identity rather than as a copy.
+ * each holding the exact value the corresponding getter publishes — `contract.is` is
+ * exactly `compiler.guard`, by identity rather than as a copy.
  *
  * @example
  * ```ts

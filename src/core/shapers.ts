@@ -153,7 +153,7 @@ export function stringShape(options?: StringShapeOptions): StringShape {
  * Builds a numeric {@link NumberShape}.
  *
  * @remarks
- * A present `min` or `max` must be FINITE. `NaN` and `±Infinity` throw a `bound` {@link
+ * A present `min` or `max` must be finite. `NaN` and `±Infinity` throw a `bound` {@link
  * ContractError} at construction, because no finite value satisfies them and no JSON
  * Schema keyword expresses them.
  *

@@ -242,8 +242,8 @@ export function literalOf(
  * Verifies that `ctor` is a real constructor (through {@link isConstructor}) first,
  * so passing an arrow function does not silently produce a broken guard.
  *
- * A CALLABLE instance passes. The only exclusion is a bad CONSTRUCTOR, never a callable
- * VALUE: an `isObject` pre-filter made `instanceOf(Function)(() => {})` answer `false`
+ * A callable instance passes. The exclusion is a bad constructor, never a callable
+ * value: an `isObject` pre-filter made `instanceOf(Function)(() => {})` answer `false`
  * while {@link isInstance}, the helper this is built on, answered `true` for the same
  * pair.
  *
@@ -757,7 +757,7 @@ export function andOf(
  * Prefer {@link unionOf} for a wider set of variants.
  *
  * @remarks
- * Each member is contained SEPARATELY, so a throwing member is a non-match rather than
+ * Each member is contained on its own, so a throwing member is a non-match rather than
  * a veto over its sibling. One containment around the whole disjunction made `orOf(a,
  * b)` and `orOf(b, a)` answer differently for one value.
  *
@@ -795,7 +795,7 @@ export function orOf(
  * Typed as `Guard<unknown>` because `Exclude<unknown, T>` is not useful; use
  * {@link complementOf} when you need the narrowed `Exclude<TBase, TExcluded>`.
  *
- * The negation applies to the CONTAINED verdict, so a throwing guard is a non-match and
+ * The negation applies to the contained verdict, so a throwing guard is a non-match and
  * its negation passes. Containing the negation instead made a guard and its `notOf`
  * both reject the same value, which broke `orOf(g, notOf(g))` as a tautology.
  *
@@ -821,7 +821,7 @@ export function notOf(guard: (value: unknown) => boolean): Guard<unknown> {
  *
  * @remarks
  * The base and the exclusion are contained separately, for the reason {@link notOf}
- * states: a throwing EXCLUSION is a non-match, so the complement passes.
+ * states: a throwing exclusion is a non-match, so the complement passes.
  *
  * @param base - The guard establishing the accepted domain
  * @param excluded - The guard whose accepted values are removed from that domain

@@ -258,7 +258,7 @@ export function collectMembers(values: readonly unknown[]): Set<unknown> {
  *
  * @remarks
  * Dispatched through the captured `Set.prototype.has` onto a collection no caller
- * holds, and asked as a MODULE BINDING rather than as a property: `set.has(value)` asks
+ * holds, and asked as a module binding rather than as a property: `set.has(value)` asks
  * a member every caller can rewrite, and moving that read onto an exported class's
  * `has` method reproduced the identical defect one prototype higher, because every
  * public class method is dispatched through a reachable prototype.
@@ -1351,7 +1351,7 @@ export function readOptions<T extends object>(
  * Draws and validates one generator random sample.
  *
  * @remarks
- * A broken source is a fault of the SOURCE rather than of the shape, so the refusal
+ * A broken source is the source's fault rather than the shape's, so the refusal
  * carries code `random` and never the `generate` code, and {@link compileGenerator}
  * rethrows it at whatever draw depth it happened instead of rotating to the next union
  * variant. The diagnostic names the consuming shape category, the `[0, 1)` limit, and a

@@ -2018,7 +2018,7 @@ export class PatternCarrier {
 	}
 }
 
-/** Carries one hostile RegExp scalar population on a type-correct string shape. */
+/** Represents a type-correct string shape carrying one hostile RegExp scalar population. */
 export class PatternFixture {
 	readonly carrier: PatternCarrier
 	readonly shape: StringShape

@@ -504,10 +504,6 @@ export function isPromiseLike<T = unknown>(
 
 /** Determines whether a value is an `ArrayBuffer`.
  *
- * @remarks
- * Checks the container alone — no element is inspected. Use {@link arrayOf} to check
- * every element against a guard.
- *
  * @param value - The value to inspect
  * @returns True if the value is an `ArrayBuffer`; false otherwise
  *
@@ -703,6 +699,10 @@ export function isWeakSet(value: unknown): value is WeakSet<object> {
 // === Array & typed-array guards
 
 /** Determines whether a value is an array.
+ *
+ * @remarks
+ * Checks the container alone — no element is inspected. Use {@link arrayOf} to check
+ * every element against a guard.
  *
  * @param value - The value to inspect
  * @returns True if the value is an array; false otherwise
