@@ -782,7 +782,7 @@ because neither measured one. `validateShape` reads it to apply `COMPILE_NODE_LI
 
 Immediate depth outranks deferred structure, cycle, and domain diagnoses. Within a string declaration the fixed domain order is invalid `min`, invalid `max`, flagged pattern, then contradictory range.
 
-Every nested and outer call inside an active pass shares the exact reentry poison object, which carries no own cause. Cleanup restores idle state, so a later independent call observes the source again.
+Every nested and outer call inside an active pass shares the exact reentry poison object, which carries no own cause. Cleanup restores idle state, so a later independent call observes the source again. A failed pass, including a caught-reentry-poisoned outer pass, leaves `expansion` undefined, and a later successful pass replaces it.
 
 The whole traversal is contained, and its cleanup builds its active-path set from an intrinsic captured at module evaluation, so no caller-reachable dispatch on the path can put a raw value through this door. A contained failure this class did not author is translated into `validateShape: shape reflection failed` (code `structure`, root path) carrying the exact thrown value as its cause.
 

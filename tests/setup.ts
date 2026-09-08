@@ -142,6 +142,18 @@ afterEach(() => {
 	vi.restoreAllMocks()
 })
 
+export const VALIDATION_BENCH_LEAF: ContractShape = Object.freeze({ category: 'string', min: 1 })
+export const VALIDATION_BENCH_OBJECT: ContractShape = Object.freeze({
+	category: 'object',
+	properties: Object.freeze({
+		alpha: VALIDATION_BENCH_LEAF,
+		beta: VALIDATION_BENCH_LEAF,
+		gamma: VALIDATION_BENCH_LEAF,
+		delta: VALIDATION_BENCH_LEAF,
+		epsilon: VALIDATION_BENCH_LEAF,
+	}),
+})
+
 /**
  * Runs an operation expected to throw a {@link ContractError} and returns that
  * error, already narrowed.
