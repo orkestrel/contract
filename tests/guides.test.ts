@@ -1,6 +1,6 @@
 // The consumer-side guides-parity drop-in: runs `@orkestrel/guide`'s checks against
-// this repo's own `guides/README.md` manifest. The constants below are this
-// package's own, and are the only part a sibling package changes.
+// this repo's own `guides/README.md` manifest. The constants that follow are this
+// package's own, as is the executed section that closes the file.
 
 import { describe, expect, it } from 'vitest'
 import {
@@ -196,10 +196,6 @@ for (const entry of manifest) {
 		// collected line is the spec, the key, and each side's text or `absent` — the same
 		// worklist `npm run docs` prints, so a failure here is read the way that command's
 		// output is.
-		// `findDrift` measured 5.6 s on this guide alone on an idle host — it takes one
-		// source lookup per compared row, over every line this package declares — so the
-		// default 5-second budget cannot hold it. This budget clears that reading with room
-		// for a contended host, and the cost is the reader's rather than this package's.
 		it('keeps every compared summary and example equal to its source', () => {
 			const disagreeing: string[] = []
 			for (const drift of findDrift(guide, source)) {
@@ -208,7 +204,7 @@ for (const entry of manifest) {
 				disagreeing.push(`${entry.spec} ${drift.key}: guide ${left} source ${right}`)
 			}
 			expect(disagreeing).toEqual([])
-		}, 30_000)
+		})
 
 		it('documents an example for every Surface function', () => {
 			const fences = guide
