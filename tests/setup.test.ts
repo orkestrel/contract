@@ -93,6 +93,7 @@ import {
 	replaceIntrinsic,
 	replaceStringIterator,
 	replaceStringSlice,
+	readMembers,
 	SHAPE_SEPARATIONS,
 	SingleReadPattern,
 	SMUGGLED_KEY,
@@ -1306,17 +1307,32 @@ describe('schema and memo fixtures', () => {
 })
 
 describe('guide comparison fixtures', () => {
+	it('partitions callable, accessor, and data prototype members', () => {
+		const prototype: object = { data: 1, method: Math.max }
+		Object.defineProperty(prototype, 'accessor', { get: Date.now })
+
+		expect(readMembers(prototype)).toEqual({
+			methods: ['method'],
+			accessors: ['accessor'],
+			data: ['data'],
+		})
+	})
+
 	it('carries a documentable and an undocumented member beside a symbol-keyed one', () => {
-		expect(Object.getOwnPropertyNames(DriftedMethods.prototype).sort()).toEqual([
-			'constructor',
-			'undocumented',
-			'validate',
-		])
+		expect(readMembers(DriftedMethods.prototype)).toEqual({
+			methods: ['validate', 'undocumented'],
+			accessors: [],
+			data: [],
+		})
 		expect(new DriftedMethods().undocumented()).toBe(1)
 
 		// The control from outside the name-keyed population a runtime comparison
 		// walks: a name walk cannot see this member at all.
-		expect(Object.getOwnPropertyNames(SmuggledMember.prototype)).toEqual(['constructor'])
+		expect(readMembers(SmuggledMember.prototype)).toEqual({
+			methods: [],
+			accessors: [],
+			data: [],
+		})
 		expect(Object.getOwnPropertySymbols(SmuggledMember.prototype)).toEqual([SMUGGLED_KEY])
 		expect(new SmuggledMember()[SMUGGLED_KEY]()).toBe(2)
 	})

@@ -3650,6 +3650,37 @@ export class ReentrantShape {
 	}
 }
 
+/** Represents the name-keyed members read from an object's prototype. */
+export interface PrototypeMembers {
+	/** Lists callable data members. */
+	readonly methods: readonly string[]
+	/** Lists accessor members. */
+	readonly accessors: readonly string[]
+	/** Lists non-callable data members. */
+	readonly data: readonly string[]
+}
+
+/**
+ * Partitions a prototype's own name-keyed members by descriptor shape.
+ *
+ * @param prototype - The prototype whose own string keys are inspected
+ * @returns Its method, accessor, and non-callable data member names
+ */
+export function readMembers(prototype: object): PrototypeMembers {
+	const methods: string[] = []
+	const accessors: string[] = []
+	const data: string[] = []
+	for (const key of Object.getOwnPropertyNames(prototype)) {
+		if (key === 'constructor') continue
+		const descriptor = Object.getOwnPropertyDescriptor(prototype, key)
+		if (descriptor === undefined) continue
+		if (typeof descriptor.value === 'function') methods.push(key)
+		else if (typeof descriptor.get === 'function') accessors.push(key)
+		else data.push(key)
+	}
+	return { methods, accessors, data }
+}
+
 /**
  * Names the symbol key {@link SmuggledMember} hides its only prototype member
  * behind.
