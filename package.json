@@ -75,7 +75,7 @@
 		"@orkestrel/guide": "^0.0.19",
 		"@orkestrel/probe": "^0.0.15",
 		"@orkestrel/scaffold": "^0.0.70",
-		"@orkestrel/test": "^0.0.14",
+		"@orkestrel/test": "^0.0.15",
 		"@types/node": "^26.5.1",
 		"oxfmt": "^0.68.0",
 		"oxlint": "^1.83.0",
