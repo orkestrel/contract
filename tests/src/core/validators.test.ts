@@ -1,6 +1,8 @@
-import type { JSONRecord, JSONValue, LiteralValue } from '@src/core'
+import type { AnyConstructor, JSONRecord, JSONValue, LiteralValue } from '@src/core'
+import type { Equal, Expect } from '../../setup.js'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
+	instanceOf,
 	isArray,
 	isArrayBuffer,
 	isArrayBufferView,
@@ -687,6 +689,126 @@ describe('instanceof-family guards are total against hostile Proxy input', () =>
 		expect(() => isInstance(hostile, Date)).not.toThrow()
 		expect(isInstance(hostile, Date)).toBe(false)
 		expect(isInstance(new Date(), Date)).toBe(true)
+	})
+})
+
+describe('isInstance narrowing', () => {
+	it('narrows unknown to Date', () => {
+		const value: unknown = new Date(0)
+		expect(isInstance(value, Date)).toBe(true)
+		if (isInstance(value, Date)) expectTypeOf(value).toEqualTypeOf<Date>()
+	})
+
+	it('narrows unknown to an abstract class', () => {
+		abstract class Shape {
+			abstract readonly area: number
+		}
+		class Square extends Shape {
+			readonly area = 4
+		}
+		const value: unknown = new Square()
+		expect(isInstance(value, Shape)).toBe(true)
+		if (isInstance(value, Shape)) expectTypeOf(value).toEqualTypeOf<Shape>()
+	})
+
+	it('narrows unknown to a class with required constructor arguments', () => {
+		class Point {
+			readonly x: number
+			constructor(x: number) {
+				this.x = x
+			}
+		}
+		const value: unknown = new Point(3)
+		expect(isInstance(value, Point)).toBe(true)
+		if (isInstance(value, Point)) expectTypeOf(value).toEqualTypeOf<Point>()
+	})
+
+	it('narrows unknown to the generic Map instance type', () => {
+		const value: unknown = new Map([['key', 1]])
+		expect(isInstance(value, Map)).toBe(true)
+		if (isInstance(value, Map)) {
+			expectTypeOf(value).toEqualTypeOf<InstanceType<MapConstructor>>()
+			expectTypeOf(value).toEqualTypeOf<Map<unknown, unknown>>()
+		}
+	})
+
+	it('narrows a nullable base to its derived class and preserves the false branch', () => {
+		class Base {
+			readonly base = true
+		}
+		class Derived extends Base {
+			readonly derived = true
+		}
+		;[new Derived(), new Base(), null].forEach((value: Base | null) => {
+			expect(isInstance(value, Derived)).toBe(value instanceof Derived)
+			if (isInstance(value, Derived)) {
+				expectTypeOf(value).toEqualTypeOf<Derived>()
+			} else {
+				expectTypeOf(value).toEqualTypeOf<Base | null>()
+			}
+		})
+	})
+
+	it('narrows a nullable base out of the false branch for a structurally identical subclass', () => {
+		class Base {
+			readonly base = true
+		}
+		class Same extends Base {}
+		;[new Same(), new Base(), null].forEach((value: Base | null) => {
+			expect(isInstance(value, Same)).toBe(value instanceof Same)
+			if (isInstance(value, Same)) {
+				expectTypeOf(value).toEqualTypeOf<Same>()
+			} else {
+				expectTypeOf(value).toEqualTypeOf<null>()
+			}
+		})
+	})
+
+	it('preserves a nullable base in the false branch for a subclass with an optional member', () => {
+		class Base {
+			readonly base = true
+		}
+		class Tagged extends Base {
+			readonly tag?: string
+		}
+		const assignable: Tagged = new Base()
+		expect(isInstance(assignable, Tagged)).toBe(false)
+		;[new Tagged(), new Base(), null].forEach((value: Base | null) => {
+			expect(isInstance(value, Tagged)).toBe(value instanceof Tagged)
+			if (isInstance(value, Tagged)) {
+				expectTypeOf(value).toEqualTypeOf<Tagged>()
+			} else {
+				expectTypeOf(value).toEqualTypeOf<Base | null>()
+			}
+		})
+	})
+
+	it('refuses a non-constructor through its parameter constraint', () => {
+		expectTypeOf<
+			Expect<Equal<{} extends Parameters<typeof isInstance>[1] ? true : false, false>>
+		>().toEqualTypeOf<true>()
+		expect(Reflect.apply(isInstance, undefined, [new Date(0), {}])).toBe(false)
+	})
+
+	it('shares the instanceOf constructor constraint', () => {
+		expectTypeOf<
+			Expect<Equal<Parameters<typeof isInstance>[1], Parameters<typeof instanceOf>[0]>>
+		>().toEqualTypeOf<true>()
+		expect(instanceOf(Date)(new Date(0))).toBe(true)
+	})
+
+	it('refuses the bare AnyConstructor through its parameter constraint', () => {
+		expectTypeOf<
+			Expect<Equal<AnyConstructor extends Parameters<typeof isInstance>[1] ? true : false, false>>
+		>().toEqualTypeOf<true>()
+		expect(isInstance(new Date(0), Date)).toBe(true)
+	})
+
+	it('refuses a Function-typed value through its parameter constraint', () => {
+		expectTypeOf<
+			Expect<Equal<Function extends Parameters<typeof isInstance>[1] ? true : false, false>>
+		>().toEqualTypeOf<true>()
+		expect(isInstance(Date, Function)).toBe(true)
 	})
 })
 

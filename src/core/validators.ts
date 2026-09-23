@@ -373,6 +373,20 @@ export function isNullableBoolean(value: unknown): value is boolean | null {
  * wraps the check in {@link holds} (see ./helpers.js) so any such throw
  * yields `false` instead of escaping.
  *
+ * Narrows `value` to `InstanceType<C>`, which reads the constructor's last
+ * construct signature. Accepts the same constructors as `instanceOf`: a public
+ * or abstract construct signature returning an object (or `any`). A class with a
+ * private or protected constructor and the bare `AnyConstructor` are refused at the call.
+ * A value typed `Function` cannot be passed because the `Function` interface has
+ * no construct signature. The constructor `Function` can be passed through
+ * `FunctionConstructor`'s construct signature and narrows to `Function`.
+ * The false branch drops each member of the declared union that is a subtype
+ * of the instance type and keeps the rest, so a subclass that adds no member
+ * narrows its base out as well (and a subclass that adds only an optional member
+ * does not). A constructor whose instance type admits
+ * primitives structurally, such as `Object`, makes the false branch unsound;
+ * use `isObject` for that check.
+ *
  * @param value - The value to test
  * @param ctor - The constructor to test against
  * @returns True if `value instanceof ctor`; false otherwise, including on a
@@ -384,15 +398,13 @@ export function isNullableBoolean(value: unknown): value is boolean | null {
  * isInstance({}, Date)          // false
  * ```
  */
-export function isInstance<C>(
+export function isInstance<C extends abstract new (...args: never) => object>(
 	value: unknown,
 	ctor: C,
-): value is InstanceType<C & AnyConstructor<object>> {
-	// `ctor` is narrowed to a function through `isFunction` before the `instanceof`
-	// check — an unconstrained generic RHS loses TS's built-in instanceof leniency
-	// once nested inside another generic call (the `holds` callback), so the
-	// narrowing keeps this call legal without a constraint that would reject
-	// combinators.ts's `instanceOf`, which validates `ctor` separately.
+): value is InstanceType<C> {
+	// Keep the published runtime behaviour: `isFunction` makes a non-callable
+	// right-hand side return `false` without consulting its `Symbol.hasInstance`
+	// or causing a contained `TypeError`.
 	const target: unknown = ctor
 	return holds(() => isFunction(target) && value instanceof target)
 }

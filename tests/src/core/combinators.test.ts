@@ -998,6 +998,15 @@ describe('instanceOf', () => {
 		expectTypeOf(instanceOf(Date)).toEqualTypeOf<Guard<Date>>()
 		expectTypeOf(instanceOf(Map)).toEqualTypeOf<Guard<Map<unknown, unknown>>>()
 	})
+
+	it('narrows to the same Date type as isInstance', () => {
+		const value: unknown = new Date(0)
+		const isDateValue = instanceOf(Date)
+		expect(isDateValue(value)).toBe(true)
+		expect(isInstance(value, Date)).toBe(true)
+		if (isDateValue(value)) expectTypeOf(value).toEqualTypeOf<Date>()
+		if (isInstance(value, Date)) expectTypeOf(value).toEqualTypeOf<Date>()
+	})
 })
 
 describe('empty-collection and zero-guard edge cases', () => {
