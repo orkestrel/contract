@@ -1,5 +1,10 @@
-import type { ContractShape, JSONSchema, LiteralValue } from './types.js'
-import { INFER_BREADTH_LIMIT, INFER_DEPTH_LIMIT, INTRINSICS } from './constants.js'
+import type { ContractShape, JSONSchema, JSONSchemaType, LiteralValue } from './types.js'
+import {
+	INFER_BREADTH_LIMIT,
+	INFER_DEPTH_LIMIT,
+	INTRINSICS,
+	JSON_SCHEMA_TYPES,
+} from './constants.js'
 import {
 	admitMember,
 	admitVisited,
@@ -14,6 +19,7 @@ import {
 	retainDepth,
 } from './helpers.js'
 import { isArray, isFiniteNumber, isLiteralValue, isRecord, isString } from './validators.js'
+import { parseEnum } from './parsers.js'
 import {
 	arrayShape,
 	booleanShape,
@@ -123,18 +129,21 @@ export class SchemaShaper {
 	//    matching only a dropped variant would be wrongly rejected), so the whole
 	//    node widens to `rawShape` instead of sampling a subset.
 	// 3. `anyOf` — identically, through `unionShape`.
-	// 4. `type: 'string'` / `'number'` / `'integer'` / `'boolean'` / `'null'` —
+	// 4. Array-valued `type` — distinct recognized names become an inclusive
+	//    union, or a single shape for one name. An empty list or any unrecognized
+	//    member widens the whole node; dropping a member would narrow it.
+	// 5. `type: 'string'` / `'number'` / `'integer'` / `'boolean'` / `'null'` —
 	//    the matching primitive shape, with length/range bounds derived through
 	//    `deriveLengthBounds` / `deriveRangeBounds`. An integer node additionally
 	//    drops its bounds when they describe an EMPTY integer range (for example
 	//    `minimum: 1.5, maximum: 1.6`) — the same emptiness `validateShape`
 	//    rejects — so the result is always a valid shape.
-	// 5. `type: 'array'` — an array shape whose element shape recurses into a
+	// 6. `type: 'array'` — an array shape whose element shape recurses into a
 	//    record-valued `items`, widening to `rawShape` otherwise, with bounds from
 	//    `minItems` / `maxItems`.
-	// 6. `type: 'object'`, OR no `type` / `enum` / `oneOf` / `anyOf` but a
+	// 7. `type: 'object'`, OR no `type` / `enum` / `oneOf` / `anyOf` but a
 	//    record-valued `properties` — delegates to the object branch.
-	// 7. Everything else — an empty schema, an unrecognized/absent `type`, or
+	// 8. Everything else — an empty schema, an unrecognized/absent `type`, or
 	//    exhausted depth/breadth — widens to `rawShape`, whose guard accepts every
 	//    defined value and whose emitted schema is the same `{}` (plus
 	//    `description`) the node carried. That is the exact inverse of `{}`, JSON
@@ -211,7 +220,37 @@ export class SchemaShaper {
 			if (variants.length > 0) return INTRINSICS.reflect.apply(unionShape, undefined, variants)
 		}
 
-		const type = isString(schema.type) ? schema.type : undefined
+		const category = schema.type
+		if (isArray(category)) {
+			const members: JSONSchemaType[] = []
+			const seen = collectMembers([])
+			for (let index = 0; index < category.length; index += 1) {
+				const member = parseEnum(category[index], JSON_SCHEMA_TYPES)
+				if (member === undefined) {
+					return rawShape(description === undefined ? {} : { description })
+				}
+				if (matchesMember(seen, member)) continue
+				admitMember(seen, member)
+				members[members.length] = member
+			}
+			if (members.length === 0 || members.length > INFER_BREADTH_LIMIT) {
+				return rawShape(description === undefined ? {} : { description })
+			}
+			const variants: ContractShape[] = []
+			for (let index = 0; index < members.length; index += 1) {
+				const member = members[index]
+				if (member === undefined) continue
+				// A type alternative stays at this node's depth and keeps its ancestor
+				// identity active; only structural children spend the depth budget.
+				variants[variants.length] = this.#build({ ...schema, type: member }, depth)
+			}
+			const first = variants[0]
+			if (variants.length === 1 && first !== undefined) return first
+			const union = INTRINSICS.reflect.apply(unionShape, undefined, variants)
+			return description === undefined ? union : INTRINSICS.freeze({ ...union, description })
+		}
+
+		const type = isString(category) ? schema.type : undefined
 
 		if (type === 'string') {
 			const bounds = deriveLengthBounds(schema.minLength, schema.maxLength)

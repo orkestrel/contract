@@ -3,10 +3,165 @@
 // `schemaToShape` is the only door that constructs it, and that door stamps its own
 // name onto every refusal, so the walk's raw readings are reachable from here alone.
 import type { ContractShape, JSONSchema } from '@src/core'
-import { attempt, isContractError, isError, schemaToShape } from '@src/core'
+import {
+	attempt,
+	compileGuard,
+	compileSchema,
+	INFER_BREADTH_LIMIT,
+	INFER_DEPTH_LIMIT,
+	isContractError,
+	isError,
+	JSON_SCHEMA_TYPES,
+	schemaToShape,
+} from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { captureContractError } from '../../setup.js'
 import { SchemaShaper } from '../../../src/core/SchemaShaper.js'
+
+describe('SchemaShaper — type arrays', () => {
+	it('accepts array and string edits and refuses numeric edits', () => {
+		const schema: Record<string, unknown> = {
+			type: 'object',
+			properties: { edits: { type: ['array', 'string'], items: { type: 'string' } } },
+			required: ['edits'],
+		}
+		const guard = compileGuard(schemaToShape(schema))
+		expect(guard({ edits: ['replace'] })).toBe(true)
+		expect(guard({ edits: 'replace' })).toBe(true)
+		expect(guard({ edits: 3 })).toBe(false)
+		expect(guard({ edits: [3] })).toBe(false)
+	})
+
+	it.each(JSON_SCHEMA_TYPES)('converts a singleton %s like its bare name', (type) => {
+		const schema: Record<string, unknown> = {
+			type: [type],
+			items: { type: 'string' },
+			properties: { title: { type: 'string' } },
+			required: ['title'],
+			additionalProperties: false,
+			minLength: 1,
+			maxLength: 3,
+			minItems: 1,
+			maxItems: 2,
+			minimum: 1,
+			maximum: 3,
+			description: 'bounded member',
+		}
+		expect(schemaToShape(schema)).toEqual(schemaToShape({ ...schema, type }))
+	})
+
+	it.each([
+		{ label: 'empty', type: [] },
+		{ label: 'unrecognized', type: ['unknown'] },
+		{ label: 'mixed', type: ['string', 'unknown'] },
+		{ label: 'unknown first', type: ['unknown', 'string'] },
+		{ label: 'non-string member', type: ['string', 3] },
+		{ label: 'undefined member', type: Array.from({ length: 1 }) },
+	])('widens a $label type array even with properties', ({ type }) => {
+		const schema: Record<string, unknown> = {
+			type,
+			properties: { title: { type: 'string' } },
+			description: 'unexpressible',
+		}
+		const shape = schemaToShape(schema)
+		expect(shape).toEqual({ category: 'raw', schema: { description: 'unexpressible' } })
+		expect(compileGuard(shape)(3)).toBe(true)
+	})
+
+	it('keeps items, bounds, and description on each member', () => {
+		const schema: Record<string, unknown> = {
+			type: ['array', 'string', 'number'],
+			items: { type: 'string', minLength: 2 },
+			minItems: 1,
+			maxItems: 2,
+			minLength: 2,
+			maxLength: 3,
+			minimum: 4,
+			maximum: 5,
+			description: 'bounded alternatives',
+		}
+		const shape = schemaToShape(schema)
+		const guard = compileGuard(shape)
+		for (const value of [['ab'], ['ab', 'cd'], 'ab', 'abc', 4, 5]) {
+			expect(guard(value)).toBe(true)
+		}
+		for (const value of [[], ['a'], [3], ['ab', 'cd', 'ef'], 'a', 'abcd', 3, 6, null]) {
+			expect(guard(value)).toBe(false)
+		}
+		expect(compileSchema(shape)).toEqual({
+			description: 'bounded alternatives',
+			anyOf: [
+				{
+					type: 'array',
+					items: { type: 'string', minLength: 2 },
+					minItems: 1,
+					maxItems: 2,
+					description: 'bounded alternatives',
+				},
+				{ type: 'string', minLength: 2, maxLength: 3, description: 'bounded alternatives' },
+				{ type: 'number', minimum: 4, maximum: 5, description: 'bounded alternatives' },
+			],
+		})
+	})
+
+	it('keeps object properties, required names, and closed extras', () => {
+		const schema: Record<string, unknown> = {
+			type: ['object', 'null'],
+			properties: { title: { type: 'string' } },
+			required: ['title'],
+			additionalProperties: false,
+		}
+		const guard = compileGuard(schemaToShape(schema))
+		expect(guard(null)).toBe(true)
+		expect(guard({ title: 'draft' })).toBe(true)
+		expect(guard({})).toBe(false)
+		expect(guard({ title: 3 })).toBe(false)
+		expect(guard({ title: 'draft', extra: true })).toBe(false)
+	})
+
+	it('deduplicates before the breadth limit and uses inclusive union semantics', () => {
+		const schema: Record<string, unknown> = {
+			type: [...Array.from({ length: INFER_BREADTH_LIMIT + 1 }, () => 'integer'), 'number'],
+		}
+		const shape = schemaToShape(schema)
+		expect(compileSchema(shape)).toEqual({ anyOf: [{ type: 'integer' }, { type: 'number' }] })
+		const guard = compileGuard(shape)
+		expect(guard(1)).toBe(true)
+		expect(guard(1.5)).toBe(true)
+		expect(guard('1')).toBe(false)
+		const repeated: Record<string, unknown> = { type: ['string', 'string'] }
+		expect(schemaToShape(repeated)).toEqual(schemaToShape({ type: 'string' }))
+	})
+
+	it.each([{ enum: ['chosen'] }, { oneOf: [{ type: 'string' }] }, { anyOf: [{ type: 'string' }] }])(
+		'keeps earlier keyword precedence for %j',
+		(keywords) => {
+			const schema: Record<string, unknown> = { ...keywords, type: ['number', 'boolean'] }
+			const guard = compileGuard(schemaToShape(schema))
+			expect(guard('chosen')).toBe(true)
+			expect(guard(3)).toBe(false)
+			expect(guard(true)).toBe(false)
+		},
+	)
+
+	it('does not spend structural depth on a singleton type array', () => {
+		let schema: Record<string, unknown> = { type: ['array'], items: { type: 'string' } }
+		let bare: JSONSchema = { type: 'array', items: { type: 'string' } }
+		for (let depth = 0; depth < INFER_DEPTH_LIMIT - 2; depth += 1) {
+			schema = { type: 'array', items: schema }
+			bare = { type: 'array', items: bare }
+		}
+		expect(schemaToShape(schema)).toEqual(schemaToShape(bare))
+	})
+
+	it('widens a cycle through a type-array member', () => {
+		const schema: Record<string, unknown> = { type: ['array', 'string'] }
+		schema['items'] = schema
+		expect(compileSchema(schemaToShape(schema))).toEqual({
+			anyOf: [{ type: 'array', items: {} }, { type: 'string' }],
+		})
+	})
+})
 
 describe('SchemaShaper — a shared node', () => {
 	it('converts a node two branches share exactly once', () => {
