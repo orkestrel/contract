@@ -71,16 +71,16 @@
 		"test:setup": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup"
 	},
 	"devDependencies": {
-		"@microsoft/api-extractor": "^7.59.3",
-		"@orkestrel/guide": "^0.0.22",
-		"@orkestrel/probe": "^0.0.19",
-		"@orkestrel/scaffold": "^0.0.86",
+		"@microsoft/api-extractor": "^7.59.4",
+		"@orkestrel/guide": "^0.0.24",
+		"@orkestrel/probe": "^0.0.22",
+		"@orkestrel/scaffold": "^0.0.94",
 		"@orkestrel/test": "^0.0.24",
 		"@types/node": "^26.6.4",
-		"oxfmt": "^0.71.0",
-		"oxlint": "^1.86.0",
+		"oxfmt": "^0.72.0",
+		"oxlint": "^1.87.0",
 		"typescript": "^6.0.3",
-		"vite": "^8.3.2",
+		"vite": "^8.3.3",
 		"vitest": "^4.1.11"
 	},
 	"engines": {
