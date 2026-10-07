@@ -36,6 +36,7 @@ import policyPlugin, {
 	MOCKING_RULE,
 	NESTED_RULE,
 	PARSER_RULE,
+	PLUGIN_RULE,
 	POLICY_BANNED_TERMS,
 	POLICY_ENDING_GLOBS,
 	POLICY_JUDGED_TERMS,
@@ -182,7 +183,9 @@ describe('selected faces', () => {
 			expect(project.test?.include).toContain(`tests/${axis}/${face}/**/*.test.ts`)
 			expect(project.test?.browser).toMatchObject({
 				enabled: true,
-				instances: expect.arrayContaining([expect.objectContaining({ browser: 'chromium' })]),
+				instances: expect.arrayContaining([
+					expect.objectContaining({ browser: 'chromium', name: `${axis}:${face} (chromium)` }),
+				]),
 			})
 			expect(project.optimizeDeps?.include).toEqual(
 				expect.arrayContaining(['@orkestrel/test', '@orkestrel/test/browser']),
@@ -354,6 +357,14 @@ describe('selected faces', () => {
 					width: selected.width,
 					height: selected.height,
 				})
+				expect(readConfigRecord(test.browser).instances).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({
+							browser: 'chromium',
+							name: `journey:${provide.variant} (chromium)`,
+						}),
+					]),
+				)
 				expect(typeof provide.capture).toBe('boolean')
 				expect(readConfigRecord(project.optimizeDeps).include).toEqual(
 					expect.arrayContaining(['@orkestrel/test', '@orkestrel/test/browser']),
@@ -397,6 +408,12 @@ describe('selected faces', () => {
 			)
 			const test = readConfigRecord(project.test)
 			if (readConfigRecord(test.browser ?? {}).enabled !== true) continue
+			const label = typeof test.name === 'string' ? test.name : readConfigRecord(test.name).label
+			expect(readConfigRecord(test.browser).instances).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ browser: 'chromium', name: `${label} (chromium)` }),
+				]),
+			)
 			const include = readConfigRecord(project.optimizeDeps).include
 			expect(include).toEqual(
 				expect.arrayContaining([
@@ -1614,6 +1631,12 @@ createSomething({
 				code: 'const COUNT = 1',
 				errors: [{ messageId: 'hidden' }],
 			},
+			{
+				name: 'rejects a hidden plugin factory [membership: declarations in a centralized file without an export]',
+				filename: 'src/worker/plugins.ts',
+				code: 'function createModalPlugin(): void {}',
+				errors: [{ messageId: 'hidden' }],
+			},
 		],
 	})
 
@@ -1720,6 +1743,11 @@ createSomething({
 				name: 'accepts a function in a function-kind file',
 				filename: 'src/worker/helpers.ts',
 				code: 'export function buildValue(): void {}',
+			},
+			{
+				name: 'accepts a plugin factory in plugins.ts',
+				filename: 'src/worker/plugins.ts',
+				code: 'export function createModalPlugin(): void {}',
 			},
 			{
 				name: 'accepts a module in a registered function domain',
@@ -1871,6 +1899,18 @@ createSomething({
 				code: 'export const coerceValue = () => undefined',
 				errors: [{ messageId: 'parser' }],
 			},
+			{
+				name: 'rejects an unprefixed export alias [membership: parsers.ts functions whose name does not start with parse]',
+				filename: 'app/edge/parsers.ts',
+				code: 'function parseValue(): void {}\nexport { parseValue as coerceValue }',
+				errors: [{ messageId: 'parser' }],
+			},
+			{
+				name: 'rejects an unprefixed exported import alias [membership: parsers.ts functions whose name does not start with parse]',
+				filename: 'app/edge/parsers.ts',
+				code: 'export import coerceValue = Values.parseValue',
+				errors: [{ messageId: 'parser' }],
+			},
 		],
 	})
 
@@ -1899,6 +1939,150 @@ createSomething({
 				filename: 'app/edge/factories.ts',
 				code: 'export const buildValue = () => undefined',
 				errors: [{ messageId: 'factory' }],
+			},
+			{
+				name: 'rejects an unprefixed export alias [membership: factories.ts functions whose name does not start with create]',
+				filename: 'app/edge/factories.ts',
+				code: 'function createValue(): void {}\nexport { createValue as buildValue }',
+				errors: [{ messageId: 'factory' }],
+			},
+			{
+				name: 'rejects an unprefixed exported import alias [membership: factories.ts functions whose name does not start with create]',
+				filename: 'app/edge/factories.ts',
+				code: 'export import buildValue = Values.createValue',
+				errors: [{ messageId: 'factory' }],
+			},
+		],
+	})
+
+	tester.run('no-misnamed-plugin', PLUGIN_RULE, {
+		valid: [
+			{
+				name: 'accepts a create-prefixed plugin factory',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function createModalPlugin(): void {}',
+			},
+			{
+				name: 'accepts a create-prefixed plugin collection factory',
+				filename: 'src/edge/plugins.ts',
+				code: 'export const createBootstrapPlugins = () => undefined',
+			},
+			{
+				name: 'accepts a plugin-suffixed name outside plugins.ts',
+				filename: 'src/edge/helpers.ts',
+				code: 'export function registerPlugin(): void {}',
+			},
+			{
+				name: 'reads no binding nested inside a plugin factory',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function createModalPlugin(): void {\n\tfunction build(): void {}\n\tbuild()\n}',
+			},
+			{
+				name: 'accepts an export specifier in the plugin form',
+				filename: 'src/edge/plugins.ts',
+				code: 'function createModalPlugin(): void {}\nexport { createModalPlugin as createDialogPlugin }',
+			},
+			{
+				name: 'accepts an exported import alias in the plugin form',
+				filename: 'src/edge/plugins.ts',
+				code: 'export import createDialogPlugin = Factories.createModalPlugin',
+			},
+			{
+				name: 'accepts an exported import alias outside plugins.ts',
+				filename: 'src/edge/helpers.ts',
+				code: 'export import registerModal = Factories.createModalPlugin',
+			},
+		],
+		invalid: [
+			{
+				name: 'rejects a plugin-suffixed name without the create prefix [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function registerModalPlugin(): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a lowercase segment before the plugin suffix [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function createmodalPlugin(): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a name that runs past the plugin suffix [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function createModalPluginHost(): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a plugin factory with no entity segment [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function createPlugin(): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a misnamed declared signature [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export declare function registerModal(): void',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects an anonymous default function [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export default function (): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects an export alias outside the plugin form [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'function createModalPlugin(): void {}\nexport { createModalPlugin as registerModal }',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a re-export outside the plugin form [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: "export { registerModal } from './modal.js'",
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a star re-export whose names the form cannot read [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: "export * from './modal.js'",
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a register-prefixed plugin factory [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function registerModal(): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a create-prefixed name without the plugin suffix [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export const createModal = () => undefined',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a bare plugin-suffixed name [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function modalPlugin(): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a lowercase entity after create [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function createplugin(): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects an underscore in the entity segment [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function createModal_Plugin(): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects an exported import alias outside the plugin form [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export import registerModal = Factories.createModalPlugin',
+				errors: [{ messageId: 'plugin' }],
 			},
 		],
 	})
@@ -2385,6 +2569,12 @@ createSomething({
 		expect(CENTRAL_SOURCE_FILES).toContain('handlers.ts')
 	})
 
+	it('registers plugins as a central function kind', () => {
+		expect(FUNCTION_SOURCE_FILES).toContain('plugins.ts')
+		expect(CENTRAL_SOURCE_FILES).toContain('plugins.ts')
+		expect(DATA_SOURCE_FILES).not.toContain('plugins.ts')
+	})
+
 	it('matches every isolated import pattern with refused and admitted fixtures', () => {
 		const fixture = createPolicyScratch({ prefix: 'propagation-patterns-' })
 		const scratch = fixture.path
@@ -2405,7 +2595,7 @@ createSomething({
 					const pattern = readConfigRecord(patternValue)
 					const message = pattern.message
 					if (typeof message !== 'string') throw new Error('Missing pattern message')
-					const sources: ReadonlyArray<readonly [string, boolean]> = message.includes('URL schemes')
+					let sources: ReadonlyArray<readonly [string, boolean]> = message.includes('URL schemes')
 						? [
 								['https://host/x', true],
 								['data:text/plain,x', true],
@@ -2471,6 +2661,24 @@ createSomething({
 											true,
 										],
 									]
+					if (message.includes('another styles face')) {
+						const face =
+							typeof pattern.regex === 'string'
+								? /@src\/(bootstrap|tailwindcss|styles)\(/u.exec(pattern.regex)?.[1]
+								: undefined
+						if (face === undefined) throw new Error('Missing styles face in restriction pattern')
+						sources = [
+							[`@src/${face}`, true],
+							[`@src/${face}?raw`, true],
+							[`@orkestrel/x/${face}`, true],
+							[`../${face}/index.js`, true],
+							[`../src/${face}/index.js`, true],
+							[`../../src/${face}/index.js`, true],
+							['@src/browser', false],
+							[`@src/${face}x`, false],
+							[`../${face}.ext/index.js`, false],
+						]
+					}
 					const owner =
 						Array.isArray(block.files) && typeof block.files[0] === 'string'
 							? block.files[0].split('/**')[0]
@@ -2540,6 +2748,9 @@ createSomething({
 				'src/vue',
 				'app/vue',
 				'src/browser',
+				'src/bootstrap',
+				'src/tailwindcss',
+				'src/styles',
 				'app/browser',
 				'src/core',
 				'app/core',
@@ -2547,7 +2758,7 @@ createSomething({
 				'app/server',
 				'src/bin',
 			]) {
-				const refused = owner.endsWith('/vue')
+				const refused: Array<string | readonly [string, string]> = owner.endsWith('/vue')
 					? [
 							'node:fs',
 							'@src/server',
@@ -2583,6 +2794,24 @@ createSomething({
 								: []),
 						]
 					: ['@src/core']
+				if (owner === 'src/core') refused.push('@src/browser', './index.css')
+				if (['src/bootstrap', 'src/tailwindcss', 'src/styles'].includes(owner)) {
+					refused.push('node:fs', '@src/server', '../server/index.js', '@app/core')
+					for (const face of ['bootstrap', 'tailwindcss', 'styles']) {
+						if (owner === `src/${face}`) continue
+						refused.push(
+							`@src/${face}`,
+							`@orkestrel/x/${face}`,
+							`../${face}/index.js`,
+							`../src/${face}/index.js`,
+							`../../src/${face}/index.js`,
+							['export * from', `@src/${face}`],
+							['import type * as boundary from', `@src/${face}`],
+						)
+						admitted.push(`@src/${face}x`, `../${face}.ext/index.js`)
+					}
+					admitted.push('@src/browser', './sheet.js', '@orkestrel/contract')
+				}
 				for (const [sources, refusal] of [
 					[
 						[
@@ -2609,7 +2838,11 @@ createSomething({
 						mkdirSync(dirname(resolve(scratch, file)), { recursive: true })
 						writeFileSync(
 							resolve(scratch, file),
-							'import * as boundary from ' + JSON.stringify(source) + '\nvoid boundary\ndebugger\n',
+							typeof source === 'string'
+								? 'import * as boundary from ' +
+										JSON.stringify(source) +
+										'\nvoid boundary\ndebugger\n'
+								: source[0] + ' ' + JSON.stringify(source[1]) + '\ndebugger\n',
 						)
 						expected.set(file, refusal)
 					}
@@ -2734,6 +2967,7 @@ createSomething({
 			)
 			scratch.write('src/violations/parsers.ts', 'export function coerceValue(): void {}\n')
 			scratch.write('src/violations/factories.ts', 'export function buildValue(): void {}\n')
+			scratch.write('src/violations/plugins.ts', 'export function registerModal(): void {}\n')
 			scratch.write('src/violations/constants.ts', 'export const values = []\n')
 			scratch.write('src/violations/composables.ts', "export const READY = 'yes'\n")
 			scratch.write('app/browser/composables/useTheme.ts', 'export function useMode(): void {}\n')
@@ -2837,6 +3071,7 @@ createSomething({
 				{ code: 'policy(no-hidden-declaration)', filename: 'src/violations/helpers.ts' },
 				{ code: 'policy(no-misnamed-parser)', filename: 'src/violations/parsers.ts' },
 				{ code: 'policy(no-misnamed-factory)', filename: 'src/violations/factories.ts' },
+				{ code: 'policy(no-misnamed-plugin)', filename: 'src/violations/plugins.ts' },
 				{ code: 'policy(no-malformed-constant)', filename: 'src/violations/constants.ts' },
 				{ code: 'policy(no-malformed-domain)', filename: 'src/violations/composables.ts' },
 				{
