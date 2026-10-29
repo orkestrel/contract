@@ -47,6 +47,9 @@ import {
 } from '@src/core'
 import type { Equal, Expect } from '../../setup.js'
 import {
+	polluteArrayConstruction,
+	buildCycle,
+	ObservationCounter,
 	buildCyclicArray,
 	buildCyclicRecord,
 	buildDeepNest,
@@ -226,6 +229,17 @@ const BUILDER_CASES: readonly BuilderCase[] = [
 ]
 
 describe('shape builders', () => {
+	it('keeps HEAD literal and object declarations under polluted array construction', () => {
+		const actual = polluteArrayConstruction(() => {
+			return objectShape({ choice: literalShape(['x', 1]) })
+		})
+		// HEAD shapers.ts:285 and :413 copy the literal vocabulary and each property by index.
+		expect(actual).toEqual({
+			category: 'object',
+			properties: { choice: { category: 'literal', values: ['x', 1] } },
+		})
+	})
+
 	it('generates the builder argument matrix with hostile and legitimate controls', () => {
 		const throwingGet = new Proxy(
 			{ value: 1 },
@@ -610,12 +624,12 @@ describe('shape builders', () => {
 	})
 
 	it('contains diagnostic coercion for every builder bound position', () => {
-		const poison = {
+		const poison = Object.freeze({
 			[Symbol.toPrimitive]() {
 				throw new Error('poisoned')
 			},
-		}
-		const cases: ReadonlyArray<readonly [string, () => unknown]> = [
+		})
+		const cases: ReadonlyArray<readonly [string, () => unknown]> = Object.freeze([
 			['stringShape.min', () => Reflect.apply(stringShape, undefined, [{ min: poison }])],
 			['stringShape.max', () => Reflect.apply(stringShape, undefined, [{ max: poison }])],
 			['numberShape.min', () => Reflect.apply(numberShape, undefined, [{ min: poison }])],
@@ -630,7 +644,7 @@ describe('shape builders', () => {
 				'arrayShape.max',
 				() => Reflect.apply(arrayShape, undefined, [stringShape(), { max: poison }]),
 			],
-		]
+		])
 
 		for (const [position, run] of cases) {
 			const error = captureContractError(run)
@@ -639,19 +653,19 @@ describe('shape builders', () => {
 	})
 
 	it('enumerates a caller-owned property declaration once and carries that snapshot', () => {
-		let reads = 0
+		const reads = new ObservationCounter()
 		const properties = new Proxy(
 			{ a: stringShape(), b: stringShape() },
 			{
 				ownKeys(target) {
-					reads += 1
-					return reads === 1 ? Reflect.ownKeys(target) : ['a']
+					reads.increment()
+					return reads.value === 1 ? Reflect.ownKeys(target) : ['a']
 				},
 			},
 		)
 		const contract = createContract(objectShape(properties))
 
-		expect(reads).toBe(1)
+		expect(reads.value).toBe(1)
 		expect(Object.keys(contract.schema.properties ?? {})).toEqual(['a', 'b'])
 		expect(contract.is({ a: 'a', b: 'b' })).toBe(true)
 		expect(contract.is({ a: 'a' })).toBe(false)
@@ -924,17 +938,17 @@ describe('shape builders', () => {
 	})
 
 	it('validates the exact owned raw population after its caller precheck', () => {
-		let reads = 0
+		const reads = new ObservationCounter()
 		const schema = new Proxy({ type: 'string', minLength: 1 } satisfies JSONSchema, {
 			get(target, property, receiver) {
 				if (property !== 'minLength') return Reflect.get(target, property, receiver)
-				reads += 1
-				return reads === 1 ? 1 : -5
+				reads.increment()
+				return reads.value === 1 ? 1 : -5
 			},
 		})
 
 		const error = captureContractError(() => rawShape(schema))
-		expect(reads).toBe(2)
+		expect(reads.value).toBe(2)
 		expect(error.code).toBe('structure')
 		expect(error.message).toBe(
 			'validateShape: raw schema length bounds must be non-negative safe integers',
@@ -943,43 +957,43 @@ describe('shape builders', () => {
 	})
 
 	it('returns the one valid captured raw population and preserves earlier diagnostics', () => {
-		let reads = 0
+		const reads = new ObservationCounter()
 		const schema = new Proxy({ type: 'string', minLength: 1 } satisfies JSONSchema, {
 			get(target, property, receiver) {
 				if (property !== 'minLength') return Reflect.get(target, property, receiver)
-				reads += 1
-				return reads === 1 ? 1 : 3
+				reads.increment()
+				return reads.value === 1 ? 1 : 3
 			},
 		})
 		const shape = rawShape(schema)
 
-		expect(reads).toBe(2)
+		expect(reads.value).toBe(2)
 		expect(shape.schema).not.toBe(schema)
 		expect(shape.schema.minLength).toBe(3)
 		expect(Object.isFrozen(shape.schema)).toBe(true)
 
-		let invalidReads = 0
+		const invalidReads = new ObservationCounter()
 		const invalid = new Proxy({ type: 'string', minLength: -5 } satisfies JSONSchema, {
 			get(target, property, receiver) {
-				if (property === 'minLength') invalidReads += 1
+				if (property === 'minLength') invalidReads.increment()
 				return Reflect.get(target, property, receiver)
 			},
 		})
 		const invalidError = captureContractError(() => rawShape(invalid))
-		expect(invalidReads).toBe(1)
+		expect(invalidReads.value).toBe(1)
 		expect(invalidError.code).toBe('structure')
 
-		let hostileReads = 0
+		const hostileReads = new ObservationCounter()
 		const hostile = new Proxy({ type: 'string', minLength: 1 } satisfies JSONSchema, {
 			get(target, property, receiver) {
 				if (property !== 'minLength') return Reflect.get(target, property, receiver)
-				hostileReads += 1
-				if (hostileReads > 1) throw new Error('clone read')
+				hostileReads.increment()
+				if (hostileReads.value > 1) throw new Error('clone read')
 				return 1
 			},
 		})
 		const hostileError = captureContractError(() => rawShape(hostile))
-		expect(hostileReads).toBe(2)
+		expect(hostileReads.value).toBe(2)
 		expect(hostileError.code).toBe('clone')
 		expect(hostileError.message).toBe('cloneSchema: property access failed')
 	})
@@ -1552,13 +1566,12 @@ describe('schemaToShape — keyword semantics', () => {
 
 	it('forces additionalProperties open when property count exceeds INFER_BREADTH_LIMIT, even against a closed schema', () => {
 		const propertyCount = INFER_BREADTH_LIMIT + 40
-		const properties: Record<string, JSONSchema> = {}
-		const value: Record<string, string> = {}
-		for (let index = 0; index < propertyCount; index += 1) {
-			const key = `k${index}`
-			properties[key] = { type: 'string' }
-			value[key] = `v${index}`
-		}
+		const properties: Record<string, JSONSchema> = Object.fromEntries(
+			Array.from({ length: propertyCount }, (_, index) => [`k${index}`, { type: 'string' }]),
+		)
+		const value = Object.fromEntries(
+			Array.from({ length: propertyCount }, (_, index) => [`k${index}`, `v${index}`]),
+		)
 		const schema: JSONSchema = { type: 'object', properties, additionalProperties: false }
 		expect(() => createContract(schemaToShape(schema))).not.toThrow()
 		const guard = compileGuard(schemaToShape(schema))
@@ -1571,10 +1584,7 @@ describe('schemaToShape — keyword semantics', () => {
 
 	it('widens oneOf/anyOf to rawShape when the record-variant count exceeds INFER_BREADTH_LIMIT, rather than narrowing to a subset union', () => {
 		const variantCount = INFER_BREADTH_LIMIT + 10
-		const variants: JSONSchema[] = []
-		for (let index = 0; index < variantCount; index += 1) {
-			variants.push({ enum: [`v${index}`] })
-		}
+		const variants = Array.from({ length: variantCount }, (_, index) => ({ enum: [`v${index}`] }))
 		const schema: JSONSchema = { anyOf: variants }
 		const guard = compileGuard(schemaToShape(schema))
 		// A variant beyond the sampling cap must still be accepted — proving the
@@ -1689,10 +1699,10 @@ describe('schemaToShape — hostile schema triad', () => {
 	})
 
 	it('completes and widens deep subtrees to rawShape at the depth limit', () => {
-		let node: JSONSchema = { type: 'string' }
-		for (let level = 0; level < 100; level += 1) {
-			node = { type: 'object', properties: { child: node }, required: ['child'] }
-		}
+		const node = Array.from({ length: 100 }).reduce<JSONSchema>(
+			(child) => ({ type: 'object', properties: { child: child }, required: ['child'] }),
+			{ type: 'string' },
+		)
 		expect(() => createContract(schemaToShape(node))).not.toThrow()
 		const contract = createContract(schemaToShape(node))
 		expect(contract.is).toBeDefined()
@@ -1714,11 +1724,11 @@ describe('schemaToShape — hostile schema triad', () => {
 		// The object branch, the keyword switch and the per-node entry are all
 		// reached through this one door now, so the door is where the refusal is
 		// asked for — at the root, inside `properties`, and inside `items`.
-		const runs = [
+		const runs = Object.freeze([
 			() => schemaToShape(hostile),
 			() => schemaToShape({ type: 'object', properties: { nested: hostile } }),
 			() => schemaToShape({ type: 'array', items: hostile }),
-		]
+		])
 		for (const run of runs) {
 			const error = captureContractError(run)
 			expect(error.code).toBe('structure')
@@ -1853,10 +1863,10 @@ describe('schemaToShape — performance guard', () => {
 		// downstream createContract/compileGuard walk of the RESULTING shape is
 		// its own, unrelated concern — compileGuard recurses the shape's tree
 		// structure, which legitimately revisits a shared subtree per path.)
-		let node: JSONSchema = { type: 'string' }
-		for (let level = 0; level < 20; level += 1) {
-			node = { type: 'object', properties: { a: node, b: node }, required: ['a', 'b'] }
-		}
+		const node = Array.from({ length: 20 }).reduce<JSONSchema>(
+			(child) => ({ type: 'object', properties: { a: child, b: child }, required: ['a', 'b'] }),
+			{ type: 'string' },
+		)
 		const start = performance.now()
 		const shape = schemaToShape(node)
 		expect(performance.now() - start).toBeLessThan(5000)
@@ -1869,10 +1879,9 @@ describe('schemaToShape — performance guard', () => {
 	})
 
 	it('resolves an INFER_BREADTH_LIMIT-wide properties record quickly', () => {
-		const properties: Record<string, JSONSchema> = {}
-		for (let index = 0; index < 300; index += 1) {
-			properties[`key${index}`] = { type: 'string' }
-		}
+		const properties: Record<string, JSONSchema> = Object.fromEntries(
+			Array.from({ length: 300 }, (_, index) => [`key${index}`, { type: 'string' }]),
+		)
 		const schema: JSONSchema = { type: 'object', properties }
 		const start = performance.now()
 		expect(() => createContract(schemaToShape(schema))).not.toThrow()
@@ -1884,19 +1893,20 @@ describe('shape builders — reparented class brands', () => {
 	it('refuses a null-base class instance at every building door', () => {
 		// `rawShape` takes a JSON Schema rather than a declaration, so that one door is driven
 		// reflectively and the corpus still puts one instance through every building door.
-		const doors: ReadonlyArray<{ readonly name: string; readonly operation: () => unknown }> = [
-			{ name: 'arrayShape', operation: () => arrayShape(new NullBaseDeclaration()) },
-			{ name: 'objectShape', operation: () => objectShape({ value: new NullBaseDeclaration() }) },
-			{ name: 'recordShape', operation: () => recordShape(new NullBaseDeclaration()) },
-			{ name: 'unionShape', operation: () => unionShape(new NullBaseDeclaration()) },
-			{ name: 'oneOfShape', operation: () => oneOfShape(new NullBaseDeclaration()) },
-			{ name: 'optionalShape', operation: () => optionalShape(new NullBaseDeclaration()) },
-			{ name: 'nullableShape', operation: () => nullableShape(new NullBaseDeclaration()) },
-			{
-				name: 'rawShape',
-				operation: () => Reflect.apply(rawShape, undefined, [new NullBaseDeclaration()]),
-			},
-		]
+		const doors: ReadonlyArray<{ readonly name: string; readonly operation: () => unknown }> =
+			Object.freeze([
+				{ name: 'arrayShape', operation: () => arrayShape(new NullBaseDeclaration()) },
+				{ name: 'objectShape', operation: () => objectShape({ value: new NullBaseDeclaration() }) },
+				{ name: 'recordShape', operation: () => recordShape(new NullBaseDeclaration()) },
+				{ name: 'unionShape', operation: () => unionShape(new NullBaseDeclaration()) },
+				{ name: 'oneOfShape', operation: () => oneOfShape(new NullBaseDeclaration()) },
+				{ name: 'optionalShape', operation: () => optionalShape(new NullBaseDeclaration()) },
+				{ name: 'nullableShape', operation: () => nullableShape(new NullBaseDeclaration()) },
+				{
+					name: 'rawShape',
+					operation: () => Reflect.apply(rawShape, undefined, [new NullBaseDeclaration()]),
+				},
+			])
 
 		const observed = doors.map((door) => {
 			const error = captureContractError(door.operation)
@@ -1987,33 +1997,18 @@ describe('schemaToShape — readable malformed vocabulary (H9)', () => {
 		// accept-anything `rawShape` — so nothing is wrongly rejected and the
 		// round-trip law is unaffected; what it costs is determinism across two
 		// graphs that differ only in which sibling holds the cyclic node.
-		const build = (cyclicFirst: boolean): JSONSchema => {
-			const cyclic: JSONSchema = { type: 'object' }
-			const wrapper: JSONSchema = { type: 'array', items: cyclic }
-			// Only the back edge needs reflection: everything else is expressible,
-			// and `properties` cannot name `wrapper` until `wrapper` names `cyclic`.
-			Reflect.set(cyclic, 'properties', { q: wrapper })
-			Reflect.set(cyclic, 'required', ['q'])
-			const plain: JSONSchema = {
-				type: 'object',
-				properties: { q: wrapper },
-				required: ['q'],
-			}
-			const properties = cyclicFirst ? { a: cyclic, b: plain } : { a: plain, b: cyclic }
-			return { type: 'object', properties, required: ['a', 'b'] }
-		}
 
-		const cyclicFirst = compileSchema(schemaToShape(build(true)))
-		const plainFirst = compileSchema(schemaToShape(build(false)))
+		const cyclicFirst = compileSchema(schemaToShape(buildCycle(true)))
+		const plainFirst = compileSchema(schemaToShape(buildCycle(false)))
 
 		// Both siblings inherit whichever conversion reached the shared node first.
 		expect(JSON.stringify(cyclicFirst)).not.toBe(JSON.stringify(plainFirst))
 		// Both remain sound: each accepts the document the other's shape describes.
 		const value = { a: { q: [{ q: [] }] }, b: { q: [{ q: [] }] } }
-		expect(compileGuard(schemaToShape(build(true)))(value)).toBe(true)
-		expect(compileGuard(schemaToShape(build(false)))(value)).toBe(true)
+		expect(compileGuard(schemaToShape(buildCycle(true)))(value)).toBe(true)
+		expect(compileGuard(schemaToShape(buildCycle(false)))(value)).toBe(true)
 		// And each conversion is deterministic for its own input.
-		expect(JSON.stringify(compileSchema(schemaToShape(build(true))))).toBe(
+		expect(JSON.stringify(compileSchema(schemaToShape(buildCycle(true))))).toBe(
 			JSON.stringify(cyclicFirst),
 		)
 	})

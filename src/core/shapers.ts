@@ -30,6 +30,8 @@ import { ShapeValidator } from './ShapeValidator.js'
 import { INTRINSICS } from './constants.js'
 import { ContractError } from './errors.js'
 import {
+	readIndexView,
+	iterateIndices,
 	attempt,
 	contain,
 	matchesRecordBrand,
@@ -311,20 +313,22 @@ export function literalShape(
 				context: { path: ['values'], shape: 'literal' },
 			})
 		}
-		const literals: LiteralValue[] = []
-		for (let index = 0; index < snapshot.value.entries.length; index += 1) {
-			const value = snapshot.value.entries[index]
-			if (!isLiteralValue(value)) {
-				throw new ContractError(
-					'validateShape: every literal value must be a string, number, or boolean',
-					{
-						code: 'structure',
-						context: { path: ['values', INTRINSICS.text(index)], shape: 'literal' },
-					},
-				)
-			}
-			literals[literals.length] = value
-		}
+		const literals = INTRINSICS.from(
+			iterateIndices(() => snapshot.value.entries.length),
+			(index) => {
+				const value = snapshot.value.entries[index]
+				if (!isLiteralValue(value)) {
+					throw new ContractError(
+						'validateShape: every literal value must be a string, number, or boolean',
+						{
+							code: 'structure',
+							context: { path: ['values', INTRINSICS.text(index)], shape: 'literal' },
+						},
+					)
+				}
+				return value
+			},
+		)
 		const owned = INTRINSICS.freeze(literals)
 		const shape: LiteralShape = {
 			category: 'literal',
@@ -431,18 +435,25 @@ export function objectShape<
 		const copied = readValue(
 			() => {
 				const record = matchesRecordBrand(input)
-				const snapshot: { [K in keyof P]: P[K] } = INTRINSICS.create(null)
 				const keyList = INTRINSICS.keys(input)
-				for (let keyIndex = 0; keyIndex < keyList.length; keyIndex += 1) {
-					const key = keyList[keyIndex]
-					if (key === undefined) continue
-					INTRINSICS.reflect.define(snapshot, key, {
-						value: INTRINSICS.reflect.read(input, key),
-						enumerable: true,
-						configurable: true,
-						writable: true,
-					})
-				}
+				const entries: ReadonlyArray<readonly [string, PropertyDescriptor]> =
+					INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(keyList), [
+						(key: string) => [
+							key,
+							{
+								value: INTRINSICS.reflect.read(input, key),
+								enumerable: true,
+								configurable: true,
+								writable: true,
+							},
+						],
+					])
+				const descriptors = INTRINSICS.record<PropertyDescriptor>({
+					[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+						entries,
+					]),
+				})
+				const snapshot: { [K in keyof P]: P[K] } = INTRINSICS.create(null, descriptors)
 				return { record, snapshot: INTRINSICS.freeze(snapshot) }
 			},
 			'objectShape',

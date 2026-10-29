@@ -185,19 +185,20 @@ export class SchemaCloner implements SchemaClonerInterface {
 			// Indexed, not iterated: this walk decides the cloned node's own-key
 			// population, so a lying `Array.prototype[Symbol.iterator]` would place a
 			// key the source never had into a snapshot documented as faithful.
-			for (let index = 0; index < keys.length; index += 1) {
-				const key = keys[index]
-				if (key === undefined) continue
-				const path = pathOf(frame.path, key)
-				const source = this.#read(frame.source, key, path)
-				const clone = this.#capture(source, path, frame.depth + 1)
-				INTRINSICS.define(frame.clone, key, {
-					value: clone,
-					enumerable: true,
-					configurable: true,
-					writable: true,
-				})
-			}
+			INTRINSICS.reflect.apply(INTRINSICS.each, keys, [
+				(key: string | undefined) => {
+					if (key === undefined) return
+					const path = pathOf(frame.path, key)
+					const source = this.#read(frame.source, key, path)
+					const clone = this.#capture(source, path, frame.depth + 1)
+					INTRINSICS.define(frame.clone, key, {
+						value: clone,
+						enumerable: true,
+						configurable: true,
+						writable: true,
+					})
+				},
+			])
 
 			INTRINSICS.freeze(frame.clone)
 		}

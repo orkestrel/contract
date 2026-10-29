@@ -20,7 +20,13 @@ import {
 } from '@src/core'
 import type { TerminalIntrinsic } from '../../setup.js'
 import {
+	polluteArrayConstruction,
+	validateSource,
+	createPatternStub,
 	buildSharedDagShape,
+	acceptRecognition,
+	ObservationCounter,
+	ObservedValue,
 	buildStaircaseShape,
 	captureContractError,
 	createNativeMaximumSparseArray,
@@ -34,12 +40,22 @@ import {
 	replaceIntrinsic,
 	StringDeclaration,
 	TERMINAL_CONSTRUCTORS,
-	VALIDATION_BENCH_LEAF,
-	VALIDATION_BENCH_OBJECT,
 } from '../../setup.js'
-import { bench, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 describe('ShapeValidator', () => {
+	it('keeps HEAD validation expansion under polluted array construction', () => {
+		const shape: ContractShape = {
+			category: 'object',
+			properties: { age: { category: 'number', integer: true } },
+			additionalProperties: false,
+		}
+		const validator = new ShapeValidator(shape)
+		polluteArrayConstruction(() => validator.validate())
+		// HEAD ShapeValidator's schedule records the root and its declared child.
+		expect(validator.expansion).toBe(2)
+	})
+
 	it('exposes only the accepted interface and prototype behavior', () => {
 		const validator: ShapeValidatorInterface = new ShapeValidator({ category: 'string' })
 
@@ -71,22 +87,22 @@ describe('ShapeValidator', () => {
 	})
 
 	it('performs zero observation during construction', () => {
-		let observations = 0
+		const observations = new ObservationCounter()
 		const source = new Proxy({ category: 'string' } satisfies ContractShape, {
 			get(target, property, receiver) {
-				observations += 1
+				observations.increment()
 				return Reflect.get(target, property, receiver)
 			},
 			getOwnPropertyDescriptor(target, property) {
-				observations += 1
+				observations.increment()
 				return Reflect.getOwnPropertyDescriptor(target, property)
 			},
 			has(target, property) {
-				observations += 1
+				observations.increment()
 				return Reflect.has(target, property)
 			},
 			ownKeys(target) {
-				observations += 1
+				observations.increment()
 				return Reflect.ownKeys(target)
 			},
 		})
@@ -94,7 +110,7 @@ describe('ShapeValidator', () => {
 		const validator = new ShapeValidator(source)
 
 		expect(validator).toBeInstanceOf(ShapeValidator)
-		expect(observations).toBe(0)
+		expect(observations.value).toBe(0)
 	})
 
 	it('rechecks one mutable source independently after failure and repair', () => {
@@ -114,7 +130,7 @@ describe('ShapeValidator', () => {
 	it('shares one caught reentrancy poison with every nested and outer call, then recovers', () => {
 		const source: ContractShape = { category: 'string' }
 		const nested: unknown[] = []
-		let reenter = true
+		const reentry = new AbortController()
 		const validator = new ShapeValidator(source)
 		const peer = new ShapeValidator({ category: 'string', min: 1 })
 		validator.validate()
@@ -125,7 +141,7 @@ describe('ShapeValidator', () => {
 			enumerable: true,
 			configurable: true,
 			get() {
-				if (reenter) {
+				if (!reentry.signal.aborted) {
 					const outcome = attempt(() => validator.validate())
 					if (!outcome.success) nested.push(outcome.error)
 				}
@@ -149,14 +165,14 @@ describe('ShapeValidator', () => {
 		expect(validator.expansion).toBeUndefined()
 		expect(peer.expansion).toBe(1)
 
-		reenter = false
+		reentry.abort()
 		validator.validate()
 		expect(validator.expansion).toBe(1)
 	})
 
 	it('preserves an uncaught nested poison by exact identity', () => {
 		const source: ContractShape = { category: 'string' }
-		let nested: unknown
+		const nested = new ObservedValue<unknown>(undefined)
 		const validator = new ShapeValidator(source)
 		Object.defineProperty(source, 'pattern', {
 			enumerable: true,
@@ -164,7 +180,7 @@ describe('ShapeValidator', () => {
 			get() {
 				const outcome = attempt(() => validator.validate())
 				if (!outcome.success) {
-					nested = outcome.error
+					nested.value = outcome.error
 					throw outcome.error
 				}
 				return Object.freeze(/x/)
@@ -173,7 +189,7 @@ describe('ShapeValidator', () => {
 		const outer = attempt(() => validator.validate())
 
 		expect(outer.success).toBe(false)
-		expect(outer.success ? undefined : outer.error).toBe(nested)
+		expect(outer.success ? undefined : outer.error).toBe(nested.value)
 		expect(validator.expansion).toBeUndefined()
 		expect(Reflect.deleteProperty(source, 'pattern')).toBe(true)
 		validator.validate()
@@ -201,20 +217,20 @@ describe('ShapeValidator', () => {
 				return Reflect.getOwnPropertyDescriptor(target, property)
 			},
 		})
-		let reads = 0
+		const reads = new ObservationCounter()
 		const field = new Proxy({ category: 'string', min: 1 } satisfies ContractShape, {
 			get(target, property, receiver) {
 				if (property !== 'min') return Reflect.get(target, property, receiver)
-				reads += 1
-				if (reads > 2) throw new Error('post-scan field read')
+				reads.increment()
+				if (reads.value > 2) throw new Error('post-scan field read')
 				return 1
 			},
 		})
 
 		for (const source of [descriptor, field]) {
-			reads = 0
+			reads.clear()
 			const direct = captureContractError(() => new ShapeValidator(source).validate())
-			reads = 0
+			reads.clear()
 			const depth = captureContractError(() => validateShape(source))
 
 			for (const error of [direct, depth]) {
@@ -232,17 +248,17 @@ describe('ShapeValidator', () => {
 		// time, because one population needs two agreeing reads and no more — so
 		// the contract compiles the population it captured, and the phase this
 		// source kept in reserve is unreachable rather than merely unused.
-		reads = 0
+		reads.clear()
 		const refused = captureContractError(() => createContract(descriptor))
 
 		expect(refused.message).toBe('cloneShape: failed to create an owned shape snapshot')
 		expect(refused.code).toBe('clone')
 		expect(refused.context).toEqual({ shape: 'shape' })
 
-		reads = 0
+		reads.clear()
 		const compiled = createContract(field)
 
-		expect(reads).toBe(2)
+		expect(reads.value).toBe(2)
 		expect(compiled.schema).toEqual({ type: 'string', minLength: 1 })
 		expect(compiled.is('x')).toBe(true)
 		expect(compiled.is('')).toBe(false)
@@ -292,33 +308,33 @@ describe('ShapeValidator', () => {
 	})
 
 	it('translates thrown validation regions to their exact structure paths', () => {
-		let propertiesReads = 0
+		const propertiesReads = new ObservationCounter()
 		const object = new Proxy({ category: 'object', properties: {} } satisfies ContractShape, {
 			get(target, property, receiver) {
 				if (property !== 'properties') return Reflect.get(target, property, receiver)
-				propertiesReads += 1
-				if (propertiesReads > 2) throw new Error('properties read')
+				propertiesReads.increment()
+				if (propertiesReads.value > 2) throw new Error('properties read')
 				return target.properties
 			},
 		})
-		let variantsReads = 0
+		const variantsReads = new ObservationCounter()
 		const union = new Proxy(
 			{ category: 'union', variants: [{ category: 'string' }] } satisfies ContractShape,
 			{
 				get(target, property, receiver) {
 					if (property !== 'variants') return Reflect.get(target, property, receiver)
-					variantsReads += 1
-					if (variantsReads > 2) throw new Error('variants read')
+					variantsReads.increment()
+					if (variantsReads.value > 2) throw new Error('variants read')
 					return target.variants
 				},
 			},
 		)
-		let valuesReads = 0
+		const valuesReads = new ObservationCounter()
 		const literal = new Proxy({ category: 'literal', values: ['value'] } satisfies ContractShape, {
 			get(target, property, receiver) {
 				if (property !== 'values') return Reflect.get(target, property, receiver)
-				valuesReads += 1
-				if (valuesReads > 2) throw new Error('values read')
+				valuesReads.increment()
+				if (valuesReads.value > 2) throw new Error('values read')
 				return target.values
 			},
 		})
@@ -373,7 +389,7 @@ describe('ShapeValidator', () => {
 				message: 'validateShape: raw schema unions must be non-empty arrays',
 			},
 		]) {
-			let reads = 0
+			const reads = new ObservationCounter()
 			const population = new Proxy<unknown[]>([], {
 				get(target, property, receiver) {
 					if (property === 'length') return 2 ** 32
@@ -381,7 +397,7 @@ describe('ShapeValidator', () => {
 				},
 				getOwnPropertyDescriptor(target, property) {
 					if (property === '0') {
-						reads += 1
+						reads.increment()
 						throw new Error('index descriptor must not be read')
 					}
 					return Reflect.getOwnPropertyDescriptor(target, property)
@@ -397,7 +413,7 @@ describe('ShapeValidator', () => {
 			expect(error.message).toBe(entry.message)
 			expect(error.code).toBe('structure')
 			expect(error.context?.path).toEqual(['schema'])
-			expect(reads).toBe(0)
+			expect(reads.value).toBe(0)
 		}
 
 		new ShapeValidator({ category: 'raw', schema: { enum: ['value'] } }).validate()
@@ -514,10 +530,10 @@ describe('ShapeValidator', () => {
 	it('lets a later immediate depth failure outrank earlier deferred faults', () => {
 		const source = createShapeValidationCase(['domain', 'cycle', 'structure'])
 		if (source.category !== 'object') return
-		let deep: ContractShape = { category: 'string' }
-		for (let level = 0; level <= COMPILE_DEPTH_LIMIT; level += 1) {
-			deep = { category: 'array', items: deep }
-		}
+		const deep = Array.from({ length: COMPILE_DEPTH_LIMIT + 1 }).reduce<ContractShape>(
+			(node) => ({ category: 'array', items: node }),
+			{ category: 'string' },
+		)
 		Reflect.set(source.properties, 'depth', deep)
 
 		const error = captureContractError(() => new ShapeValidator(source).validate())
@@ -594,24 +610,24 @@ describe('ShapeValidator', () => {
 		// proof — and `toString` stays unobserved as before, since the quoted text
 		// is composed from the captured scalars.
 		const pattern = /a/i
-		let sourceReads = 0
-		let flagsReads = 0
-		let stringReads = 0
+		const sourceReads = new ObservationCounter()
+		const flagsReads = new ObservationCounter()
+		const stringReads = new ObservationCounter()
 		Object.defineProperty(pattern, 'source', {
 			get() {
-				sourceReads += 1
+				sourceReads.increment()
 				return 'a'
 			},
 		})
 		Object.defineProperty(pattern, 'flags', {
 			get() {
-				flagsReads += 1
+				flagsReads.increment()
 				return 'i'
 			},
 		})
 		Object.defineProperty(pattern, 'toString', {
 			get() {
-				stringReads += 1
+				stringReads.increment()
 				throw new Error('pattern stringification must not be observed')
 			},
 		})
@@ -627,9 +643,9 @@ describe('ShapeValidator', () => {
 		expect(error.context).toEqual({ path: [], shape: 'string', received: '/a/i' })
 		expect(error.context?.limit).toBeUndefined()
 		expect(Object.hasOwn(error, 'cause')).toBe(false)
-		expect(sourceReads).toBe(0)
-		expect(flagsReads).toBe(0)
-		expect(stringReads).toBe(0)
+		expect(sourceReads.value).toBe(0)
+		expect(flagsReads.value).toBe(0)
+		expect(stringReads.value).toBe(0)
 
 		const nested = captureContractError(() =>
 			new ShapeValidator({
@@ -686,10 +702,10 @@ describe('ShapeValidator', () => {
 		Reflect.deleteProperty(properties, 'cycle')
 		expect(captureContractError(() => new ShapeValidator(source).validate()).code).toBe('pattern')
 
-		let deep: ContractShape = { category: 'string' }
-		for (let level = 0; level <= COMPILE_DEPTH_LIMIT; level += 1) {
-			deep = { category: 'array', items: deep }
-		}
+		const deep = Array.from({ length: COMPILE_DEPTH_LIMIT + 1 }).reduce<ContractShape>(
+			(node) => ({ category: 'array', items: node }),
+			{ category: 'string' },
+		)
 		Reflect.set(properties, 'depth', deep)
 		expect(captureContractError(() => new ShapeValidator(source).validate()).code).toBe('depth')
 	})
@@ -744,8 +760,8 @@ describe('ShapeValidator', () => {
 			readonly name: string
 			readonly open: (shape: ContractShape) => void
 		}> = [
-			{ name: 'ShapeValidator.validate', open: (shape) => new ShapeValidator(shape).validate() },
-			{ name: 'validateShape', open: (shape) => validateShape(shape) },
+			{ name: 'ShapeValidator.validate', open: validateSource },
+			{ name: 'validateShape', open: validateShape },
 		]
 		const escaped: string[] = []
 		// A row that never armed is reported rather than skipped: the escape check
@@ -828,11 +844,9 @@ describe('the raw-schema gate decides through captured operations', () => {
 	// Two documented refusals of `rawShape` / `validateShape` were decided by
 	// a live global read and by a caller-writable membership test, so a caller
 	// could make a malformed schema compile clean without anything throwing.
-	const answerFalse = (): boolean => false
 
 	it('refuses an invalid pattern while globalThis.RegExp is a non-throwing stub', () => {
-		const stub = (): object => ({})
-		const outcome = replaceIntrinsic(globalThis, 'RegExp', stub, () =>
+		const outcome = replaceIntrinsic(globalThis, 'RegExp', createPatternStub, () =>
 			attempt(() => rawShape({ type: 'string', pattern: '(' })),
 		)
 
@@ -844,8 +858,7 @@ describe('the raw-schema gate decides through captured operations', () => {
 		// The control the refusal probe is worthless without: the captured read has
 		// to keep ACCEPTING too, or the test would pass for a gate that refuses
 		// everything.
-		const stub = (): object => ({})
-		const outcome = replaceIntrinsic(globalThis, 'RegExp', stub, () =>
+		const outcome = replaceIntrinsic(globalThis, 'RegExp', createPatternStub, () =>
 			attempt(() => rawShape({ type: 'string', pattern: '^a+$' })),
 		)
 
@@ -853,7 +866,7 @@ describe('the raw-schema gate decides through captured operations', () => {
 	})
 
 	it('refuses a duplicated raw enum while Set.prototype.has answers false', () => {
-		const outcome = replaceIntrinsic(Set.prototype, 'has', answerFalse, () =>
+		const outcome = replaceIntrinsic(Set.prototype, 'has', denyRecognition, () =>
 			attempt(() => rawShape({ type: 'string', enum: ['a', 'a'] })),
 		)
 
@@ -862,7 +875,7 @@ describe('the raw-schema gate decides through captured operations', () => {
 	})
 
 	it('refuses a duplicated required list while Set.prototype.has answers false', () => {
-		const outcome = replaceIntrinsic(Set.prototype, 'has', answerFalse, () =>
+		const outcome = replaceIntrinsic(Set.prototype, 'has', denyRecognition, () =>
 			attempt(() => rawShape({ type: 'object', required: ['a', 'a'] })),
 		)
 
@@ -870,8 +883,7 @@ describe('the raw-schema gate decides through captured operations', () => {
 	})
 
 	it('accepts a distinct raw enum while Set.prototype.has answers true', () => {
-		const answerTrue = (): boolean => true
-		const outcome = replaceIntrinsic(Set.prototype, 'has', answerTrue, () =>
+		const outcome = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () =>
 			attempt(() => rawShape({ type: 'string', enum: ['a', 'b'] })),
 		)
 
@@ -899,12 +911,16 @@ describe('one observation per unique node per call (R6-A)', () => {
 		// Declaration order must not decide it either: deepest edge first is the
 		// arrangement the old memo happened to handle well.
 		const reversed = new ObservedShape()
-		const properties: Record<string, ContractShape> = {}
-		for (let level = 16; level > 0; level -= 1) {
-			let node: ContractShape = reversed.shape
-			for (let step = 0; step < level; step += 1) node = { category: 'array', items: node }
-			properties[`k${String(level)}`] = node
-		}
+		const properties = Object.fromEntries(
+			Array.from({ length: 16 }, (_, index) => {
+				const level = 16 - index
+				const shape = Array.from({ length: level }).reduce<ContractShape>(
+					(node) => ({ category: 'array', items: node }),
+					reversed.shape,
+				)
+				return [`k${String(level)}`, shape]
+			}),
+		)
 		validateShape({ category: 'object', properties })
 		expect(reversed.reads).toBe(once)
 	})
@@ -976,10 +992,14 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 		// that skipped a node because a shallower edge had cleared it would report
 		// nothing here.
 		const half = Math.floor(COMPILE_DEPTH_LIMIT / 2) + 1
-		let tail: ContractShape = stringShape()
-		for (let level = 0; level < half; level += 1) tail = { category: 'array', items: tail }
-		let shape: ContractShape = tail
-		for (let level = 0; level < half; level += 1) shape = { category: 'array', items: shape }
+		const tail = Array.from({ length: half }).reduce<ContractShape>(
+			(node) => ({ category: 'array', items: node }),
+			stringShape(),
+		)
+		const shape = Array.from({ length: half }).reduce<ContractShape>(
+			(node) => ({ category: 'array', items: node }),
+			tail,
+		)
 
 		const error = captureContractError(() => validateShape(shape))
 		expect(error.code).toBe('depth')
@@ -988,10 +1008,10 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 
 		// Control: one level shallower is accepted, so the bound is the bound and
 		// not an artifact of the measurement.
-		let inside: ContractShape = stringShape()
-		for (let level = 0; level < COMPILE_DEPTH_LIMIT; level += 1) {
-			inside = { category: 'array', items: inside }
-		}
+		const inside = Array.from({ length: COMPILE_DEPTH_LIMIT }).reduce<ContractShape>(
+			(node) => ({ category: 'array', items: node }),
+			stringShape(),
+		)
 		expect(() => validateShape(inside)).not.toThrow()
 	})
 
@@ -1000,10 +1020,10 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 		// pre-order walk would have reached, not whichever the measurement visited.
 		// The tower is written out rather than built, because every builder runs
 		// this same gate and would refuse it before the test could hand it over.
-		let tower: ContractShape = { category: 'string' }
-		for (let level = 0; level < COMPILE_DEPTH_LIMIT; level += 1) {
-			tower = { category: 'array', items: tower }
-		}
+		const tower = Array.from({ length: COMPILE_DEPTH_LIMIT }).reduce<ContractShape>(
+			(node) => ({ category: 'array', items: node }),
+			{ category: 'string' },
+		)
 		const error = captureContractError(() =>
 			validateShape({ category: 'object', properties: { alpha: tower, beta: tower } }),
 		)
@@ -1024,10 +1044,10 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 		// and the path still names every level it took to get there.
 		const deepest: ContractShape = { category: 'array', items: { category: 'string' } }
 		Reflect.set(deepest, 'items', 42)
-		let tower: ContractShape = deepest
-		for (let level = 0; level < COMPILE_DEPTH_LIMIT; level += 1) {
-			tower = { category: 'array', items: tower }
-		}
+		const tower = Array.from({ length: COMPILE_DEPTH_LIMIT }).reduce<ContractShape>(
+			(node) => ({ category: 'array', items: node }),
+			deepest,
+		)
 		const error = captureContractError(() => validateShape(tower))
 
 		expect(error.code).toBe('depth')
@@ -1039,10 +1059,10 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 		// rule that could fire.
 		const slot: ContractShape = { category: 'array', items: { category: 'string' } }
 		Reflect.set(slot, 'items', 42)
-		let shallow: ContractShape = slot
-		for (let level = 0; level < COMPILE_DEPTH_LIMIT - 1; level += 1) {
-			shallow = { category: 'array', items: shallow }
-		}
+		const shallow = Array.from({ length: COMPILE_DEPTH_LIMIT - 1 }).reduce<ContractShape>(
+			(node) => ({ category: 'array', items: node }),
+			slot,
+		)
 		expect(captureContractError(() => validateShape(shallow)).code).toBe('structure')
 	})
 
@@ -1052,10 +1072,10 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 		const near = captureContractError(() => validateShape(looped))
 		expect(near.code).toBe('cycle')
 
-		let buried: ContractShape = looped
-		for (let level = 0; level < COMPILE_DEPTH_LIMIT + 1; level += 1) {
-			buried = { category: 'array', items: buried }
-		}
+		const buried = Array.from({ length: COMPILE_DEPTH_LIMIT + 1 }).reduce<ContractShape>(
+			(node) => ({ category: 'array', items: node }),
+			looped,
+		)
 		expect(captureContractError(() => validateShape(buried)).code).toBe('depth')
 	})
 
@@ -1089,10 +1109,10 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 		// the alias chain was — SHORTENING the declaration turned a depth violation
 		// into a cycle, which no rule can justify.
 		for (const links of [1, 2, 3]) {
-			let deep: ContractShape = { category: 'string' }
-			for (let level = 0; level < 510; level += 1) {
-				deep = { category: 'object', properties: { k0: deep } }
-			}
+			const deep = Array.from({ length: 510 }).reduce<ContractShape>(
+				(node) => ({ category: 'object', properties: { k0: node } }),
+				{ category: 'string' },
+			)
 			const loopedProperties: Record<string, ContractShape> = {}
 			const looped: ContractShape = { category: 'object', properties: loopedProperties }
 			const fork: ContractShape = {
@@ -1100,10 +1120,10 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 				properties: { p: { category: 'object', properties: { x: looped } }, q: deep },
 			}
 			loopedProperties.back = fork
-			let alias: ContractShape = looped
-			for (let level = 0; level < links; level += 1) {
-				alias = { category: 'object', properties: { k0: alias } }
-			}
+			const alias = Array.from({ length: links }).reduce<ContractShape>(
+				(node) => ({ category: 'object', properties: { k0: node } }),
+				looped,
+			)
 			const root: ContractShape = { category: 'object', properties: { a: fork, b: alias } }
 			const error = captureContractError(() => validateShape(root))
 			expect(error.code).toBe('depth')
@@ -1118,10 +1138,10 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 		// measurement rather than the fallback answers it — and it reports depth at
 		// every alias length, proving the route really does overshoot.
 		for (const links of [1, 2, 3]) {
-			let deep: ContractShape = { category: 'string' }
-			for (let level = 0; level < 510; level += 1) {
-				deep = { category: 'object', properties: { k0: deep } }
-			}
+			const deep = Array.from({ length: 510 }).reduce<ContractShape>(
+				(node) => ({ category: 'object', properties: { k0: node } }),
+				{ category: 'string' },
+			)
 			const twin: ContractShape = {
 				category: 'object',
 				properties: {
@@ -1134,10 +1154,10 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 				category: 'object',
 				properties: { p: { category: 'object', properties: { x: looped } }, q: deep },
 			}
-			let alias: ContractShape = looped
-			for (let level = 0; level < links; level += 1) {
-				alias = { category: 'object', properties: { k0: alias } }
-			}
+			const alias = Array.from({ length: links }).reduce<ContractShape>(
+				(node) => ({ category: 'object', properties: { k0: node } }),
+				looped,
+			)
 			expect(
 				captureContractError(() =>
 					validateShape({ category: 'object', properties: { a: fork, b: alias } }),
@@ -1156,10 +1176,10 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 				properties: { p: { category: 'object', properties: { x: looped } } },
 			}
 			loopedProperties.back = fork
-			let alias: ContractShape = looped
-			for (let level = 0; level < links; level += 1) {
-				alias = { category: 'object', properties: { k0: alias } }
-			}
+			const alias = Array.from({ length: links }).reduce<ContractShape>(
+				(node) => ({ category: 'object', properties: { k0: node } }),
+				looped,
+			)
 			expect(
 				captureContractError(() =>
 					validateShape({ category: 'object', properties: { a: fork, b: alias } }),
@@ -1184,31 +1204,31 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 			const hub: ContractShape = { category: 'object', properties: hubProperties }
 			const mid: ContractShape = { category: 'object', properties: midProperties }
 			const tail: ContractShape = { category: 'object', properties: tailProperties }
-			let toMid: ContractShape = mid
-			for (let level = 0; level < 60; level += 1) {
-				toMid = { category: 'object', properties: { k0: toMid } }
-			}
+			const toMid = Array.from({ length: 60 }).reduce<ContractShape>(
+				(node) => ({ category: 'object', properties: { k0: node } }),
+				mid,
+			)
 			loopProperties.k0 = toMid
-			let toHub: ContractShape = hub
-			for (let level = 0; level < 196; level += 1) {
-				toHub = { category: 'object', properties: { k0: toHub } }
-			}
+			const toHub = Array.from({ length: 196 }).reduce<ContractShape>(
+				(node) => ({ category: 'object', properties: { k0: node } }),
+				hub,
+			)
 			midProperties.k0 = toHub
 			hubProperties.k0 = tail
-			let toLoop: ContractShape = loop
-			for (let level = 0; level < 186; level += 1) {
-				toLoop = { category: 'object', properties: { k0: toLoop } }
-			}
+			const toLoop = Array.from({ length: 186 }).reduce<ContractShape>(
+				(node) => ({ category: 'object', properties: { k0: node } }),
+				loop,
+			)
 			hubProperties.k1 = toLoop
-			let toLoopShort: ContractShape = loop
-			for (let level = 0; level < 2; level += 1) {
-				toLoopShort = { category: 'object', properties: { k0: toLoopShort } }
-			}
+			const toLoopShort = Array.from({ length: 2 }).reduce<ContractShape>(
+				(node) => ({ category: 'object', properties: { k0: node } }),
+				loop,
+			)
 			tailProperties.k0 = toLoopShort
-			let toTail: ContractShape = tail
-			for (let level = 0; level < 64; level += 1) {
-				toTail = { category: 'object', properties: { k0: toTail } }
-			}
+			const toTail = Array.from({ length: 64 }).reduce<ContractShape>(
+				(node) => ({ category: 'object', properties: { k0: node } }),
+				tail,
+			)
 			const properties: Record<string, ContractShape> =
 				variant === 'second'
 					? { k1: toTail }
@@ -1236,10 +1256,10 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 		const loopProperties: Record<string, ContractShape> = {}
 		const loop: ContractShape = { category: 'object', properties: loopProperties }
 		loopProperties.self = loop
-		let tower: ContractShape = loop
-		for (let level = 0; level < 26; level += 1) {
-			tower = { category: 'object', properties: { left: tower, right: tower } }
-		}
+		const tower = Array.from({ length: 26 }).reduce<ContractShape>(
+			(node) => ({ category: 'object', properties: { left: node, right: node } }),
+			loop,
+		)
 		expect(captureContractError(() => validateShape(tower)).code).toBe('cycle')
 	})
 
@@ -1285,10 +1305,10 @@ describe('raw schema records are inspected once per call (R6-A)', () => {
 	})
 
 	it('refuses a raw node whose schema nesting overshoots from its own position', () => {
-		let schema: JSONSchema = { type: 'string' }
-		for (let level = 0; level < COMPILE_DEPTH_LIMIT + 1; level += 1) {
-			schema = { type: 'array', items: schema }
-		}
+		const schema = Array.from({ length: COMPILE_DEPTH_LIMIT + 1 }).reduce<JSONSchema>(
+			(node) => ({ type: 'array', items: node }),
+			{ type: 'string' },
+		)
 		const error = captureContractError(() => validateShape({ category: 'raw', schema }))
 		expect(error.code).toBe('structure')
 		expect(error.message).toBe('validateShape: raw schema exceeds the compilation depth limit')
@@ -1296,10 +1316,10 @@ describe('raw schema records are inspected once per call (R6-A)', () => {
 
 		// A schema that fits at the root but not once the node is nested: the same
 		// record, refused from the deeper position and accepted from the shallow one.
-		let modest: JSONSchema = { type: 'string' }
-		for (let level = 0; level < COMPILE_DEPTH_LIMIT - 2; level += 1) {
-			modest = { type: 'array', items: modest }
-		}
+		const modest = Array.from({ length: COMPILE_DEPTH_LIMIT - 2 }).reduce<JSONSchema>(
+			(node) => ({ type: 'array', items: node }),
+			{ type: 'string' },
+		)
 		const node: ContractShape = { category: 'raw', schema: modest }
 		expect(() => validateShape(node)).not.toThrow()
 		expect(
@@ -1320,11 +1340,15 @@ describe('raw schema records are inspected once per call (R6-A)', () => {
 		// occurrence discovery met FIRST, so the same graph accused a different slot
 		// depending on which key was written first — and in one of the two orders it
 		// accused a slot the control below proves is legal on its own.
-		let schema: JSONSchema = { type: 'string' }
-		for (let level = 0; level < 8; level += 1) schema = { type: 'array', items: schema }
+		const schema = Array.from({ length: 8 }).reduce<JSONSchema>(
+			(node) => ({ type: 'array', items: node }),
+			{ type: 'string' },
+		)
 		const shared: ContractShape = { category: 'raw', schema }
-		let deep: ContractShape = shared
-		for (let level = 0; level < 504; level += 1) deep = { category: 'array', items: deep }
+		const deep = Array.from({ length: 504 }).reduce<ContractShape>(
+			(node) => ({ category: 'array', items: node }),
+			shared,
+		)
 
 		// Control: the shallow slot alone is accepted, so it is not the violation.
 		expect(() => validateShape({ category: 'object', properties: { a: shared } })).not.toThrow()
@@ -1385,88 +1409,45 @@ describe('the cyclic fallback agrees with an unmemoized walk (R6-A-fix)', () => 
 		// reports 286 cycle / 68 depth — three declarations whose depth violation is
 		// lost. A pin that could not report a wrong memo would be measuring nothing.
 		const draw = seededRandom(20260808)
-		const tally = { accepted: 0, cycle: 0, depth: 0, other: 0 }
-		for (let round = 0; round < 400; round += 1) {
+		const verdicts = Array.from({ length: 400 }, () => {
 			const hubCount = 3 + Math.floor(draw() * 4)
-			const hubProperties: Array<Record<string, ContractShape>> = []
-			const hubs: ContractShape[] = []
-			for (let hub = 0; hub < hubCount; hub += 1) {
-				const properties: Record<string, ContractShape> = {}
-				hubProperties[hub] = properties
-				hubs[hub] = { category: 'object', properties }
-			}
-			for (let hub = 0; hub < hubCount; hub += 1) {
-				const properties = hubProperties[hub]
-				if (properties === undefined) continue
+			const hubProperties = Array.from(
+				{ length: hubCount },
+				(): Record<string, ContractShape> => ({}),
+			)
+			const hubs = hubProperties.map((properties): ContractShape => ({
+				category: 'object',
+				properties,
+			}))
+			for (const properties of hubProperties) {
 				const edges = 1 + Math.floor(draw() * 3)
-				for (let edge = 0; edge < edges; edge += 1) {
+				for (const [edge] of Array.from({ length: edges }).entries()) {
 					const target = Math.floor(draw() * (hubCount + 1))
 					const chosen = hubs[target]
-					let tail: ContractShape = chosen === undefined ? { category: 'string' } : chosen
+					const leaf: ContractShape = chosen === undefined ? { category: 'string' } : chosen
 					const links = 20 + Math.floor(draw() * 180)
-					for (let level = 0; level < links; level += 1) {
-						tail = { category: 'object', properties: { k0: tail } }
-					}
+					const tail = Array.from({ length: links }).reduce<ContractShape>(
+						(node) => ({ category: 'object', properties: { k0: node } }),
+						leaf,
+					)
 					properties[`e${String(edge)}`] = tail
 				}
 			}
 			const root = hubs[0]
-			if (root === undefined) continue
+			if (root === undefined) return undefined
 			const outcome = attempt(() => validateShape(root))
-			if (outcome.success) {
-				tally.accepted += 1
-				continue
-			}
+			if (outcome.success) return 'accepted'
 			const error = outcome.error
-			if (!isContractError(error)) tally.other += 1
-			else if (error.code === 'cycle') tally.cycle += 1
-			else if (error.code === 'depth') tally.depth += 1
-			else tally.other += 1
+			return isContractError(error) && (error.code === 'cycle' || error.code === 'depth')
+				? error.code
+				: 'other'
+		})
+		const tally = {
+			accepted: verdicts.filter((verdict) => verdict === 'accepted').length,
+			cycle: verdicts.filter((verdict) => verdict === 'cycle').length,
+			depth: verdicts.filter((verdict) => verdict === 'depth').length,
+			other: verdicts.filter((verdict) => verdict === 'other').length,
 		}
 		expect(tally).toEqual({ accepted: 46, cycle: 283, depth: 71, other: 0 })
 	})
 })
-
-if (import.meta.env.MODE === 'benchmark') {
-	const retainedLeaf = new ShapeValidator(VALIDATION_BENCH_LEAF)
-	const retainedIdentity = new ShapeValidator(VALIDATION_BENCH_LEAF)
-	const retainedObject = new ShapeValidator(VALIDATION_BENCH_OBJECT)
-	const doubled = new ShapeValidator(VALIDATION_BENCH_LEAF)
-
-	bench(
-		'validates a retained refined leaf',
-		() => {
-			retainedLeaf.validate()
-		},
-		{ time: 1000 },
-	)
-	bench(
-		'constructs and validates a refined leaf',
-		() => {
-			new ShapeValidator(VALIDATION_BENCH_LEAF).validate()
-		},
-		{ time: 1000 },
-	)
-	bench(
-		'validates a retained five-key object',
-		() => {
-			retainedObject.validate()
-		},
-		{ time: 1000 },
-	)
-	bench(
-		'validates a retained identity leaf',
-		() => {
-			retainedIdentity.validate()
-		},
-		{ time: 1000 },
-	)
-	bench(
-		'validates a retained leaf twice',
-		() => {
-			doubled.validate()
-			doubled.validate()
-		},
-		{ time: 1000 },
-	)
-}

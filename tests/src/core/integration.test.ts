@@ -7,10 +7,11 @@
 //
 // Shared setup helpers exercise lockstep and JSON roundtrips while each case
 // retains its own public cross-module composition boundary.
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import type { Guard } from '@src/core'
 import type { Tree } from '../../setup.js'
 import {
+	iterateIndices,
 	arrayShape,
 	attempt,
 	booleanShape,
@@ -42,6 +43,8 @@ import {
 	oneOfShape,
 	optionalShape,
 	parseEnum,
+	parseEnumValues,
+	encodeParts,
 	parseJSONAs,
 	recordOf,
 	recordShape,
@@ -60,6 +63,13 @@ import {
 import * as core from '@src/core'
 import type { TerminalIntrinsic, TerminalLie } from '../../setup.js'
 import {
+	throwClock,
+	appendDrift,
+	readPairs,
+	readUnpinnedModule,
+	ReachableVocabulary,
+	walkUnbounded,
+	acceptRecognition,
 	buildTree,
 	captured,
 	compileWidenedContract,
@@ -77,6 +87,7 @@ import {
 	publicDoors,
 	redirectIntrinsic,
 	replaceAccessor,
+	readStrings,
 	replaceIntrinsic,
 	TERMINAL_CONSTRUCTORS,
 	TERMINAL_HOOKS,
@@ -349,11 +360,11 @@ describe('caller-reachable dispatch on a path whose contract forbids failure', (
 	it('lets no public door escape with a raw caller value while any member is redirected', () => {
 		const escaped: string[] = []
 
-		for (let row = 0; row < throwing.length; row += 1) {
+		for (const row of iterateIndices(() => throwing.length)) {
 			const intrinsic = throwing[row]
 			if (intrinsic === undefined) continue
 			const sentinel = Object.freeze({ stage: intrinsic.label })
-			for (let index = 0; index < doors.length; index += 1) {
+			for (const index of iterateIndices(() => doors.length)) {
 				const door = doors[index]
 				if (door === undefined || door.refusal === 'raw') continue
 				const outcome = redirectIntrinsic(intrinsic, sentinel, (armed) =>
@@ -375,7 +386,7 @@ describe('caller-reachable dispatch on a path whose contract forbids failure', (
 		// silently failed to install reports as inert rather than as clean.
 		const inert: string[] = []
 
-		for (let row = 0; row < throwing.length; row += 1) {
+		for (const row of iterateIndices(() => throwing.length)) {
 			const intrinsic = throwing[row]
 			if (intrinsic === undefined) continue
 			const sentinel = Object.freeze({ stage: intrinsic.label })
@@ -403,7 +414,7 @@ describe('caller-reachable dispatch on a path whose contract forbids failure', (
 		// honest run rather than listed: a door that publishes a deeply frozen,
 		// marker-free value in an honest realm must publish one or refuse.
 		const honest = new Map<string, string>()
-		for (let index = 0; index < doors.length; index += 1) {
+		for (const index of iterateIndices(() => doors.length)) {
 			const door = doors[index]
 			if (door === undefined) continue
 			const outcome = attempt(door.open)
@@ -411,10 +422,10 @@ describe('caller-reachable dispatch on a path whose contract forbids failure', (
 		}
 		const unfaithful: string[] = []
 
-		for (let row = 0; row < TERMINAL_LIES.length; row += 1) {
+		for (const row of iterateIndices(() => TERMINAL_LIES.length)) {
 			const lie = TERMINAL_LIES[row]
 			if (lie === undefined) continue
-			for (let index = 0; index < doors.length; index += 1) {
+			for (const index of iterateIndices(() => doors.length)) {
 				const door = doors[index]
 				if (door === undefined || door.refusal === 'raw') continue
 				const baseline = honest.get(door.label)
@@ -653,7 +664,7 @@ describe('the redirection instruments can report a failure', () => {
 		// than asserted per row, so one silent installation failure names itself
 		// instead of stopping the sweep at the first row.
 		const inert: string[] = []
-		for (let row = 0; row < TERMINAL_LIES.length; row += 1) {
+		for (const row of iterateIndices(() => TERMINAL_LIES.length)) {
 			const lie = TERMINAL_LIES[row]
 			if (lie === undefined) continue
 			if (!lieIntrinsic(lie, (armed) => armed)) inert[inert.length] = lie.label
@@ -722,21 +733,17 @@ describe('the redirection instruments can report a failure', () => {
 			'parseEnum/stranger',
 		]
 		const labels: string[] = []
-		for (let index = 0; index < doors.length; index += 1) {
+		for (const index of iterateIndices(() => doors.length)) {
 			const door = doors[index]
 			if (door !== undefined) labels[labels.length] = door.label
 		}
 		for (const label of required) expect(labels).toContain(label)
 
-		const answerTrue = (): boolean => true
-		const thrower = (): never => {
-			throw new Error('clock')
-		}
-		const membership = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+		const membership = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () => ({
 			enumerated: enumOf({ red: 'r' })('NOT-A-MEMBER'),
 			literal: literalOf('a', 'b')('NOT-A-MEMBER'),
 		}))
-		const clock = replaceIntrinsic(Date, 'now', thrower, () =>
+		const clock = replaceIntrinsic(Date, 'now', throwClock, () =>
 			attempt(() => compileGenerator(stringShape())),
 		)
 
@@ -744,48 +751,6 @@ describe('the redirection instruments can report a failure', () => {
 		expect(clock.success).toBe(true)
 	})
 })
-
-/**
- * A membership answer spelled the way this package used to spell it: through a
- * method on a class prototype every consumer can reach.
- *
- * @remarks
- * The control drawn from OUTSIDE the membership sweeps' populations. Both
- * sweeps below are only evidence once they have reported a failing verdict, and
- * neither can report one against a package that no longer contains this
- * construct — so the construct is declared here, driven through the identical
- * doors, and required to be NAMED. An empty verdict from an instrument that has
- * never named anything measures nothing.
- */
-class ReachableVocabulary {
-	readonly #members: Set<unknown>
-
-	constructor(values: readonly unknown[]) {
-		this.#members = new Set(values)
-	}
-
-	has(value: unknown): boolean {
-		return this.#members.has(value)
-	}
-}
-
-/** An iterative walk whose termination genuinely rests on `WeakSet.prototype.has`. */
-function walkUnbounded(root: object): number {
-	const active = new WeakSet<object>()
-	const pending: object[] = [root]
-	let visits = 0
-	while (pending.length > 0) {
-		const node = pending.pop()
-		if (node === undefined) continue
-		if (active.has(node)) continue
-		active.add(node)
-		visits += 1
-		for (const value of Object.values(node)) {
-			if (typeof value === 'object' && value !== null) pending[pending.length] = value
-		}
-	}
-	return visits
-}
 
 describe('no caller-reachable member decides a membership answer', () => {
 	// Every door and every fixture is built HERE, before any redirect can arm,
@@ -809,7 +774,7 @@ describe('no caller-reachable member decides a membership answer', () => {
 	const mixedMap = new Map<unknown, unknown>([['a', 'not-a-number']])
 	const reachable = new ReachableVocabulary(['a', 'b'])
 
-	const answers: ReadonlyArray<readonly [string, () => unknown, unknown]> = [
+	const answers: ReadonlyArray<readonly [string, () => unknown, unknown]> = Object.freeze([
 		['literalOf/stranger', () => literalGuard('NOT-A-MEMBER'), false],
 		['literalOf/member', () => literalGuard('a'), true],
 		['enumOf/stranger', () => enumGuard('NOT-A-MEMBER'), false],
@@ -852,46 +817,27 @@ describe('no caller-reachable member decides a membership answer', () => {
 			'{"type":"string","pattern":"^a+$"}',
 		],
 		['isRegExp/stranger', () => isRegExp('x'), false],
-	]
+	])
 
-	const control: readonly [string, () => unknown, unknown] = [
+	const control: readonly [string, () => unknown, unknown] = Object.freeze([
 		'ReachableVocabulary/stranger',
 		() => reachable.has('NOT-A-MEMBER'),
 		false,
-	]
-
-	function driftOf(
-		door: readonly [string, () => unknown, unknown],
-		label: string,
-		drift: string[],
-	): void {
-		const outcome = attempt(door[1])
-		if (!outcome.success || outcome.value !== door[2]) {
-			drift[drift.length] = `${label} at ${door[0]}`
-		}
-	}
+	])
 
 	it('answers every membership question honestly in an honest realm', () => {
 		const wrong: string[] = []
-		for (let index = 0; index < answers.length; index += 1) {
+		for (const index of iterateIndices(() => answers.length)) {
 			const door = answers[index]
-			if (door !== undefined) driftOf(door, 'honest', wrong)
+			if (door !== undefined) appendDrift(door, 'honest', wrong)
 		}
-		driftOf(control, 'honest', wrong)
+		appendDrift(control, 'honest', wrong)
 
 		expect(wrong).toEqual([])
 	})
 
 	it('answers every membership question honestly while a host member lies', () => {
-		const injectString = function* onlyStrings(this: ReadonlySet<unknown>): Generator<unknown> {
-			for (const entry of Array.from(this.values())) if (typeof entry === 'string') yield entry
-		}
-		const injectPair = function* onlyNumbers(
-			this: ReadonlyMap<unknown, unknown>,
-		): Generator<unknown> {
-			for (const entry of Array.from(this.entries())) yield [entry[0], 1]
-		}
-		const lies: ReadonlyArray<readonly [string, object, PropertyKey, unknown]> = [
+		const lies = Object.freeze<ReadonlyArray<readonly [string, object, PropertyKey, unknown]>>([
 			['Set.prototype.has answers true', Set.prototype, 'has', (): boolean => true],
 			['Set.prototype.has answers false', Set.prototype, 'has', (): boolean => false],
 			['WeakSet.prototype.has answers true', WeakSet.prototype, 'has', (): boolean => true],
@@ -909,38 +855,38 @@ describe('no caller-reachable member decides a membership answer', () => {
 				'Set.prototype[Symbol.iterator] hides a stranger',
 				Set.prototype,
 				Symbol.iterator,
-				injectString,
+				readStrings,
 			],
 			[
 				'Map.prototype[Symbol.iterator] hides a stranger',
 				Map.prototype,
 				Symbol.iterator,
-				injectPair,
+				readPairs,
 			],
-		]
+		])
 		const drift: string[] = []
 		const named: string[] = []
 
-		for (let row = 0; row < lies.length; row += 1) {
+		for (const row of iterateIndices(() => lies.length)) {
 			const lie = lies[row]
 			if (lie === undefined) continue
-			for (let index = 0; index < answers.length; index += 1) {
+			for (const index of iterateIndices(() => answers.length)) {
 				const door = answers[index]
 				if (door === undefined) continue
-				replaceIntrinsic(lie[1], lie[2], lie[3], () => driftOf(door, lie[0], drift))
+				replaceIntrinsic(lie[1], lie[2], lie[3], () => appendDrift(door, lie[0], drift))
 			}
-			replaceIntrinsic(lie[1], lie[2], lie[3], () => driftOf(control, lie[0], named))
+			replaceIntrinsic(lie[1], lie[2], lie[3], () => appendDrift(control, lie[0], named))
 		}
 		const accessors: ReadonlyArray<'source' | 'flags'> = ['source', 'flags']
 		for (const accessor of accessors) {
-			for (let index = 0; index < answers.length; index += 1) {
+			for (const index of iterateIndices(() => answers.length)) {
 				const door = answers[index]
 				if (door === undefined) continue
 				replaceAccessor(
 					RegExp.prototype,
 					accessor,
 					() => '.*',
-					() => driftOf(door, `RegExp.prototype.${accessor} answers a decoy`, drift),
+					() => appendDrift(door, `RegExp.prototype.${accessor} answers a decoy`, drift),
 				)
 			}
 		}
@@ -959,24 +905,27 @@ describe('no caller-reachable member decides a membership answer', () => {
 			via: 'replacement',
 		}
 		const rows: readonly TerminalIntrinsic[] = [...OWNED_MEMBERS, Object.freeze(vocabularyMember)]
-		const substitutes: ReadonlyArray<() => boolean> = [(): boolean => true, (): boolean => false]
+		const substitutes: ReadonlyArray<() => boolean> = Object.freeze([
+			(): boolean => true,
+			(): boolean => false,
+		])
 		const drift: string[] = []
 		const named: string[] = []
 
-		for (let row = 0; row < rows.length; row += 1) {
+		for (const row of iterateIndices(() => rows.length)) {
 			const member = rows[row]
 			if (member === undefined) continue
-			for (let choice = 0; choice < substitutes.length; choice += 1) {
+			for (const choice of iterateIndices(() => substitutes.length)) {
 				const substitute = substitutes[choice]
-				for (let index = 0; index < answers.length; index += 1) {
+				for (const index of iterateIndices(() => answers.length)) {
 					const door = answers[index]
 					if (door === undefined) continue
 					replaceIntrinsic(member.target, member.key, substitute, () =>
-						driftOf(door, member.label, drift),
+						appendDrift(door, member.label, drift),
 					)
 				}
 				replaceIntrinsic(member.target, member.key, substitute, () =>
-					driftOf(control, member.label, named),
+					appendDrift(control, member.label, named),
 				)
 			}
 		}
@@ -1007,7 +956,18 @@ describe('no caller-reachable member decides a membership answer', () => {
 			ShapeCloner,
 			ShapeValidator,
 			ContractError,
+			iterateIndices,
+			encodeParts,
+			parseEnumValues,
 		]
+		for (const generator of [iterateIndices, encodeParts, parseEnumValues]) {
+			expect(Object.isFrozen(generator.prototype)).toBe(true)
+			for (const key of ['next', 'return', 'throw', Symbol.iterator]) {
+				const descriptor = Object.getOwnPropertyDescriptor(generator.prototype, key)
+				expect(descriptor?.writable).toBe(false)
+				expect(descriptor?.configurable).toBe(false)
+			}
+		}
 		const plain = captured.names(core).filter((name) => {
 			const exported: unknown = captured.get(core, name)
 			return typeof exported === 'function' && !owners.some((owner) => owner === exported)
@@ -1060,31 +1020,7 @@ describe('no caller-reachable member decides a membership answer', () => {
 		// ANSWERING `Reflect.defineProperty`, so a `defineProperty` that reports
 		// success without installing anything is the silent failure the corroborating
 		// descriptor read exists to catch.
-		const genuine = Reflect.defineProperty
-		const selective = function (
-			target: object,
-			key: PropertyKey,
-			descriptor: PropertyDescriptor,
-		): boolean {
-			return key === 'constructor' && descriptor.writable === false
-				? true
-				: genuine(target, key, descriptor)
-		}
-		const original = captured.descriptor(Reflect, 'defineProperty')
-		if (original === undefined) throw new Error('Reflect.defineProperty descriptor is absent')
-		captured.define(Reflect, 'defineProperty', { ...original, value: selective })
-		let outcome: { readonly success: boolean; readonly error?: unknown }
-		try {
-			vi.resetModules()
-			const loaded: Promise<unknown> = import('../../../src/core/errors.js')
-			outcome = await loaded.then(
-				() => ({ success: true }),
-				(error: unknown) => ({ success: false, error }),
-			)
-		} finally {
-			captured.define(Reflect, 'defineProperty', original)
-			vi.resetModules()
-		}
+		const outcome = await readUnpinnedModule()
 
 		expect(outcome.success).toBe(false)
 	})

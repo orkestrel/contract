@@ -9,7 +9,12 @@ import {
 	JSONCloner,
 } from '@src/core'
 import {
+	polluteArrayConstruction,
 	captureContractError,
+	acceptRecognition,
+	denyRecognition,
+	ObservationCounter,
+	ObservedValue,
 	pollutePrototype,
 	redirectIntrinsic,
 	ReentrantPollution,
@@ -17,9 +22,18 @@ import {
 	throwSentinel,
 } from '../../setup.js'
 import { requestWeakReferenceCollection } from '../../setupServer.js'
+import { requireValue } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 
 describe('JSONCloner', () => {
+	it('keeps HEAD indexed JSON copies under polluted array construction', () => {
+		const input = { rows: [1, { label: 'x' }] }
+		const actual = polluteArrayConstruction(() => new JSONCloner(input).clone())
+		// HEAD JSONCloner.ts:225 and :277 capture each array index and record descriptor.
+		expect(actual).toEqual(input)
+		expect(actual).not.toBe(input)
+	})
+
 	it('is root-exported, conforms to its interface, and exposes only clone', () => {
 		const cloner: JSONClonerInterface = new JSONCloner({ ready: true })
 
@@ -62,54 +76,54 @@ describe('JSONCloner', () => {
 	})
 
 	it('settles success once and replays the exact frozen root without rereading', () => {
-		let observations = 0
+		const observations = new ObservationCounter()
 		const source = new Proxy(
 			{ nested: [1, 2, 3] },
 			{
 				getOwnPropertyDescriptor(target, key) {
-					observations += 1
+					observations.increment()
 					return Reflect.getOwnPropertyDescriptor(target, key)
 				},
 				getPrototypeOf(target) {
-					observations += 1
+					observations.increment()
 					return Reflect.getPrototypeOf(target)
 				},
 				ownKeys(target) {
-					observations += 1
+					observations.increment()
 					return Reflect.ownKeys(target)
 				},
 			},
 		)
 		const cloner = new JSONCloner(source)
 		const first = cloner.clone()
-		const settled = observations
+		const settled = observations.value
 		const second = cloner.clone()
 
 		expect(second).toBe(first)
-		expect(observations).toBe(settled)
+		expect(observations.value).toBe(settled)
 		expect(Object.isFrozen(first)).toBe(true)
 	})
 
 	it('settles failure once and rethrows the exact owned error without rereading', () => {
-		let observations = 0
+		const observations = new ObservationCounter()
 		const caller = new ContractError('caller', { code: 'clone' })
 		const source = new Proxy(
 			{},
 			{
 				ownKeys() {
-					observations += 1
+					observations.increment()
 					throw caller
 				},
 			},
 		)
 		const cloner = new JSONCloner(source)
 		const first = captureContractError(() => cloner.clone())
-		const settled = observations
+		const settled = observations.value
 		const second = captureContractError(() => cloner.clone())
 
 		expect(second).toBe(first)
 		expect(first).not.toBe(caller)
-		expect(observations).toBe(settled)
+		expect(observations.value).toBe(settled)
 		expect(Object.hasOwn(first, 'cause')).toBe(false)
 	})
 
@@ -153,9 +167,9 @@ describe('JSONCloner', () => {
 			]
 
 			for (const subject of cloners) {
-				let redirected = false
+				const redirected = new ObservedValue(false)
 				const first = redirectIntrinsic(intrinsic, sentinel, (armed) => {
-					redirected = armed
+					redirected.value = armed
 					return attempt(() => subject.cloner.clone())
 				})
 				const replay = attempt(() => subject.cloner.clone())
@@ -163,7 +177,7 @@ describe('JSONCloner', () => {
 				observed.push({
 					intrinsic: intrinsic.label,
 					source: subject.name,
-					redirected,
+					redirected: redirected.value,
 					escaped: !first.success && first.error === sentinel,
 					owned: first.success || isContractError(first.error),
 					// Unlike the schema and shape engines, every JSON refusal is
@@ -238,10 +252,10 @@ describe('JSONCloner', () => {
 	})
 
 	it('releases failed traversal work while retaining exact terminal replay', async () => {
-		let subjectChild: { readonly nested: readonly number[] } | undefined = {
+		const subjectChild = new ObservedValue<{ readonly nested: readonly number[] } | undefined>({
 			nested: Array.from({ length: 20_000 }, (_value, index) => index),
-		}
-		const subjectReference = new WeakRef(subjectChild)
+		})
+		const subjectReference = new WeakRef(requireValue(subjectChild.value))
 		const subjectSource = new Proxy(
 			{},
 			{
@@ -253,7 +267,7 @@ describe('JSONCloner', () => {
 				},
 				getOwnPropertyDescriptor(_target, key) {
 					return {
-						value: key === 'child' ? subjectChild : Symbol('bad'),
+						value: key === 'child' ? subjectChild.value : Symbol('bad'),
 						enumerable: true,
 						configurable: true,
 						writable: true,
@@ -263,12 +277,12 @@ describe('JSONCloner', () => {
 		)
 		const subjectCloner = new JSONCloner(subjectSource)
 		const terminal = captureContractError(() => subjectCloner.clone())
-		subjectChild = undefined
+		subjectChild.value = undefined
 
-		let controlChild: { readonly nested: readonly number[] } | undefined = {
+		const controlChild = new ObservedValue<{ readonly nested: readonly number[] } | undefined>({
 			nested: Array.from({ length: 20_000 }, (_value, index) => index),
-		}
-		const controlReference = new WeakRef(controlChild)
+		})
+		const controlReference = new WeakRef(requireValue(controlChild.value))
 		const controlSource = new Proxy(
 			{},
 			{
@@ -280,7 +294,7 @@ describe('JSONCloner', () => {
 				},
 				getOwnPropertyDescriptor(_target, key) {
 					return {
-						value: key === 'child' ? controlChild : Symbol('bad'),
+						value: key === 'child' ? controlChild.value : Symbol('bad'),
 						enumerable: true,
 						configurable: true,
 						writable: true,
@@ -289,7 +303,7 @@ describe('JSONCloner', () => {
 			},
 		)
 		captureContractError(() => new JSONCloner(controlSource).clone())
-		controlChild = undefined
+		controlChild.value = undefined
 
 		await requestWeakReferenceCollection([controlReference, subjectReference])
 
@@ -299,28 +313,28 @@ describe('JSONCloner', () => {
 	})
 
 	it('promotes caught active reentry to the shared terminal poison', () => {
-		const state: { cloner: JSONClonerInterface | undefined } = { cloner: undefined }
-		let nested: unknown
+		const state = new ObservedValue<JSONClonerInterface | undefined>(undefined)
+		const nested = new ObservedValue<unknown>(undefined)
 		const source = new Proxy(
 			{},
 			{
 				getPrototypeOf() {
-					if (state.cloner === undefined) throw new Error('cloner must be initialized')
+					if (state.value === undefined) throw new Error('cloner must be initialized')
 					try {
-						state.cloner.clone()
+						state.value.clone()
 					} catch (reason) {
-						nested = reason
+						nested.value = reason
 					}
 					return null
 				},
 			},
 		)
-		state.cloner = new JSONCloner(source)
+		state.value = new JSONCloner(source)
 
-		const outer = captureContractError(() => state.cloner?.clone())
-		const later = captureContractError(() => state.cloner?.clone())
+		const outer = captureContractError(() => state.value?.clone())
+		const later = captureContractError(() => state.value?.clone())
 
-		expect(nested).toBe(outer)
+		expect(nested.value).toBe(outer)
 		expect(later).toBe(outer)
 		expect(outer.message).toBe('JSONCloner.clone: JSON cloning may not be reentered')
 		expect(outer.code).toBe('clone')
@@ -329,21 +343,21 @@ describe('JSONCloner', () => {
 	})
 
 	it('promotes uncaught active reentry to the shared terminal poison', () => {
-		const state: { cloner: JSONClonerInterface | undefined } = { cloner: undefined }
+		const state = new ObservedValue<JSONClonerInterface | undefined>(undefined)
 		const source = new Proxy(
 			{},
 			{
 				getPrototypeOf() {
-					if (state.cloner === undefined) throw new Error('cloner must be initialized')
-					state.cloner.clone()
+					if (state.value === undefined) throw new Error('cloner must be initialized')
+					state.value.clone()
 					return null
 				},
 			},
 		)
-		state.cloner = new JSONCloner(source)
+		state.value = new JSONCloner(source)
 
-		const outer = captureContractError(() => state.cloner?.clone())
-		const later = captureContractError(() => state.cloner?.clone())
+		const outer = captureContractError(() => state.value?.clone())
+		const later = captureContractError(() => state.value?.clone())
 
 		expect(later).toBe(outer)
 		expect(outer.message).toBe('JSONCloner.clone: JSON cloning may not be reentered')
@@ -351,27 +365,27 @@ describe('JSONCloner', () => {
 	})
 
 	it('keeps class instances and eager operations observably fresh', () => {
-		let observations = 0
+		const observations = new ObservationCounter()
 		const source = new Proxy(
 			{ value: [1] },
 			{
 				ownKeys(target) {
-					observations += 1
+					observations.increment()
 					return Reflect.ownKeys(target)
 				},
 			},
 		)
 		const first = new JSONCloner(source).clone()
-		const afterFirst = observations
+		const afterFirst = observations.value
 		const second = new JSONCloner(source).clone()
-		const afterSecond = observations
+		const afterSecond = observations.value
 		const eagerFirst = cloneJSONValue(source)
 		const eagerSecond = cloneJSONValue(source)
 
 		expect(second).not.toBe(first)
 		expect(eagerFirst).not.toBe(eagerSecond)
 		expect(afterSecond).toBeGreaterThan(afterFirst)
-		expect(observations).toBeGreaterThan(afterSecond)
+		expect(observations.value).toBeGreaterThan(afterSecond)
 	})
 
 	it('contains caller-owned and clone-shaped thrown values without a cause', () => {
@@ -446,19 +460,19 @@ describe('JSONCloner', () => {
 	})
 
 	it('matches descriptor refusal, key order, normalized output, and mutation isolation', () => {
-		let accesses = 0
+		const accesses = new ObservationCounter()
 		const accessor: Record<string, unknown> = {}
 		Object.defineProperty(accessor, 'value', {
 			enumerable: true,
 			get() {
-				accesses += 1
+				accesses.increment()
 				return 'unsafe'
 			},
 		})
 		const directError = captureContractError(() => new JSONCloner(accessor).clone())
 		const eagerError = captureContractError(() => cloneJSONValue(accessor))
 		expect(directError.message).toBe(eagerError.message)
-		expect(accesses).toBe(0)
+		expect(accesses.value).toBe(0)
 
 		const source: Record<string, unknown> = Object.create(null)
 		source.first = { value: 'stable' }
@@ -487,20 +501,22 @@ describe('JSONCloner', () => {
 	})
 
 	it('matches the eager boundary for deeply nested iterative input', () => {
-		let source: unknown = 'leaf'
-		for (let index = 0; index < 20_000; index += 1) source = [source]
+		const source = Array.from({ length: 20_000 }).reduce<unknown>((node) => [node], 'leaf')
 
 		const direct = new JSONCloner(source).clone()
 		const eager = cloneJSONValue(source)
-		let directNode: JSONValue = direct
-		let eagerNode: JSONValue = eager
-		for (let index = 0; index < 20_000; index += 1) {
-			if (!Array.isArray(directNode) || !Array.isArray(eagerNode)) {
-				throw new Error(`expected arrays at depth ${index}`)
-			}
-			directNode = directNode[0]
-			eagerNode = eagerNode[0]
-		}
+		const { direct: directNode, eager: eagerNode } = Array.from({ length: 20_000 }).reduce<{
+			readonly direct: JSONValue
+			readonly eager: JSONValue
+		}>(
+			(nodes, _, index) => {
+				if (!Array.isArray(nodes.direct) || !Array.isArray(nodes.eager)) {
+					throw new Error(`expected arrays at depth ${index}`)
+				}
+				return { direct: nodes.direct[0], eager: nodes.eager[0] }
+			},
+			{ direct, eager },
+		)
 
 		expect(directNode).toBe('leaf')
 		expect(eagerNode).toBe('leaf')
@@ -522,11 +538,9 @@ describe('array exactness is decided through an unredirectable vocabulary', () =
 	// The exactness verdict is what this door publishes about the caller's array,
 	// and the shrinking-`Set` form asked three caller-writable members for it:
 	// `has`, `delete`, and the `size` accessor.
-	const answerTrue = (): boolean => true
-	const answerFalse = (): boolean => false
 
 	it('accepts an exact array while Set.prototype.has answers false', () => {
-		const outcome = replaceIntrinsic(Set.prototype, 'has', answerFalse, () =>
+		const outcome = replaceIntrinsic(Set.prototype, 'has', denyRecognition, () =>
 			attempt(() => new JSONCloner([1, 2]).clone()),
 		)
 
@@ -537,7 +551,7 @@ describe('array exactness is decided through an unredirectable vocabulary', () =
 	it('refuses an array carrying an extra own key while Set.prototype.has answers true', () => {
 		const hostile: unknown[] = [1]
 		Object.defineProperty(hostile, 'ghost', { value: 2, enumerable: true, configurable: true })
-		const outcome = replaceIntrinsic(Set.prototype, 'has', answerTrue, () =>
+		const outcome = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () =>
 			attempt(() => new JSONCloner(hostile).clone()),
 		)
 
@@ -548,7 +562,7 @@ describe('array exactness is decided through an unredirectable vocabulary', () =
 	it('refuses the same array while Set.prototype.delete answers true', () => {
 		const hostile: unknown[] = [1]
 		Object.defineProperty(hostile, 'ghost', { value: 2, enumerable: true, configurable: true })
-		const outcome = replaceIntrinsic(Set.prototype, 'delete', answerTrue, () =>
+		const outcome = replaceIntrinsic(Set.prototype, 'delete', acceptRecognition, () =>
 			attempt(() => new JSONCloner(hostile).clone()),
 		)
 
@@ -563,8 +577,9 @@ describe('JSONCloner — bounded produced work (H9)', () => {
 		// take away — but its COST was unbounded: 21 source objects, a few hundred
 		// bytes, took 3.3 s, and 30 aliases takes hours. Shared references are
 		// ordinary data, so this is reachable with no attacker at all.
-		let excessive: unknown = { leaf: true }
-		for (let index = 0; index < 30; index += 1) excessive = { x: excessive, y: excessive }
+		const excessive = Array.from({ length: 30 }).reduce<unknown>((node) => ({ x: node, y: node }), {
+			leaf: true,
+		})
 
 		const started = performance.now()
 		const error = captureContractError(() => cloneJSONValue(excessive))
@@ -579,8 +594,9 @@ describe('JSONCloner — bounded produced work (H9)', () => {
 
 		// Control: a graph comfortably inside the bound still clones, and still
 		// duplicates its aliases exactly as documented.
-		let modest: unknown = { leaf: true }
-		for (let index = 0; index < 12; index += 1) modest = { x: modest, y: modest }
+		const modest = Array.from({ length: 12 }).reduce<unknown>((node) => ({ x: node, y: node }), {
+			leaf: true,
+		})
 		const clone = cloneJSONValue(modest)
 		expect(isRecord(clone)).toBe(true)
 		const record = isRecord(clone) ? clone : {}

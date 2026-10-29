@@ -1,3 +1,4 @@
+import { polluteArrayConstruction, ObservationCounter } from '../../setup.js'
 // `SampleInferer` is interned: it carries no barrel row, `tests/guides.test.ts` names it
 // in `INTERNAL`, and this suite therefore reaches the class by relative source path.
 // `samplesToSchema` is the only door that constructs it, so the per-walk memo the
@@ -8,6 +9,59 @@ import { describe, expect, it } from 'vitest'
 import { SampleInferer } from '../../../src/core/SampleInferer.js'
 
 describe('SampleInferer — the ordered row-prefix memo', () => {
+	it('keeps HEAD live sample length and sparse element reads', () => {
+		const reads: PropertyKey[] = []
+		const observed = new ObservationCounter()
+		const rows = [undefined, { age: 1 }, { age: 2 }]
+		Reflect.deleteProperty(rows, '0')
+		const source = new Proxy(rows, {
+			get(target, key) {
+				reads.push(key)
+				if (key === '1' && observed.value === 0) {
+					observed.increment()
+					target.length = 2
+				}
+				return Reflect.get(target, key)
+			},
+		})
+		const actual = polluteArrayConstruction(() =>
+			new SampleInferer(source, 8, 16, true, false, false).infer(),
+		)
+		// HEAD SampleInferer.ts:87-96 reads the hole and rereads length after each element.
+		expect(reads.slice(0, 6)).toEqual(['length', 'length', '0', 'length', '1', 'length'])
+		expect(reads).not.toContain('2')
+		expect(reads).not.toContain('constructor')
+		expect(reads).not.toContain(Symbol.iterator)
+		expect(actual).toEqual({
+			anyOf: [
+				{
+					type: 'object',
+					properties: { age: { type: 'integer' } },
+					required: ['age'],
+					additionalProperties: false,
+				},
+				{},
+			],
+		})
+	})
+
+	it('keeps HEAD sample columns under polluted array construction', () => {
+		const rows = [
+			{ age: 1, tags: ['x'] },
+			{ age: 2, tags: ['y'] },
+		]
+		const actual = polluteArrayConstruction(() =>
+			new SampleInferer(rows, 8, 16, true, false, false).infer(),
+		)
+		// HEAD SampleInferer.ts:85 and :138 derive the same row and property populations.
+		expect(actual).toEqual({
+			type: 'object',
+			properties: { age: { type: 'integer' }, tags: { type: 'array', items: { type: 'string' } } },
+			required: ['age', 'tags'],
+			additionalProperties: false,
+		})
+	})
+
 	it('serves a second slot collecting the same rows in the same order', () => {
 		const child: Record<string, unknown> = { count: 1 }
 		const rows: readonly unknown[] = [

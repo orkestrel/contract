@@ -28,19 +28,49 @@ import {
 	unionShape,
 } from '@src/core'
 import {
+	polluteArrayConstruction,
+	measureAllocations,
 	buildCountedGraph,
 	buildCountedSlots,
 	buildDeepShape,
 	buildSharedDagShape,
 	buildStaircaseShape,
-	captured,
 	captureContractError,
 	ObservedShape,
 	ReentrantShape,
 } from '../../setup.js'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 describe('ContractCompiler', () => {
+	it('keeps HEAD compiled artifacts under polluted array construction', () => {
+		const shape = objectShape({
+			name: stringShape({ min: 1, max: 1 }),
+			age: optionalShape(integerShape({ min: 1, max: 1 })),
+			tags: arrayShape(literalShape(['x']), { min: 1, max: 1 }),
+			choice: unionShape(integerShape({ min: 1, max: 1 }), stringShape({ min: 1, max: 1 })),
+		})
+		const value = { name: 'x', age: 1, tags: ['x'], choice: 1 }
+		const compiler = new ContractCompiler(shape)
+		const actual = polluteArrayConstruction(() => ({
+			schema: compiler.schema,
+			accepted: compiler.guard(value),
+			parsed: compiler.parser(value),
+			audit: compiler.auditor(value),
+			report: compiler.reporter(value),
+			seeded: compiler.guard(compiler.generator(seededRandom(7))),
+			refused: compiler.guard({ ...value, name: 3 }),
+		}))
+		// HEAD ContractCompiler.ts:717, :875, :1079, :1417, :1746 and :2067 compile these artifacts.
+		expect(Object.keys(actual.schema.properties ?? {})).toEqual(['name', 'age', 'tags', 'choice'])
+		expect(actual.schema.required).toEqual(['name', 'tags', 'choice'])
+		expect(actual.accepted).toBe(true)
+		expect(actual.parsed).toEqual(value)
+		expect(actual.audit).toEqual([])
+		expect(actual.report).toEqual([])
+		expect(actual.seeded).toBe(true)
+		expect(actual.refused).toBe(false)
+	})
+
 	it('exposes exactly the seven ruled getters and pins them', () => {
 		const compiler: ContractCompilerInterface<StringShape> = new ContractCompiler(
 			stringShape({ min: 1 }),
@@ -56,11 +86,10 @@ describe('ContractCompiler', () => {
 			'generator',
 			'contract',
 		])
-		const configurable: string[] = []
-		for (const key of Object.getOwnPropertyNames(ContractCompiler.prototype)) {
-			const descriptor = Object.getOwnPropertyDescriptor(ContractCompiler.prototype, key)
-			if (descriptor?.configurable !== false) configurable[configurable.length] = key
-		}
+		const configurable = Object.getOwnPropertyNames(ContractCompiler.prototype).filter(
+			(key) =>
+				Object.getOwnPropertyDescriptor(ContractCompiler.prototype, key)?.configurable !== false,
+		)
 		expect(configurable).toEqual([])
 		expect(compiler.guard('Ada')).toBe(true)
 		expect(compiler.guard('')).toBe(false)
@@ -393,12 +422,11 @@ describe('ContractCompiler', () => {
 		// The reported vector, kept in its reported form: no aliases in the
 		// declaration, no accessors in the value, two references per level.
 		const levels = 30
-		let shape: ContractShape = numberShape()
-		let value: unknown = 0
-		for (let level = 0; level < levels; level += 1) {
-			shape = arrayShape(shape)
-			value = [value, value]
-		}
+		const shape = Array.from({ length: levels }).reduce<ContractShape>(
+			(child) => arrayShape(child),
+			numberShape(),
+		)
+		const value = Array.from({ length: levels }).reduce<unknown>((child) => [child, child], 0)
 		const contract = createContract(shape)
 		const started = performance.now()
 		const answers: readonly unknown[] = [
@@ -460,66 +488,10 @@ describe('ContractCompiler', () => {
 		// count. These two declarations differ only there. The build allocates
 		// working maps of its own, so the DELTA between the two reads is the
 		// discriminating figure and neither total is asserted. The call counts are
-		// the control, and the values they are taken over are chosen to FORCE the
-		// ledger to allocate: a tracked node serves one object from its inline slot
-		// and builds a map only when a second distinct object reaches it inside one
-		// call, so every member here holds two distinct records. The counts prove
-		// this counter registers a map the closure builds, and they rise with the
-		// tracked-node count as a per-node cost must.
-		const original = captured.descriptor(globalThis, 'WeakMap')
-		if (original === undefined) throw new Error('the WeakMap descriptor is absent')
-		let constructions = 0
-		class CountingWeakMap extends WeakMap<object, unknown> {
-			constructor(entries?: ReadonlyArray<readonly [object, unknown]> | null) {
-				super(entries)
-				constructions += 1
-			}
-		}
-		let buildDelta = 0
-		let calledFew = 0
-		let calledMany = 0
-		let answers: readonly unknown[] = []
-		try {
-			captured.define(globalThis, 'WeakMap', { ...original, value: CountingWeakMap })
-			vi.resetModules()
-			const loaded = await import('../../../src/core/index.js')
-			const few = loaded.objectShape({
-				items: loaded.arrayShape(loaded.objectShape({ name: loaded.stringShape() })),
-			})
-			const many = loaded.objectShape({
-				items: loaded.arrayShape(loaded.objectShape({ name: loaded.stringShape() })),
-				first: loaded.arrayShape(loaded.objectShape({ tag: loaded.stringShape() })),
-				second: loaded.arrayShape(loaded.objectShape({ tag: loaded.stringShape() })),
-				third: loaded.arrayShape(loaded.objectShape({ tag: loaded.stringShape() })),
-				fourth: loaded.arrayShape(loaded.objectShape({ tag: loaded.stringShape() })),
-			})
-			const compilerFew = new loaded.ContractCompiler(few)
-			const compilerMany = new loaded.ContractCompiler(many)
-
-			let opened = constructions
-			const guardFew = compilerFew.guard
-			const builtFew = constructions - opened
-			opened = constructions
-			const guardMany = compilerMany.guard
-			buildDelta = constructions - opened - builtFew
-
-			opened = constructions
-			const answeredFew = guardFew({ items: [{ name: 'leaf' }, { name: 'branch' }] })
-			calledFew = constructions - opened
-			opened = constructions
-			const answeredMany = guardMany({
-				items: [{ name: 'leaf' }, { name: 'branch' }],
-				first: [{ tag: 'a' }, { tag: 'b' }],
-				second: [{ tag: 'c' }, { tag: 'd' }],
-				third: [{ tag: 'e' }, { tag: 'f' }],
-				fourth: [{ tag: 'g' }, { tag: 'h' }],
-			})
-			calledMany = constructions - opened
-			answers = [answeredFew, answeredMany]
-		} finally {
-			captured.define(globalThis, 'WeakMap', original)
-			vi.resetModules()
-		}
+		// the control: each member holds distinct records, so evaluation reaches
+		// each tracked node's per-call memo. The counts rise with the tracked-node
+		// population while building an artifact allocates no evaluation memo.
+		const { answers, buildDelta, calledFew, calledMany } = await measureAllocations()
 
 		expect(answers).toEqual([true, true])
 		expect(buildDelta).toBe(0)
@@ -530,9 +502,7 @@ describe('ContractCompiler', () => {
 	it('reports a shared faulted node at every path the walk reached it through', () => {
 		const shape = arrayShape(objectShape({ inner: stringShape() }))
 		const record = { inner: 1 }
-		const paths: string[] = []
-		for (const fault of compileAuditor(shape, [record, record]))
-			paths[paths.length] = `${fault.path}`
+		const paths = compileAuditor(shape, [record, record]).map((fault) => `${fault.path}`)
 
 		expect(paths).toEqual(['0,inner', '1,inner'])
 	})
@@ -540,8 +510,7 @@ describe('ContractCompiler', () => {
 	it('still reads every distinct node of a tree value and leaves a bounded door alone', () => {
 		const levels = 10
 		const tree = buildCountedGraph(levels, false)
-		let plain: unknown = 'leaf'
-		for (let level = 0; level < 18; level += 1) plain = [plain, plain]
+		const plain = Array.from({ length: 18 }).reduce<unknown>((child) => [child, child], 'leaf')
 
 		expect(compileGuard(tree.shape)(tree.value)).toBe(true)
 		expect(tree.count()).toBe(2 ** (levels + 1) - 2)

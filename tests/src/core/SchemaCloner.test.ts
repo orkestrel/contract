@@ -9,6 +9,8 @@ import {
 } from '@src/core'
 import {
 	ArrayRootSchema,
+	ObservationCounter,
+	ObservedValue,
 	captureContractError,
 	createRevokedProxy,
 	createSchemaRetention,
@@ -36,77 +38,77 @@ describe('SchemaCloner', () => {
 	})
 
 	it('settles success once and replays the exact frozen root without rereading', () => {
-		let observations = 0
+		const observations = new ObservationCounter()
 		const source = new Proxy<JSONSchema>(
 			{ anyOf: [{ type: 'string' }] },
 			{
 				get(target, key, receiver) {
-					observations += 1
+					observations.increment()
 					return Reflect.get(target, key, receiver)
 				},
 				getOwnPropertyDescriptor(target, key) {
-					observations += 1
+					observations.increment()
 					return Reflect.getOwnPropertyDescriptor(target, key)
 				},
 				ownKeys(target) {
-					observations += 1
+					observations.increment()
 					return Reflect.ownKeys(target)
 				},
 			},
 		)
 		const cloner = new SchemaCloner(source)
 		const first = cloner.clone()
-		const settled = observations
+		const settled = observations.value
 		const second = cloner.clone()
 
 		expect(second).toBe(first)
-		expect(observations).toBe(settled)
+		expect(observations.value).toBe(settled)
 		expect(Object.isFrozen(first)).toBe(true)
 	})
 
 	it('settles failure once and rethrows the exact owned error without rereading', () => {
-		let observations = 0
+		const observations = new ObservationCounter()
 		const caller = new ContractError('caller', { code: 'clone' })
 		const source = new Proxy<JSONSchema>(
 			{},
 			{
 				ownKeys() {
-					observations += 1
+					observations.increment()
 					throw caller
 				},
 			},
 		)
 		const cloner = new SchemaCloner(source)
 		const first = captureContractError(() => cloner.clone())
-		const settled = observations
+		const settled = observations.value
 		const second = captureContractError(() => cloner.clone())
 
 		expect(second).toBe(first)
 		expect(first).not.toBe(caller)
-		expect(observations).toBe(settled)
+		expect(observations.value).toBe(settled)
 		expect(first.message).toBe('cloneSchema: property enumeration failed')
 		expect(first.context).toEqual({ path: [], shape: 'schema' })
 		expect(Object.hasOwn(first, 'cause')).toBe(false)
 	})
 
 	it('keeps distinct instances independent', () => {
-		let observations = 0
+		const observations = new ObservationCounter()
 		const source = new Proxy<JSONSchema>(
 			{ type: 'string' },
 			{
 				ownKeys(target) {
-					observations += 1
+					observations.increment()
 					return Reflect.ownKeys(target)
 				},
 			},
 		)
 		const first = new SchemaCloner(source).clone()
-		const afterFirst = observations
+		const afterFirst = observations.value
 		const second = new SchemaCloner(source).clone()
 
 		expect(second).not.toBe(first)
 		expect(second).toEqual(first)
-		expect(observations).toBeGreaterThan(afterFirst)
+		expect(observations.value).toBeGreaterThan(afterFirst)
 	})
 
 	it('promotes caught reentry followed by apparent success to the shared poison', () => {
@@ -468,15 +470,19 @@ describe('SchemaCloner', () => {
 	})
 
 	it('clones to the shared depth limit without recursive call-stack pressure, and refuses past it', () => {
-		let legal: JSONSchema = { type: 'string' }
-		for (let index = 0; index < COMPILE_DEPTH_LIMIT; index += 1) legal = { items: legal }
+		const legal = Array.from({ length: COMPILE_DEPTH_LIMIT }).reduce<JSONSchema>(
+			(schema) => ({ items: schema }),
+			{ type: 'string' },
+		)
 
-		let current: JSONSchema | undefined = new SchemaCloner(legal).clone()
-		for (let index = 0; index < COMPILE_DEPTH_LIMIT; index += 1) {
-			if (current === undefined) throw new Error(`expected schema at depth ${index}`)
-			if (!Object.isFrozen(current)) throw new Error(`expected frozen schema at depth ${index}`)
-			current = current.items
-		}
+		const current = Array.from({ length: COMPILE_DEPTH_LIMIT }).reduce<JSONSchema | undefined>(
+			(schema, _, index) => {
+				if (schema === undefined) throw new Error(`expected schema at depth ${index}`)
+				if (!Object.isFrozen(schema)) throw new Error(`expected frozen schema at depth ${index}`)
+				return schema.items
+			},
+			new SchemaCloner(legal).clone(),
+		)
 		expect(current).toEqual({ type: 'string' })
 
 		// This door carried no depth bound at all while every other public
@@ -485,8 +491,10 @@ describe('SchemaCloner', () => {
 		// text — used to cost tens of seconds. The verdict is now reached in time
 		// proportional to the LIMIT, and it is a coded refusal rather than a host
 		// `RangeError`.
-		let excessive: JSONSchema = { type: 'string' }
-		for (let index = 0; index < 20_000; index += 1) excessive = { items: excessive }
+		const excessive = Array.from({ length: 20_000 }).reduce<JSONSchema>(
+			(schema) => ({ items: schema }),
+			{ type: 'string' },
+		)
 		const started = performance.now()
 		const error = captureContractError(() => new SchemaCloner(excessive).clone())
 		expect(error.code).toBe('depth')
@@ -587,9 +595,9 @@ describe('SchemaCloner', () => {
 			]
 
 			for (const subject of cloners) {
-				let redirected = false
+				const redirected = new ObservedValue(false)
 				const first = redirectIntrinsic(intrinsic, sentinel, (armed) => {
-					redirected = armed
+					redirected.value = armed
 					return attempt(() => subject.cloner.clone())
 				})
 				const replay = attempt(() => subject.cloner.clone())
@@ -597,7 +605,7 @@ describe('SchemaCloner', () => {
 				observed.push({
 					intrinsic: intrinsic.label,
 					source: subject.name,
-					redirected,
+					redirected: redirected.value,
 					escaped: !first.success && first.error === sentinel,
 					owned: first.success || isContractError(first.error),
 					caused:

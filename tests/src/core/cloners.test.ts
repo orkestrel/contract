@@ -14,7 +14,12 @@ import {
 	stringShape,
 	unionShape,
 } from '@src/core'
-import { captureContractError, ForgedBrandDeclaration, NullBaseDeclaration } from '../../setup.js'
+import {
+	ObservationCounter,
+	captureContractError,
+	ForgedBrandDeclaration,
+	NullBaseDeclaration,
+} from '../../setup.js'
 import { createForeignRecord } from '../../setupServer.js'
 import { describe, expect, it } from 'vitest'
 
@@ -93,24 +98,24 @@ describe('cloneJSONValue', () => {
 	})
 
 	it('creates a fresh composite snapshot for every eager call', () => {
-		let observations = 0
+		const observations = new ObservationCounter()
 		const source = new Proxy(
 			{ nested: [1] },
 			{
 				ownKeys(target) {
-					observations += 1
+					observations.increment()
 					return Reflect.ownKeys(target)
 				},
 			},
 		)
 
 		const first = cloneJSONValue(source)
-		const afterFirst = observations
+		const afterFirst = observations.value
 		const second = cloneJSONValue(source)
 
 		expect(second).not.toBe(first)
 		expect(second).toEqual(first)
-		expect(observations).toBeGreaterThan(afterFirst)
+		expect(observations.value).toBeGreaterThan(afterFirst)
 	})
 
 	it('preserves __proto__ as own data in deterministic key order', () => {
@@ -200,7 +205,7 @@ describe('cloneJSONValue', () => {
 	})
 
 	it('rejects inexact properties and unsupported values without invoking accessors', () => {
-		let accesses = 0
+		const accesses = new ObservationCounter()
 		const sparse = new Array<unknown>(2)
 		sparse[0] = 'present'
 
@@ -217,7 +222,7 @@ describe('cloneJSONValue', () => {
 			enumerable: true,
 			configurable: true,
 			get() {
-				accesses += 1
+				accesses.increment()
 				return 'unsafe'
 			},
 		})
@@ -235,7 +240,7 @@ describe('cloneJSONValue', () => {
 			enumerable: true,
 			configurable: true,
 			get() {
-				accesses += 1
+				accesses.increment()
 				return 'unsafe'
 			},
 		})
@@ -287,7 +292,7 @@ describe('cloneJSONValue', () => {
 			expect(error.code).toBe('clone')
 			expect(error.context?.shape).toBe('json')
 		}
-		expect(accesses).toBe(0)
+		expect(accesses.value).toBe(0)
 	})
 
 	it('rejects an array proxy that substitutes a decoration for a canonical index key', () => {
@@ -370,40 +375,38 @@ describe('cloneJSONValue', () => {
 
 	it('clones deeply nested input without recursive call-stack pressure', () => {
 		const depth = 20_000
-		let source: unknown = 'leaf'
-		for (let index = 0; index < depth; index += 1) source = [source]
+		const source = Array.from({ length: depth }).reduce<unknown>((child) => [child], 'leaf')
 
 		const clone = cloneJSONValue(source)
-		let current: unknown = clone
-		for (let index = 0; index < depth; index += 1) {
-			if (!Array.isArray(current)) throw new Error(`expected array at depth ${index}`)
-			if (!Object.isFrozen(current)) throw new Error(`expected frozen array at depth ${index}`)
-			current = current[0]
-		}
+		const current = Array.from({ length: depth }).reduce<unknown>((child, _, index) => {
+			if (!Array.isArray(child)) throw new Error(`expected array at depth ${index}`)
+			if (!Object.isFrozen(child)) throw new Error(`expected frozen array at depth ${index}`)
+			return child[0]
+		}, clone)
 		expect(current).toBe('leaf')
 	})
 })
 
 describe('cloneSchema', () => {
 	it('creates fresh eager successes and rereads the source', () => {
-		let observations = 0
+		const observations = new ObservationCounter()
 		const source = new Proxy<JSONSchema>(
 			{ type: 'string' },
 			{
 				ownKeys(target) {
-					observations += 1
+					observations.increment()
 					return Reflect.ownKeys(target)
 				},
 			},
 		)
 
 		const first = cloneSchema(source)
-		const afterFirst = observations
+		const afterFirst = observations.value
 		const second = cloneSchema(source)
 
 		expect(second).not.toBe(first)
 		expect(second).toEqual(first)
-		expect(observations).toBeGreaterThan(afterFirst)
+		expect(observations.value).toBeGreaterThan(afterFirst)
 	})
 
 	it('creates fresh eager failures while retaining the exact property cause', () => {
@@ -525,7 +528,7 @@ describe('cloneShape', () => {
 describe('ownShape', () => {
 	it('prefers a frozen source validation ContractError over the original clone failure', () => {
 		const cause = new Error('first minimum read')
-		let reads = 0
+		const reads = new ObservationCounter()
 		const target: ContractShape = { category: 'number' }
 		Object.defineProperty(target, 'min', {
 			enumerable: true,
@@ -537,8 +540,8 @@ describe('ownShape', () => {
 		const source = new Proxy(target, {
 			getOwnPropertyDescriptor(sourceTarget, property) {
 				if (property === 'min') {
-					reads += 1
-					if (reads === 2) throw cause
+					reads.increment()
+					if (reads.value === 2) throw cause
 				}
 				return Reflect.getOwnPropertyDescriptor(sourceTarget, property)
 			},
@@ -595,12 +598,12 @@ describe('ownShape', () => {
 
 describe('eager ownership boundaries — reparented class brands', () => {
 	it('refuses a null-base class instance at every eager shape and JSON door', () => {
-		const doors = [
+		const doors = Object.freeze([
 			{ name: 'cloneShape', operation: () => cloneShape(new NullBaseDeclaration()) },
 			{ name: 'ownShape', operation: () => ownShape(new NullBaseDeclaration()) },
 			{ name: 'cloneJSONValue', operation: () => cloneJSONValue(new NullBaseDeclaration()) },
 			{ name: 'cloneJSONRecord', operation: () => cloneJSONRecord(new NullBaseDeclaration()) },
-		]
+		])
 
 		const observed = doors.map((door) => {
 			const error = captureContractError(door.operation)
@@ -621,12 +624,13 @@ describe('eager ownership boundaries — reparented class brands', () => {
 		// with the mandated realm members is not, because nothing observable from
 		// outside a realm separates the two. The forgery buys acceptance, and the
 		// snapshots published are still owned plain data.
-		const doors: ReadonlyArray<{ readonly name: string; readonly operation: () => unknown }> = [
-			{ name: 'cloneShape', operation: () => cloneShape(new ForgedBrandDeclaration()) },
-			{ name: 'ownShape', operation: () => ownShape(new ForgedBrandDeclaration()) },
-			{ name: 'cloneJSONValue', operation: () => cloneJSONValue(new ForgedBrandDeclaration()) },
-			{ name: 'cloneJSONRecord', operation: () => cloneJSONRecord(new ForgedBrandDeclaration()) },
-		]
+		const doors: ReadonlyArray<{ readonly name: string; readonly operation: () => unknown }> =
+			Object.freeze([
+				{ name: 'cloneShape', operation: () => cloneShape(new ForgedBrandDeclaration()) },
+				{ name: 'ownShape', operation: () => ownShape(new ForgedBrandDeclaration()) },
+				{ name: 'cloneJSONValue', operation: () => cloneJSONValue(new ForgedBrandDeclaration()) },
+				{ name: 'cloneJSONRecord', operation: () => cloneJSONRecord(new ForgedBrandDeclaration()) },
+			])
 
 		const observed = doors.map((door) => {
 			const outcome = attempt(door.operation)

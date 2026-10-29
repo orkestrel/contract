@@ -39,6 +39,12 @@ import {
 	whereOf,
 } from '@src/core'
 import {
+	readCategory,
+	excludeNull,
+	throwMembership,
+	acceptRecognition,
+	denyRecognition,
+	ObservationCounter,
 	buildCyclicArray,
 	buildCyclicRecord,
 	buildDeepNest,
@@ -50,12 +56,37 @@ import {
 	createRevokedProxy,
 	createThrowingGetter,
 	replaceIntrinsic,
+	pollutePrototype,
+	polluteArrayConstruction,
 	throwHostileAccess,
 } from '../../setup.js'
 import { createForeignPrototype, createForeignRegExp } from '../../setupServer.js'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 
 describe('element combinators', () => {
+	it('keeps HEAD selected guard declarations under polluted array construction', () => {
+		const shape = { age: isNumber, name: isString }
+		const actual = polluteArrayConstruction(() => ({
+			picked: recordOf(pickOf(shape, ['age']))({ age: 1 }),
+			omitted: recordOf(omitOf(shape, ['name']))({ age: 1 }),
+			refused: recordOf(pickOf(shape, ['age']))({ age: 'invalid' }),
+		}))
+		// HEAD combinators.ts:625 and :684 derive selected own-key descriptors.
+		expect(actual).toEqual({ picked: true, omitted: true, refused: false })
+	})
+
+	it('keeps HEAD arrayOf refusal under an inherited empty iterator', () => {
+		const guard = arrayOf(isNumber)
+		const actual = pollutePrototype(
+			Object.prototype,
+			Symbol.iterator,
+			() => () => [][Symbol.iterator](),
+			() => guard(['invalid']),
+		)
+		// HEAD helpers.ts:1120 reads 'invalid'; combinators.ts:89 refuses that entry.
+		expect(actual).toBe(false)
+	})
+
 	it('validates arrays and tuples', () => {
 		const strings = arrayOf(isString)
 		expect(strings(['a', 'b'])).toBe(true)
@@ -311,12 +342,12 @@ describe('recordOf, pickOf, omitOf', () => {
 
 	it('refuses unreadable factory containers at every shape-derived sibling', () => {
 		const hostile = createHostileKeys()
-		for (const [reader, run] of [
+		for (const [reader, run] of Object.freeze<ReadonlyArray<readonly [string, () => unknown]>>([
 			['recordOf', () => Reflect.apply(recordOf, undefined, [hostile])],
 			['objectOf', () => Reflect.apply(objectOf, undefined, [hostile])],
 			['pickOf', () => Reflect.apply(pickOf, undefined, [hostile, ['id']])],
 			['omitOf', () => Reflect.apply(omitOf, undefined, [hostile, ['id']])],
-		] satisfies ReadonlyArray<readonly [string, () => unknown]>) {
+		])) {
 			const error = captureContractError(run)
 			expect(error.code).toBe('structure')
 			expect(error.message).toBe(`${reader}: shape could not be read`)
@@ -324,20 +355,20 @@ describe('recordOf, pickOf, omitOf', () => {
 	})
 
 	it('recordOf owns every consumed guard once at construction', () => {
-		let reads = 0
+		const reads = new ObservationCounter()
 		const source: { a: Guard<unknown> } = { a: isString }
 		const shape = new Proxy(source, {
 			get(target, key, receiver) {
-				if (key === 'a') reads += 1
+				if (key === 'a') reads.increment()
 				return Reflect.get(target, key, receiver)
 			},
 		})
 		const guard = recordOf(shape)
 
-		expect(reads).toBe(1)
+		expect(reads.value).toBe(1)
 		expect(guard({ a: 'value' })).toBe(true)
 		expect(guard({ a: 1 })).toBe(false)
-		expect(reads).toBe(1)
+		expect(reads.value).toBe(1)
 	})
 
 	it('recordOf guard meaning cannot drift after construction', () => {
@@ -379,10 +410,10 @@ describe('recordOf, pickOf, omitOf', () => {
 	})
 
 	it('shape guards refuse an unreadable optional-key list at construction', () => {
-		for (const [reader, run] of [
+		for (const [reader, run] of Object.freeze<ReadonlyArray<readonly [string, () => unknown]>>([
 			['recordOf', () => recordOf({ a: isString }, createRevokedArrayProxy<'a'>())],
 			['objectOf', () => objectOf({ a: isString }, createRevokedArrayProxy<'a'>())],
-		] satisfies ReadonlyArray<readonly [string, () => unknown]>) {
+		])) {
 			const error = captureContractError(run)
 			expect(error.code).toBe('structure')
 			expect(error.message).toBe(`${reader}: optional could not be read`)
@@ -399,10 +430,10 @@ describe('recordOf, pickOf, omitOf', () => {
 			},
 		)
 
-		for (const [reader, run] of [
+		for (const [reader, run] of Object.freeze<ReadonlyArray<readonly [string, () => unknown]>>([
 			['pickOf', () => pickOf(shape, ['a'])],
 			['omitOf', () => omitOf(shape, [])],
-		] satisfies ReadonlyArray<readonly [string, () => unknown]>) {
+		])) {
 			const error = captureContractError(run)
 			expect(error.code).toBe('structure')
 			expect(error.message).toBe(`${reader}: shape could not be read`)
@@ -488,7 +519,7 @@ describe('recordOf, pickOf, omitOf', () => {
 		})
 
 		it('accepts a genuine own property that shadows a prototype name', () => {
-			const own = { toString() {} }
+			const own = Object.freeze({ toString() {} })
 			expect(recordOf({ toString: isFunction })(own)).toBe(true)
 			expect(recordOf({ toString: isString })({ toString: 'x' })).toBe(true)
 			expect(recordOf({ toString: isString })({ toString: 1 })).toBe(false)
@@ -758,15 +789,15 @@ describe('refinement, laziness, transforms, nullability', () => {
 	})
 
 	it('defers guard resolution with lazyOf on every call', () => {
-		let buildCount = 0
+		const buildCount = new ObservationCounter()
 		const lazyString = lazyOf(() => {
-			buildCount += 1
+			buildCount.increment()
 			return isString
 		})
-		expect(buildCount).toBe(0)
+		expect(buildCount.value).toBe(0)
 		expect(lazyString('tree')).toBe(true)
 		expect(lazyString(1)).toBe(false)
-		expect(buildCount).toBe(2)
+		expect(buildCount.value).toBe(2)
 	})
 
 	it('supports self-referential recursive guards via lazyOf', () => {
@@ -777,11 +808,10 @@ describe('refinement, laziness, transforms, nullability', () => {
 		// Hold the guard in a mutable cell so the thunk reads the final guard
 		// after assignment — the canonical lazyOf recursion pattern, without a
 		// self-referential `let` binding.
-		const cell: { guard: Guard<Tree> } = {
-			guard: (_value: unknown): _value is Tree => false,
-		}
-		cell.guard = recordOf({ value: isNumber, children: arrayOf(lazyOf(() => cell.guard)) })
-		const isTree = cell.guard
+		const isTree: Guard<Tree> = recordOf({
+			value: isNumber,
+			children: arrayOf(lazyOf(() => isTree)),
+		})
 
 		expect(isTree({ value: 1, children: [] })).toBe(true)
 		expect(isTree({ value: 1, children: [{ value: 2, children: [] }] })).toBe(true)
@@ -790,17 +820,14 @@ describe('refinement, laziness, transforms, nullability', () => {
 	})
 
 	it('bounds lazyOf-rooted recursion by design and resets after each call', () => {
-		const cell: { guard: Guard<unknown> } = {
-			guard: (_value: unknown): _value is unknown => false,
-		}
-		const lazy = lazyOf(() => cell.guard)
-		cell.guard = unionOf(isString, arrayOf(lazy), recordOf({ value: lazy }))
+		const lazy: Guard<unknown> = lazyOf(() => recursive)
+		const recursive = unionOf(isString, arrayOf(lazy), recordOf({ value: lazy }))
 
 		expect(GUARD_DEPTH_LIMIT).toBe(512)
-		expect(() => cell.guard(buildDeepNest(10_000))).not.toThrow()
-		expect(cell.guard(buildDeepNest(10_000))).toBe(false)
-		expect(cell.guard(buildDeepNest(100))).toBe(true)
-		expect(cell.guard('leaf')).toBe(true)
+		expect(() => recursive(buildDeepNest(10_000))).not.toThrow()
+		expect(recursive(buildDeepNest(10_000))).toBe(false)
+		expect(recursive(buildDeepNest(100))).toBe(true)
+		expect(recursive('leaf')).toBe(true)
 	})
 
 	it('guards a projected value with transformOf', () => {
@@ -1088,40 +1115,27 @@ describe('user-callback throw containment', () => {
 		// object throws on `null`; one `holds` around the WHOLE disjunction let it
 		// erase every later passing member, so the same union answered differently
 		// depending on argument order.
-		const naive = (value: unknown): boolean => {
-			// The ordinary shape of a caller predicate that assumes an object: reading
-			// `value.kind` off `null` is a TypeError, and nothing about that makes
-			// `null` a member of every other guard in the union.
-			if (value === null || typeof value !== 'object') {
-				throw new TypeError('cannot read properties of a non-object')
-			}
-			return 'kind' in value && value.kind === 'x'
-		}
 
-		expect(unionOf(isNull, naive)(null)).toBe(true)
-		expect(unionOf(naive, isNull)(null)).toBe(true)
-		expect(orOf(isNull, naive)(null)).toBe(true)
-		expect(orOf(naive, isNull)(null)).toBe(true)
+		expect(unionOf(isNull, readCategory)(null)).toBe(true)
+		expect(unionOf(readCategory, isNull)(null)).toBe(true)
+		expect(orOf(isNull, readCategory)(null)).toBe(true)
+		expect(orOf(readCategory, isNull)(null)).toBe(true)
 		// `g` and `notOf(g)` may not both reject the same value.
-		expect(notOf(naive)(null)).toBe(true)
-		expect(orOf(naive, notOf(naive))(null)).toBe(true)
-		expect(notOf(notOf(naive))(null)).toBe(false)
-		const naiveExclusion = (value: null): value is never => {
-			if (value === null) throw new TypeError('cannot read properties of null')
-			return false
-		}
-		expect(complementOf(isNull, naiveExclusion)(null)).toBe(true)
+		expect(notOf(readCategory)(null)).toBe(true)
+		expect(orOf(readCategory, notOf(readCategory))(null)).toBe(true)
+		expect(notOf(notOf(readCategory))(null)).toBe(false)
+		expect(complementOf(isNull, excludeNull)(null)).toBe(true)
 		// Control: conjunction is unchanged — a throwing member genuinely did not
 		// pass, so `false` was already the right answer there.
-		expect(andOf(isNull, naive)(null)).toBe(false)
-		expect(intersectionOf(isNull, naive)(null)).toBe(false)
+		expect(andOf(isNull, readCategory)(null)).toBe(false)
+		expect(intersectionOf(isNull, readCategory)(null)).toBe(false)
 	})
 
 	it('accepts a callable instance, agreeing with the helper it is built on', () => {
 		// `instanceOf` carried an `isObject` pre-filter, and `typeof fn` is
 		// 'function', so it rejected every callable instance while `isInstance`
 		// accepted the identical pair.
-		const callable = (): void => {}
+		const callable = acceptRecognition
 		expect(isInstance(callable, Function)).toBe(true)
 		expect(instanceOf(Function)(callable)).toBe(true)
 		// Controls: a non-instance and a non-constructor still answer false.
@@ -1219,11 +1233,11 @@ describe('combinator totality sweep', () => {
 		expect(stringShape({ pattern: hostile }).pattern?.source).toBe('value')
 
 		const proxy = new Proxy(/value/, {})
-		for (const [reader, run] of [
+		for (const [reader, run] of Object.freeze<ReadonlyArray<readonly [string, () => unknown]>>([
 			['matchOf', () => matchOf(proxy)],
 			['stringOf', () => stringOf({ pattern: proxy })],
 			['stringShape', () => stringShape({ pattern: proxy })],
-		] satisfies ReadonlyArray<readonly [string, () => unknown]>) {
+		])) {
 			const error = captureContractError(run)
 			expect(error.code).toBe('pattern')
 			expect(error.message).toBe(`${reader}: pattern must be a RegExp`)
@@ -1231,8 +1245,7 @@ describe('combinator totality sweep', () => {
 	})
 
 	it('a guard from every combinator factory returns a boolean for every hostile fixture', () => {
-		let recursive: Guard<unknown> = isString
-		recursive = unionOf(isString, arrayOf(lazyOf(() => recursive)))
+		const recursive: Guard<unknown> = unionOf(isString, arrayOf(lazyOf(() => recursive)))
 		const shape = { id: isString, count: isNumber }
 		const guards: ReadonlyArray<Guard<unknown>> = [
 			arrayOf(isString),
@@ -1293,11 +1306,11 @@ describe('optionalOf', () => {
 
 describe('container-combinator throw containment', () => {
 	it('recordOf: a hostile getter on a value read is contained as a non-match', () => {
-		const hostile: unknown = {
+		const hostile: unknown = Object.freeze({
 			get a() {
 				throw new Error('hostile getter')
 			},
-		}
+		})
 		const guard = recordOf({ a: isString })
 		expect(() => guard(hostile)).not.toThrow()
 		expect(guard(hostile)).toBe(false)
@@ -1409,11 +1422,9 @@ describe('membership answered through an unredirectable vocabulary', () => {
 	// changed what these guards ANSWER — no throw, no diagnostic, a wrong yes.
 	// The lie is installed for the whole call, so both the build and the read run
 	// under it.
-	const answerTrue = (): boolean => true
-	const answerFalse = (): boolean => false
 
 	it('literalOf rejects a non-member while Set.prototype.has answers true', () => {
-		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+		const answers = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () => ({
 			member: literalOf('a', 'b')('a'),
 			stranger: literalOf('a', 'b')('NOT-A-MEMBER'),
 			listed: literalOf(['a', 'b'])('NOT-A-MEMBER'),
@@ -1423,7 +1434,7 @@ describe('membership answered through an unredirectable vocabulary', () => {
 	})
 
 	it('literalOf accepts a member while Set.prototype.has answers false', () => {
-		const answers = replaceIntrinsic(Set.prototype, 'has', answerFalse, () =>
+		const answers = replaceIntrinsic(Set.prototype, 'has', denyRecognition, () =>
 			literalOf('a', 'b')('a'),
 		)
 
@@ -1431,7 +1442,7 @@ describe('membership answered through an unredirectable vocabulary', () => {
 	})
 
 	it('enumOf rejects a non-member while Set.prototype.has answers true', () => {
-		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+		const answers = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () => ({
 			member: enumOf({ red: 'r', blue: 'b' })('r'),
 			stranger: enumOf({ red: 'r', blue: 'b' })('NOT-A-MEMBER'),
 		}))
@@ -1442,10 +1453,7 @@ describe('membership answered through an unredirectable vocabulary', () => {
 	it('enumOf answers false instead of throwing while Set.prototype.has throws', () => {
 		// A guard never throws for adversarial input. Its sibling `literalOf` had
 		// this right one screen away, which is exactly how the gap survived.
-		const thrower = (): boolean => {
-			throw new Error('sethas')
-		}
-		const answers = replaceIntrinsic(Set.prototype, 'has', thrower, () =>
+		const answers = replaceIntrinsic(Set.prototype, 'has', throwMembership, () =>
 			attempt(() => enumOf({ red: 'r' })('r')),
 		)
 
@@ -1454,7 +1462,7 @@ describe('membership answered through an unredirectable vocabulary', () => {
 	})
 
 	it('recordOf still rejects an undeclared key while Set.prototype.has answers true', () => {
-		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+		const answers = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () => ({
 			exact: recordOf({ name: isString })({ name: 'Ada' }),
 			extra: recordOf({ name: isString })({ name: 'Ada', ghost: 1 }),
 			missing: recordOf({ name: isString })({}),
@@ -1465,7 +1473,7 @@ describe('membership answered through an unredirectable vocabulary', () => {
 
 	it('recordOf still requires a non-optional key while Set.prototype.has answers true', () => {
 		const guard = recordOf({ name: isString, age: isNumber }, ['age'])
-		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+		const answers = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () => ({
 			optionalAbsent: guard({ name: 'Ada' }),
 			requiredAbsent: guard({ age: 1 }),
 		}))
@@ -1474,7 +1482,7 @@ describe('membership answered through an unredirectable vocabulary', () => {
 	})
 
 	it('keyOf rejects a key the object does not own while Set.prototype.has answers true', () => {
-		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+		const answers = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () => ({
 			member: keyOf({ red: 1, green: 2 })('red'),
 			stranger: keyOf({ red: 1, green: 2 })('purple'),
 		}))
@@ -1484,7 +1492,7 @@ describe('membership answered through an unredirectable vocabulary', () => {
 
 	it('pickOf and omitOf keep their selections while Set.prototype.has answers true', () => {
 		const shape: GuardsShape = { name: isString, age: isNumber }
-		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+		const answers = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () => ({
 			picked: Object.keys(pickOf(shape, ['name'])),
 			omitted: Object.keys(omitOf(shape, ['age'])),
 		}))

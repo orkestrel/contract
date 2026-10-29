@@ -15,6 +15,7 @@ import type {
 	GuardsShape,
 	JSONSchema,
 	JSONValue,
+	LengthReader,
 	NumberShape,
 	RandomFunction,
 	ReadValueOptions,
@@ -49,6 +50,72 @@ import {
 } from './validators.js'
 
 /**
+ * Iterates indices while rereading the upper bound before every step.
+ *
+ * @remarks
+ * Uses a captured native cursor and never reads an element or a caller's
+ * iterator. Fractional bounds include the last index below the bound.
+ *
+ * @param read - Reads the current upper bound
+ * @returns The indices below each observed bound
+ *
+ * @example
+ * ```ts
+ * Array.from(iterateIndices(() => 3)) // [0, 1, 2]
+ * ```
+ */
+export function* iterateIndices(read: LengthReader): Generator<number, void, unknown> {
+	const cursor = INTRINSICS.reflect.apply(
+		INTRINSICS.indices,
+		{
+			get length() {
+				const length = read()
+				return length > 0 ? INTRINSICS.ceil(length) : 0
+			},
+		},
+		[],
+	)
+	while (true) {
+		const step: IteratorResult<number> = INTRINSICS.reflect.apply(INTRINSICS.advance, cursor, [])
+		if (step.done) return
+		yield step.value
+	}
+}
+
+/**
+ * Exposes indexed reads through a non-array receiver without species dispatch.
+ *
+ * @remarks
+ * Captured array methods read length, membership, and elements lazily through
+ * the source receiver. The view is not an array, so native map, filter, and
+ * flatMap never consult its constructor or species. Their callback's collection
+ * argument is this view. No source element is observed while constructing it.
+ *
+ * @param values - The array whose live indexed reads and membership are forwarded
+ * @returns A non-array receiver for captured array methods
+ *
+ * @example
+ * ```ts
+ * INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView([1, 2]), [
+ * 	(value: number) => value * 2,
+ * ]) // [2, 4]
+ * ```
+ */
+export function readIndexView(values: readonly unknown[]): object {
+	return new INTRINSICS.proxy(
+		{ __proto__: null },
+		{
+			get(_target, key) {
+				return INTRINSICS.reflect.read(values, key)
+			},
+			has(_target, key) {
+				return INTRINSICS.reflect.present(values, key)
+			},
+		},
+	)
+}
+
+/**
  * Builds a diagnostic path from an existing path and further segments, without
  * dispatching through array iteration.
  *
@@ -78,18 +145,21 @@ export function pathOf(
 	path: readonly string[],
 	...segments: ReadonlyArray<string | undefined>
 ): readonly string[] {
-	const extended: string[] = []
-	for (let index = 0; index < path.length; index += 1) {
-		const existing = path[index]
-		if (existing === undefined) continue
-		extended[extended.length] = existing
-	}
-	for (let index = 0; index < segments.length; index += 1) {
-		const segment = segments[index]
-		if (segment === undefined) continue
-		extended[extended.length] = segment
-	}
-	return extended
+	const existing = INTRINSICS.from(
+		iterateIndices(() => path.length),
+		(index) => path[index],
+	)
+	const added = INTRINSICS.from(
+		iterateIndices(() => segments.length),
+		(index) => segments[index],
+	)
+	const combined = INTRINSICS.from(
+		iterateIndices(() => existing.length + added.length),
+		(index) => (index < existing.length ? existing[index] : added[index - existing.length]),
+	)
+	return INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(combined), [
+		(segment: string | undefined) => segment !== undefined,
+	])
 }
 
 /**
@@ -113,7 +183,7 @@ export function pathOf(
  * ```
  */
 export function appendEntries<T>(target: T[], source: readonly T[]): void {
-	for (let index = 0; index < source.length; index += 1) {
+	for (const index of iterateIndices(() => source.length)) {
 		const entry = source[index]
 		// A hole is skipped rather than materialized as a present `undefined`: the
 		// arrays this appends are dense reports this package built, so the branch
@@ -143,13 +213,13 @@ export function appendEntries<T>(target: T[], source: readonly T[]): void {
  */
 export function limitEntries<T>(entries: readonly T[], limit: number): readonly T[] {
 	if (entries.length <= limit) return entries
-	const bounded: T[] = []
-	for (let index = 0; index < limit; index += 1) {
-		const entry = entries[index]
-		if (entry === undefined) continue
-		bounded[bounded.length] = entry
-	}
-	return bounded
+	const selected = INTRINSICS.from(
+		iterateIndices(() => limit),
+		(index) => entries[index],
+	)
+	return INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(selected), [
+		(entry: T | undefined) => entry !== undefined,
+	])
 }
 
 /**
@@ -203,12 +273,13 @@ export function compareValues<T extends string | number>(left: T, right: T): num
  * ```
  */
 export function sortValues<T extends string | number>(values: readonly T[]): readonly T[] {
-	const owned: T[] = []
-	for (let index = 0; index < values.length; index += 1) {
-		const value = values[index]
-		if (value === undefined) continue
-		owned[owned.length] = value
-	}
+	const observed = INTRINSICS.from(
+		iterateIndices(() => values.length),
+		(index) => values[index],
+	)
+	const owned: T[] = INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(observed), [
+		(value: T | undefined) => value !== undefined,
+	])
 	INTRINSICS.reflect.apply(INTRINSICS.order, owned, [compareValues])
 	return owned
 }
@@ -234,6 +305,8 @@ export function sortValues<T extends string | number>(values: readonly T[]): rea
  * `new Set(values)` reads `Symbol.iterator` off the argument and `add` off the
  * instance, so building from an iterable would reintroduce two replaceable
  * dispatches to remove one.
+ * A captured native union consumes the owned indexed snapshot through a cursor
+ * whose `next` is bound to the captured array advance operation.
  *
  * @param values - The members to collect, read by index
  * @returns A collection no caller holds a reference to
@@ -245,11 +318,24 @@ export function sortValues<T extends string | number>(values: readonly T[]): rea
  * ```
  */
 export function collectMembers(values: readonly unknown[]): Set<unknown> {
-	const members = new INTRINSICS.set<unknown>()
-	for (let index = 0; index < values.length; index += 1) {
-		INTRINSICS.reflect.apply(INTRINSICS.admit, members, [values[index]])
-	}
-	return members
+	const indices = iterateIndices(() => values.length)
+	const entries = INTRINSICS.from(indices, (index) => values[index])
+	return INTRINSICS.reflect.apply(INTRINSICS.union, new INTRINSICS.set<unknown>(), [
+		{
+			size: entries.length,
+			has(value: unknown): boolean {
+				return INTRINSICS.reflect.apply(INTRINSICS.some, entries, [
+					(entry: unknown) => entry === value || INTRINSICS.same(entry, value),
+				])
+			},
+			keys(): Iterator<unknown> {
+				const cursor = INTRINSICS.reflect.apply(INTRINSICS.iterator, entries, [])
+				return {
+					next: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.advance, [cursor]),
+				}
+			},
+		},
+	])
 }
 
 /**
@@ -503,12 +589,11 @@ export function readSetEntries(value: ReadonlySet<unknown>): Result<readonly unk
 	return attempt(() => {
 		const collected: unknown[][] = []
 		INTRINSICS.reflect.apply(INTRINSICS.sweep, value, [collectEntries(collected)])
-		const entries: unknown[] = []
-		for (let index = 0; index < collected.length; index += 1) {
-			const pair = collected[index]
-			if (pair === undefined) continue
-			entries[entries.length] = pair[1]
-		}
+		const entries: readonly unknown[] = INTRINSICS.reflect.apply(
+			INTRINSICS.project,
+			readIndexView(collected),
+			[(pair: readonly unknown[]) => pair[1]],
+		)
 		return INTRINSICS.freeze(entries)
 	})
 }
@@ -644,12 +729,14 @@ export function readPattern(pattern: RegExp): RegExp {
 	if (source === undefined || flags === undefined) {
 		throw new INTRINSICS.error('Pattern source and flags could not be read')
 	}
-	let stateless = ''
-	for (let index = 0; index < flags.length; index += 1) {
-		const flag = flags[index]
-		if (flag === undefined || flag === 'g' || flag === 'y') continue
-		stateless += flag
-	}
+	const characters = INTRINSICS.from(
+		iterateIndices(() => flags.length),
+		(index) => flags[index],
+	)
+	const selected = INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(characters), [
+		(flag: string | undefined) => flag !== undefined && flag !== 'g' && flag !== 'y',
+	])
+	const stateless: string = INTRINSICS.reflect.apply(INTRINSICS.join, selected, [''])
 	return new INTRINSICS.pattern(source, stateless)
 }
 
@@ -731,7 +818,7 @@ export function ownPattern(pattern: RegExp, reader: string): RegExp {
  */
 export function pinMembers(prototype: object, owner: string): void {
 	const members = INTRINSICS.reflect.members(prototype)
-	for (let index = 0; index < members.length; index += 1) {
+	for (const index of iterateIndices(() => members.length)) {
 		const key = members[index]
 		if (key === undefined) continue
 		// An ACCESSOR is pinned by its configurability alone. `writable` belongs to
@@ -1054,7 +1141,7 @@ export function matchesRecordBrand(value: unknown): boolean {
 	// Indexed, not iterated: `for…of` over an array this module built still reads
 	// `Array.prototype[Symbol.iterator]`, a caller-writable member, and an
 	// iterator yielding a name this list never held decides a brand verdict.
-	for (let index = 0; index < mandated.length; index += 1) {
+	for (const index of iterateIndices(() => mandated.length)) {
 		const member = mandated[index]
 		if (member === undefined) return false
 		// A descriptor read, not a value read: it answers ownership, data-ness and
@@ -1108,55 +1195,75 @@ export function readArrayEntries<T>(value: readonly T[]): Result<ArrayRead<T>> {
 		// ascending index texts and `length`, and nothing else. The scan stops at
 		// the first disagreement, so a population that fails the question pays for
 		// the prefix it shares with a canonical one before it walks.
-		let matched = 0
-		while (matched < length && members[matched] === INTRINSICS.text(matched)) matched += 1
-		if (matched === length && members.length === length + 1 && members[length] === 'length') {
-			const packed = new INTRINSICS.list<T | undefined>(length)
-			for (let index = 0; index < length; index += 1) {
-				const key = members[index]
-				if (key === undefined || !INTRINSICS.own(value, key)) {
-					throw new INTRINSICS.error('Array index views disagree')
-				}
-				packed[index] = value[index]
-			}
+		const canonical =
+			members.length === length + 1 &&
+			members[length] === 'length' &&
+			!INTRINSICS.reflect.apply(INTRINSICS.some, members, [
+				(key: PropertyKey, index: number) => index < length && key !== INTRINSICS.text(index),
+			])
+		if (canonical) {
+			const packed = INTRINSICS.from(
+				iterateIndices(() => length),
+				(index) => {
+					const key = members[index]
+					if (key === undefined || !INTRINSICS.own(value, key)) {
+						throw new INTRINSICS.error('Array index views disagree')
+					}
+					return value[index]
+				},
+			)
 			return INTRINSICS.freeze({ entries: INTRINSICS.freeze(packed), dense: true })
 		}
-		const collected: number[] = []
-		const keys: string[] = []
-		let ascending = true
-		let previous = -1
-		for (let position = 0; position < members.length; position += 1) {
-			const key = members[position]
-			if (!isString(key)) continue
-			const index = INTRINSICS.numeric(key)
-			if (
-				INTRINSICS.integer(index) &&
-				index >= 0 &&
-				index < 2 ** 32 - 1 &&
-				INTRINSICS.text(index) === key
-			) {
-				if (index >= length) throw new INTRINSICS.error('Array index views disagree')
-				if (index <= previous) ascending = false
-				previous = index
-				collected[collected.length] = index
-				keys[keys.length] = key
-			}
-		}
+		const selected: ReadonlyArray<{ readonly index: number; readonly key: string }> =
+			INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(members), [
+				(key: PropertyKey) => {
+					if (!isString(key)) return []
+					const index = INTRINSICS.numeric(key)
+					if (
+						!INTRINSICS.integer(index) ||
+						index < 0 ||
+						index >= 2 ** 32 - 1 ||
+						INTRINSICS.text(index) !== key
+					) {
+						return []
+					}
+					if (index >= length) throw new INTRINSICS.error('Array index views disagree')
+					return [{ index, key }]
+				},
+			])
+		const collected: readonly number[] = INTRINSICS.reflect.apply(
+			INTRINSICS.project,
+			readIndexView(selected),
+			[(entry: { readonly index: number }) => entry.index],
+		)
+		const keys: readonly string[] = INTRINSICS.reflect.apply(
+			INTRINSICS.project,
+			readIndexView(selected),
+			[(entry: { readonly key: string }) => entry.key],
+		)
+		const ascending = !INTRINSICS.reflect.apply(INTRINSICS.some, collected, [
+			(index: number, position: number) => index <= (collected[position - 1] ?? -1),
+		])
 		// Ordered on arrival, not by default: a caller-defined key view may deliver
 		// the canonical indices in any order, so the sort answers that view alone
 		// and the parallel key list carries the string already proven canonical
 		// against its index, which the ordered arrival then never re-derives.
 		const indices = ascending ? collected : sortValues(collected)
-		const entries = new INTRINSICS.list<T | undefined>(length)
-		for (let position = 0; position < indices.length; position += 1) {
-			const index = indices[position]
-			if (index === undefined) continue
-			const key = ascending ? keys[position] : INTRINSICS.text(index)
-			if (key === undefined || !INTRINSICS.own(value, key)) {
-				throw new INTRINSICS.error('Array index views disagree')
-			}
-			entries[index] = value[index]
-		}
+		const pairs = INTRINSICS.from(
+			iterateIndices(() => indices.length),
+			(position) => {
+				const index = indices[position]
+				const key = ascending ? keys[position] : INTRINSICS.text(index)
+				if (index === undefined || key === undefined || !INTRINSICS.own(value, key)) {
+					throw new INTRINSICS.error('Array index views disagree')
+				}
+				return [key, { value: value[index], enumerable: true, configurable: true, writable: true }]
+			},
+		)
+		const descriptors = INTRINSICS.record<PropertyDescriptor>({
+			[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [pairs]),
+		})
+		const entries = INTRINSICS.definitions(new INTRINSICS.list<T | undefined>(length), descriptors)
 		return INTRINSICS.freeze({
 			entries: INTRINSICS.freeze(entries),
 			dense: indices.length === length,
@@ -1193,14 +1300,26 @@ export function readGuardShape(
 	const declared = readValue(
 		() => {
 			const members = INTRINSICS.reflect.members(shape)
-			const guards: Record<string, Guard<unknown> | undefined> = INTRINSICS.create(null)
-			const names: string[] = []
-			for (let index = 0; index < members.length; index += 1) {
-				const key = members[index]
-				if (!isString(key)) continue
-				if (!INTRINSICS.own(guards, key)) names[names.length] = key
-				guards[key] = shape[key]
-			}
+			const names: readonly string[] = INTRINSICS.reflect.apply(
+				INTRINSICS.select,
+				readIndexView(members),
+				[(key: PropertyKey) => isString(key)],
+			)
+			const pairs = INTRINSICS.from(
+				iterateIndices(() => names.length),
+				(index) => {
+					const key = names[index]
+					return [key, key === undefined ? undefined : shape[key]]
+				},
+			)
+			const guards = INTRINSICS.rebase(
+				INTRINSICS.record<Guard<unknown> | undefined>({
+					[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+						pairs,
+					]),
+				}),
+				null,
+			)
 			return { guards, names, vocabulary: collectMembers(names) }
 		},
 		reader,
@@ -1213,11 +1332,12 @@ export function readGuardShape(
 			const entries = readArrayEntries(optional)
 			if (!entries.success) throw entries.error
 			if (!entries.value.dense) throw new INTRINSICS.error('Optional key list must be dense')
-			const keys = collectMembers([])
-			for (let index = 0; index < entries.value.entries.length; index += 1) {
-				admitMember(keys, INTRINSICS.text(entries.value.entries[index]))
-			}
-			return keys
+			return collectMembers(
+				INTRINSICS.from(
+					iterateIndices(() => entries.value.entries.length),
+					(index) => INTRINSICS.text(entries.value.entries[index]),
+				),
+			)
 		},
 		reader,
 		{ subject: 'optional' },
@@ -1309,29 +1429,54 @@ export function readOptions<T extends object>(
 				// the caller's value into a snapshot the builder swears it observed.
 				// An own data key on a null-prototype object dispatches through nothing,
 				// including for a key literally named '__proto__'.
-				const values: Record<string, unknown> = INTRINSICS.create(null)
-				for (let index = 0; index < keys.length; index += 1) {
-					const key = keys[index]
-					if (key === undefined) continue
-					values[key] = INTRINSICS.reflect.read(input, key)
-					INTRINSICS.reflect.present(input, key)
-					INTRINSICS.reflect.describe(input, key)
-				}
+				const observed = INTRINSICS.from(
+					iterateIndices(() => keys.length),
+					(index) => {
+						const key = keys[index]
+						if (key === undefined) return undefined
+						const value = INTRINSICS.reflect.read(input, key)
+						INTRINSICS.reflect.present(input, key)
+						INTRINSICS.reflect.describe(input, key)
+						return [key, value]
+					},
+				)
+				const pairs = INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(observed), [
+					(entry: unknown) => entry !== undefined,
+				])
+				const values = INTRINSICS.rebase(
+					INTRINSICS.record<unknown>({
+						[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+							pairs,
+						]),
+					}),
+					null,
+				)
 				INTRINSICS.reflect.members(input)
 				const record = matchesRecordBrand(input)
-				const snapshot: T = INTRINSICS.create(INTRINSICS.base)
-				for (let index = 0; index < keys.length; index += 1) {
-					const key = keys[index]
-					if (key === undefined) continue
-					const value = values[key]
-					if (value === undefined) continue
-					INTRINSICS.reflect.define(snapshot, key, {
-						value,
-						enumerable: true,
-						configurable: true,
-						writable: true,
-					})
-				}
+				const names: readonly string[] = INTRINSICS.reflect.apply(
+					INTRINSICS.select,
+					readIndexView(
+						INTRINSICS.from(
+							iterateIndices(() => keys.length),
+							(index) => keys[index],
+						),
+					),
+					[(key: string | undefined) => key !== undefined && values[key] !== undefined],
+				)
+				const descriptors = INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(names), [
+					(key: string) => [
+						key,
+						{ value: values[key], enumerable: true, configurable: true, writable: true },
+					],
+				])
+				const snapshot: T = INTRINSICS.create(
+					INTRINSICS.base,
+					INTRINSICS.record<PropertyDescriptor>({
+						[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+							descriptors,
+						]),
+					}),
+				)
 				return { snapshot, record }
 			},
 			builder,
@@ -1420,17 +1565,19 @@ export function resolveField(record: Readonly<Record<string, unknown>>, path: Fi
 	const outcome = attempt(() => {
 		if (!isRecord(record)) return undefined
 		const keys = isString(path) ? [path] : path
-		let current: unknown = record
-		// Indexed: the caller's own path array is walked through its own index
-		// properties rather than through `Array.prototype[Symbol.iterator]`, so an
-		// injected leading segment cannot redirect the lookup.
-		for (let index = 0; index < keys.length; index += 1) {
-			const key = keys[index]
-			if (key === undefined) return undefined
-			if (!isObject(current) || !INTRINSICS.own(current, key)) return undefined
-			current = INTRINSICS.reflect.read(current, key)
-		}
-		return current
+		const indices = iterateIndices(() => keys.length)
+		return INTRINSICS.reflect.apply(INTRINSICS.reduce, indices, [
+			(current: unknown, index: number): unknown => {
+				const key = keys[index]
+				if (key === undefined || !isObject(current) || !INTRINSICS.own(current, key)) {
+					// Closing the cursor prevents even a later path-length observation.
+					indices.return()
+					return undefined
+				}
+				return INTRINSICS.reflect.read(current, key)
+			},
+			record,
+		])
 	})
 	return outcome.success ? outcome.value : undefined
 }
@@ -1499,7 +1646,7 @@ export function matchesJSONDepth(value: unknown): boolean {
 				const snapshot = readArrayEntries(entry)
 				if (!snapshot.success) return false
 				const children = INTRINSICS.values(snapshot.value.entries)
-				for (let index = 0; index < children.length; index += 1) {
+				for (const index of iterateIndices(() => children.length)) {
 					stack[stack.length] = { operation: 'enter', value: children[index], depth }
 				}
 				continue
@@ -1507,7 +1654,7 @@ export function matchesJSONDepth(value: unknown): boolean {
 
 			const keys = enumerableKeys(entry)
 			if (keys === undefined) return false
-			for (let index = 0; index < keys.length; index += 1) {
+			for (const index of iterateIndices(() => keys.length)) {
 				const key = keys[index]
 				if (key === undefined) return false
 				if (!INTRINSICS.own(entry, key)) return false
@@ -1597,7 +1744,8 @@ export function matchesJSONValue(entry: unknown, ancestors: WeakSet<object>): en
 					// Pushed in reverse so the LIFO stack visits siblings in source order,
 					// which is the order the recursive walk this replaced descended in.
 					const entries = snapshot.value.entries
-					for (let index = entries.length - 1; index >= 0; index -= 1) {
+					for (const offset of iterateIndices(() => entries.length)) {
+						const index = entries.length - 1 - offset
 						stack[stack.length] = { operation: 'enter', value: entries[index] }
 					}
 					continue
@@ -1608,7 +1756,8 @@ export function matchesJSONValue(entry: unknown, ancestors: WeakSet<object>): en
 				admitVisited(ancestors, node)
 				stack[stack.length] = { operation: 'exit', value: node }
 				const members = INTRINSICS.values(node)
-				for (let index = members.length - 1; index >= 0; index -= 1) {
+				for (const offset of iterateIndices(() => members.length)) {
+					const index = members.length - 1 - offset
 					stack[stack.length] = { operation: 'enter', value: members[index] }
 				}
 			}
@@ -1618,43 +1767,6 @@ export function matchesJSONValue(entry: unknown, ancestors: WeakSet<object>): en
 		'matchesJSONValue',
 		{ context: { shape: 'json' } },
 	)
-}
-
-// === Random
-
-/**
- * Builds a deterministic pseudo-random source seeded from a single number.
- *
- * @remarks
- * A mulberry32 generator — the same seed always yields the same sequence, so
- * generated seed data is reproducible across runs. Used as the default random
- * source for {@link compileGenerator}, seeded from the wall clock so casual
- * callers still get varied output without passing a source themselves.
- *
- * @param seed - The seed for the sequence
- * @returns A {@link RandomFunction} returning values in `[0, 1)`
- *
- * @example
- * ```ts
- * const random = seededRandom(42)
- * random() // always the same first value for seed 42
- * ```
- */
-export function seededRandom(seed: number): RandomFunction {
-	if (!isNumber(seed)) {
-		throw new ContractError('seededRandom: seed must be a number', {
-			code: 'random',
-			context: { limit: 'number', received: preview(seed) },
-		})
-	}
-	let state = seed >>> 0
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0
-		let t = state
-		t = INTRINSICS.imul(t ^ (t >>> 15), t | 1)
-		t ^= t + INTRINSICS.imul(t ^ (t >>> 7), t | 61)
-		return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296
-	}
 }
 
 /**
@@ -1682,18 +1794,12 @@ export function seededRandom(seed: number): RandomFunction {
  */
 export function enumerableSymbolCount(value: object): number {
 	return readValue(() => {
-		let count = 0
-		// Indexed: `Object.getOwnPropertySymbols` returns a fresh array this module
-		// owns, and walking it through `Array.prototype[Symbol.iterator]` would let
-		// a replaced iterator decide an emptiness verdict.
 		const symbols = INTRINSICS.symbols(value)
-		for (let index = 0; index < symbols.length; index += 1) {
-			const symbol = symbols[index]
-			if (symbol === undefined) continue
-			if (INTRINSICS.describe(value, symbol)?.enumerable) {
-				count += 1
-			}
-		}
+		const count: number = INTRINSICS.reflect.apply(INTRINSICS.fold, symbols, [
+			(total: number, symbol: symbol) =>
+				total + (INTRINSICS.describe(value, symbol)?.enumerable ? 1 : 0),
+			0,
+		])
 		return count
 	}, 'enumerableSymbolCount')
 }
@@ -1873,22 +1979,9 @@ export function canonicalStringify(value: unknown): string | undefined {
 				const frame = stack.pop()
 				if (frame === undefined) return undefined
 				if (frame.operation === 'exit') {
-					// Indexed and concatenated, not iterated and joined: this string IS
-					// the canonical identity every schema de-duplication and every `enum`
-					// ordering is keyed by, and both `Array.prototype[Symbol.iterator]`
-					// and `Array.prototype.join` are caller-writable members on it.
-					let encoded = ''
-					for (let index = 0; index < frame.members.length; index += 1) {
-						const member = frame.members[index]
-						const part = isObject(member)
-							? (INTRINSICS.reflect.apply(INTRINSICS.recall, encodings, [member]) ??
-								encodeLeaf(member))
-							: encodeLeaf(member)
-						if (part === undefined) return undefined
-						const key = frame.keys?.[index]
-						const text = key === undefined ? part : `${INTRINSICS.stringify(key)}:${part}`
-						encoded += index === 0 ? text : `,${text}`
-					}
+					const parts = INTRINSICS.from(encodeParts(frame.members, frame.keys, encodings))
+					if (parts.length !== frame.members.length) return undefined
+					const encoded: string = INTRINSICS.reflect.apply(INTRINSICS.join, parts, [','])
 					const text = frame.keys === undefined ? `[${encoded}]` : `{${encoded}}`
 					INTRINSICS.reflect.apply(INTRINSICS.retain, encodings, [frame.value, text])
 					omitVisited(ancestors, frame.value)
@@ -1899,33 +1992,24 @@ export function canonicalStringify(value: unknown): string | undefined {
 				if (matchesVisited(ancestors, container)) return undefined
 				if (INTRINSICS.reflect.apply(INTRINSICS.recall, encodings, [container]) !== undefined)
 					continue
-				const members: unknown[] = []
-				const selected: string[] = []
-				let keys: readonly string[] | undefined
-				if (isArray(container)) {
-					const snapshot = readArrayEntries(container)
-					if (!snapshot.success) throw snapshot.error
-					if (!snapshot.value.dense) return undefined
-					// Indexed, not `appendEntries`: a PRESENT `undefined` element is a
-					// value JSON cannot encode and must abandon the whole encoding, and
-					// the shared appender skips `undefined` by design.
-					const entries = snapshot.value.entries
-					for (let index = 0; index < entries.length; index += 1) {
-						members[members.length] = entries[index]
-					}
-				} else {
-					const names = sortValues(INTRINSICS.keys(container))
-					for (let index = 0; index < names.length; index += 1) {
-						const key = names[index]
-						if (key === undefined) continue
-						selected[selected.length] = key
-						members[members.length] = INTRINSICS.reflect.read(container, key)
-					}
-					keys = selected
-				}
+				const snapshot = isArray(container) ? readArrayEntries(container) : undefined
+				if (snapshot !== undefined && !snapshot.success) throw snapshot.error
+				if (snapshot !== undefined && !snapshot.value.dense) return undefined
+				const keys = snapshot === undefined ? sortValues(INTRINSICS.keys(container)) : undefined
+				const members =
+					snapshot === undefined
+						? INTRINSICS.from(
+								iterateIndices(() => keys?.length ?? 0),
+								(index) => {
+									const key = keys?.[index]
+									return key === undefined ? undefined : INTRINSICS.reflect.read(container, key)
+								},
+							)
+						: snapshot.value.entries
 				admitVisited(ancestors, container)
 				stack[stack.length] = { operation: 'exit', value: container, members, keys }
-				for (let index = members.length - 1; index >= 0; index -= 1) {
+				for (const offset of iterateIndices(() => members.length)) {
+					const index = members.length - 1 - offset
 					const member = members[index]
 					if (isObject(member) && (isArray(member) || matchesRecordBrand(member))) {
 						stack[stack.length] = { operation: 'enter', value: member }
@@ -2246,32 +2330,9 @@ export function preview(value: unknown): string {
 			const whole = INTRINSICS.stringify(source)
 			if (whole.length <= PREVIEW_LIMIT) return whole
 		}
-		let text = quoted ? '"' : ''
-		let index = 0
-		while (index < source.length) {
-			const first = source[index]
-			if (first === undefined) break
-			const second = index + 1 < source.length ? source[index + 1] : undefined
-			const paired =
-				first >= '\ud800' &&
-				first <= '\udbff' &&
-				second !== undefined &&
-				second >= '\udc00' &&
-				second <= '\udfff'
-			const character = paired ? `${first}${second}` : first
-			const encoded = INTRINSICS.stringify(character)
-			const tokenLength = encoded.length - 2
-			if (text.length + tokenLength > PREVIEW_LIMIT) return `${text}…`
-			let tokenIndex = 1
-			while (tokenIndex <= tokenLength) {
-				const token = encoded[tokenIndex]
-				if (token !== undefined) text += token
-				tokenIndex += 1
-			}
-			index += paired ? 2 : 1
-		}
-		if (!quoted) return text
-		return text.length < PREVIEW_LIMIT ? `${text}"` : `${text}…`
+		const parts = previewParts(source, 0, PREVIEW_LIMIT - (quoted ? 1 : 0), quoted)
+		const body: string = INTRINSICS.reflect.apply(INTRINSICS.join, parts, [''])
+		return quoted ? `"${body}` : body
 	}
 	if (isNumber(value) || isBoolean(value)) return INTRINSICS.text(value)
 	if (isBigInt(value)) return `${value}n`
@@ -2546,12 +2607,19 @@ export function buildArrayFaults(
 export function selectClosestFaults<T extends AuditFault>(
 	reports: ReadonlyArray<readonly T[]>,
 ): readonly T[] {
-	let closest: readonly T[] | undefined
-	for (let index = 0; index < reports.length; index += 1) {
-		const report = reports[index]
-		if (report === undefined) continue
-		if (closest === undefined || report.length < closest.length) closest = report
-	}
+	const closest: readonly T[] | undefined = INTRINSICS.reflect.apply(
+		INTRINSICS.reduce,
+		iterateIndices(() => reports.length),
+		[
+			(best: readonly T[] | undefined, index: number) => {
+				const report = reports[index]
+				return report !== undefined && (best === undefined || report.length < best.length)
+					? report
+					: best
+			},
+			undefined,
+		],
+	)
 	return closest ?? INTRINSICS.freeze([])
 }
 
@@ -2665,4 +2733,147 @@ export function refuseExpansion(expansion: number | undefined): void {
 			received: INTRINSICS.text(expansion),
 		},
 	})
+}
+
+/**
+ * Encodes ordered members, stopping before the first unencodable member.
+ *
+ * @param members - The owned members in source order
+ * @param keys - Object keys, or undefined for an array
+ * @param encodings - Encodings already computed for child containers
+ * @returns The encoded prefix
+ *
+ * @example
+ * ```ts
+ * Array.from(encodeParts([1, undefined, 2], undefined, new WeakMap())) // ['1']
+ * ```
+ */
+export function* encodeParts(
+	members: readonly unknown[],
+	keys: readonly string[] | undefined,
+	encodings: WeakMap<object, string>,
+): Generator<string, void, unknown> {
+	for (const index of iterateIndices(() => members.length)) {
+		const member = members[index]
+		const part = isObject(member)
+			? (INTRINSICS.reflect.apply(INTRINSICS.recall, encodings, [member]) ?? encodeLeaf(member))
+			: encodeLeaf(member)
+		if (part === undefined) return
+		const key = keys?.[index]
+		yield key === undefined ? part : `${INTRINSICS.stringify(key)}:${part}`
+	}
+}
+
+/**
+ * Builds bounded escaped preview parts without splitting a surrogate pair.
+ *
+ * @param source - The source text
+ * @param index - The next UTF-16 offset
+ * @param capacity - The unused preview width
+ * @param quoted - Whether the final part closes a string quote
+ * @returns The escaped parts with their closing quote or truncation mark
+ *
+ * @example
+ * ```ts
+ * previewParts('abc', 0, 2, false) // ['a', 'b', '…']
+ * ```
+ */
+export function previewParts(
+	source: string,
+	index: number,
+	capacity: number,
+	quoted: boolean,
+): readonly string[] {
+	const available = INTRINSICS.min(capacity, PREVIEW_LIMIT)
+	const first = source[index]
+	if (index >= source.length || first === undefined) {
+		return quoted ? [available > 0 ? '"' : '…'] : []
+	}
+	const second = index + 1 < source.length ? source[index + 1] : undefined
+	const paired =
+		first >= '\ud800' &&
+		first <= '\udbff' &&
+		second !== undefined &&
+		second >= '\udc00' &&
+		second <= '\udfff'
+	const character = paired ? `${first}${second}` : first
+	const encoded = INTRINSICS.stringify(character)
+	const length = encoded.length - 2
+	if (length > available) return ['…']
+	const characters = INTRINSICS.from(
+		iterateIndices(() => length),
+		(offset) => encoded[offset + 1],
+	)
+	const token: string = INTRINSICS.reflect.apply(INTRINSICS.join, characters, [''])
+	const tail = previewParts(source, index + (paired ? 2 : 1), available - length, quoted)
+	return INTRINSICS.from(
+		iterateIndices(() => tail.length + 1),
+		(offset) => (offset === 0 ? token : (tail[offset - 1] ?? '')),
+	)
+}
+
+/**
+ * Builds a null-prototype lookup from names to their last index.
+ *
+ * @param names - Names in declaration order
+ * @returns The indexed lookup
+ *
+ * @example
+ * ```ts
+ * buildPositions(['id', '__proto__']).id // 0
+ * ```
+ */
+export function buildPositions(names: readonly string[]): Readonly<Record<string, number>> {
+	const pairs = INTRINSICS.from(
+		iterateIndices(() => names.length),
+		(index) => [names[index], index],
+	)
+	return INTRINSICS.rebase(
+		INTRINSICS.record<number>({
+			[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [pairs]),
+		}),
+		null,
+	)
+}
+
+/**
+ * Derives the bit mask of names present in an indexed lookup.
+ *
+ * @param names - Names to observe in order
+ * @param positions - The bit position of each declared name
+ * @returns The combined signed 32-bit mask
+ *
+ * @example
+ * ```ts
+ * readPresence(['id'], buildPositions(['id', 'name'])) // 1
+ * ```
+ */
+export function readPresence(
+	names: readonly string[],
+	positions: Readonly<Record<string, number>>,
+): number {
+	return INTRINSICS.reflect.apply(
+		INTRINSICS.reduce,
+		iterateIndices(() => names.length),
+		[
+			(mask: number, index: number) => {
+				const name = names[index]
+				if (name === undefined || !INTRINSICS.own(positions, name)) return mask
+				const position = positions[name]
+				return position === undefined ? mask : mask | (1 << position)
+			},
+			0,
+		],
+	)
+}
+
+// Pin the iterator protocol before any caller can reach these exported generators.
+for (const generator of [iterateIndices, encodeParts]) {
+	for (const key of ['next', 'return', 'throw', Symbol.iterator]) {
+		INTRINSICS.define(generator.prototype, key, {
+			value: INTRINSICS.reflect.read(generator.prototype, key),
+		})
+	}
+	INTRINSICS.freeze(generator.prototype)
+	INTRINSICS.freeze(generator)
 }

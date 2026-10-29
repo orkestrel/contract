@@ -6,20 +6,19 @@ import {
 	JSON_SCHEMA_TYPES,
 } from './constants.js'
 import {
-	admitMember,
+	readIndexView,
 	admitVisited,
-	collectMembers,
 	deriveLengthBounds,
 	deriveRangeBounds,
 	limitEntries,
-	matchesMember,
+	iterateIndices,
 	matchesRecordBrand,
 	matchesVisited,
 	omitVisited,
 	retainDepth,
 } from './helpers.js'
 import { isArray, isFiniteNumber, isLiteralValue, isRecord, isString } from './validators.js'
-import { parseEnum } from './parsers.js'
+import { parseEnumValues } from './parsers.js'
 import {
 	arrayShape,
 	booleanShape,
@@ -158,92 +157,129 @@ export class SchemaShaper {
 		const description = isString(schema.description) ? schema.description : undefined
 
 		if (isArray(schema.enum)) {
-			const literals: LiteralValue[] = []
-			// De-duplicated in the same pass that already drops non-literal and
-			// non-finite entries, by the package's own SameValueZero membership.
-			// `literalShape` refuses a repeated vocabulary, and that refusal was
-			// republished as `schema could not be read` — a data defect reported as
-			// unreadability, for a schema every keyword of which was read. JSON
-			// Schema requires `enum` members to be unique, so a repeat is malformed
-			// vocabulary, and this conversion's stated rule for malformed vocabulary
-			// is to ignore it and widen, never to throw. First occurrence wins, so
-			// the emitted order still follows the source.
-			const seen = collectMembers([])
-			for (let index = 0; index < schema.enum.length; index += 1) {
-				const entry = schema.enum[index]
-				if (isLiteralValue(entry) && (typeof entry !== 'number' || isFiniteNumber(entry))) {
-					if (matchesMember(seen, entry)) continue
-					admitMember(seen, entry)
-					literals[literals.length] = entry
-				}
-			}
+			const observed = INTRINSICS.from(
+				iterateIndices(
+					() =>
+						INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'enum']).length,
+				),
+				(index) =>
+					INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'enum'])[index],
+			)
+			const valid: readonly LiteralValue[] = INTRINSICS.reflect.apply(
+				INTRINSICS.select,
+				readIndexView(observed),
+				[
+					(entry: unknown) =>
+						isLiteralValue(entry) && (typeof entry !== 'number' || isFiniteNumber(entry)),
+				],
+			)
+			const pairs = INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(valid), [
+				(entry: LiteralValue, index: number) => [
+					`${typeof entry}:${INTRINSICS.text(entry)}`,
+					index,
+				],
+			])
+			const reversed = INTRINSICS.reflect.apply(INTRINSICS.flip, pairs, [])
+			const first = INTRINSICS.record<number>({
+				[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+					reversed,
+				]),
+			})
+			const literals: readonly LiteralValue[] = INTRINSICS.reflect.apply(
+				INTRINSICS.select,
+				readIndexView(valid),
+				[
+					(entry: LiteralValue, index: number) =>
+						first[`${typeof entry}:${INTRINSICS.text(entry)}`] === index,
+				],
+			)
 			if (literals.length > 0) {
 				return literalShape(literals, description === undefined ? undefined : { description })
 			}
 		}
 
 		if (isArray(schema.oneOf)) {
-			const records: JSONSchema[] = []
-			for (let index = 0; index < schema.oneOf.length; index += 1) {
-				const entry = schema.oneOf[index]
-				if (isRecord(entry)) records[records.length] = entry
-			}
+			const observed = INTRINSICS.from(
+				iterateIndices(
+					() =>
+						INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'oneOf']).length,
+				),
+				(index) =>
+					INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'oneOf'])[index],
+			)
+			const records: readonly JSONSchema[] = INTRINSICS.reflect.apply(
+				INTRINSICS.select,
+				readIndexView(observed),
+				[isRecord],
+			)
 			if (records.length > INFER_BREADTH_LIMIT) {
 				return rawShape(description === undefined ? {} : { description })
 			}
-			const variants: ContractShape[] = []
-			for (let index = 0; index < records.length; index += 1) {
-				const entry = records[index]
-				if (entry === undefined) continue
-				variants[variants.length] = this.#convert(entry, depth - 1)
-			}
+			const variants: readonly ContractShape[] = INTRINSICS.reflect.apply(
+				INTRINSICS.project,
+				readIndexView(records),
+				[(entry: JSONSchema) => this.#convert(entry, depth - 1)],
+			)
+
 			// `Reflect.apply` reads its argument list by index, where a spread call
 			// would dispatch through the caller-writable array iterator.
 			if (variants.length > 0) return INTRINSICS.reflect.apply(oneOfShape, undefined, variants)
 		}
 
 		if (isArray(schema.anyOf)) {
-			const records: JSONSchema[] = []
-			for (let index = 0; index < schema.anyOf.length; index += 1) {
-				const entry = schema.anyOf[index]
-				if (isRecord(entry)) records[records.length] = entry
-			}
+			const observed = INTRINSICS.from(
+				iterateIndices(
+					() =>
+						INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'anyOf']).length,
+				),
+				(index) =>
+					INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'anyOf'])[index],
+			)
+			const records: readonly JSONSchema[] = INTRINSICS.reflect.apply(
+				INTRINSICS.select,
+				readIndexView(observed),
+				[isRecord],
+			)
 			if (records.length > INFER_BREADTH_LIMIT) {
 				return rawShape(description === undefined ? {} : { description })
 			}
-			const variants: ContractShape[] = []
-			for (let index = 0; index < records.length; index += 1) {
-				const entry = records[index]
-				if (entry === undefined) continue
-				variants[variants.length] = this.#convert(entry, depth - 1)
-			}
+			const variants: readonly ContractShape[] = INTRINSICS.reflect.apply(
+				INTRINSICS.project,
+				readIndexView(records),
+				[(entry: JSONSchema) => this.#convert(entry, depth - 1)],
+			)
+
 			if (variants.length > 0) return INTRINSICS.reflect.apply(unionShape, undefined, variants)
 		}
 
 		const category = schema.type
 		if (isArray(category)) {
-			const members: JSONSchemaType[] = []
-			const seen = collectMembers([])
-			for (let index = 0; index < category.length; index += 1) {
-				const member = parseEnum(category[index], JSON_SCHEMA_TYPES)
-				if (member === undefined) {
-					return rawShape(description === undefined ? {} : { description })
-				}
-				if (matchesMember(seen, member)) continue
-				admitMember(seen, member)
-				members[members.length] = member
+			const observed = INTRINSICS.from(parseEnumValues(category, JSON_SCHEMA_TYPES))
+			if (
+				INTRINSICS.reflect.apply(INTRINSICS.some, observed, [
+					(entry: JSONSchemaType | undefined) => entry === undefined,
+				])
+			) {
+				return rawShape(description === undefined ? {} : { description })
 			}
+			const members: readonly JSONSchemaType[] = INTRINSICS.reflect.apply(
+				INTRINSICS.select,
+				readIndexView(observed),
+				[
+					(member: JSONSchemaType, index: number) =>
+						INTRINSICS.reflect.apply(INTRINSICS.find, observed, [
+							(entry: unknown) => entry === member,
+						]) === index,
+				],
+			)
 			if (members.length === 0 || members.length > INFER_BREADTH_LIMIT) {
 				return rawShape(description === undefined ? {} : { description })
 			}
-			const variants: ContractShape[] = []
-			for (let index = 0; index < members.length; index += 1) {
-				const member = members[index]
-				if (member === undefined) continue
-				// A type alternative stays at this node's depth and keeps its ancestor
-				// identity active; only structural children spend the depth budget.
-				variants[variants.length] = this.#build({ ...schema, type: member }, depth)
-			}
+			const variants: readonly ContractShape[] = INTRINSICS.reflect.apply(
+				INTRINSICS.project,
+				readIndexView(members),
+				[(member: JSONSchemaType) => this.#build({ ...schema, type: member }, depth)],
+			)
 			const first = variants[0]
 			if (variants.length === 1 && first !== undefined) return first
 			const union = INTRINSICS.reflect.apply(unionShape, undefined, variants)
@@ -323,35 +359,38 @@ export class SchemaShaper {
 	// own data key rather than mutating the prototype.
 	#buildObject(schema: JSONSchema, depth: number, description: string | undefined): ContractShape {
 		const propertiesSource = isRecord(schema.properties) ? schema.properties : undefined
-		// Indexed rather than `filter` / `includes`: this list decides which
-		// properties the published shape marks required, and both are
-		// caller-writable members.
-		const requiredSource = collectMembers([])
-		if (isArray(schema.required)) {
-			for (let index = 0; index < schema.required.length; index += 1) {
-				const entry = schema.required[index]
-				if (isString(entry)) admitMember(requiredSource, entry)
-			}
-		}
-		// Honest typing: a null-prototype accumulator so a property literally
-		// named '__proto__' becomes an own data key instead of mutating the
-		// prototype — the same pattern the record inference uses.
-		const properties: Record<string, ContractShape> = INTRINSICS.create(null)
-		let truncated = false
-		if (propertiesSource) {
-			const allKeys = INTRINSICS.keys(propertiesSource)
-			truncated = allKeys.length > INFER_BREADTH_LIMIT
-			const keys = limitEntries(allKeys, INFER_BREADTH_LIMIT)
-			for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
-				const key = keys[keyIndex]
-				if (key === undefined) continue
-				const child = propertiesSource[key]
+		const requiredSource = isArray(schema.required)
+			? INTRINSICS.from(
+					iterateIndices(
+						() =>
+							INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'required'])
+								.length,
+					),
+					(index) =>
+						INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'required'])[
+							index
+						],
+				)
+			: []
+		const allKeys = propertiesSource === undefined ? [] : INTRINSICS.keys(propertiesSource)
+		const truncated = allKeys.length > INFER_BREADTH_LIMIT
+		const keys = limitEntries(allKeys, INFER_BREADTH_LIMIT)
+		const pairs = INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(keys), [
+			(key: string) => {
+				const child = propertiesSource?.[key]
 				const childShape = isRecord(child) ? this.#convert(child, depth - 1) : rawShape({})
-				properties[key] = matchesMember(requiredSource, key)
-					? childShape
-					: optionalShape(childShape)
-			}
-		}
+				const required = INTRINSICS.reflect.apply(INTRINSICS.some, requiredSource, [
+					(entry: unknown) => isString(entry) && entry === key,
+				])
+				return [key, required ? childShape : optionalShape(childShape)]
+			},
+		])
+		const properties = INTRINSICS.rebase(
+			INTRINSICS.record<ContractShape>({
+				[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [pairs]),
+			}),
+			null,
+		)
 		const extra = schema.additionalProperties
 		const additionalProperties: boolean | ContractShape = truncated
 			? true

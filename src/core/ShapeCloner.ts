@@ -21,8 +21,10 @@ import type {
 import { COMPILE_DEPTH_LIMIT, INTRINSICS } from './constants.js'
 import { ContractError, isContractError } from './errors.js'
 import {
+	readIndexView,
 	admitVisited,
 	attempt,
+	iterateIndices,
 	matchesRecordBrand,
 	matchesVisited,
 	pathOf,
@@ -207,10 +209,8 @@ export class ShapeCloner implements ShapeClonerInterface {
 		// validator would accept.
 		const memo = this.#memo
 		if (memo === undefined) throw this.#unavailable()
-		let cursor = 0
-		while (cursor < this.#pending.length) {
+		for (const cursor of iterateIndices(() => this.#pending.length)) {
 			const entry = this.#pending[cursor]
-			cursor += 1
 			if (entry === undefined) continue
 			if (INTRINSICS.reflect.apply(INTRINSICS.keyed, memo, [entry.shape])) continue
 			// The depth verdict is reached in time proportional to the LIMIT rather
@@ -621,10 +621,10 @@ export class ShapeCloner implements ShapeClonerInterface {
 				context: { path: pathOf(path, 'values') },
 			})
 		}
-		const entries: LiteralValue[] = []
-		for (let index = 0; index < snapshot.value.entries.length; index += 1) {
-			entries[entries.length] = this.#literal(values, snapshot.value.entries[index], index, path)
-		}
+		const entries = INTRINSICS.from(
+			iterateIndices(() => snapshot.value.entries.length),
+			(index) => this.#literal(values, snapshot.value.entries[index], index, path),
+		)
 		return INTRINSICS.freeze(entries)
 	}
 
@@ -674,35 +674,37 @@ export class ShapeCloner implements ShapeClonerInterface {
 		path: readonly string[],
 	): void {
 		const keys = INTRINSICS.keys(properties)
-		const snapshot: ShapeProperty[] = []
-		// Indexed, not iterated: this walk decides the cloned shape's property
-		// population.
-		for (let index = 0; index < keys.length; index += 1) {
-			const key = keys[index]
-			if (key === undefined) continue
-			const descriptor = INTRINSICS.describe(properties, key)
-			if (descriptor === undefined || !INTRINSICS.own(descriptor, 'value')) {
-				throw this.#create('validateShape: every structural child must be a shape', {
-					code: 'structure',
-					context: { path: pathOf(path, 'properties', key) },
-				})
-			}
-			const child = properties[key]
-			const repeated = properties[key]
-			const described: unknown = descriptor.value
-			if (!INTRINSICS.same(described, child) || !INTRINSICS.same(child, repeated)) {
-				throw this.#create('validateShape: every structural child must be a shape', {
-					code: 'structure',
-					context: { path: pathOf(path, 'properties', key) },
-				})
-			}
-			snapshot[snapshot.length] = { key, child }
-		}
+		const snapshot: readonly ShapeProperty[] = INTRINSICS.reflect.apply(
+			INTRINSICS.project,
+			readIndexView(keys),
+			[
+				(key: string) => {
+					const descriptor = INTRINSICS.describe(properties, key)
+					if (descriptor === undefined || !INTRINSICS.own(descriptor, 'value')) {
+						throw this.#create('validateShape: every structural child must be a shape', {
+							code: 'structure',
+							context: { path: pathOf(path, 'properties', key) },
+						})
+					}
+					const child = properties[key]
+					const repeated = properties[key]
+					const described: unknown = descriptor.value
+					if (!INTRINSICS.same(described, child) || !INTRINSICS.same(child, repeated)) {
+						throw this.#create('validateShape: every structural child must be a shape', {
+							code: 'structure',
+							context: { path: pathOf(path, 'properties', key) },
+						})
+					}
+					return { key, child }
+				},
+			],
+		)
 		const repeated = INTRINSICS.keys(properties)
-		let drifted = repeated.length !== keys.length
-		for (let index = 0; index < repeated.length; index += 1) {
-			if (repeated[index] !== keys[index]) drifted = true
-		}
+		const drifted =
+			repeated.length !== keys.length ||
+			INTRINSICS.reflect.apply(INTRINSICS.some, repeated, [
+				(key: string, index: number) => key !== keys[index],
+			])
 		if (drifted) {
 			throw this.#create('cloneShape: property keys must be stable data', {
 				code: 'structure',
@@ -742,7 +744,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		const captured = this.#variants
 		if (captured === undefined) throw this.#unavailable()
 		INTRINSICS.reflect.apply(INTRINSICS.store, captured, [source, entries])
-		for (let index = 0; index < entries.length; index += 1) {
+		for (const index of iterateIndices(() => entries.length)) {
 			const variant = entries[index]
 			const key = INTRINSICS.text(index)
 			const descriptor = attempt(() => INTRINSICS.describe(variants, key))
@@ -783,7 +785,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 						context: { path: pathOf(path, 'properties'), shape: 'object' },
 					})
 				}
-				for (let index = 0; index < properties.length; index += 1) {
+				for (const index of iterateIndices(() => properties.length)) {
 					const entry = properties[index]
 					if (entry === undefined || entry.child === undefined) continue
 					this.#registerChild(entry.child, pathOf(path, 'properties', entry.key), depth)
@@ -804,7 +806,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 						context: { path: pathOf(path, 'variants') },
 					})
 				}
-				for (let index = 0; index < variants.length; index += 1) {
+				for (const index of iterateIndices(() => variants.length)) {
 					const variant = variants[index]
 					if (variant !== undefined) {
 						this.#registerChild(variant, pathOf(path, 'variants', INTRINSICS.text(index)), depth)
@@ -832,7 +834,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		const memo = this.#memo
 		const paths = this.#paths
 		if (memo === undefined || paths === undefined) throw this.#unavailable()
-		for (let sourceIndex = 0; sourceIndex < this.#sources.length; sourceIndex += 1) {
+		for (const sourceIndex of iterateIndices(() => this.#sources.length)) {
 			const source = this.#sources[sourceIndex]
 			if (source === undefined) continue
 			const clone = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [source])
@@ -882,26 +884,32 @@ export class ShapeCloner implements ShapeClonerInterface {
 				context: { path: pathOf(path, 'properties'), shape: 'object' },
 			})
 		}
-		const properties: Record<string, ContractShape> = INTRINSICS.create(null)
-		for (let index = 0; index < snapshot.length; index += 1) {
-			const entry = snapshot[index]
-			if (entry === undefined) continue
-			const { key, child } = entry
-			if (child === undefined) {
-				throw this.#create('validateShape: every structural child must be a shape', {
-					code: 'structure',
-					context: { path: pathOf(path, 'properties', key) },
-				})
-			}
-			const cloned = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [child])
-			if (cloned === undefined) {
-				throw this.#create('validateShape: every structural child must be a shape', {
-					code: 'structure',
-					context: { path: pathOf(path, 'properties', key) },
-				})
-			}
-			properties[key] = cloned
-		}
+		const pairs = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(snapshot), [
+			(entry: ShapeProperty | undefined) => {
+				if (entry === undefined) return []
+				const { key, child } = entry
+				if (child === undefined) {
+					throw this.#create('validateShape: every structural child must be a shape', {
+						code: 'structure',
+						context: { path: pathOf(path, 'properties', key) },
+					})
+				}
+				const cloned = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [child])
+				if (cloned === undefined) {
+					throw this.#create('validateShape: every structural child must be a shape', {
+						code: 'structure',
+						context: { path: pathOf(path, 'properties', key) },
+					})
+				}
+				return [[key, cloned]]
+			},
+		])
+		const properties = INTRINSICS.rebase(
+			INTRINSICS.record<ContractShape>({
+				[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [pairs]),
+			}),
+			null,
+		)
 		INTRINSICS.reflect.write(clone, 'properties', INTRINSICS.freeze(properties))
 		const additional = clone.additionalProperties
 		if (additional !== undefined && additional !== true && additional !== false) {
@@ -927,24 +935,26 @@ export class ShapeCloner implements ShapeClonerInterface {
 				context: { path: pathOf(path, 'variants') },
 			})
 		}
-		const variants: ContractShape[] = []
-		for (let index = 0; index < snapshot.length; index += 1) {
-			const variant = snapshot[index]
-			if (variant === undefined) {
-				throw this.#create('validateShape: every structural child must be a shape', {
-					code: 'structure',
-					context: { path: pathOf(path, 'variants', INTRINSICS.text(index)) },
-				})
-			}
-			const cloned = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [variant])
-			if (cloned === undefined) {
-				throw this.#create('validateShape: every structural child must be a shape', {
-					code: 'structure',
-					context: { path: pathOf(path, 'variants', INTRINSICS.text(index)) },
-				})
-			}
-			variants[variants.length] = cloned
-		}
+		const variants = INTRINSICS.from(
+			iterateIndices(() => snapshot.length),
+			(index) => {
+				const variant = snapshot[index]
+				if (variant === undefined) {
+					throw this.#create('validateShape: every structural child must be a shape', {
+						code: 'structure',
+						context: { path: pathOf(path, 'variants', INTRINSICS.text(index)) },
+					})
+				}
+				const cloned = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [variant])
+				if (cloned === undefined) {
+					throw this.#create('validateShape: every structural child must be a shape', {
+						code: 'structure',
+						context: { path: pathOf(path, 'variants', INTRINSICS.text(index)) },
+					})
+				}
+				return cloned
+			},
+		)
 		INTRINSICS.reflect.write(clone, 'variants', INTRINSICS.freeze(variants))
 	}
 
@@ -964,7 +974,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 	#freezeNodes(): void {
 		const memo = this.#memo
 		if (memo === undefined) throw this.#unavailable()
-		for (let sourceIndex = 0; sourceIndex < this.#sources.length; sourceIndex += 1) {
+		for (const sourceIndex of iterateIndices(() => this.#sources.length)) {
 			const source = this.#sources[sourceIndex]
 			if (source === undefined) continue
 			const clone = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [source])

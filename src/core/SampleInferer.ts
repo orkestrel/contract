@@ -1,13 +1,12 @@
 import type { JSONSchema, SampleMemo } from './types.js'
 import { INFER_ENUM_LIMIT, INTRINSICS } from './constants.js'
 import {
-	admitMember,
+	readIndexView,
+	iterateIndices,
 	attempt,
 	buildSampleMemo,
-	collectMembers,
 	enumerableKeys,
 	limitEntries,
-	matchesMember,
 	readSampleMemo,
 	sortValues,
 } from './helpers.js'
@@ -84,14 +83,18 @@ export class SampleInferer {
 	// run to (maybe) reattach a unanimous `format`.
 	#infer(samples: readonly unknown[], depth: number, memo: SampleMemo): JSONSchema {
 		if (samples.length === 0) return {}
-		// Indexed rather than `every`, and the narrowed rows are collected as they
-		// are recognized so the record branch keeps its honest typing without an
-		// assertion.
-		const records: Array<Record<string, unknown>> = []
-		for (let index = 0; index < samples.length; index += 1) {
-			const sample = samples[index]
-			if (isRecord(sample)) records[records.length] = sample
-		}
+		const observed = INTRINSICS.from(
+			iterateIndices(() => samples.length),
+			(index) => {
+				const sample = samples[index]
+				return isRecord(sample) ? sample : undefined
+			},
+		)
+		const records: ReadonlyArray<Record<string, unknown>> = INTRINSICS.reflect.apply(
+			INTRINSICS.select,
+			readIndexView(observed),
+			[(sample: unknown) => sample !== undefined],
+		)
 		if (records.length === samples.length) {
 			return this.#walkRecords(records, depth, memo)
 		}
@@ -99,16 +102,11 @@ export class SampleInferer {
 			const enumSchema = inferPrimitiveEnum(samples, INFER_ENUM_LIMIT)
 			if (enumSchema) return enumSchema
 		}
-		const schemas: JSONSchema[] = []
-		for (let index = 0; index < samples.length; index += 1) {
-			schemas[schemas.length] = new ValueInferer(
-				samples[index],
-				depth,
-				this.#breadth,
-				this.#closed,
-				false,
-			).infer()
-		}
+		const schemas = INTRINSICS.from(
+			iterateIndices(() => samples.length),
+			(index) =>
+				new ValueInferer(samples[index], depth, this.#breadth, this.#closed, false).infer(),
+		)
 		const unified = unifySchemas(schemas)
 		if (this.#format && unified.type === 'string' && INTRINSICS.keys(unified).length === 1) {
 			const detected = samplesToFormat(samples)
@@ -146,95 +144,104 @@ export class SampleInferer {
 		// flag the emission depends on. A multi-row list is a fresh array on every
 		// call, but its rows are not: following their identities lands on the same
 		// node whichever array carried them.
-		let node = memo
-		for (let index = 0; index < samples.length; index += 1) {
-			const row = samples[index]
-			if (row === undefined) break
-			const next = INTRINSICS.reflect.apply(INTRINSICS.recall, node.rows, [row])
-			if (next !== undefined) {
-				node = readSampleMemo(next, 'samplesToSchema')
-				continue
-			}
-			const fresh = buildSampleMemo()
-			INTRINSICS.reflect.apply(INTRINSICS.retain, node.rows, [row, fresh])
-			node = fresh
-		}
+		const node: SampleMemo = INTRINSICS.reflect.apply(INTRINSICS.fold, samples, [
+			(current: SampleMemo, row: Record<string, unknown>) => {
+				const next = INTRINSICS.reflect.apply(INTRINSICS.recall, current.rows, [row])
+				if (next !== undefined) return readSampleMemo(next, 'samplesToSchema')
+				const fresh = buildSampleMemo()
+				INTRINSICS.reflect.apply(INTRINSICS.retain, current.rows, [row, fresh])
+				return fresh
+			},
+			memo,
+		])
 		const signature = `${depth}|${this.#breadth}|${this.#closed}|${this.#format}|${this.#enumerated}`
 		const cached = INTRINSICS.reflect.apply(INTRINSICS.fetch, node.schemas, [signature])
 		if (cached !== undefined) return cached
-		// Refuse the whole key-enumeration claim when any row cannot be read.
-		const seen = collectMembers([])
-		const collected: string[] = []
-		for (let sampleIndex = 0; sampleIndex < samples.length; sampleIndex += 1) {
-			const sample = samples[sampleIndex]
-			// Indexed, never iterated: the row list is walked by index so no answer
-			// this class publishes depends on `Array.prototype[Symbol.iterator]`. The
-			// caller's own list was already read into an owned dense snapshot, so an
-			// absent row here is unreachable and the refusal states the invariant.
-			if (sample === undefined) {
-				throw new INTRINSICS.error('samplesToSchema: every sample must be a record')
-			}
-			const sampleKeys = enumerableKeys(sample)
-			if (sampleKeys === undefined) {
-				throw new INTRINSICS.error('samplesToSchema: property enumeration failed')
-			}
-			for (let keyIndex = 0; keyIndex < sampleKeys.length; keyIndex += 1) {
-				const key = sampleKeys[keyIndex]
-				if (key === undefined || matchesMember(seen, key)) continue
-				admitMember(seen, key)
-				collected[collected.length] = key
-			}
-		}
-		const allKeys = sortValues(collected)
+		const keyPairs = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(samples), [
+			(sample: Record<string, unknown> | undefined) => {
+				if (sample === undefined) {
+					throw new INTRINSICS.error('samplesToSchema: every sample must be a record')
+				}
+				const sampleKeys = enumerableKeys(sample)
+				if (sampleKeys === undefined) {
+					throw new INTRINSICS.error('samplesToSchema: property enumeration failed')
+				}
+				return INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(sampleKeys), [
+					(key: string) => [key, true],
+				])
+			},
+		])
+		const keySet = INTRINSICS.record<boolean>({
+			[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [keyPairs]),
+		})
+		const allKeys = sortValues(INTRINSICS.keys(keySet))
 		const keys = limitEntries(allKeys, this.#breadth)
 		const truncated = allKeys.length > this.#breadth
-		// Honest typing: a null-prototype accumulator so a key literally named
-		// '__proto__' becomes an own data key instead of mutating the prototype —
-		// the same pattern compileGuard / compileParser use (compilers.ts).
-		const properties: Record<string, JSONSchema> = INTRINSICS.create(null)
-		const required: string[] = []
-		let partial = truncated
-		// Bounded by depth alone: unlike the single-value walk, this record-sample
-		// path carries no ancestor set. A shared reference across sample rows is
-		// legitimate data (not a cycle back to an ancestor), so the decrementing
-		// depth budget is the sole termination guarantee here.
-		for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
-			const key = keys[keyIndex]
-			if (key === undefined) continue
-			// Refuse the whole per-key claim when any sample value cannot be read.
-			const valuesOutcome = attempt(() => {
-				const values: unknown[] = []
-				let dropped = false
-				for (let sampleIndex = 0; sampleIndex < samples.length; sampleIndex += 1) {
-					const sample = samples[sampleIndex]
-					if (sample === undefined) {
-						throw new INTRINSICS.error('samplesToSchema: every sample must be a record')
-					}
-					const propertyValue = sample[key]
-					if (propertyValue === undefined) {
-						if (INTRINSICS.own(sample, key)) dropped = true
-						continue
-					}
-					values[values.length] = propertyValue
+		const columns = INTRINSICS.from(
+			iterateIndices(() => keys.length),
+			(index) => {
+				const key = keys[index]
+				if (key === undefined) return { key, schema: undefined, dropped: false, required: false }
+				const valuesOutcome = attempt(() => {
+					const observed = INTRINSICS.from(
+						iterateIndices(() => samples.length),
+						(sampleIndex) => {
+							const sample = samples[sampleIndex]
+							if (sample === undefined) {
+								throw new INTRINSICS.error('samplesToSchema: every sample must be a record')
+							}
+							const value = sample[key]
+							return { value, dropped: value === undefined && INTRINSICS.own(sample, key) }
+						},
+					)
+					const present = INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(observed), [
+						(entry: { readonly value: unknown }) => entry.value !== undefined,
+					])
+					const values: readonly unknown[] = INTRINSICS.reflect.apply(
+						INTRINSICS.project,
+						readIndexView(present),
+						[(entry: { readonly value: unknown }) => entry.value],
+					)
+					const dropped: boolean = INTRINSICS.reflect.apply(INTRINSICS.some, observed, [
+						(entry: { readonly dropped: boolean }) => entry.dropped,
+					])
+					return { values, dropped }
+				})
+				if (!valuesOutcome.success) throw valuesOutcome.error
+				const { values, dropped } = valuesOutcome.value
+				return {
+					key,
+					schema: values.length > 0 ? this.#infer(values, depth - 1, memo) : undefined,
+					dropped,
+					required: !dropped && values.length === samples.length,
 				}
-				return { values, dropped }
-			})
-			if (!valuesOutcome.success) throw valuesOutcome.error
-			const { values, dropped } = valuesOutcome.value
-			// A row holding `undefined` for this key OPENS the schema; it does not
-			// delete the column. Skipping the key entirely discarded a property two
-			// of three rows carried as a real integer, and neither the TSDoc nor the
-			// guide ever promised more than the opening.
-			if (dropped) partial = true
-			if (values.length > 0) {
-				// The slot below is followed from the node this call was ENTERED with,
-				// not from the row-prefix node reached above: two keys of one record
-				// carry different row lists, so a shared base is what lets each land on
-				// its own node instead of on a prefix of its sibling's.
-				properties[key] = this.#infer(values, depth - 1, memo)
-			}
-			if (!dropped && values.length === samples.length) required[required.length] = key
-		}
+			},
+		)
+		const pairs = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(columns), [
+			(column: { readonly key: string | undefined; readonly schema: JSONSchema | undefined }) =>
+				column.key === undefined || column.schema === undefined
+					? []
+					: [[column.key, column.schema]],
+		])
+		const properties = INTRINSICS.rebase(
+			INTRINSICS.record<JSONSchema>({
+				[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [pairs]),
+			}),
+			null,
+		)
+		const required: readonly string[] = INTRINSICS.reflect.apply(
+			INTRINSICS.expand,
+			readIndexView(columns),
+			[
+				(column: { readonly key: string | undefined; readonly required: boolean }) =>
+					column.required && column.key !== undefined ? [column.key] : [],
+			],
+		)
+		const partial =
+			truncated ||
+			INTRINSICS.reflect.apply(INTRINSICS.some, columns, [
+				(column: { readonly dropped: boolean }) => column.dropped,
+			])
 		const schema: JSONSchema = {
 			type: 'object',
 			...(INTRINSICS.keys(properties).length > 0 ? { properties } : {}),

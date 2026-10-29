@@ -2,6 +2,7 @@ import type { JSONClonerInterface, JSONRecord, JSONValue, Result } from './types
 import { CLONE_NODE_LIMIT, INTRINSICS } from './constants.js'
 import { ContractError } from './errors.js'
 import {
+	iterateIndices,
 	admitVisited,
 	attempt,
 	collectMembers,
@@ -255,47 +256,57 @@ export class JSONCloner implements JSONClonerInterface {
 		if (keysOutcome.value.length !== lengthDescriptor.value + 1) {
 			this.#refuse('cloneJSONValue: array own keys are not exact')
 		}
-		const entries: Array<[key: string, value: unknown]> = []
-		for (let index = 0; index < lengthDescriptor.value; index += 1) {
-			const key = INTRINSICS.text(index)
-			if (!matchesMember(owned, key)) {
-				this.#refuse('cloneJSONValue: array own keys are not exact')
-			}
-			const descriptorOutcome = attempt(() => INTRINSICS.reflect.describe(source, key))
-			if (!descriptorOutcome.success) {
-				this.#refuse('cloneJSONValue: array index could not be inspected')
-			}
-			const descriptor = descriptorOutcome.value
-			if (descriptor === undefined || !('value' in descriptor) || descriptor.enumerable !== true) {
-				this.#refuse('cloneJSONValue: array index is not enumerable data')
-			}
-			entries[entries.length] = [key, descriptor.value]
-		}
-		return entries
+		return INTRINSICS.from(
+			iterateIndices(() => lengthDescriptor.value),
+			(index): readonly [string, unknown] => {
+				const key = INTRINSICS.text(index)
+				if (!matchesMember(owned, key)) {
+					this.#refuse('cloneJSONValue: array own keys are not exact')
+				}
+				const descriptorOutcome = attempt(() => INTRINSICS.reflect.describe(source, key))
+				if (!descriptorOutcome.success) {
+					this.#refuse('cloneJSONValue: array index could not be inspected')
+				}
+				const descriptor = descriptorOutcome.value
+				if (
+					descriptor === undefined ||
+					!('value' in descriptor) ||
+					descriptor.enumerable !== true
+				) {
+					this.#refuse('cloneJSONValue: array index is not enumerable data')
+				}
+				return [key, descriptor.value]
+			},
+		)
 	}
 
 	#captureRecord(source: object): ReadonlyArray<readonly [key: string, value: unknown]> {
 		const keysOutcome = attempt(() => INTRINSICS.reflect.members(source))
 		if (!keysOutcome.success) this.#refuse('cloneJSONValue: own keys could not be inspected')
-		const entries: Array<[key: string, value: unknown]> = []
 		const names = keysOutcome.value
 		// Indexed, not iterated: this walk decides the published record's own-key
 		// population, and an iterator is a caller-writable member that can yield a
 		// key the source never had.
-		for (let index = 0; index < names.length; index += 1) {
-			const key = names[index]
-			if (typeof key !== 'string') this.#refuse('cloneJSONValue: record has a symbol property')
-			const descriptorOutcome = attempt(() => INTRINSICS.reflect.describe(source, key))
-			if (!descriptorOutcome.success) {
-				this.#refuse('cloneJSONValue: record property could not be inspected')
-			}
-			const descriptor = descriptorOutcome.value
-			if (descriptor === undefined || !('value' in descriptor) || descriptor.enumerable !== true) {
-				this.#refuse('cloneJSONValue: record property is not enumerable data')
-			}
-			entries[entries.length] = [key, descriptor.value]
-		}
-		return entries
+		return INTRINSICS.from(
+			iterateIndices(() => names.length),
+			(index): readonly [string, unknown] => {
+				const key = names[index]
+				if (typeof key !== 'string') this.#refuse('cloneJSONValue: record has a symbol property')
+				const descriptorOutcome = attempt(() => INTRINSICS.reflect.describe(source, key))
+				if (!descriptorOutcome.success) {
+					this.#refuse('cloneJSONValue: record property could not be inspected')
+				}
+				const descriptor = descriptorOutcome.value
+				if (
+					descriptor === undefined ||
+					!('value' in descriptor) ||
+					descriptor.enumerable !== true
+				) {
+					this.#refuse('cloneJSONValue: record property is not enumerable data')
+				}
+				return [key, descriptor.value]
+			},
+		)
 	}
 
 	#create(message: string): ContractError {

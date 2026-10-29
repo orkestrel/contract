@@ -78,6 +78,18 @@ import {
 	GUARD_DEPTH_LIMIT,
 } from '@src/core'
 import {
+	JSONExample,
+	returnArgument,
+	readNumber,
+	resolveNumber,
+	resolveIdentity,
+	createPromise,
+	generateNumber,
+	generateIdentity,
+	generateAsyncNumber,
+	generateAsyncIdentity,
+	createAsyncLeaf,
+	ObservationCounter,
 	buildCyclicArray,
 	buildCyclicRecord,
 	buildDeepNest,
@@ -93,10 +105,6 @@ import {
 	StrippedBrandDeclaration,
 } from '../../setup.js'
 import { createForeignRecord, createForeignRegExp } from '../../setupServer.js'
-
-class JSONExample {
-	readonly value = 1
-}
 
 describe('primitive validators', () => {
 	it('detects null and undefined values', () => {
@@ -162,7 +170,7 @@ describe('primitive validators', () => {
 			expect(isLiteralValue(value)).toBe(true)
 			if (isLiteralValue(value)) expectTypeOf(value).toEqualTypeOf<LiteralValue>()
 		}
-		for (const value of [null, undefined, 1n, Symbol('literal'), () => 1, [], {}]) {
+		for (const value of [null, undefined, 1n, Symbol('literal'), readNumber, [], {}]) {
 			expect(isLiteralValue(value)).toBe(false)
 		}
 		expect(Object.is(-0, 0)).toBe(false)
@@ -170,7 +178,7 @@ describe('primitive validators', () => {
 	})
 
 	it('detects functions and common built-ins', () => {
-		const fn = (value: unknown) => value
+		const fn = returnArgument
 		expect(isFunction(fn)).toBe(true)
 		expect(isFunction({})).toBe(false)
 		expect(isDate(new Date())).toBe(true)
@@ -187,12 +195,12 @@ describe('primitive validators', () => {
 	})
 
 	it('rejects RegExp lookalikes and proxies without reading advertised accessors', () => {
-		let reads = 0
+		const reads = new ObservationCounter()
 		const accessor = {}
 		for (const field of ['source', 'flags']) {
 			Object.defineProperty(accessor, field, {
 				get() {
-					reads += 1
+					reads.increment()
 					throw new Error('advertised RegExp field')
 				},
 			})
@@ -204,7 +212,7 @@ describe('primitive validators', () => {
 		revoked.revoke()
 
 		for (const value of [
-			{ source: 'duck', flags: '', test() {} },
+			Object.freeze({ source: 'duck', flags: '', test() {} }),
 			forged,
 			accessor,
 			transparent,
@@ -213,19 +221,15 @@ describe('primitive validators', () => {
 			expect(() => isRegExp(value)).not.toThrow()
 			expect(isRegExp(value)).toBe(false)
 		}
-		expect(reads).toBe(0)
+		expect(reads.value).toBe(0)
 	})
 
 	it('detects iterables and async iterables', async () => {
-		async function* createAsyncGenerator(): AsyncGenerator<number, void, unknown> {
-			yield 1
-		}
-
 		expect(isIterable([1, 2, 3])).toBe(true)
 		expect(isIterable('abc')).toBe(true)
 		expect(isIterable(new Set([1, 2]))).toBe(true)
 		expect(isIterable({})).toBe(false)
-		expect(isAsyncIterable(createAsyncGenerator())).toBe(true)
+		expect(isAsyncIterable(generateAsyncNumber())).toBe(true)
 		expect(isAsyncIterable([1, 2, 3])).toBe(false)
 
 		await Promise.resolve()
@@ -233,7 +237,7 @@ describe('primitive validators', () => {
 
 	it('detects promises and promise-like objects', () => {
 		const promise = Promise.resolve(1)
-		const promiseLike: unknown = {
+		const promiseLike: unknown = Object.freeze({
 			then() {
 				return undefined
 			},
@@ -243,12 +247,12 @@ describe('primitive validators', () => {
 			finally() {
 				return undefined
 			},
-		}
-		const incompletePromiseLike: unknown = {
+		})
+		const incompletePromiseLike: unknown = Object.freeze({
 			then() {
 				return undefined
 			},
-		}
+		})
 
 		expect(isPromise(promise)).toBe(true)
 		expect(isPromise(promiseLike)).toBe(false)
@@ -555,28 +559,28 @@ describe('emptiness validators', () => {
 
 describe('reflective guards contain hostile getter/Proxy throws', () => {
 	it('isPromiseLike returns false, never throws, on a throwing then getter', () => {
-		const hostile: unknown = {
+		const hostile: unknown = Object.freeze({
 			get then() {
 				throw new Error('boom')
 			},
-		}
+		})
 		expect(() => isPromiseLike(hostile)).not.toThrow()
 		expect(isPromiseLike(hostile)).toBe(false)
 	})
 
 	it('isPromiseLike returns false, never throws, on throwing catch/finally getters', () => {
-		const hostileCatch: unknown = {
+		const hostileCatch: unknown = Object.freeze({
 			then() {
 				return undefined
 			},
 			get catch() {
 				throw new Error('boom')
 			},
-		}
+		})
 		expect(() => isPromiseLike(hostileCatch)).not.toThrow()
 		expect(isPromiseLike(hostileCatch)).toBe(false)
 
-		const hostileFinally: unknown = {
+		const hostileFinally: unknown = Object.freeze({
 			then() {
 				return undefined
 			},
@@ -586,50 +590,50 @@ describe('reflective guards contain hostile getter/Proxy throws', () => {
 			get finally() {
 				throw new Error('boom')
 			},
-		}
+		})
 		expect(() => isPromiseLike(hostileFinally)).not.toThrow()
 		expect(isPromiseLike(hostileFinally)).toBe(false)
 	})
 
 	it('isIterable returns false, never throws, on a throwing Symbol.iterator getter', () => {
-		const hostile: unknown = {
+		const hostile: unknown = Object.freeze({
 			get [Symbol.iterator]() {
 				throw new Error('boom')
 			},
-		}
+		})
 		expect(() => isIterable(hostile)).not.toThrow()
 		expect(isIterable(hostile)).toBe(false)
 	})
 
 	it('isAsyncIterable returns false, never throws, on a throwing Symbol.asyncIterator getter', () => {
-		const hostile: unknown = {
+		const hostile: unknown = Object.freeze({
 			get [Symbol.asyncIterator]() {
 				throw new Error('boom')
 			},
-		}
+		})
 		expect(() => isAsyncIterable(hostile)).not.toThrow()
 		expect(isAsyncIterable(hostile)).toBe(false)
 	})
 
 	it('isJSONValue returns false, never throws, on a throwing property getter', () => {
-		const hostile: unknown = {
+		const hostile: unknown = Object.freeze({
 			get a() {
 				throw new Error('boom')
 			},
-		}
+		})
 		expect(() => isJSONValue(hostile)).not.toThrow()
 		expect(isJSONValue(hostile)).toBe(false)
 	})
 
 	it('isJSONValue returns false, never throws, on a throwing getter nested inside an array', () => {
-		const hostile: unknown = [
+		const hostile: unknown = Object.freeze([
 			1,
 			{
 				get b() {
 					throw new Error('boom')
 				},
 			},
-		]
+		])
 		expect(() => isJSONValue(hostile)).not.toThrow()
 		expect(isJSONValue(hostile)).toBe(false)
 	})
@@ -937,55 +941,43 @@ describe('isJSONValue — cycles, NaN/Infinity, and deep nesting', () => {
 
 describe('function validators', () => {
 	it('detects zero-argument functions', () => {
-		const zeroArg = () => 1
-		const withArg = (value: unknown) => value
+		const zeroArg = readNumber
+		const withArg = returnArgument
 		expect(isZeroArg(zeroArg)).toBe(true)
 		expect(isZeroArg(withArg)).toBe(false)
 		expect(isZeroArg('not a function')).toBe(false)
 	})
 
 	it('detects async functions', () => {
-		const asyncFn = async () => 1
-		const promiseFn = () => Promise.resolve(1)
+		const asyncFn = resolveNumber
+		const promiseFn = createPromise
 		expect(isAsyncFunction(asyncFn)).toBe(true)
 		expect(isAsyncFunction(promiseFn)).toBe(false)
 	})
 
 	it('detects generator functions', () => {
-		function* generator(): Generator<number, void, unknown> {
-			yield 1
-		}
+		const generator = generateNumber
 		expect(isGeneratorFunction(generator)).toBe(true)
 		expect(isGeneratorFunction(() => 1)).toBe(false)
 	})
 
 	it('detects async generator functions', () => {
-		async function* asyncGenerator(): AsyncGenerator<number, void, unknown> {
-			yield 1
-		}
+		const asyncGenerator = generateAsyncNumber
 		expect(isAsyncGeneratorFunction(asyncGenerator)).toBe(true)
 		expect(isAsyncGeneratorFunction(async () => 1)).toBe(false)
 	})
 
 	it('detects zero-argument async, generator, and async generator functions', () => {
-		const zeroArgAsync = async () => 1
-		const oneArgAsync = async (value: unknown) => value
+		const zeroArgAsync = resolveNumber
+		const oneArgAsync = resolveIdentity
 
-		function* zeroArgGenerator(): Generator<number, void, unknown> {
-			yield 1
-		}
+		const zeroArgGenerator = generateNumber
 
-		function* oneArgGenerator(value: unknown): Generator<unknown, void, unknown> {
-			yield value
-		}
+		const oneArgGenerator = generateIdentity
 
-		async function* zeroArgAsyncGenerator(): AsyncGenerator<number, void, unknown> {
-			yield 1
-		}
+		const zeroArgAsyncGenerator = generateAsyncNumber
 
-		async function* oneArgAsyncGenerator(value: unknown): AsyncGenerator<unknown, void, unknown> {
-			yield value
-		}
+		const oneArgAsyncGenerator = generateAsyncIdentity
 
 		expect(isZeroArgAsync(zeroArgAsync)).toBe(true)
 		expect(isZeroArgAsync(oneArgAsync)).toBe(false)
@@ -1012,7 +1004,7 @@ describe('function validators', () => {
 		// A passive hostile input: `value.constructor` is null, so a bare
 		// `.constructor.name` would throw `null.name`. The guard must return
 		// `false`, never throw.
-		const fn = async () => 1
+		const fn = createAsyncLeaf()
 		Object.defineProperty(fn, 'constructor', { value: null, configurable: true })
 		expect(() => isAsyncFunction(fn)).not.toThrow()
 		expect(isAsyncFunction(fn)).toBe(false)
@@ -1160,7 +1152,7 @@ describe('non-negative numeric guards', () => {
 			Symbol('number'),
 			{},
 			[],
-			() => 1,
+			readNumber,
 		]) {
 			expect(isNonNegativeNumber(value)).toBe(false)
 		}
@@ -1206,12 +1198,11 @@ describe('bounded JSON guards', () => {
 		const shallowCycle: unknown[] = []
 		shallowCycle.push(shallowCycle)
 		const boundaryCycle: unknown[] = []
-		let cursor = boundaryCycle
-		for (let depth = 1; depth < GUARD_DEPTH_LIMIT; depth += 1) {
+		const cursor = Array.from({ length: GUARD_DEPTH_LIMIT - 1 }).reduce<unknown[]>((parent) => {
 			const child: unknown[] = []
-			cursor.push(child)
-			cursor = child
-		}
+			parent.push(child)
+			return child
+		}, boundaryCycle)
 		cursor.push(boundaryCycle)
 
 		for (const value of [sparse, shallowCycle, boundaryCycle, new Date(), new Map()]) {
@@ -1220,32 +1211,32 @@ describe('bounded JSON guards', () => {
 	})
 
 	it('short-circuits the depth pass before JSON validation', () => {
-		let reads = 0
+		const reads = new ObservationCounter()
 		const deep = buildDeepNest(GUARD_DEPTH_LIMIT)
 		const value = Object.defineProperty({}, 'nested', {
 			get() {
-				reads += 1
+				reads.increment()
 				return deep
 			},
 			enumerable: true,
 		})
 
 		expect(isBoundedJSONValue(value)).toBe(false)
-		expect(reads).toBe(1)
+		expect(reads.value).toBe(1)
 	})
 
 	it('performs sequential total observations rather than promising one atomic snapshot', () => {
-		let reads = 0
+		const reads = new ObservationCounter()
 		const value = Object.defineProperty({}, 'state', {
 			get() {
-				reads += 1
-				return reads === 1 ? 1 : () => 1
+				reads.increment()
+				return reads.value === 1 ? 1 : readNumber
 			},
 			enumerable: true,
 		})
 
 		expect(isBoundedJSONValue(value)).toBe(false)
-		expect(reads).toBe(2)
+		expect(reads.value).toBe(2)
 	})
 
 	it('stays total for hostile records and arrays', () => {

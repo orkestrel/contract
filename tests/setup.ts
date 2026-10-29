@@ -47,6 +47,7 @@ import {
 	instanceOf,
 	integerShape,
 	intersectionOf,
+	iterateIndices,
 	isArray,
 	isBoundedJSONRecord,
 	isBoundedJSONValue,
@@ -902,14 +903,14 @@ export interface WorkBoundInterface {
  * ```
  */
 export function createWorkBound(limit: number, overflow: unknown): WorkBoundInterface {
-	let asked = 0
+	const asked = new ObservationCounter()
 	return Object.freeze({
 		deny: (): boolean => {
-			asked += 1
-			if (asked > limit) throw overflow
+			asked.increment()
+			if (asked.value > limit) throw overflow
 			return false
 		},
-		count: (): number => asked,
+		count: (): number => asked.value,
 	})
 }
 
@@ -1010,7 +1011,7 @@ export const TERMINAL_LIES: readonly TerminalLie[] = Object.freeze([
 		key: Symbol.iterator,
 		substitute: function* injectLeading(this: readonly unknown[]): Generator<unknown> {
 			yield 'INJECTED'
-			for (let index = 0; index < this.length; index += 1) yield this[index]
+			for (const index of iterateIndices(() => this.length)) yield this[index]
 		},
 		control: (): boolean => [...['real']][0] === 'INJECTED',
 	}),
@@ -1168,7 +1169,7 @@ export const TERMINAL_LIES: readonly TerminalLie[] = Object.freeze([
 				yield this[1]
 				return
 			}
-			for (let index = 0; index < this.length; index += 1) yield this[index]
+			for (const index of iterateIndices(() => this.length)) yield this[index]
 		},
 		control: (): boolean => {
 			const [first] = ['name', 'value']
@@ -1211,11 +1212,11 @@ export const TERMINAL_LIES: readonly TerminalLie[] = Object.freeze([
 		key: 'forEach',
 		substitute: (): void => undefined,
 		control: (): boolean => {
-			let visits = 0
+			const visits = new ObservationCounter()
 			new Set(['member']).forEach(() => {
-				visits += 1
+				visits.increment()
 			})
-			return visits === 0
+			return visits.value === 0
 		},
 	}),
 	Object.freeze({
@@ -1224,11 +1225,11 @@ export const TERMINAL_LIES: readonly TerminalLie[] = Object.freeze([
 		key: 'forEach',
 		substitute: (): void => undefined,
 		control: (): boolean => {
-			let visits = 0
+			const visits = new ObservationCounter()
 			new Map([['key', 'value']]).forEach(() => {
-				visits += 1
+				visits.increment()
 			})
-			return visits === 0
+			return visits.value === 0
 		},
 	}),
 	Object.freeze({
@@ -1346,7 +1347,7 @@ export function lieIntrinsic<T>(lie: TerminalLie, operation: (armed: boolean) =>
  */
 export function findVacuousControls(lies: readonly TerminalLie[]): readonly string[] {
 	const vacuous: string[] = []
-	for (let row = 0; row < lies.length; row += 1) {
+	for (const row of iterateIndices(() => lies.length)) {
 		const lie = lies[row]
 		if (lie === undefined) continue
 		if (lie.control()) vacuous[vacuous.length] = lie.label
@@ -1388,7 +1389,7 @@ export function findVacuousControls(lies: readonly TerminalLie[]): readonly stri
  */
 export function findInstallationControls(lies: readonly TerminalLie[]): readonly string[] {
 	const blind: string[] = []
-	for (let row = 0; row < lies.length; row += 1) {
+	for (const row of iterateIndices(() => lies.length)) {
 		const lie = lies[row]
 		if (lie === undefined) continue
 		const descriptor = captured.descriptor(lie.target, lie.key)
@@ -1397,10 +1398,12 @@ export function findInstallationControls(lies: readonly TerminalLie[]): readonly
 			blind[blind.length] = lie.label
 			continue
 		}
-		const forward = function (this: unknown, ...args: readonly unknown[]): unknown {
-			return captured.apply(honest, this, args)
-		}
-		captured.define(lie.target, lie.key, { ...descriptor, value: forward })
+		captured.define(lie.target, lie.key, {
+			...descriptor,
+			value: function (this: unknown, ...args: readonly unknown[]): unknown {
+				return captured.apply(honest, this, args)
+			},
+		})
 		try {
 			if (lie.control()) blind[blind.length] = lie.label
 		} finally {
@@ -1435,13 +1438,13 @@ export function fingerprintOwnership(value: unknown, ancestors: readonly object[
 	if (value === null || (typeof value !== 'object' && typeof value !== 'function')) {
 		return typeof value === 'string' ? `"${value}"` : String(value)
 	}
-	for (let index = 0; index < ancestors.length; index += 1) {
+	for (const index of iterateIndices(() => ancestors.length)) {
 		if (ancestors[index] === value) return '<edge>'
 	}
 	const path = [...ancestors, value]
 	const names = captured.names(value)
 	const parts: string[] = []
-	for (let index = 0; index < names.length; index += 1) {
+	for (const index of iterateIndices(() => names.length)) {
 		const name = names[index]
 		if (name === undefined || name === 'length') continue
 		const descriptor = captured.descriptor(value, name)
@@ -1500,7 +1503,7 @@ export function publicDoors(): readonly PublicDoor[] {
 	// INSTRUMENT dispatching through the member under attack, and it reports the
 	// probe's own construction as the package's escape.
 	const instant = new Date()
-	const coded: ReadonlyArray<readonly [string, () => unknown]> = [
+	const coded: ReadonlyArray<readonly [string, () => unknown]> = Object.freeze([
 		['new ShapeCloner', () => new ShapeCloner(shape)],
 		['ShapeCloner.clone', () => new ShapeCloner(shape).clone()],
 		['new SchemaCloner', () => new SchemaCloner(schema)],
@@ -1611,8 +1614,8 @@ export function publicDoors(): readonly PublicDoor[] {
 		['andOf', () => andOf(isString, isNonEmptyString)('a')],
 		['orOf', () => orOf(isString, isNumber)('a')],
 		['complementOf', () => complementOf(isString, isEmptyString)('a')],
-	]
-	const total: ReadonlyArray<readonly [string, () => unknown]> = [
+	])
+	const total: ReadonlyArray<readonly [string, () => unknown]> = Object.freeze([
 		['contract.is', () => contract.is(record)],
 		['contract.schema', () => contract.schema],
 		['isContractError', () => isContractError(record)],
@@ -1652,31 +1655,28 @@ export function publicDoors(): readonly PublicDoor[] {
 		['parseArrayField', () => parseArrayField(record, 'tags')],
 		['holds', () => holds(() => true)],
 		['attempt', () => attempt(() => 1)],
-	]
-	const doors: PublicDoor[] = []
-	for (let index = 0; index < coded.length; index += 1) {
-		const row = coded[index]
-		if (row === undefined) continue
-		const door: PublicDoor = { label: row[0], open: row[1], refusal: 'coded' }
-		doors[doors.length] = Object.freeze(door)
-	}
-	for (let index = 0; index < total.length; index += 1) {
-		const row = total[index]
-		if (row === undefined) continue
-		const door: PublicDoor = { label: row[0], open: row[1], refusal: 'total' }
-		doors[doors.length] = Object.freeze(door)
-	}
-	// The one door whose contract genuinely publishes the exact observed value:
-	// `matchesRecordBrand` is the DIAGNOSING form and says so, so a raw escape
-	// there is its documented answer rather than a leak. Naming it keeps the
-	// sweep honest instead of quietly widening the rule for every other door.
-	const diagnosing: PublicDoor = {
-		label: 'matchesRecordBrand',
-		open: () => matchesRecordBrand(record),
-		refusal: 'raw',
-	}
-	doors[doors.length] = Object.freeze(diagnosing)
-	return Object.freeze(doors)
+	])
+	return Object.freeze([
+		...coded.map((row): PublicDoor =>
+			Object.freeze({
+				label: row[0],
+				open: row[1],
+				refusal: 'coded',
+			}),
+		),
+		...total.map((row): PublicDoor =>
+			Object.freeze({
+				label: row[0],
+				open: row[1],
+				refusal: 'total',
+			}),
+		),
+		Object.freeze({
+			label: 'matchesRecordBrand',
+			open: () => matchesRecordBrand(record),
+			refusal: 'raw',
+		}),
+	])
 }
 
 /**
@@ -2099,13 +2099,13 @@ export class SingleReadPattern {
 
 	#pattern(): RegExp {
 		const pattern = /a/
-		let observed = 0
+		const observed = new ObservationCounter()
 		Object.defineProperty(pattern, 'source', {
 			configurable: true,
 			get: () => {
-				observed += 1
+				observed.increment()
 				this.#reads += 1
-				if (observed > 1) throw new Error('SingleReadPattern: source was observed twice')
+				if (observed.value > 1) throw new Error('SingleReadPattern: source was observed twice')
 				return 'a'
 			},
 		})
@@ -2551,11 +2551,10 @@ export function createThrowingPrototype(reason: unknown): object {
  */
 export function createStatefulGetter(): Readonly<Record<string, unknown>> {
 	const record: Record<string, unknown> = {}
-	let read = false
+	const read = new ObservationCounter()
 	return Object.defineProperty(record, 'value', {
 		get: () => {
-			const first = !read
-			read = true
+			const first = read.increment() === 1
 			return first ? 1 : 'drifted'
 		},
 		enumerable: true,
@@ -2619,11 +2618,10 @@ export function createHostileKeys(): object {
  * ```
  */
 export function buildDeepNest(depth: number): unknown {
-	let value: unknown = 'leaf'
-	for (let layer = 0; layer < depth; layer += 1) {
-		value = layer % 2 === 0 ? [value] : { value }
-	}
-	return value
+	return Array.from(iterateIndices(() => depth)).reduce<unknown>(
+		(value, layer) => (layer % 2 === 0 ? [value] : { value }),
+		'leaf',
+	)
 }
 
 /**
@@ -2647,9 +2645,10 @@ export function buildDeepNest(depth: number): unknown {
  * ```
  */
 export function buildWideVocabulary(count = 200_000): readonly string[] {
-	const values: string[] = []
-	for (let index = 0; index < count; index += 1) values.push(`value${index}`)
-	return values
+	return Array.from(
+		iterateIndices(() => count),
+		(index) => `value${index}`,
+	)
 }
 
 /**
@@ -2664,11 +2663,10 @@ export function buildWideVocabulary(count = 200_000): readonly string[] {
  * ```
  */
 export function buildDeepShape(depth: number): ContractShape {
-	let shape: ContractShape = stringShape()
-	for (let index = 0; index < depth; index += 1) {
-		shape = arrayShape(shape)
-	}
-	return shape
+	return Array.from(iterateIndices(() => depth)).reduce<ContractShape>(
+		(shape) => arrayShape(shape),
+		stringShape(),
+	)
 }
 
 /**
@@ -2690,11 +2688,10 @@ export function buildDeepShape(depth: number): ContractShape {
  * ```
  */
 export function buildSharedDagShape(levels: number): ContractShape {
-	let shape: ContractShape = stringShape()
-	for (let index = 0; index < levels; index += 1) {
-		shape = objectShape({ left: shape, right: shape })
-	}
-	return shape
+	return Array.from(iterateIndices(() => levels)).reduce<ContractShape>(
+		(shape) => objectShape({ left: shape, right: shape }),
+		stringShape(),
+	)
 }
 
 /** Pairs a declaration, a value graph walking it, and the tally of nodes the walk read. */
@@ -2735,37 +2732,36 @@ export interface CountedGraphInterface {
  * ```
  */
 export function buildCountedGraph(levels: number, shared: boolean): CountedGraphInterface {
-	let reads = 0
-	let shape: ContractShape = stringShape()
-	let layer: unknown[] = []
-	for (let index = 0; index < (shared ? 1 : 2 ** levels); index += 1) layer[layer.length] = 'leaf'
-	for (let level = 0; level < levels; level += 1) {
-		shape = arrayShape(objectShape({ inner: shape }))
-		const records: unknown[] = []
-		for (let index = 0; index < layer.length; index += 1) {
-			const child = layer[index]
-			const record: Record<string, unknown> = {}
-			Object.defineProperty(record, 'inner', {
-				get: () => {
-					reads += 1
-					return child
-				},
-				enumerable: true,
+	const reads = new ObservationCounter()
+	const shape = Array.from(iterateIndices(() => levels)).reduce<ContractShape>(
+		(current) => arrayShape(objectShape({ inner: current })),
+		stringShape(),
+	)
+	const layer = Array.from(iterateIndices(() => levels)).reduce<readonly unknown[]>(
+		(previous) => {
+			const records = previous.map((child) =>
+				Object.defineProperty({}, 'inner', {
+					get: () => {
+						reads.increment()
+						return child
+					},
+					enumerable: true,
+				}),
+			)
+			return Array.from({ length: Math.ceil(records.length / (shared ? 1 : 2)) }, (_, position) => {
+				const index = position * (shared ? 1 : 2)
+				return shared ? [records[index], records[index]] : [records[index], records[index + 1]]
 			})
-			records[records.length] = record
-		}
-		const wrapped: unknown[] = []
-		for (let index = 0; index < records.length; index += shared ? 1 : 2) {
-			wrapped[wrapped.length] = shared
-				? [records[index], records[index]]
-				: [records[index], records[index + 1]]
-		}
-		layer = wrapped
-	}
+		},
+		Array.from(
+			iterateIndices(() => (shared ? 1 : 2 ** levels)),
+			() => 'leaf',
+		),
+	)
 	return Object.freeze({
 		shape,
 		value: layer[0],
-		count: (): number => reads,
+		count: (): number => reads.value,
 	})
 }
 
@@ -2794,14 +2790,14 @@ export function buildCountedGraph(levels: number, shared: boolean): CountedGraph
  * ```
  */
 export function buildCountedSlots(shared: boolean): CountedGraphInterface {
-	let reads = 0
+	const reads = new ObservationCounter()
 	const left: Record<string, unknown> = {}
 	const right: Record<string, unknown> = shared ? left : {}
 	const records: ReadonlyArray<Record<string, unknown>> = shared ? [left] : [left, right]
 	for (const record of records) {
 		Object.defineProperty(record, 'inner', {
 			get: () => {
-				reads += 1
+				reads.increment()
 				return 'leaf'
 			},
 			enumerable: true,
@@ -2811,7 +2807,7 @@ export function buildCountedSlots(shared: boolean): CountedGraphInterface {
 	return Object.freeze({
 		shape: objectShape({ left: child, right: child }),
 		value: { left, right },
-		count: (): number => reads,
+		count: (): number => reads.value,
 	})
 }
 
@@ -3131,7 +3127,7 @@ export function soundnessViolations<T>(
 	parse: (value: unknown) => T | undefined,
 ): readonly string[] {
 	const out: string[] = []
-	for (let index = 0; index < SOUNDNESS_SAMPLE.length; index += 1) {
+	for (const index of iterateIndices(() => SOUNDNESS_SAMPLE.length)) {
 		const value = SOUNDNESS_SAMPLE[index]
 		const parsed = parse(value)
 		if (guard(value) && !Object.is(parsed, value)) out.push(`A@${index}`)
@@ -3310,15 +3306,15 @@ export function compositeShape(depth = 2): ContractShape {
 		rec: recordShape(numberShape()),
 		json: jsonShape(),
 	})
-	let current: ContractShape = leaf
-	for (let level = 2; level <= depth; level += 1) {
-		current = objectShape({
-			nested: current,
-			list: arrayShape(current, { min: 0, max: 3 }),
-			dict: recordShape(current),
-		})
-	}
-	return current
+	return Array.from(iterateIndices(() => depth - 1)).reduce<ContractShape>(
+		(current) =>
+			objectShape({
+				nested: current,
+				list: arrayShape(current, { min: 0, max: 3 }),
+				dict: recordShape(current),
+			}),
+		leaf,
+	)
 }
 
 // === Value factories
@@ -3525,7 +3521,7 @@ export function faultsToConstraints(
 	faults: readonly AuditFault[],
 ): ReadonlyArray<FaultConstraint | undefined> {
 	const constraints: Array<FaultConstraint | undefined> = []
-	for (let index = 0; index < faults.length; index += 1) {
+	for (const index of iterateIndices(() => faults.length)) {
 		const fault = faults[index]
 		if (fault === undefined) continue
 		constraints[constraints.length] = fault.reason === 'constraint' ? fault.constraint : undefined
@@ -3589,12 +3585,18 @@ export class ObservedShape {
  * @returns An object shape whose property `kN` wraps `child` in `N` array levels
  */
 export function buildStaircaseShape(child: ContractShape, levels: number): ContractShape {
-	const properties: Record<string, ContractShape> = {}
-	for (let level = 0; level < levels; level += 1) {
-		let node: ContractShape = child
-		for (let step = 0; step < level; step += 1) node = { category: 'array', items: node }
-		properties[`k${String(level)}`] = node
-	}
+	const properties = Object.fromEntries(
+		Array.from(
+			iterateIndices(() => levels),
+			(level) => [
+				`k${String(level)}`,
+				Array.from({ length: level }).reduce<ContractShape>(
+					(node) => ({ category: 'array', items: node }),
+					child,
+				),
+			],
+		),
+	)
 	return { category: 'object', properties }
 }
 
@@ -3728,4 +3730,475 @@ export class SmuggledMember {
 	[SMUGGLED_KEY](): number {
 		return 2
 	}
+}
+
+/** Returns an unconditional positive recognition answer for a boundary stub. */
+export function acceptRecognition(): boolean {
+	return true
+}
+
+/**
+ * Counts observations without retaining calls or dispatching through array methods.
+ *
+ * @remarks
+ * The installed call recorder appends with `Array.prototype.push`. These fixtures
+ * run while host methods are redirected, and their counts must survive that redirect.
+ */
+export class ObservationCounter {
+	#value = 0
+
+	get value(): number {
+		return this.#value
+	}
+
+	increment(): number {
+		this.#value += 1
+		return this.#value
+	}
+
+	clear(): void {
+		this.#value = 0
+	}
+}
+
+/** Retains a value supplied by callbacks during one test operation. */
+export class ObservedValue<T> {
+	#value: T
+
+	constructor(value: T) {
+		this.#value = value
+	}
+
+	get value(): T {
+		return this.#value
+	}
+
+	set value(value: T) {
+		this.#value = value
+	}
+}
+/** Empties the receiver to expose reliance on a live sort method. */
+export function clearValues(this: unknown[]): unknown[] {
+	this.length = 0
+	return this
+}
+
+/** Inserts a foreign member before the receiver's indexed members. */
+export function* injectMarker(this: readonly unknown[]): Generator<unknown> {
+	yield 'INJECTED'
+	for (const index of iterateIndices(() => this.length)) yield this[index]
+}
+
+/** Hides non-string set entries through a substituted iterator. */
+export function* readStrings(this: ReadonlySet<unknown>): Generator<unknown> {
+	for (const entry of Array.from(this.values())) if (typeof entry === 'string') yield entry
+}
+
+export function catchFailure(run: () => unknown): unknown {
+	try {
+		run()
+		return undefined
+	} catch (error) {
+		return error
+	}
+}
+
+export function readNest(
+	node: unknown,
+	limit: number,
+	layers = 0,
+): { readonly node: unknown; readonly layers: number } {
+	if (limit === 0 || typeof node !== 'object' || node === null) return { node, layers }
+	return readNest(Array.isArray(node) ? node[0] : Reflect.get(node, 'value'), limit - 1, layers + 1)
+}
+
+export function readWrappers(
+	node: ContractShape | undefined,
+	limit: number,
+	levels = 0,
+): { readonly node: ContractShape | undefined; readonly levels: number } {
+	if (limit === 0 || node?.category !== 'array') return { node, levels }
+	return readWrappers(node.items, limit - 1, levels + 1)
+}
+
+export function measureLeaf(node: unknown, limit: number, depth = 0): number {
+	if (node === 'leaf') return depth
+	if (limit === 0 || typeof node !== 'object' || node === null) return 0
+	if (Array.isArray(node)) return measureLeaf(node[0], limit - 1, depth + 1)
+	try {
+		const descriptor = Object.getOwnPropertyDescriptor(node, 'value')
+		return descriptor !== undefined && Object.hasOwn(descriptor, 'value')
+			? measureLeaf(descriptor.value, limit - 1, depth + 1)
+			: 0
+	} catch {
+		return 0
+	}
+}
+
+export async function measureAllocations() {
+	const original = captured.descriptor(globalThis, 'WeakMap')
+	if (original === undefined) throw new Error('the WeakMap descriptor is absent')
+	const constructions = new ObservationCounter()
+	class CountingWeakMap extends WeakMap<object, unknown> {
+		constructor(entries?: ReadonlyArray<readonly [object, unknown]> | null) {
+			super(entries)
+			constructions.increment()
+		}
+	}
+	try {
+		captured.define(globalThis, 'WeakMap', { ...original, value: CountingWeakMap })
+		vi.resetModules()
+		const loaded = await import('../src/core/index.js')
+		const few = loaded.objectShape({
+			items: loaded.arrayShape(loaded.objectShape({ name: loaded.stringShape() })),
+		})
+		const many = loaded.objectShape({
+			items: loaded.arrayShape(loaded.objectShape({ name: loaded.stringShape() })),
+			first: loaded.arrayShape(loaded.objectShape({ tag: loaded.stringShape() })),
+			second: loaded.arrayShape(loaded.objectShape({ tag: loaded.stringShape() })),
+			third: loaded.arrayShape(loaded.objectShape({ tag: loaded.stringShape() })),
+			fourth: loaded.arrayShape(loaded.objectShape({ tag: loaded.stringShape() })),
+		})
+		const compilerFew = new loaded.ContractCompiler(few)
+		const compilerMany = new loaded.ContractCompiler(many)
+
+		const openedFew = constructions.value
+		const guardFew = compilerFew.guard
+		const builtFew = constructions.value - openedFew
+		const openedMany = constructions.value
+		const guardMany = compilerMany.guard
+		const buildDelta = constructions.value - openedMany - builtFew
+
+		const calledStartFew = constructions.value
+		const answeredFew = guardFew({ items: [{ name: 'leaf' }, { name: 'branch' }] })
+		const calledFew = constructions.value - calledStartFew
+		const calledStartMany = constructions.value
+		const answeredMany = guardMany({
+			items: [{ name: 'leaf' }, { name: 'branch' }],
+			first: [{ tag: 'a' }, { tag: 'b' }],
+			second: [{ tag: 'c' }, { tag: 'd' }],
+			third: [{ tag: 'e' }, { tag: 'f' }],
+			fourth: [{ tag: 'g' }, { tag: 'h' }],
+		})
+		const calledMany = constructions.value - calledStartMany
+		return { answers: [answeredFew, answeredMany], buildDelta, calledFew, calledMany }
+	} finally {
+		captured.define(globalThis, 'WeakMap', original)
+		vi.resetModules()
+	}
+}
+
+export function createSubstitution(genuine: (typeof Array.prototype)[typeof Symbol.iterator]) {
+	return function* substituteFirst(this: readonly unknown[]): Generator<unknown> {
+		if (this.length === 2 && this[0] === 'name') {
+			yield 'ghost'
+			yield this[1]
+			return
+		}
+		const inner: unknown = Reflect.apply(genuine, this, [])
+		if (inner === null || typeof inner !== 'object') return
+		for (;;) {
+			const next: unknown = Reflect.get(inner, 'next')
+			if (typeof next !== 'function') return
+			const step: unknown = Reflect.apply(next, inner, [])
+			if (step === null || typeof step !== 'object') return
+			if (Reflect.get(step, 'done') === true) return
+			yield Reflect.get(step, 'value')
+		}
+	}
+}
+
+export function validateSource(shape: ContractShape): void {
+	new ShapeValidator(shape).validate()
+}
+
+export function createPatternStub(): object {
+	return {}
+}
+
+export function countSchemaNodes(schema: JSONSchema | undefined): number {
+	return schema === undefined ? 0 : 1 + countSchemaNodes(schema.properties?.nested)
+}
+
+export function readCategory(value: unknown): boolean {
+	// The ordinary shape of a caller predicate that assumes an object: reading
+	// `value.kind` off `null` is a TypeError, and nothing about that makes
+	// `null` a member of every other guard in the union.
+	if (value === null || typeof value !== 'object') {
+		throw new TypeError('cannot read properties of a non-object')
+	}
+	return 'kind' in value && value.kind === 'x'
+}
+
+export function excludeNull(value: null): value is never {
+	if (value === null) throw new TypeError('cannot read properties of null')
+	return false
+}
+
+export function throwMembership(): boolean {
+	throw new Error('sethas')
+}
+
+export function acceptValue(_value: unknown): _value is unknown {
+	return true
+}
+
+export function denyValue(_value: unknown): _value is never {
+	return false
+}
+
+export function createMarker(array: boolean): string | readonly string[] {
+	return array ? ['INJECTED'] : 'INJECTED'
+}
+
+export function createEmptyFaults(): readonly Fault[] {
+	return []
+}
+
+/**
+ * Arms inherited iterable and species dispatch, restoring both descriptors in finally.
+ */
+export function polluteArrayConstruction<T>(operation: () => T): T {
+	const iterator = captured.descriptor(Object.prototype, Symbol.iterator)
+	const constructor = captured.descriptor(Array.prototype, 'constructor')
+	if (constructor === undefined) throw new Error('Array constructor descriptor is absent')
+	try {
+		captured.define(Object.prototype, Symbol.iterator, {
+			configurable: true,
+			value() {
+				return {
+					next() {
+						return { done: true, value: undefined }
+					},
+				}
+			},
+		})
+		captured.define(Array.prototype, 'constructor', {
+			configurable: true,
+			get() {
+				throw new Error('inherited array constructor')
+			},
+		})
+		return operation()
+	} finally {
+		captured.define(Array.prototype, 'constructor', constructor)
+		if (iterator === undefined) captured.remove(Object.prototype, Symbol.iterator)
+		else captured.define(Object.prototype, Symbol.iterator, iterator)
+	}
+}
+
+/** Builds the declared-key, extra-key, cycle, sparse, revoked, and deep compiler inputs. */
+export function buildCompilerInputs(): readonly unknown[] {
+	const declaredThrows: Record<string, unknown> = {}
+	Object.defineProperty(declaredThrows, 'a', {
+		enumerable: true,
+		get() {
+			throw new Error('declared key')
+		},
+	})
+	const extraThrows: Record<string, unknown> = { a: 'x' }
+	Object.defineProperty(extraThrows, 'b', {
+		enumerable: true,
+		get() {
+			throw new Error('undeclared key')
+		},
+	})
+	const cyclic: Record<string, unknown> = { a: 'x' }
+	cyclic.self = cyclic
+	const deep = Array.from({ length: 3_000 }).reduce<unknown>((a) => ({ a }), 1)
+	return [declaredThrows, extraThrows, cyclic, buildSparseArray(), createRevokedProxy(), deep]
+}
+
+export function findAgreementViolations(
+	shape: ContractShape,
+	foreign: Guard<unknown> | undefined,
+): readonly string[] {
+	const guard = foreign ?? compileGuard(shape)
+	const parse = compileParser(shape)
+	const violations: string[] = []
+	const values = [...SOUNDNESS_SAMPLE, ...buildCompilerInputs()]
+	for (const index of iterateIndices(() => values.length)) {
+		const value = values[index]
+		const guarded = attempt(() => guard(value))
+		const audited = attempt(() => compileAuditor(shape, value))
+		const explained = attempt(() => compileReporter(shape, value))
+		const parsed = attempt(() => parse(value))
+		if (!guarded.success) {
+			violations[violations.length] = `guard threw @${String(index)}`
+			continue
+		}
+		const byGuard = guarded.value === true
+		const byAudit = audited.success && audited.value.length === 0
+		const byReport = explained.success && explained.value.length === 0
+		// The soundness question: a certification is a promise that `parse`
+		// succeeds, so no certifying door may sit beside a refusing parser.
+		if ((byGuard || byAudit || byReport) && !parsed.success) {
+			violations[violations.length] = `certified but refused @${String(index)}`
+		}
+		if (audited.success && byAudit !== byGuard) {
+			violations[violations.length] = `L1 @${String(index)}`
+		}
+		if (explained.success && parsed.success && byReport !== (parsed.value !== undefined)) {
+			violations[violations.length] = `L2 @${String(index)}`
+		}
+		if (parsed.success && parsed.value !== undefined && !guard(parsed.value)) {
+			violations[violations.length] = `L3 @${String(index)}`
+		}
+		if (byGuard && parsed.success && parsed.value === undefined) {
+			violations[violations.length] = `L4 @${String(index)}`
+		}
+		if (byAudit && explained.success && !byReport) {
+			violations[violations.length] = `L5 @${String(index)}`
+		}
+	}
+	return violations
+}
+
+export function createSubstituteValues(): readonly number[] {
+	return [9, 9, 9]
+}
+
+export function throwReplacement(): never {
+	throw new Error('replaced')
+}
+
+/** Returns the first callback argument unchanged. */
+export function returnArgument<T>(value: T): T {
+	return value
+}
+
+export function throwClock(): never {
+	throw new Error('clock')
+}
+
+export function appendDrift(
+	door: readonly [string, () => unknown, unknown],
+	label: string,
+	drift: string[],
+): void {
+	const outcome = attempt(door[1])
+	if (!outcome.success || outcome.value !== door[2]) {
+		drift[drift.length] = `${label} at ${door[0]}`
+	}
+}
+
+export function* readPairs(this: ReadonlyMap<unknown, unknown>): Generator<unknown> {
+	for (const entry of Array.from(this.entries())) yield [entry[0], 1]
+}
+
+export async function readUnpinnedModule() {
+	const genuine = Reflect.defineProperty
+
+	const original = captured.descriptor(Reflect, 'defineProperty')
+	if (original === undefined) throw new Error('Reflect.defineProperty descriptor is absent')
+	captured.define(Reflect, 'defineProperty', {
+		...original,
+		value: function (target: object, key: PropertyKey, descriptor: PropertyDescriptor): boolean {
+			return key === 'constructor' && descriptor.writable === false
+				? true
+				: genuine(target, key, descriptor)
+		},
+	})
+	try {
+		vi.resetModules()
+		const loaded: Promise<unknown> = import('../src/core/errors.js')
+		return await loaded.then(
+			() => ({ success: true }),
+			(error: unknown) => ({ success: false, error }),
+		)
+	} finally {
+		captured.define(Reflect, 'defineProperty', original)
+		vi.resetModules()
+	}
+}
+
+export class ReachableVocabulary {
+	readonly #members: Set<unknown>
+
+	constructor(values: readonly unknown[]) {
+		this.#members = new Set(values)
+	}
+
+	has(value: unknown): boolean {
+		return this.#members.has(value)
+	}
+}
+
+export function walkUnbounded(root: object): number {
+	const active = new WeakSet<object>()
+	const pending: object[] = [root]
+	const visits = new ObservationCounter()
+	while (pending.length > 0) {
+		const node = pending.pop()
+		if (node === undefined) continue
+		if (active.has(node)) continue
+		active.add(node)
+		visits.increment()
+		for (const value of Object.values(node)) {
+			if (typeof value === 'object' && value !== null) pending[pending.length] = value
+		}
+	}
+	return visits.value
+}
+
+export function buildCycle(cyclicFirst: boolean): JSONSchema {
+	const cyclic: JSONSchema = { type: 'object' }
+	const wrapper: JSONSchema = { type: 'array', items: cyclic }
+	// Only the back edge needs reflection: everything else is expressible,
+	// and `properties` cannot name `wrapper` until `wrapper` names `cyclic`.
+	Reflect.set(cyclic, 'properties', { q: wrapper })
+	Reflect.set(cyclic, 'required', ['q'])
+	const plain: JSONSchema = {
+		type: 'object',
+		properties: { q: wrapper },
+		required: ['q'],
+	}
+	const properties = cyclicFirst ? { a: cyclic, b: plain } : { a: plain, b: cyclic }
+	return { type: 'object', properties, required: ['a', 'b'] }
+}
+
+export class JSONExample {
+	readonly value = 1
+}
+
+export function readNumber(): number {
+	return 1
+}
+
+export async function resolveNumber(): Promise<number> {
+	return 1
+}
+
+export async function resolveIdentity(value: unknown): Promise<unknown> {
+	return value
+}
+
+export function createPromise(): Promise<number> {
+	return Promise.resolve(1)
+}
+
+export function* generateNumber(): Generator<number, void, unknown> {
+	yield 1
+}
+
+export function* generateIdentity(value: unknown): Generator<unknown, void, unknown> {
+	yield value
+}
+
+export async function* generateAsyncNumber(): AsyncGenerator<number, void, unknown> {
+	yield 1
+}
+
+export async function* generateAsyncIdentity(
+	value: unknown,
+): AsyncGenerator<unknown, void, unknown> {
+	yield value
+}
+
+export function createAsyncLeaf() {
+	return async () => 1
+}
+
+export class DetailedContractError extends ContractError {
+	override readonly name = 'DetailedContractError'
 }

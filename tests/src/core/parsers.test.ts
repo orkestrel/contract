@@ -19,6 +19,7 @@ import {
 	parseBoolean,
 	parseBooleanField,
 	parseEnum,
+	parseEnumValues,
 	parseEnumField,
 	parseInteger,
 	parseIntegerField,
@@ -38,9 +39,11 @@ import {
 } from '@src/core'
 import {
 	buildSparseArray,
+	acceptRecognition,
 	captureContractError,
 	createRevokedArrayProxy,
 	createThrowingGetter,
+	denyRecognition,
 	replaceIntrinsic,
 	soundnessViolations,
 	throwHostileAccess,
@@ -347,11 +350,13 @@ describe('record-field parsers', () => {
 	})
 
 	it('parseNullField and parseJSONValueField never throw against a hostile getter', () => {
-		const hostile = {
-			get a(): unknown {
+		const hostile = Object.defineProperty({}, 'a', {
+			enumerable: true,
+			configurable: true,
+			get(): unknown {
 				throw new Error('hostile getter')
 			},
-		}
+		})
 		expect(() => parseNullField(hostile, 'a')).not.toThrow()
 		expect(parseNullField(hostile, 'a')).toBeUndefined()
 		expect(() => parseJSONValueField(hostile, 'a')).not.toThrow()
@@ -483,11 +488,9 @@ describe('coercion answered through an unredirectable vocabulary', () => {
 	// defect in parser form, and `parseEnum` is the door it arrived through:
 	// `Set.prototype.has = () => true` made `parseEnum('zzz', ['a', 'b'])` answer
 	// `'zzz'`.
-	const answerTrue = (): boolean => true
-	const answerFalse = (): boolean => false
 
 	it('parseEnum answers undefined for a non-member while Set.prototype.has answers true', () => {
-		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+		const answers = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () => ({
 			member: parseEnum('a', ['a', 'b']),
 			stranger: parseEnum('zzz', ['a', 'b']),
 			crossType: parseEnum('1', [1]),
@@ -497,7 +500,7 @@ describe('coercion answered through an unredirectable vocabulary', () => {
 	})
 
 	it('parseEnum answers the member while Set.prototype.has answers false', () => {
-		const answers = replaceIntrinsic(Set.prototype, 'has', answerFalse, () =>
+		const answers = replaceIntrinsic(Set.prototype, 'has', denyRecognition, () =>
 			parseEnum('a', ['a', 'b']),
 		)
 
@@ -505,7 +508,7 @@ describe('coercion answered through an unredirectable vocabulary', () => {
 	})
 
 	it('parseEnumField inherits the same answer through its field reader', () => {
-		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+		const answers = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () => ({
 			member: parseEnumField({ role: 'a' }, 'role', ['a', 'b']),
 			stranger: parseEnumField({ role: 'zzz' }, 'role', ['a', 'b']),
 		}))
@@ -514,11 +517,24 @@ describe('coercion answered through an unredirectable vocabulary', () => {
 	})
 
 	it('stays sound with its paired guard under the same lie', () => {
-		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => {
+		const answers = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () => {
 			const parsed = parseEnum('zzz', ['a', 'b'])
 			return { parsed, guarded: literalOf('a', 'b')('zzz') }
 		})
 
 		expect(answers).toEqual({ parsed: undefined, guarded: false })
+	})
+})
+
+describe('parseEnumValues', () => {
+	it('ends after the first invalid indexed member without reading later members', () => {
+		const values = Object.defineProperty(['a', 'invalid', 'b'], '2', {
+			get() {
+				throw new Error('past the invalid member')
+			},
+		})
+		expect(Array.from(parseEnumValues(values, ['a', 'b']))).toEqual(['a', undefined])
+		expect(Array.from(parseEnumValues(['a', 'b'], ['a', 'b']))).toEqual(['a', 'b'])
+		expect(Array.from(parseEnumValues([], ['a']))).toEqual([])
 	})
 })

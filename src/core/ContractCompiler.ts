@@ -27,12 +27,14 @@ import {
 } from './constants.js'
 import { ContractError, isContractError } from './errors.js'
 import {
-	admitMember,
+	readIndexView,
 	appendEntries,
 	attempt,
+	iterateIndices,
 	collectMembers,
 	contain,
 	buildArrayFaults,
+	buildPositions,
 	buildNumberFaults,
 	buildStringFaults,
 	drawRandom,
@@ -45,9 +47,9 @@ import {
 	preview,
 	readArrayEntries,
 	readPatternSource,
+	readPresence,
 	readValue,
 	refuseExpansion,
-	seededRandom,
 	selectClosestFaults,
 	shapeToKind,
 } from './helpers.js'
@@ -78,6 +80,8 @@ import {
 import { parseBoolean, parseInteger, parseJSONValue, parseNumber, parseString } from './parsers.js'
 import { cloneSchema, ownShape } from './cloners.js'
 import { ShapeValidator } from './ShapeValidator.js'
+import { EvaluationScope } from './EvaluationScope.js'
+import { seededRandom } from './seeders.js'
 
 /**
  * Owns one contract shape's artifacts and their bundle, compiled lazily.
@@ -130,14 +134,6 @@ export class ContractCompiler<
 	// so a replaced `globalThis.WeakMap` would throw a caller value out of a door
 	// documented to publish a `ContractError`.
 	static readonly #weakMap = WeakMap
-	// The call-scoped value ledger's clock. `#visits` hands out one identity per
-	// top-level walk and `#scope` names the walk that is running, so a node's memo can
-	// say which call filled it. Both are static because a compiled artifact is
-	// self-contained by design — it must not reach instance state its compiler
-	// releases — and because those numbers are the whole of it: no value, no
-	// answer, and nothing that outlives the walk that set them.
-	static #visits = 0
-	static #scope = 0
 	// The released state, shared by every compiler this class ever builds.
 	// `#release` assigns these in place of the working collections, so an instance
 	// allocates one collection per family instead of two and construction carries
@@ -480,7 +476,8 @@ export class ContractCompiler<
 				this.#stack[this.#stack.length] = { operation: 'enter', shape: shape.inner }
 				return
 			case 'union': {
-				for (let index = shape.variants.length - 1; index >= 0; index -= 1) {
+				for (const offset of iterateIndices(() => shape.variants.length)) {
+					const index = shape.variants.length - 1 - offset
 					const variant = shape.variants[index]
 					if (variant === undefined) continue
 					this.#stack[this.#stack.length] = { operation: 'enter', shape: variant }
@@ -493,7 +490,8 @@ export class ContractCompiler<
 					this.#stack[this.#stack.length] = { operation: 'enter', shape: extra }
 				}
 				const keys = INTRINSICS.keys(shape.properties)
-				for (let index = keys.length - 1; index >= 0; index -= 1) {
+				for (const offset of iterateIndices(() => keys.length)) {
+					const index = keys.length - 1 - offset
 					const key = keys[index]
 					if (key === undefined) continue
 					const child = shape.properties[key]
@@ -548,37 +546,15 @@ export class ContractCompiler<
 	// reporter and the generator alike, so those three build the guard plan when —
 	// and only when — the graph actually holds one.
 	#unions(): boolean {
-		for (let index = 0; index < this.#nodes.length; index += 1) {
+		for (const index of iterateIndices(() => this.#nodes.length)) {
 			if (this.#nodes[index]?.category === 'union') return true
 		}
 		return false
 	}
 
-	// === Call-scoped value ledger
-	//
-	// A compiled artifact applies each child artifact once per OCCURRENCE, and a
-	// value graph is a DAG as often as a declaration is — two slots holding one
-	// object is ordinary data, not an attack. That costs one visit per PATH: a
-	// twenty-three-node `arrayShape` chain over twenty-two shared arrays measured
-	// 524,286 node reads, 4.4 s for `is` and 8.4 s for `audit`, growing fourfold
-	// per two levels, for a declaration inside every published bound. The answer a
-	// compiled node gives about one object is a function of that object, so it is
-	// computed once per call and reused by every later path that arrives at the
-	// same pair. The scope tag is what keeps that reuse INSIDE one call, since a
-	// value the caller changes between two calls must be read again. It is the
-	// per-call identity memo `valueToSchema` and `schemaToShape` already carry,
-	// and it publishes nothing.
-	//
-	// The ledger a tracked node keeps is one inline SLOT — the object it last
-	// answered about and the answer it gave — because the call that reaches a
-	// tracked node with one object is the common one, and a slot costs a
-	// comparison where a map costs an allocation. A `WeakMap` is built only when
-	// a SECOND distinct object arrives inside one scope, and the slot's entry is
-	// carried into it as it is built, so the first object keeps its answer for
-	// every later path. `filled` starts below every scope the clock hands out —
-	// `#visits` rises before it names a scope, so no scope is 0 — and the first
-	// call therefore always refreshes. A refresh drops the map and empties the
-	// slot together, which is what keeps an answer from crossing calls.
+	// Each root evaluation owns the answers for its active synchronous walk.
+	// Shared objects reuse one answer per compiled node; the scope is removed
+	// in finally so later calls always observe the caller's current value.
 
 	// Only a node that descends into a child artifact can be reached twice through
 	// one value; a leaf answers about the value in front of it, so tracking one
@@ -591,46 +567,7 @@ export class ContractCompiler<
 	}
 
 	#trackGuard(plan: Guard<unknown>): Guard<unknown> {
-		let filled = 0
-		let memo: WeakMap<object, boolean> | undefined
-		let slot: object | undefined
-		let kept = false
-		return (value: unknown): value is unknown => {
-			if (!isObject(value)) return plan(value)
-			const opened = ContractCompiler.#scope === 0
-			if (opened) {
-				ContractCompiler.#visits += 1
-				ContractCompiler.#scope = ContractCompiler.#visits
-			}
-			try {
-				const scope = ContractCompiler.#scope
-				if (filled !== scope) {
-					memo = undefined
-					slot = undefined
-					kept = false
-					filled = scope
-				}
-				if (slot === value) return kept
-				if (memo !== undefined) {
-					const recalled = INTRINSICS.reflect.apply(INTRINSICS.recall, memo, [value])
-					if (recalled !== undefined) return recalled
-				}
-				const answer = plan(value)
-				if (slot === undefined) {
-					slot = value
-					kept = answer
-				} else {
-					if (memo === undefined) {
-						memo = new ContractCompiler.#weakMap()
-						INTRINSICS.reflect.apply(INTRINSICS.retain, memo, [slot, kept])
-					}
-					INTRINSICS.reflect.apply(INTRINSICS.retain, memo, [value, answer])
-				}
-				return answer
-			} finally {
-				if (opened) ContractCompiler.#scope = 0
-			}
-		}
+		return (value: unknown): value is unknown => EvaluationScope.run(plan, value)
 	}
 
 	// The diagnostic families reuse only the CLEAN verdict, because a fault
@@ -638,53 +575,11 @@ export class ContractCompiler<
 	// that reported no fault about an object reports none about it wherever else
 	// the walk arrives. A faulted node is re-walked at its new path, and stays
 	// bounded by `FAULT_LIMIT` — every collector stops once the cap is reached, so
-	// a value that faults everywhere saturates instead of expanding. The slot
-	// carries that rule too: a faulted first value fills it with nothing kept, so
-	// the node holds that value in front of it and still re-walks every later
-	// arrival of it.
+	// a value that faults everywhere saturates instead of expanding.
 	#trackFaults<T>(
 		plan: (value: unknown, path: readonly string[]) => readonly T[],
 	): (value: unknown, path: readonly string[]) => readonly T[] {
-		let filled = 0
-		let memo: WeakMap<object, readonly T[]> | undefined
-		let slot: object | undefined
-		let kept: readonly T[] | undefined
-		return (value: unknown, path: readonly string[]): readonly T[] => {
-			if (!isObject(value)) return plan(value, path)
-			const opened = ContractCompiler.#scope === 0
-			if (opened) {
-				ContractCompiler.#visits += 1
-				ContractCompiler.#scope = ContractCompiler.#visits
-			}
-			try {
-				const scope = ContractCompiler.#scope
-				if (filled !== scope) {
-					memo = undefined
-					slot = undefined
-					kept = undefined
-					filled = scope
-				}
-				if (slot === value && kept !== undefined) return kept
-				if (memo !== undefined) {
-					const recalled = INTRINSICS.reflect.apply(INTRINSICS.recall, memo, [value])
-					if (recalled !== undefined) return recalled
-				}
-				const answer = plan(value, path)
-				if (slot === undefined) {
-					slot = value
-					kept = answer.length === 0 ? answer : undefined
-				} else if (answer.length === 0) {
-					if (memo === undefined) {
-						memo = new ContractCompiler.#weakMap()
-						if (kept !== undefined) INTRINSICS.reflect.apply(INTRINSICS.retain, memo, [slot, kept])
-					}
-					INTRINSICS.reflect.apply(INTRINSICS.retain, memo, [value, answer])
-				}
-				return answer
-			} finally {
-				if (opened) ContractCompiler.#scope = 0
-			}
-		}
+		return (value, path) => EvaluationScope.run(plan, value, path, true)
 	}
 
 	// === Schema family
@@ -693,7 +588,7 @@ export class ContractCompiler<
 		const ready = this.#schema
 		if (ready !== undefined) return ready
 		this.#prepare()
-		for (let step = 0; step < this.#order.length; step += 1) {
+		for (const step of iterateIndices(() => this.#order.length)) {
 			const index = this.#order[step]
 			if (index === undefined) continue
 			this.#schemas[index] = this.#schemaOf(index)
@@ -764,12 +659,11 @@ export class ContractCompiler<
 				// and an array spread retrieves `Array.prototype[Symbol.iterator]` at the
 				// moment of use, so a caller could add a member to a vocabulary this
 				// package documents as exactly the shape's own.
-				const vocabulary: LiteralValue[] = []
-				for (let index2 = 0; index2 < owned.values.length; index2 += 1) {
-					const value = owned.values[index2]
-					if (value === undefined) continue
-					vocabulary[vocabulary.length] = value
-				}
+				const vocabulary: readonly LiteralValue[] = INTRINSICS.reflect.apply(
+					INTRINSICS.select,
+					readIndexView(owned.values),
+					[(value: LiteralValue | undefined) => value !== undefined],
+				)
 				return INTRINSICS.freeze({
 					enum: INTRINSICS.freeze(vocabulary),
 					...(owned.description !== undefined ? { description: owned.description } : {}),
@@ -784,17 +678,43 @@ export class ContractCompiler<
 					...(owned.description !== undefined ? { description: owned.description } : {}),
 				})
 			case 'object': {
-				const properties: Record<string, JSONSchema> = INTRINSICS.create(null)
-				const required: string[] = []
-				const keyList = INTRINSICS.keys(owned.properties)
-				for (let keyIndex = 0; keyIndex < keyList.length; keyIndex += 1) {
-					const key = keyList[keyIndex]
-					if (key === undefined) continue
-					const child = owned.properties[key]
-					if (child === undefined) continue
-					properties[key] = this.#schemaAt(child.category === 'optional' ? child.inner : child)
-					if (child.category !== 'optional') required[required.length] = key
-				}
+				const entries: ReadonlyArray<{
+					readonly key: string
+					readonly schema: JSONSchema
+					readonly required: boolean
+				}> = INTRINSICS.reflect.apply(
+					INTRINSICS.expand,
+					readIndexView(INTRINSICS.keys(owned.properties)),
+					[
+						(key: string) => {
+							const child = owned.properties[key]
+							if (child === undefined) return []
+							return [
+								{
+									key,
+									schema: this.#schemaAt(child.category === 'optional' ? child.inner : child),
+									required: child.category !== 'optional',
+								},
+							]
+						},
+					],
+				)
+				const pairs = INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(entries), [
+					(entry: (typeof entries)[number]) => [entry.key, entry.schema],
+				])
+				const properties = INTRINSICS.rebase(
+					INTRINSICS.record<JSONSchema>({
+						[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+							pairs,
+						]),
+					}),
+					null,
+				)
+				const required: readonly string[] = INTRINSICS.reflect.apply(
+					INTRINSICS.expand,
+					readIndexView(entries),
+					[(entry: (typeof entries)[number]) => (entry.required ? [entry.key] : [])],
+				)
 				const extra = owned.additionalProperties
 				const additionalProperties: boolean | JSONSchema =
 					extra === true
@@ -817,12 +737,14 @@ export class ContractCompiler<
 				// `Array.prototype.map = () => ['INJECTED']` made `compileSchema` answer
 				// `{"anyOf":["INJECTED"]}` — a success, with the caller's content inside
 				// the package's own output.
-				const variants: JSONSchema[] = []
-				for (let index2 = 0; index2 < owned.variants.length; index2 += 1) {
-					const variant = owned.variants[index2]
-					if (variant === undefined) continue
-					variants[variants.length] = this.#schemaAt(variant)
-				}
+				const variants: JSONSchema[] = INTRINSICS.reflect.apply(
+					INTRINSICS.expand,
+					readIndexView(owned.variants),
+					[
+						(variant: ContractShape | undefined) =>
+							variant === undefined ? [] : [this.#schemaAt(variant)],
+					],
+				)
 				return INTRINSICS.freeze({
 					...(owned.mode === 'oneOf'
 						? { oneOf: INTRINSICS.freeze(variants) }
@@ -850,7 +772,7 @@ export class ContractCompiler<
 		const ready = this.#guard
 		if (ready !== undefined) return ready
 		this.#prepare()
-		for (let step = 0; step < this.#order.length; step += 1) {
+		for (const step of iterateIndices(() => this.#order.length)) {
 			const index = this.#order[step]
 			if (index === undefined) continue
 			const plan = this.#guardOf(index)
@@ -913,38 +835,54 @@ export class ContractCompiler<
 				// Honest typing: a null-prototype accumulator so a property literally
 				// named '__proto__' becomes an own data key instead of mutating the
 				// prototype — the same pattern `pickOf` uses (combinators.ts).
-				const map: Record<string, Guard<unknown>> = INTRINSICS.create(null)
-				const optionalKeys: string[] = []
-				const keyList = INTRINSICS.keys(owned.properties)
-				for (let keyIndex = 0; keyIndex < keyList.length; keyIndex += 1) {
-					const key = keyList[keyIndex]
-					if (key === undefined) continue
-					const child = owned.properties[key]
-					if (child === undefined) continue
-					if (child.category === 'optional') {
-						map[key] = this.#guardAt(child.inner)
-						optionalKeys[optionalKeys.length] = key
-					} else {
-						map[key] = this.#guardAt(child)
-					}
-				}
+				const entries: ReadonlyArray<{
+					readonly key: string
+					readonly guard: Guard<unknown>
+					readonly optional: boolean
+				}> = INTRINSICS.reflect.apply(
+					INTRINSICS.expand,
+					readIndexView(INTRINSICS.keys(owned.properties)),
+					[
+						(key: string) => {
+							const child = owned.properties[key]
+							if (child === undefined) return []
+							const optional = child.category === 'optional'
+							return [{ key, guard: this.#guardAt(optional ? child.inner : child), optional }]
+						},
+					],
+				)
+				const pairs = INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(entries), [
+					(entry: (typeof entries)[number]) => [entry.key, entry.guard],
+				])
+				const map = INTRINSICS.rebase(
+					INTRINSICS.record<Guard<unknown>>({
+						[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+							pairs,
+						]),
+					}),
+					null,
+				)
+				const optionalKeys: readonly string[] = INTRINSICS.reflect.apply(
+					INTRINSICS.expand,
+					readIndexView(entries),
+					[(entry: (typeof entries)[number]) => (entry.optional ? [entry.key] : [])],
+				)
 				const extra = owned.additionalProperties
 				const closed = extra === undefined || extra === false
 				const additional = closed || extra === true ? undefined : this.#guardAt(extra)
 				// Indexed, not `filter`/`includes`: both are caller-writable members of
 				// `Array.prototype` reached by name, one line above a boundary whose own
 				// comment promises this walk never throws.
-				const required: string[] = []
-				const declared = INTRINSICS.keys(map)
-				for (let keyIndex = 0; keyIndex < declared.length; keyIndex += 1) {
-					const key = declared[keyIndex]
-					if (key === undefined) continue
-					let optional = false
-					for (let optionalIndex = 0; optionalIndex < optionalKeys.length; optionalIndex += 1) {
-						if (optionalKeys[optionalIndex] === key) optional = true
-					}
-					if (!optional) required[required.length] = key
-				}
+				const required: readonly string[] = INTRINSICS.reflect.apply(
+					INTRINSICS.select,
+					readIndexView(INTRINSICS.keys(map)),
+					[
+						(key: string) =>
+							!INTRINSICS.reflect.apply(INTRINSICS.some, optionalKeys, [
+								(optional: string) => optional === key,
+							]),
+					],
+				)
 				// The required keys are fixed here, so their presence question is
 				// answered by one integer rather than by a per-call vocabulary: each
 				// required key takes a bit position here, and a call ORs one bit per own
@@ -953,16 +891,8 @@ export class ContractCompiler<
 				// '__proto__' takes a position like any other. Past the mask's width
 				// the collected-vocabulary form below still answers.
 				const maskable = required.length <= PRESENCE_MASK_LIMIT
-				const positions: Record<string, number> = INTRINSICS.create(null)
-				let full = 0
-				if (maskable) {
-					for (let keyIndex = 0; keyIndex < required.length; keyIndex += 1) {
-						const key = required[keyIndex]
-						if (key === undefined) continue
-						positions[key] = keyIndex
-						full |= 1 << keyIndex
-					}
-				}
+				const positions = buildPositions(maskable ? required : [])
+				const full = maskable ? readPresence(required, positions) : 0
 				return (value: unknown): value is unknown => {
 					if (!isRecord(value)) return false
 					const keys = enumerableKeys(value)
@@ -973,24 +903,17 @@ export class ContractCompiler<
 					// `.claude/rules/patterns.md` § Validation and contracts requires.
 					const outcome = attempt(() => {
 						if (maskable) {
-							let seen = 0
-							for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
-								const key = keys[keyIndex]
-								if (key === undefined) continue
-								if (!INTRINSICS.own(positions, key)) continue
-								const position = positions[key]
-								if (position !== undefined) seen |= 1 << position
-							}
+							const seen = readPresence(keys, positions)
 							if (seen !== full) return false
 						} else {
 							const present = collectMembers(keys)
-							for (let keyIndex = 0; keyIndex < required.length; keyIndex += 1) {
+							for (const keyIndex of iterateIndices(() => required.length)) {
 								const key = required[keyIndex]
 								if (key === undefined) continue
 								if (!matchesMember(present, key)) return false
 							}
 						}
-						for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+						for (const keyIndex of iterateIndices(() => keys.length)) {
 							const key = keys[keyIndex]
 							if (key === undefined) continue
 							const guard = INTRINSICS.own(map, key) ? map[key] : undefined
@@ -1015,23 +938,24 @@ export class ContractCompiler<
 				}
 			}
 			case 'union': {
-				const guards: Array<Guard<unknown>> = []
-				for (let index2 = 0; index2 < owned.variants.length; index2 += 1) {
-					const variant = owned.variants[index2]
-					if (variant === undefined) continue
-					guards[guards.length] = this.#guardAt(variant)
-				}
+				const guards: Array<Guard<unknown>> = INTRINSICS.reflect.apply(
+					INTRINSICS.expand,
+					readIndexView(owned.variants),
+					[
+						(variant: ContractShape | undefined) =>
+							variant === undefined ? [] : [this.#guardAt(variant)],
+					],
+				)
 				// A `oneOf`-mode union matches the emitted JSON Schema `oneOf` keyword —
 				// EXACTLY one variant must guard-accept the value, not "at least one"
 				// (unionOf's anyOf semantics). A value matching two-or-more variants is
 				// rejected, since it would violate the compiled schema.
 				if (owned.mode === 'oneOf') {
 					return (value: unknown): value is unknown => {
-						let matched = 0
-						for (let index2 = 0; index2 < guards.length; index2 += 1) {
-							const guard = guards[index2]
-							if (guard !== undefined && guard(value)) matched += 1
-						}
+						const matched: number = INTRINSICS.reflect.apply(INTRINSICS.fold, guards, [
+							(total: number, guard: Guard<unknown>) => total + (guard(value) ? 1 : 0),
+							0,
+						])
 						return matched === 1
 					}
 				}
@@ -1055,7 +979,7 @@ export class ContractCompiler<
 		if (ready !== undefined) return ready
 		this.#prepare()
 		if (this.#unions()) this.#buildGuard()
-		for (let step = 0; step < this.#order.length; step += 1) {
+		for (const step of iterateIndices(() => this.#order.length)) {
 			const index = this.#order[step]
 			if (index === undefined) continue
 			this.#parsers[index] = this.#parserOf(index)
@@ -1153,7 +1077,7 @@ export class ContractCompiler<
 					}
 					if (!entries.value.dense) return undefined
 					const result: unknown[] = []
-					for (let entryIndex = 0; entryIndex < entries.value.entries.length; entryIndex += 1) {
+					for (const entryIndex of iterateIndices(() => entries.value.entries.length)) {
 						// Indexed rather than iterated, and read in place: a hole and a
 						// present `undefined` are the same observation to the item parser,
 						// so neither is silently dropped from the assembled result.
@@ -1176,30 +1100,33 @@ export class ContractCompiler<
 			// auditor is the artifact that reports it, one `'extra'` fault per
 			// undeclared key.
 			case 'object': {
-				const entries: Array<{ key: string; parse: Parser<unknown>; optional: boolean }> = []
 				const keyList = INTRINSICS.keys(owned.properties)
-				for (let keyIndex = 0; keyIndex < keyList.length; keyIndex += 1) {
-					const key = keyList[keyIndex]
-					if (key === undefined) continue
-					const child = owned.properties[key]
-					if (child === undefined) continue
-					const optional = child.category === 'optional'
-					entries[entries.length] = {
-						key,
-						parse: this.#parserAt(optional ? child.inner : child),
-						optional,
-					}
-				}
-				const known = readValue(
-					() => {
-						const declared = collectMembers([])
-						for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
-							const entry = entries[entryIndex]
-							if (entry === undefined) continue
-							admitMember(declared, entry.key)
-						}
-						return declared
+				const entries: ReadonlyArray<{
+					readonly key: string
+					readonly parse: Parser<unknown>
+					readonly optional: boolean
+				}> = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(keyList), [
+					(key: string) => {
+						const child = owned.properties[key]
+						if (child === undefined) return []
+						const optional = child.category === 'optional'
+						const inner = optional ? child.inner : child
+						return [
+							{
+								key,
+								parse: this.#parserAt(inner),
+								optional,
+							},
+						]
 					},
+				])
+				const known = readValue(
+					() =>
+						collectMembers(
+							INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(entries), [
+								(entry: { readonly key: string }) => entry.key,
+							]),
+						),
 					'compileParser',
 					{
 						subject: 'object',
@@ -1212,14 +1139,13 @@ export class ContractCompiler<
 				// entry named '__proto__' takes a position like any other. Past the
 				// mask's width the collected-vocabulary form still answers.
 				const maskable = entries.length <= PRESENCE_MASK_LIMIT
-				const positions: Record<string, number> = INTRINSICS.create(null)
-				if (maskable) {
-					for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
-						const entry = entries[entryIndex]
-						if (entry === undefined) continue
-						positions[entry.key] = entryIndex
-					}
-				}
+				const positions = buildPositions(
+					maskable
+						? INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(entries), [
+								(entry: { readonly key: string }) => entry.key,
+							])
+						: [],
+				)
 				const extra = owned.additionalProperties
 				const additional =
 					extra === undefined || extra === false || extra === true
@@ -1245,21 +1171,12 @@ export class ContractCompiler<
 					// § Validation and contracts requires.
 					const outcome = attempt(() => {
 						const present = maskable ? undefined : collectMembers(keys)
-						let seen = 0
-						if (present === undefined) {
-							for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
-								const key = keys[keyIndex]
-								if (key === undefined) continue
-								if (!INTRINSICS.own(positions, key)) continue
-								const position = positions[key]
-								if (position !== undefined) seen |= 1 << position
-							}
-						}
+						const seen = present === undefined ? readPresence(keys, positions) : 0
 						// Honest typing: a null-prototype accumulator so an input own key
 						// literally named '__proto__' lands as an own data key instead of
 						// mutating the prototype (same pattern as `pickOf`).
-						const result: Record<string, unknown> = INTRINSICS.create(null)
-						for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+						const selected: Array<readonly [string, unknown]> = []
+						for (const entryIndex of iterateIndices(() => entries.length)) {
 							const entry = entries[entryIndex]
 							if (entry === undefined) continue
 							const absent =
@@ -1277,23 +1194,30 @@ export class ContractCompiler<
 							}
 							const parsed = entry.parse(raw)
 							if (parsed === undefined) return undefined
-							result[entry.key] = parsed
+							selected[selected.length] = [entry.key, parsed]
 						}
 						if (open) {
-							for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+							for (const keyIndex of iterateIndices(() => keys.length)) {
 								const key = keys[keyIndex]
 								if (key === undefined) continue
 								if (matchesMember(known, key)) continue
 								if (additional === undefined) {
-									result[key] = record[key]
+									selected[selected.length] = [key, record[key]]
 								} else {
 									const parsed = additional(record[key])
 									if (parsed === undefined) return undefined
-									result[key] = parsed
+									selected[selected.length] = [key, parsed]
 								}
 							}
 						}
-						return result
+						return INTRINSICS.rebase(
+							INTRINSICS.record<unknown>({
+								[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+									selected,
+								]),
+							}),
+							null,
+						)
 					})
 					if (outcome.success) return outcome.value
 					if (isContractError(outcome.error)) throw outcome.error
@@ -1307,15 +1231,20 @@ export class ContractCompiler<
 				}
 			}
 			case 'union': {
-				const variants: Array<{ parse: Parser<unknown>; guard: Guard<unknown> }> = []
-				for (let index2 = 0; index2 < owned.variants.length; index2 += 1) {
-					const variant = owned.variants[index2]
-					if (variant === undefined) continue
-					variants[variants.length] = {
-						parse: this.#parserAt(variant),
-						guard: this.#guardAt(variant),
-					}
-				}
+				const variants: ReadonlyArray<{
+					readonly parse: Parser<unknown>
+					readonly guard: Guard<unknown>
+				}> = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(owned.variants), [
+					(variant: ContractShape | undefined) =>
+						variant === undefined
+							? []
+							: [
+									{
+										parse: this.#parserAt(variant),
+										guard: this.#guardAt(variant),
+									},
+								],
+				])
 				// `oneOf` exactly-one semantics (documented on `oneOfShape`): judged on
 				// the RAW input's guard matches only — no coercion fallback. Exactly one
 				// variant's guard must accept the raw value; that variant's parser then
@@ -1329,15 +1258,12 @@ export class ContractCompiler<
 						// Indexed, not `filter`: an array prototype method decides how many
 						// variants matched, and a substitute answering a rigged list decides
 						// what this parser publishes.
-						let matched = 0
-						let only: { parse: Parser<unknown>; guard: Guard<unknown> } | undefined
-						for (let index2 = 0; index2 < variants.length; index2 += 1) {
-							const variant = variants[index2]
-							if (variant === undefined || !variant.guard(value)) continue
-							matched += 1
-							if (matched === 1) only = variant
-						}
-						return matched === 1 && only !== undefined ? only.parse(value) : undefined
+						const matching: ReadonlyArray<{ readonly parse: Parser<unknown> }> =
+							INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(variants), [
+								(variant: { readonly guard: Guard<unknown> }) => variant.guard(value),
+							])
+						const only = matching[0]
+						return matching.length === 1 && only !== undefined ? only.parse(value) : undefined
 					}
 				}
 				return (value) => {
@@ -1345,14 +1271,14 @@ export class ContractCompiler<
 					// parser (`.claude/rules/patterns.md` § Validation and contracts): a
 					// value already valid against ANY variant's guard is returned
 					// unchanged, so an earlier variant's coercion never overwrites it.
-					for (let variantIndex = 0; variantIndex < variants.length; variantIndex += 1) {
+					for (const variantIndex of iterateIndices(() => variants.length)) {
 						const variant = variants[variantIndex]
 						if (variant === undefined) continue
 						if (variant.guard(value)) return value
 					}
 					// Coercion pass: no variant matched as-is, so parse-then-guard,
 					// first variant that both parses and guards wins.
-					for (let variantIndex = 0; variantIndex < variants.length; variantIndex += 1) {
+					for (const variantIndex of iterateIndices(() => variants.length)) {
 						const variant = variants[variantIndex]
 						if (variant === undefined) continue
 						const parsed = variant.parse(value)
@@ -1380,7 +1306,7 @@ export class ContractCompiler<
 		const ready = this.#auditor
 		if (ready !== undefined) return ready
 		this.#prepare()
-		for (let step = 0; step < this.#order.length; step += 1) {
+		for (const step of iterateIndices(() => this.#order.length)) {
 			const index = this.#order[step]
 			if (index === undefined) continue
 			const plan = this.#auditOf(index)
@@ -1503,7 +1429,7 @@ export class ContractCompiler<
 						)
 					}
 					const faults: AuditFault[] = []
-					for (let entryIndex = 0; entryIndex < entries.value.entries.length; entryIndex += 1) {
+					for (const entryIndex of iterateIndices(() => entries.value.entries.length)) {
 						if (faults.length >= FAULT_LIMIT) break
 						appendEntries(
 							faults,
@@ -1515,27 +1441,28 @@ export class ContractCompiler<
 				}
 			}
 			case 'object': {
-				const entries: Array<{
-					key: string
-					audit: (value: unknown, path: readonly string[]) => readonly AuditFault[]
-					optional: boolean
-					kind: FaultKind
-				}> = []
 				const declaredKeys = INTRINSICS.keys(owned.properties)
-				for (let keyIndex = 0; keyIndex < declaredKeys.length; keyIndex += 1) {
-					const key = declaredKeys[keyIndex]
-					if (key === undefined) continue
-					const child = owned.properties[key]
-					if (child === undefined) continue
-					const optional = child.category === 'optional'
-					const inner = optional ? child.inner : child
-					entries[entries.length] = {
-						key,
-						audit: this.#auditAt(inner),
-						optional,
-						kind: shapeToKind(inner),
-					}
-				}
+				const entries: ReadonlyArray<{
+					readonly key: string
+					readonly audit: (value: unknown, path: readonly string[]) => readonly AuditFault[]
+					readonly optional: boolean
+					readonly kind: FaultKind
+				}> = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(declaredKeys), [
+					(key: string) => {
+						const child = owned.properties[key]
+						if (child === undefined) return []
+						const optional = child.category === 'optional'
+						const inner = optional ? child.inner : child
+						return [
+							{
+								key,
+								audit: this.#auditAt(inner),
+								optional,
+								kind: shapeToKind(inner),
+							},
+						]
+					},
+				])
 				const extra = owned.additionalProperties
 				const closed = extra === undefined || extra === false
 				const additional = closed || extra === true ? undefined : this.#auditAt(extra)
@@ -1554,14 +1481,13 @@ export class ContractCompiler<
 				const planned = attempt(() => collectMembers(declaredKeys))
 				const declared = planned.success ? planned.value : undefined
 				const maskable = entries.length <= PRESENCE_MASK_LIMIT
-				const positions: Record<string, number> = INTRINSICS.create(null)
-				if (maskable) {
-					for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
-						const entry = entries[entryIndex]
-						if (entry === undefined) continue
-						positions[entry.key] = entryIndex
-					}
-				}
+				const positions = buildPositions(
+					maskable
+						? INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(entries), [
+								(entry: { readonly key: string }) => entry.key,
+							])
+						: [],
+				)
 				return (value, path) => {
 					if (isObject(value)) {
 						readValue(() => INTRINSICS.reflect.prototype(value), 'compileAuditor', {
@@ -1587,17 +1513,8 @@ export class ContractCompiler<
 					const outcome = attempt(() => {
 						const present = maskable ? undefined : collectMembers(keys)
 						const vocabulary = declared ?? collectMembers(declaredKeys)
-						let seen = 0
-						if (present === undefined) {
-							for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
-								const key = keys[keyIndex]
-								if (key === undefined) continue
-								if (!INTRINSICS.own(positions, key)) continue
-								const position = positions[key]
-								if (position !== undefined) seen |= 1 << position
-							}
-						}
-						for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+						const seen = present === undefined ? readPresence(keys, positions) : 0
+						for (const entryIndex of iterateIndices(() => entries.length)) {
 							const entry = entries[entryIndex]
 							if (entry === undefined) continue
 							if (faults.length >= FAULT_LIMIT) return
@@ -1617,7 +1534,7 @@ export class ContractCompiler<
 							}
 							appendEntries(faults, entry.audit(record[entry.key], pathOf(path, entry.key)))
 						}
-						for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+						for (const keyIndex of iterateIndices(() => keys.length)) {
 							const key = keys[keyIndex]
 							if (key === undefined) continue
 							if (faults.length >= FAULT_LIMIT) return
@@ -1649,18 +1566,16 @@ export class ContractCompiler<
 				}
 			}
 			case 'union': {
-				const plans: Array<(value: unknown, path: readonly string[]) => readonly AuditFault[]> = []
-				for (let index2 = 0; index2 < owned.variants.length; index2 += 1) {
-					const variant = owned.variants[index2]
-					if (variant === undefined) continue
-					plans[plans.length] = this.#auditAt(variant)
-				}
+				const plans: Array<(value: unknown, path: readonly string[]) => readonly AuditFault[]> =
+					INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(owned.variants), [
+						(variant: ContractShape | undefined) =>
+							variant === undefined ? [] : [this.#auditAt(variant)],
+					])
 				const exclusive = owned.mode === 'oneOf'
 				const count = owned.variants.length
 				return (value, path) => {
 					const perVariant: Array<readonly AuditFault[]> = []
-					let matched = 0
-					for (let index2 = 0; index2 < plans.length; index2 += 1) {
+					for (const index2 of iterateIndices(() => plans.length)) {
 						const plan = plans[index2]
 						if (plan === undefined) continue
 						const variantFaults = plan(value, path)
@@ -1673,10 +1588,13 @@ export class ContractCompiler<
 							// refusal for a value `is` answers `true` for. A `oneOf` verdict is
 							// the match count over every variant, so it reads all of them.
 							if (!exclusive) return []
-							matched += 1
 						}
 						perVariant[perVariant.length] = variantFaults
 					}
+					const matched: number = INTRINSICS.reflect.apply(INTRINSICS.fold, perVariant, [
+						(total: number, faults: readonly AuditFault[]) => total + (faults.length === 0 ? 1 : 0),
+						0,
+					])
 					if (exclusive) {
 						if (matched === 1) return []
 						if (matched > 1) return [{ reason: 'oneOf', path, matched }]
@@ -1714,7 +1632,7 @@ export class ContractCompiler<
 		if (ready !== undefined) return ready
 		this.#prepare()
 		if (this.#unions()) this.#buildGuard()
-		for (let step = 0; step < this.#order.length; step += 1) {
+		for (const step of iterateIndices(() => this.#order.length)) {
 			const index = this.#order[step]
 			if (index === undefined) continue
 			const plan = this.#reportOf(index)
@@ -1810,7 +1728,7 @@ export class ContractCompiler<
 						return [{ reason: 'type', path, expected: 'array', received: preview(value) }]
 					}
 					const faults: Fault[] = []
-					for (let entryIndex = 0; entryIndex < entries.value.entries.length; entryIndex += 1) {
+					for (const entryIndex of iterateIndices(() => entries.value.entries.length)) {
 						if (faults.length >= FAULT_LIMIT) break
 						appendEntries(
 							faults,
@@ -1822,29 +1740,33 @@ export class ContractCompiler<
 				}
 			}
 			case 'object': {
-				const entries: Array<{
-					key: string
-					report: (value: unknown, path: readonly string[]) => readonly Fault[]
-					optional: boolean
-					kind: FaultKind
-				}> = []
-				const names: string[] = []
 				const keyList = INTRINSICS.keys(owned.properties)
-				for (let keyIndex = 0; keyIndex < keyList.length; keyIndex += 1) {
-					const key = keyList[keyIndex]
-					if (key === undefined) continue
-					const child = owned.properties[key]
-					if (child === undefined) continue
-					const optional = child.category === 'optional'
-					const inner = optional ? child.inner : child
-					entries[entries.length] = {
-						key,
-						report: this.#reportAt(inner),
-						optional,
-						kind: shapeToKind(inner),
-					}
-					names[names.length] = key
-				}
+				const entries: ReadonlyArray<{
+					readonly key: string
+					readonly report: (value: unknown, path: readonly string[]) => readonly Fault[]
+					readonly optional: boolean
+					readonly kind: FaultKind
+				}> = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(keyList), [
+					(key: string) => {
+						const child = owned.properties[key]
+						if (child === undefined) return []
+						const optional = child.category === 'optional'
+						const inner = optional ? child.inner : child
+						return [
+							{
+								key,
+								report: this.#reportAt(inner),
+								optional,
+								kind: shapeToKind(inner),
+							},
+						]
+					},
+				])
+				const names: readonly string[] = INTRINSICS.reflect.apply(
+					INTRINSICS.project,
+					readIndexView(entries),
+					[(entry: (typeof entries)[number]) => entry.key],
+				)
 				const extra = owned.additionalProperties
 				const tail =
 					extra === undefined || extra === true || extra === false
@@ -1867,14 +1789,13 @@ export class ContractCompiler<
 				const planned = attempt(() => collectMembers(names))
 				const known = planned.success ? planned.value : undefined
 				const maskable = entries.length <= PRESENCE_MASK_LIMIT
-				const positions: Record<string, number> = INTRINSICS.create(null)
-				if (maskable) {
-					for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
-						const entry = entries[entryIndex]
-						if (entry === undefined) continue
-						positions[entry.key] = entryIndex
-					}
-				}
+				const positions = buildPositions(
+					maskable
+						? INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(entries), [
+								(entry: { readonly key: string }) => entry.key,
+							])
+						: [],
+				)
 				return (value, path) => {
 					if (!isRecord(value)) {
 						return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
@@ -1893,17 +1814,8 @@ export class ContractCompiler<
 					const outcome = attempt(() => {
 						const present = maskable ? undefined : collectMembers(keys)
 						const vocabulary = known ?? collectMembers(names)
-						let seen = 0
-						if (present === undefined) {
-							for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
-								const key = keys[keyIndex]
-								if (key === undefined) continue
-								if (!INTRINSICS.own(positions, key)) continue
-								const position = positions[key]
-								if (position !== undefined) seen |= 1 << position
-							}
-						}
-						for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+						const seen = present === undefined ? readPresence(keys, positions) : 0
+						for (const entryIndex of iterateIndices(() => entries.length)) {
 							const entry = entries[entryIndex]
 							if (entry === undefined) continue
 							if (faults.length >= FAULT_LIMIT) return
@@ -1944,7 +1856,7 @@ export class ContractCompiler<
 						// report, its documented "parse will succeed" signal, for a value
 						// `parse` refused as unreadable.
 						if (open) {
-							for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+							for (const keyIndex of iterateIndices(() => keys.length)) {
 								const key = keys[keyIndex]
 								if (key === undefined) continue
 								if (faults.length >= FAULT_LIMIT) return
@@ -1963,19 +1875,34 @@ export class ContractCompiler<
 				}
 			}
 			case 'union': {
-				const plans: Array<(value: unknown, path: readonly string[]) => readonly Fault[]> = []
-				const guards: Array<Guard<unknown>> = []
-				for (let index2 = 0; index2 < owned.variants.length; index2 += 1) {
-					const variant = owned.variants[index2]
-					if (variant === undefined) continue
-					plans[plans.length] = this.#reportAt(variant)
-					guards[guards.length] = this.#guardAt(variant)
-				}
+				const variants: ReadonlyArray<{
+					readonly report: (value: unknown, path: readonly string[]) => readonly Fault[]
+					readonly guard: Guard<unknown>
+				}> = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(owned.variants), [
+					(variant: ContractShape | undefined) =>
+						variant === undefined
+							? []
+							: [
+									{
+										report: this.#reportAt(variant),
+										guard: this.#guardAt(variant),
+									},
+								],
+				])
+				const plans: ReadonlyArray<(value: unknown, path: readonly string[]) => readonly Fault[]> =
+					INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(variants), [
+						(variant: (typeof variants)[number]) => variant.report,
+					])
+				const guards: ReadonlyArray<Guard<unknown>> = INTRINSICS.reflect.apply(
+					INTRINSICS.project,
+					readIndexView(variants),
+					[(variant: (typeof variants)[number]) => variant.guard],
+				)
 				const exclusive = owned.mode === 'oneOf'
 				const count = owned.variants.length
 				return (value, path) => {
 					const perVariant: Array<readonly Fault[]> = []
-					for (let index2 = 0; index2 < plans.length; index2 += 1) {
+					for (const index2 of iterateIndices(() => plans.length)) {
 						const plan = plans[index2]
 						if (plan === undefined) continue
 						const variantFaults = plan(value, path)
@@ -1989,11 +1916,10 @@ export class ContractCompiler<
 					}
 					const closest = selectClosestFaults(perVariant)
 					if (exclusive) {
-						let matched = 0
-						for (let index2 = 0; index2 < guards.length; index2 += 1) {
-							const guard = guards[index2]
-							if (guard !== undefined && guard(value)) matched += 1
-						}
+						const matched: number = INTRINSICS.reflect.apply(INTRINSICS.fold, guards, [
+							(total: number, guard: Guard<unknown>) => total + (guard(value) ? 1 : 0),
+							0,
+						])
 						if (matched === 1) return []
 						if (matched === 0) {
 							const report: Fault[] = [{ reason: 'oneOf', path, matched: 0 }]
@@ -2030,7 +1956,7 @@ export class ContractCompiler<
 		if (ready !== undefined) return ready
 		this.#prepare()
 		if (this.#unions()) this.#buildGuard()
-		for (let step = 0; step < this.#order.length; step += 1) {
+		for (const step of iterateIndices(() => this.#order.length)) {
 			const index = this.#order[step]
 			if (index === undefined) continue
 			this.#seeds[index] = this.#seedOf(index)
@@ -2074,10 +2000,14 @@ export class ContractCompiler<
 				const pattern = owned.pattern
 				return (random) => {
 					const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
-					let value = ''
-					for (let step = 0; step < length; step += 1) {
-						value += alphabet[INTRINSICS.floor(drawRandom(random, 'string') * alphabet.length)]
-					}
+					const characters = INTRINSICS.from(
+						iterateIndices(() => length),
+						() =>
+							INTRINSICS.text(
+								alphabet[INTRINSICS.floor(drawRandom(random, 'string') * alphabet.length)],
+							),
+					)
+					const value: string = INTRINSICS.reflect.apply(INTRINSICS.join, characters, [''])
 					if (pattern !== undefined && !matchOf(pattern)(value)) {
 						const limit = readPatternSource(pattern)
 						throw new ContractError(
@@ -2119,10 +2049,14 @@ export class ContractCompiler<
 					if (pick === 2) return INTRINSICS.floor(drawRandom(random, 'json') * 1000)
 					if (pick === 3) {
 						const alphabet = 'abcdefghijklmnopqrstuvwxyz'
-						let value = ''
-						for (let step = 0; step < 6; step += 1) {
-							value += alphabet[INTRINSICS.floor(drawRandom(random, 'json') * alphabet.length)]
-						}
+						const characters = INTRINSICS.from(
+							iterateIndices(() => 6),
+							() =>
+								INTRINSICS.text(
+									alphabet[INTRINSICS.floor(drawRandom(random, 'json') * alphabet.length)],
+								),
+						)
+						const value: string = INTRINSICS.reflect.apply(INTRINSICS.join, characters, [''])
 						return value
 					}
 					return { value: INTRINSICS.floor(drawRandom(random, 'json') * 1000) }
@@ -2145,32 +2079,33 @@ export class ContractCompiler<
 				const hi = owned.max ?? INTRINSICS.max(lo, 3)
 				return (random) => {
 					const length = INTRINSICS.floor(drawRandom(random, 'array') * (hi - lo + 1)) + lo
-					const result: unknown[] = []
-					for (let step = 0; step < length; step += 1) {
-						result[result.length] = item(random)
-					}
-					return result
+					return INTRINSICS.from(
+						iterateIndices(() => length),
+						() => item(random),
+					)
 				}
 			}
 			case 'object': {
-				const entries: Array<{
-					key: string
-					seed: (random: RandomFunction) => unknown
-					optional: boolean
-				}> = []
 				const keyList = INTRINSICS.keys(owned.properties)
-				for (let keyIndex = 0; keyIndex < keyList.length; keyIndex += 1) {
-					const key = keyList[keyIndex]
-					if (key === undefined) continue
-					const child = owned.properties[key]
-					if (child === undefined) continue
-					const optional = child.category === 'optional'
-					entries[entries.length] = {
-						key,
-						seed: this.#seedAt(optional ? child.inner : child),
-						optional,
-					}
-				}
+				const entries: ReadonlyArray<{
+					readonly key: string
+					readonly seed: (random: RandomFunction) => unknown
+					readonly optional: boolean
+				}> = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(keyList), [
+					(key: string) => {
+						const child = owned.properties[key]
+						if (child === undefined) return []
+						const optional = child.category === 'optional'
+						const inner = optional ? child.inner : child
+						return [
+							{
+								key,
+								seed: this.#seedAt(inner),
+								optional,
+							},
+						]
+					},
+				])
 				const extra = owned.additionalProperties
 				const tail =
 					extra === undefined || extra === true || extra === false ? undefined : this.#seedAt(extra)
@@ -2179,44 +2114,49 @@ export class ContractCompiler<
 					// guard's and parser's null-prototype property views it carries the normal
 					// object prototype — `defineProperty` (never assignment) still lands a
 					// '__proto__' key as an own data key rather than mutating that prototype.
-					const result: Record<string, unknown> = {}
-					for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
-						const entry = entries[entryIndex]
-						if (entry === undefined) continue
-						if (entry.optional && drawRandom(random, 'object') < 0.3) continue
-						INTRINSICS.define(result, entry.key, {
-							value: entry.seed(random),
-							enumerable: true,
-							configurable: true,
-							writable: true,
-						})
-					}
-					// An open object (additionalProperties is a shape, not a boolean) also
-					// generates synthetic extra entries so the shape does not trivially
-					// generate as `{}` — skip any collision with a declared property name.
-					if (tail !== undefined) {
-						const count = 1 + INTRINSICS.floor(drawRandom(random, 'object') * 2)
-						for (let step = 0; step < count; step += 1) {
+					const pairs = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(entries), [
+						(entry: (typeof entries)[number]) =>
+							entry.optional && drawRandom(random, 'object') < 0.3
+								? []
+								: [[entry.key, entry.seed(random)]],
+					])
+					const declared = INTRINSICS.record<unknown>({
+						[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+							pairs,
+						]),
+					})
+					const count =
+						tail === undefined ? 0 : 1 + INTRINSICS.floor(drawRandom(random, 'object') * 2)
+					const extras = INTRINSICS.from(
+						iterateIndices(() => count),
+						(step) => {
 							const key = `key${step}`
-							if (INTRINSICS.own(result, key)) continue
-							INTRINSICS.define(result, key, {
-								value: tail(random),
-								enumerable: true,
-								configurable: true,
-								writable: true,
-							})
-						}
-					}
+							return INTRINSICS.own(declared, key) || tail === undefined
+								? undefined
+								: [key, tail(random)]
+						},
+					)
+					const selected = INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(extras), [
+						(entry: unknown) => entry !== undefined,
+					])
+					const additional = INTRINSICS.record<unknown>({
+						[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+							selected,
+						]),
+					})
+					const result = { ...declared, ...additional }
 					return result
 				}
 			}
 			case 'union': {
-				const plans: Array<(random: RandomFunction) => unknown> = []
-				for (let index2 = 0; index2 < owned.variants.length; index2 += 1) {
-					const variant = owned.variants[index2]
-					if (variant === undefined) continue
-					plans[plans.length] = this.#seedAt(variant)
-				}
+				const plans: Array<(random: RandomFunction) => unknown> = INTRINSICS.reflect.apply(
+					INTRINSICS.expand,
+					readIndexView(owned.variants),
+					[
+						(variant: ContractShape | undefined) =>
+							variant === undefined ? [] : [this.#seedAt(variant)],
+					],
+				)
 				const count = owned.variants.length
 				const guard = count === 0 ? undefined : this.#guardAt(owned)
 				const attempts = INTRINSICS.max(GENERATION_ATTEMPT_LIMIT, count)
@@ -2228,7 +2168,7 @@ export class ContractCompiler<
 						})
 					}
 					const start = INTRINSICS.floor(drawRandom(random, 'union') * count)
-					for (let attemptIndex = 0; attemptIndex < attempts; attemptIndex += 1) {
+					for (const attemptIndex of iterateIndices(() => attempts)) {
 						const plan = plans[(start + attemptIndex) % count]
 						if (plan === undefined) continue
 						const outcome = attempt(() => plan(random))

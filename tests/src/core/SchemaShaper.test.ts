@@ -15,10 +15,36 @@ import {
 	schemaToShape,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { captureContractError } from '../../setup.js'
+import { polluteArrayConstruction, captureContractError } from '../../setup.js'
 import { SchemaShaper } from '../../../src/core/SchemaShaper.js'
 
 describe('SchemaShaper — type arrays', () => {
+	it('keeps HEAD schema alternatives under polluted array construction', () => {
+		const schemas: ReadonlyArray<Readonly<Record<string, unknown>>> = [
+			{ enum: ['x', 'x', 1] },
+			{ oneOf: [{ type: 'string' }, { type: 'integer' }] },
+			{ anyOf: [{ type: 'string' }, { type: 'integer' }] },
+			{ type: ['string', 'null'] },
+			{ type: 'object', properties: { age: { type: 'integer' } }, required: ['age'] },
+		]
+		const actual = schemas.map((schema) =>
+			polluteArrayConstruction(() => compileSchema(new SchemaShaper(schema).shape())),
+		)
+		// HEAD SchemaShaper.ts:157 and :324 retain enum/type alternatives and declared properties.
+		expect(actual).toEqual([
+			{ enum: ['x', 1] },
+			{ oneOf: [{ type: 'string' }, { type: 'integer' }] },
+			{ anyOf: [{ type: 'string' }, { type: 'integer' }] },
+			{ anyOf: [{ type: 'string' }, { type: 'null' }] },
+			{
+				type: 'object',
+				properties: { age: { type: 'integer' } },
+				required: ['age'],
+				additionalProperties: true,
+			},
+		])
+	})
+
 	it('accepts array and string edits and refuses numeric edits', () => {
 		const schema: Record<string, unknown> = {
 			type: 'object',
@@ -145,12 +171,14 @@ describe('SchemaShaper — type arrays', () => {
 	)
 
 	it('does not spend structural depth on a singleton type array', () => {
-		let schema: Record<string, unknown> = { type: ['array'], items: { type: 'string' } }
-		let bare: JSONSchema = { type: 'array', items: { type: 'string' } }
-		for (let depth = 0; depth < INFER_DEPTH_LIMIT - 2; depth += 1) {
-			schema = { type: 'array', items: schema }
-			bare = { type: 'array', items: bare }
-		}
+		const schema = Array.from({ length: INFER_DEPTH_LIMIT - 2 }).reduce<Record<string, unknown>>(
+			(node) => ({ type: 'array', items: node }),
+			{ type: ['array'], items: { type: 'string' } },
+		)
+		const bare = Array.from({ length: INFER_DEPTH_LIMIT - 2 }).reduce<JSONSchema>(
+			(node) => ({ type: 'array', items: node }),
+			{ type: 'array', items: { type: 'string' } },
+		)
 		expect(schemaToShape(schema)).toEqual(schemaToShape(bare))
 	})
 

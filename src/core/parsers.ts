@@ -14,6 +14,7 @@ import {
 	collectMembers,
 	contain,
 	holds,
+	iterateIndices,
 	matchesJSONValue,
 	matchesMember,
 	readArrayEntries,
@@ -239,16 +240,12 @@ export function parseArray<T = unknown>(
 	const entries = readArrayEntries(value)
 	if (!entries.success || !entries.value.dense) return undefined
 	if (
-		!holds(() => {
-			// Indexed: the snapshot is an array this package built, and walking it
-			// through `Array.prototype[Symbol.iterator]` would let a replaced iterator
-			// decide which elements this parser ever guards.
-			const collected = entries.value.entries
-			for (let index = 0; index < collected.length; index += 1) {
-				if (!guard(collected[index])) return false
-			}
-			return true
-		})
+		!holds(
+			() =>
+				INTRINSICS.reflect.apply(INTRINSICS.find, entries.value.entries, [
+					(entry: unknown) => !guard(entry),
+				]) === -1,
+		)
 	) {
 		return undefined
 	}
@@ -334,6 +331,37 @@ export function parseEnum(
 	if (!holds(() => matchesMember(collectMembers(outcome.value.entries), value))) return undefined
 	return isLiteralValue(value) ? value : undefined
 }
+
+/**
+ * Parses indexed enum members, ending after the first undefined result.
+ *
+ * @param values - The source array, read by index
+ * @param allowed - The accepted literal vocabulary
+ * @returns Parsed members, including the first invalid member's undefined result
+ *
+ * @example
+ * ```ts
+ * Array.from(parseEnumValues(['a', 'x', 'b'], ['a', 'b'])) // ['a', undefined]
+ * ```
+ */
+export function* parseEnumValues<const T extends LiteralValue>(
+	values: readonly unknown[],
+	allowed: readonly T[],
+): Generator<T | undefined, void, unknown> {
+	for (const index of iterateIndices(() => values.length)) {
+		const member = parseEnum(values[index], allowed)
+		yield member
+		if (member === undefined) return
+	}
+}
+
+for (const key of ['next', 'return', 'throw', Symbol.iterator]) {
+	INTRINSICS.define(parseEnumValues.prototype, key, {
+		value: INTRINSICS.reflect.read(parseEnumValues.prototype, key),
+	})
+}
+INTRINSICS.freeze(parseEnumValues.prototype)
+INTRINSICS.freeze(parseEnumValues)
 
 // === Record-field parsers
 

@@ -8,6 +8,7 @@ import type { SpawnSyncReturns } from 'node:child_process'
 import type { TestContext } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import {
+	cpSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -30,7 +31,11 @@ const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 // compiler majors this toolchain supports, and its in-process API is not. It is
 // resolved from the workspace under proof, so a consumer of the packed artifact is
 // checked by the same compiler that workspace's own `check` script runs.
-const TSC = createRequire(join(ROOT, 'package.json')).resolve('typescript/bin/tsc')
+const TSC = join(
+	dirname(createRequire(join(ROOT, 'package.json')).resolve('typescript/package.json')),
+	'bin',
+	'tsc',
+)
 // Windows needs a shell to launch a `.cmd`: Node refuses one directly since the
 // batch-argument hardening, and `spawnSync` returns `EINVAL` with a null status
 // rather than an exit code a caller can read. Every following argument is a literal or
@@ -199,14 +204,18 @@ function isList(value: unknown): value is readonly unknown[] {
 function isPackageTarget(target: string): boolean {
 	if (!target.startsWith('./')) return false
 	for (const segment of target.slice(2).split(/[\\/]/u)) {
-		let decoded = segment
-		try {
-			decoded = decodeURIComponent(segment)
-		} catch {}
-		const normalized = decoded.toLowerCase()
+		const normalized = decodeSegment(segment).toLowerCase()
 		if (normalized === '.' || normalized === '..' || normalized === 'node_modules') return false
 	}
 	return true
+}
+
+function decodeSegment(segment: string): string {
+	try {
+		return decodeURIComponent(segment)
+	} catch {
+		return segment
+	}
 }
 
 function readJson(path: string): unknown {
@@ -290,11 +299,16 @@ function matchesFile(path: string): boolean {
 // the containing condition or fallback list unresolved, so the walk continues.
 function targetToDeclaration(target: string, installed: string): string | undefined {
 	if (!isPackageTarget(target)) return undefined
-	let declaration = target
-	if (target.endsWith('.cjs')) declaration = `${target.slice(0, -4)}.d.cts`
-	else if (target.endsWith('.mjs')) declaration = `${target.slice(0, -4)}.d.mts`
-	else if (target.endsWith('.js')) declaration = `${target.slice(0, -3)}.d.ts`
-	else if (!isDeclaration(target)) return undefined
+	const declaration = target.endsWith('.cjs')
+		? `${target.slice(0, -4)}.d.cts`
+		: target.endsWith('.mjs')
+			? `${target.slice(0, -4)}.d.mts`
+			: target.endsWith('.js')
+				? `${target.slice(0, -3)}.d.ts`
+				: isDeclaration(target)
+					? target
+					: undefined
+	if (declaration === undefined) return undefined
 	return matchesFile(join(installed, declaration)) ? declaration : undefined
 }
 
@@ -326,22 +340,22 @@ function resolveDeclaration(
 // physical nested manifest starts a scope even when it omits `type` or cannot be
 // parsed. A directory at that spelling is not a manifest, so the walk continues.
 function readPackageType(installed: string, target: string): unknown {
-	let directory = dirname(join(installed, target))
-	while (true) {
-		const path = join(directory, 'package.json')
-		if (matchesFile(path)) {
-			try {
-				const manifest = readJson(path)
-				return isRecord(manifest) ? manifest.type : undefined
-			} catch {
-				return undefined
-			}
+	return readDirectoryType(installed, dirname(join(installed, target)))
+}
+
+function readDirectoryType(installed: string, directory: string): unknown {
+	const path = join(directory, 'package.json')
+	if (matchesFile(path)) {
+		try {
+			const manifest = readJson(path)
+			return isRecord(manifest) ? manifest.type : undefined
+		} catch {
+			return undefined
 		}
-		if (directory === installed) return undefined
-		const parent = dirname(directory)
-		if (parent === directory) return undefined
-		directory = parent
 	}
+	if (directory === installed) return undefined
+	const parent = dirname(directory)
+	return parent === directory ? undefined : readDirectoryType(installed, parent)
 }
 
 function resolvesBrowser(entry: unknown): boolean {
@@ -777,6 +791,94 @@ function requireStage(context: TestContext): Stage {
 }
 
 describe('installed package consumer', () => {
+	it('recognizes branded errors across formats and physical copies [requires the registry]', (context) => {
+		const stage = requireStage(context)
+		const name = readManifestName(join(stage.installed, 'package.json'))
+		const duplicate = join(stage.consumer, 'duplicate')
+		cpSync(stage.installed, duplicate, { recursive: true })
+		const driver = join(stage.consumer, 'errors.mjs')
+		writeFile(
+			driver,
+			`import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
+import { join } from 'node:path'
+const require = createRequire(import.meta.url)
+const imported = await import(process.argv[2])
+const required = require(process.argv[2])
+const duplicate = process.argv[3]
+const manifest = require(join(duplicate, 'package.json'))
+const copied = await import(pathToFileURL(join(duplicate, manifest.exports['.'].import.default)).href)
+const copies = [imported, required, copied]
+assert.equal(new Set(copies.map((copy) => copy.ContractError)).size, copies.length)
+for (const [index, source] of copies.entries()) {
+	for (const [other, target] of copies.entries()) {
+		if (index !== other) assert.notEqual(source.ContractError, target.ContractError)
+		const error = new source.ContractError('cross-copy', { code: 'structure' })
+		assert.equal(target.isContractError(error), true)
+		class DetailedError extends source.ContractError { name = 'DetailedError' }
+		assert.equal(target.isContractError(new DetailedError('subclass', { code: 'structure' })), true)
+		class ErrorContext {
+			path = ['properties', 'age']
+			shape = 'number'
+			limit = Number.POSITIVE_INFINITY
+			received = 'age'
+		}
+		const instance = new ErrorContext()
+		const instanceError = new source.ContractError('class context', {
+			code: 'structure', context: instance, cause: instance,
+		})
+		assert.equal(instanceError.context, instance)
+		assert.equal(instanceError.cause, instance)
+		assert.equal(target.isContractError(instanceError), true)
+		const callable = Object.assign(() => { throw new Error('context must not be invoked') }, {
+			path: ['properties', 'age'], shape: 'number', limit: -1.5, received: 'age',
+		})
+		const callableError = new source.ContractError('callable context', {
+			code: 'structure', context: callable, cause: callable,
+		})
+		assert.equal(callableError.context, callable)
+		assert.equal(callableError.cause, callable)
+		assert.equal(target.isContractError(callableError), true)
+		assert.equal(Reflect.set(callable, 'received', 42), true)
+		assert.equal(target.isContractError(callableError), false)
+		const path = Object.defineProperty(['age'], Symbol.iterator, {
+			get() { throw new Error('path iterator must not be read') },
+		})
+		const indexed = new source.ContractError('indexed path', {
+			code: 'structure', context: { path },
+		})
+		assert.equal(target.isContractError(indexed), true)
+		assert.equal(Reflect.set(path, '0', 42), true)
+		assert.equal(target.isContractError(indexed), false)
+		const inherited = new source.ContractError('inherited data', { code: 'structure' })
+		assert.equal(Reflect.deleteProperty(inherited, 'code'), true)
+		Object.setPrototypeOf(inherited, Object.create(source.ContractError.prototype, {
+			code: { value: 'structure' },
+		}))
+		assert.equal(target.isContractError(inherited), false)
+		const accessor = new source.ContractError('inherited getter', { code: 'structure' })
+		assert.equal(Reflect.deleteProperty(accessor, 'code'), true)
+		const reads = []
+		Object.setPrototypeOf(accessor, Object.create(source.ContractError.prototype, {
+			code: { get() { reads.push('code'); return 'structure' } },
+		}))
+		assert.equal(target.isContractError(accessor), false)
+		assert.deepEqual(reads, [])
+		assert.equal(target.isContractError(Object.assign(new Error('look-alike'), { code: 'structure' })), false)
+		assert.equal(target.isContractError(new Proxy(error, {})), false)
+		const plain = {}
+		Object.defineProperty(plain, Symbol.for('@orkestrel/contract.error'), { value: plain })
+		assert.equal(target.isContractError(plain), false)
+	}
+}
+`,
+		)
+		const result = runNode([driver, name, duplicate], stage.consumer)
+		expect(readOutput(result)).toBe('')
+		expect(result.status).toBe(0)
+	})
+
 	it('packs one archive and installs it in isolation [requires the registry]', (context) => {
 		const stage = requireStage(context)
 		expect(stage.archives).toHaveLength(1)

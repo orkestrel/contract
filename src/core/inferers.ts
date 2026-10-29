@@ -3,14 +3,12 @@ import { FORMAT_MAX_LENGTH, INFER_BREADTH_LIMIT, INTRINSICS } from './constants.
 import { ContractError } from './errors.js'
 import { isFiniteNumber, isRecord, isString } from './validators.js'
 import {
-	admitMember,
-	appendEntries,
+	readIndexView,
+	iterateIndices,
 	attempt,
 	canonicalStringify,
 	classifyFormat,
-	collectMembers,
 	contain,
-	matchesMember,
 	readArrayEntries,
 	readOptions,
 	readValue,
@@ -74,56 +72,67 @@ export function unifySchemas(schemas: readonly JSONSchema[]): JSONSchema {
 				if (!snapshot.value.dense) throw new INTRINSICS.error('unifySchemas: schemas must be dense')
 				const owned = snapshot.value.entries
 				if (owned.length === 0) return {}
-				// A key list plus a null-prototype table, walked by index — not a `Map`
-				// spread into `.sort().map()`. Every one of those is a caller-writable
-				// member on the path that decides the PUBLISHED union: an emptying
-				// `sort` truncated the answer and a substituted `map` replaced it
-				// wholesale, both without throwing.
-				const keys: string[] = []
-				const collected = collectMembers([])
-				const byKey: Record<string, JSONSchema> = INTRINSICS.create(null)
-				const unkeyed: JSONSchema[] = []
-				for (let index = 0; index < owned.length; index += 1) {
-					const schema = owned[index]
-					if (schema === undefined || !isRecord(schema)) {
-						throw new INTRINSICS.error('unifySchemas: schemas must be records')
-					}
-					const key = canonicalStringify(schema)
-					if (key === undefined) {
-						unkeyed[unkeyed.length] = schema
-						continue
-					}
-					if (matchesMember(collected, key)) continue
-					admitMember(collected, key)
-					keys[keys.length] = key
-					byKey[key] = schema
-				}
-				// Both literals always canonicalize; the explicit checks keep the
-				// subsumption total against `canonicalStringify`'s optional result.
+				const keyed = INTRINSICS.from(
+					iterateIndices(() => owned.length),
+					(index) => {
+						const schema = owned[index]
+						if (schema === undefined || !isRecord(schema)) {
+							throw new INTRINSICS.error('unifySchemas: schemas must be records')
+						}
+						return { key: canonicalStringify(schema), schema }
+					},
+				)
+				const encodable = INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(keyed), [
+					(entry: { readonly key: string | undefined }) => entry.key !== undefined,
+				])
+				const pairs = INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(encodable), [
+					(entry: { readonly key: string; readonly schema: JSONSchema }) => [
+						entry.key,
+						entry.schema,
+					],
+				])
+				const reversed = INTRINSICS.reflect.apply(INTRINSICS.flip, pairs, [])
+				const byKey = INTRINSICS.record<JSONSchema>({
+					[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+						reversed,
+					]),
+				})
 				const integerKey = canonicalStringify({ type: 'integer' })
 				const numberKey = canonicalStringify({ type: 'number' })
 				const subsumed =
 					integerKey !== undefined &&
 					numberKey !== undefined &&
-					matchesMember(collected, integerKey) &&
-					matchesMember(collected, numberKey)
+					INTRINSICS.own(byKey, integerKey) &&
+					INTRINSICS.own(byKey, numberKey)
 						? integerKey
 						: undefined
+				const keys = INTRINSICS.reflect.apply(
+					INTRINSICS.select,
+					readIndexView(INTRINSICS.keys(byKey)),
+					[(key: string) => key !== subsumed],
+				)
 				const ordered = sortValues(keys)
-				const members: JSONSchema[] = []
-				for (let index = 0; index < ordered.length; index += 1) {
-					const key = ordered[index]
-					if (key === undefined || key === subsumed) continue
-					const schema = byKey[key]
-					if (schema === undefined) continue
-					members[members.length] = schema
-				}
-				appendEntries(members, unkeyed)
+				const unkeyed: ReadonlyArray<{ readonly schema: JSONSchema }> = INTRINSICS.reflect.apply(
+					INTRINSICS.select,
+					readIndexView(keyed),
+					[(entry: { readonly key: string | undefined }) => entry.key === undefined],
+				)
+				const members = INTRINSICS.from(
+					iterateIndices(() => ordered.length + unkeyed.length),
+					(index) => {
+						const key = ordered[index]
+						return key === undefined ? unkeyed[index - ordered.length]?.schema : byKey[key]
+					},
+				)
 				if (members.length <= 1) {
 					const only = members[0]
 					return only ?? {}
 				}
-				return { anyOf: members }
+				return {
+					anyOf: INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(members), [
+						(schema: JSONSchema | undefined) => schema !== undefined,
+					]),
+				}
 			},
 			'unifySchemas',
 			{ subject: 'schemas' },
@@ -201,15 +210,14 @@ export function samplesToFormat(values: readonly unknown[]): SchemaFormat | unde
 					throw new INTRINSICS.error('samplesToFormat: values must be dense')
 				const owned = snapshot.value.entries
 				if (owned.length === 0) return undefined
-				let first: SchemaFormat | undefined
-				for (let index = 0; index < owned.length; index += 1) {
-					const value = owned[index]
-					if (!isString(value)) return undefined
-					const format = stringToFormat(value)
-					if (format === undefined) return undefined
-					if (index === 0) first = format
-					else if (format !== first) return undefined
-				}
+				const initial = owned[0]
+				const first = isString(initial) ? stringToFormat(initial) : undefined
+				if (first === undefined) return undefined
+				const mismatch = INTRINSICS.reflect.apply(INTRINSICS.some, owned, [
+					(value: unknown, index: number) =>
+						index > 0 && (!isString(value) || stringToFormat(value) !== first),
+				])
+				if (mismatch) return undefined
 				return first
 			},
 			'samplesToFormat',
@@ -268,43 +276,42 @@ export function inferPrimitiveEnum(
 					throw new INTRINSICS.error('inferPrimitiveEnum: values must be dense')
 				const owned = snapshot.value.entries
 				if (owned.length < 2) return undefined
-				let strings = 0
-				let numbers = 0
-				for (let index = 0; index < owned.length; index += 1) {
-					const value = owned[index]
-					if (isString(value)) strings += 1
-					else if (isFiniteNumber(value)) numbers += 1
-				}
-				const allString = strings === owned.length
-				const allNumber = !allString && numbers === owned.length
+				const allString = !INTRINSICS.reflect.apply(INTRINSICS.some, owned, [
+					(value: unknown) => !isString(value),
+				])
+				const allNumber =
+					!allString &&
+					!INTRINSICS.reflect.apply(INTRINSICS.some, owned, [
+						(value: unknown) => !isFiniteNumber(value),
+					])
 				if (!allString && !allNumber) return undefined
-				// A key list plus a null-prototype table, ordered through the captured
-				// sort: `Map` iteration, array spread, `.sort` and `.map` are four
-				// caller-writable dispatches deciding a published `enum`.
-				const keys: string[] = []
-				const collected = collectMembers([])
-				const byKey: Record<string, string | number> = INTRINSICS.create(null)
-				for (let index = 0; index < owned.length; index += 1) {
-					const value = owned[index]
-					if (!isString(value) && !isFiniteNumber(value)) continue
-					const key = canonicalStringify(value)
-					if (key === undefined) return undefined
-					if (!matchesMember(collected, key)) {
-						admitMember(collected, key)
-						keys[keys.length] = key
-					}
-					byKey[key] = value
+				const pairs = INTRINSICS.from(
+					iterateIndices(() => owned.length),
+					(index) => {
+						const value = owned[index]
+						return [canonicalStringify(value), value]
+					},
+				)
+				if (
+					INTRINSICS.reflect.apply(INTRINSICS.some, pairs, [
+						(pair: readonly unknown[]) => pair[0] === undefined,
+					])
+				) {
+					return undefined
 				}
+				const byKey = INTRINSICS.record<string | number>({
+					[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+						pairs,
+					]),
+				})
+				const keys = INTRINSICS.keys(byKey)
 				if (keys.length >= owned.length || keys.length > limit) return undefined
 				const ordered = sortValues(keys)
-				const population: Array<string | number> = []
-				for (let index = 0; index < ordered.length; index += 1) {
-					const key = ordered[index]
-					if (key === undefined) continue
-					const value = byKey[key]
-					if (value === undefined) continue
-					population[population.length] = value
-				}
+				const population: ReadonlyArray<string | number> = INTRINSICS.reflect.apply(
+					INTRINSICS.project,
+					readIndexView(ordered),
+					[(key: string) => byKey[key]],
+				)
 				return { enum: population }
 			},
 			'inferPrimitiveEnum',

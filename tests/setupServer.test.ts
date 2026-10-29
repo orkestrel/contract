@@ -66,9 +66,7 @@ describe('foreign realm sources', () => {
 
 describe('weak reference collection', () => {
 	it('collects an unreachable target and returns while a reachable one survives', async () => {
-		let target: object | undefined = { payload: 'x'.repeat(1_024) }
-		const unreachable = new WeakRef(target)
-		target = undefined
+		const unreachable = new WeakRef({ payload: 'x'.repeat(1_024) })
 		await requestWeakReferenceCollection([unreachable])
 		expect(unreachable.deref()).toBeUndefined()
 

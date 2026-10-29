@@ -1,6 +1,8 @@
 import type { JSONSchema } from './types.js'
 import { INTRINSICS } from './constants.js'
 import {
+	readIndexView,
+	iterateIndices,
 	admitVisited,
 	attempt,
 	enumerableKeys,
@@ -165,12 +167,11 @@ export class ValueInferer {
 			// rather than adding a fourth exception to it.
 			if (!snapshot.value.dense) return undefined
 			const entries = snapshot.value.entries
-			const sampled: JSONSchema[] = []
-			const length = INTRINSICS.min(entries.length, this.#breadth)
-			for (let index = 0; index < length; index += 1) {
-				sampled[sampled.length] = this.#infer(entries[index], depth - 1)
-			}
-			return sampled
+			const length = INTRINSICS.ceil(INTRINSICS.min(entries.length, this.#breadth))
+			return INTRINSICS.from(
+				iterateIndices(() => length),
+				(index) => this.#infer(entries[index], depth - 1),
+			)
 		})
 		omitVisited(this.#visited, value)
 		if (!outcome.success) throw outcome.error
@@ -223,20 +224,44 @@ export class ValueInferer {
 			// named '__proto__' becomes an own data key instead of mutating the
 			// prototype — the same pattern compileGuard / compileParser use
 			// (compilers.ts).
-			const properties: Record<string, JSONSchema> = INTRINSICS.create(null)
-			const required: string[] = []
-			let dropped = false
-			for (let index = 0; index < keys.length; index += 1) {
-				const key = keys[index]
-				if (key === undefined) continue
-				const propertyValue = value[key]
-				if (propertyValue === undefined) {
-					dropped = true
-					continue
-				}
-				properties[key] = this.#infer(propertyValue, depth - 1)
-				required[required.length] = key
-			}
+			const observed = INTRINSICS.from(
+				iterateIndices(() => keys.length),
+				(index) => {
+					const key = keys[index]
+					if (key === undefined) return { key, schema: undefined }
+					const propertyValue = value[key]
+					return {
+						key,
+						schema: propertyValue === undefined ? undefined : this.#infer(propertyValue, depth - 1),
+					}
+				},
+			)
+			const selected: ReadonlyArray<{ readonly key: string; readonly schema: JSONSchema }> =
+				INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(observed), [
+					(entry: (typeof observed)[number]) =>
+						entry.key !== undefined && entry.schema !== undefined,
+				])
+			const pairs: ReadonlyArray<readonly [string, JSONSchema]> = INTRINSICS.reflect.apply(
+				INTRINSICS.project,
+				readIndexView(selected),
+				[(entry: (typeof selected)[number]) => [entry.key, entry.schema]],
+			)
+			const properties = INTRINSICS.rebase(
+				INTRINSICS.record<JSONSchema>({
+					[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+						pairs,
+					]),
+				}),
+				null,
+			)
+			const required: readonly string[] = INTRINSICS.reflect.apply(
+				INTRINSICS.project,
+				readIndexView(selected),
+				[(entry: (typeof selected)[number]) => entry.key],
+			)
+			const dropped: boolean = INTRINSICS.reflect.apply(INTRINSICS.some, observed, [
+				(entry: (typeof observed)[number]) => entry.key !== undefined && entry.schema === undefined,
+			])
 			return { properties, required, partial: truncated || dropped }
 		})
 		omitVisited(this.#visited, value)

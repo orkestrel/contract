@@ -95,10 +95,14 @@ export const INTRINSICS = Object.freeze({
 	same: Object.is,
 	/** Captures `Object.create` — the null-prototype and prototype-pinned accumulators. */
 	create: Object.create,
+	/** Captures `Proxy` for non-array indexed views. */
+	proxy: Proxy,
 	/** Captures `Object.getOwnPropertyDescriptor` — value observation that runs no accessor. */
 	describe: Object.getOwnPropertyDescriptor,
 	/** Captures `Object.defineProperty` — exact placement of an own data property. */
 	define: Object.defineProperty,
+	/** Captures `Object.defineProperties` — sparse snapshot construction. */
+	definitions: Object.defineProperties,
 	/** Captures `Object.getPrototypeOf` — the record-brand observation. */
 	prototype: Object.getPrototypeOf,
 	/** Captures `Object.getOwnPropertySymbols` — the own-symbol population. */
@@ -188,6 +192,40 @@ export const INTRINSICS = Object.freeze({
 	list: Array,
 	/** Captures `Array.prototype.sort` — the deterministic ordering every published schema is emitted in, dispatched through `apply`. */
 	order: Array.prototype.sort,
+	/** Captures `Array.prototype.some` for short-circuit membership checks. */
+	some: Array.prototype.some,
+	/** Captures `Array.prototype.findIndex`, including reads of sparse positions. */
+	find: Array.prototype.findIndex,
+	/** Captures `Array.prototype.forEach` for indexed visits of owned arrays. */
+	each: Array.prototype.forEach,
+	/** Captures `Array.from` for ordered array construction. */
+	from: Array.from,
+	/** Captures `Array.prototype.reduce` for derived aggregate values. */
+	fold: Array.prototype.reduce,
+	/** Captures `Iterator.prototype.reduce` — ordered lazy reduction. */
+	reduce: Iterator.prototype.reduce,
+	/** Captures `Array.prototype.filter` for derived selections. */
+	select: Array.prototype.filter,
+	/** Captures `Array.prototype.map` for derived projections. */
+	project: Array.prototype.map,
+	/** Captures `Array.prototype.flatMap` — ordered list expansion. */
+	expand: Array.prototype.flatMap,
+	/** Captures `Array.prototype.toReversed` — reverse-order derivation. */
+	flip: Array.prototype.toReversed,
+	/** Captures `Array.prototype.values` for owned iterable construction. */
+	iterator: Array.prototype.values,
+	/** Captures `Array.prototype.keys` — an indexed cursor that reads length per step. */
+	indices: Array.prototype.keys,
+	/** Captures the native array iterator advance operation. */
+	advance: Object.getPrototypeOf([][Symbol.iterator]()).next,
+	/** Captures `Array.prototype.join` — text assembly from derived parts. */
+	join: Array.prototype.join,
+	/** Captures `Function.prototype.bind` for a receiver-bound host operation. */
+	bind: Function.prototype.bind,
+	/** Captures `Object.fromEntries` for derived records. */
+	record: Object.fromEntries,
+	/** Captures `Object.setPrototypeOf` for owned record prototypes. */
+	rebase: Object.setPrototypeOf,
 	/** Captures `Map` — keyed working state. */
 	map: Map,
 	/** Captures `Map.prototype.get` — a memo read whose answer a published graph embeds, dispatched through `apply`. */
@@ -200,12 +238,16 @@ export const INTRINSICS = Object.freeze({
 	pairs: Map.prototype.forEach,
 	/** Captures `Set` — membership working state. */
 	set: Set,
+	/** Captures `Set.prototype.union` — construction without a live `add` dispatch. */
+	union: Set.prototype.union,
 	/** Captures `Set.prototype.has` — THE membership answer every published verdict rests on, dispatched through `apply`. */
 	member: Set.prototype.has,
 	/** Captures `Set.prototype.add` — collection of one more member, dispatched through `apply`. */
 	admit: Set.prototype.add,
 	/** Captures `Set.prototype.forEach` — the only full view of a caller's `Set` that runs no iterator, dispatched through `apply`. */
 	sweep: Set.prototype.forEach,
+	/** Captures `Set.prototype.delete` — settlement of an active operation. */
+	remove: Set.prototype.delete,
 	/** Captures `WeakMap` — object-keyed working state. */
 	weakMap: WeakMap,
 	/** Captures `WeakMap.prototype.get` — an object-keyed memo read a published graph embeds, dispatched through `apply`. */

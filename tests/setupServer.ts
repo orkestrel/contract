@@ -32,11 +32,8 @@ export async function requestWeakReferenceCollection(
 		const collector: unknown = runInNewContext('gc')
 		if (typeof collector !== 'function') throw new Error('expected an exposed collector')
 
-		for (
-			let round = 0;
-			round < 40 && references.some((reference) => reference.deref() !== undefined);
-			round += 1
-		) {
+		const rounds = Array.from({ length: 40 }).values()
+		while (!rounds.next().done && references.some((reference) => reference.deref() !== undefined)) {
 			await setImmediate()
 			const pressure = Array.from({ length: 2_000 }, () => new Uint8Array(4_096))
 			Reflect.apply(collector, undefined, [])

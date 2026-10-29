@@ -1,14 +1,27 @@
+import { polluteArrayConstruction, countSchemaNodes } from '../../setup.js'
 // `ValueInferer` is interned: it carries no barrel row, `tests/guides.test.ts` names it
 // in `INTERNAL`, and this suite therefore reaches the class by relative source path.
 // Its doors sanitize every budget through `sanitizeDepth` and `sanitizeBudget` before
 // construction, so an unsanitized budget — the state the class documents itself as
 // assuming away — is reachable from here and nowhere else.
-import type { JSONSchema } from '@src/core'
 import { INFER_DEPTH_LIMIT, valueToSchema } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { ValueInferer } from '../../../src/core/ValueInferer.js'
 
 describe('ValueInferer — an unsanitized depth budget', () => {
+	it('keeps HEAD inferred arrays and properties under polluted array construction', () => {
+		const actual = polluteArrayConstruction(() =>
+			new ValueInferer({ age: 1, tags: ['x'] }, 8, 16, true, false).infer(),
+		)
+		// HEAD ValueInferer.ts:99 derives each array item and own record property.
+		expect(actual).toEqual({
+			type: 'object',
+			properties: { age: { type: 'integer' }, tags: { type: 'array', items: { type: 'string' } } },
+			required: ['age', 'tags'],
+			additionalProperties: false,
+		})
+	})
+
 	it('widens a container root for every budget that is not above zero', () => {
 		// `NaN` reaches the same branch as zero because the guard is written
 		// `!(depth > 0)` rather than `depth <= 0`, which `NaN` would pass through.
@@ -47,28 +60,14 @@ describe('ValueInferer — an unsanitized depth budget', () => {
 	})
 
 	it('descends past the cap the door imposes', () => {
-		let deep: Record<string, unknown> = { leaf: 1 }
-		for (let level = 0; level < INFER_DEPTH_LIMIT * 2; level += 1) deep = { nested: deep }
-
-		let direct = 0
-		let node: JSONSchema | undefined = new ValueInferer(
-			deep,
-			INFER_DEPTH_LIMIT + 4,
-			8,
-			false,
-			false,
-		).infer()
-		while (node !== undefined) {
-			direct += 1
-			node = node.properties?.nested
-		}
-
-		let capped = 0
-		let doorNode: JSONSchema | undefined = valueToSchema(deep, { closed: false })
-		while (doorNode !== undefined) {
-			capped += 1
-			doorNode = doorNode.properties?.nested
-		}
+		const deep = Array.from({ length: INFER_DEPTH_LIMIT * 2 }).reduce<Record<string, unknown>>(
+			(node) => ({ nested: node }),
+			{ leaf: 1 },
+		)
+		const direct = countSchemaNodes(
+			new ValueInferer(deep, INFER_DEPTH_LIMIT + 4, 8, false, false).infer(),
+		)
+		const capped = countSchemaNodes(valueToSchema(deep, { closed: false }))
 
 		expect(capped).toBe(INFER_DEPTH_LIMIT + 1)
 		expect(direct).toBe(INFER_DEPTH_LIMIT + 5)

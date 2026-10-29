@@ -20,7 +20,7 @@ import { CONTRACT_CODES, CONTRACT_ERROR_BRAND, INTRINSICS } from './constants.js
  * ```
  */
 export class ContractError extends Error {
-	override readonly name = 'ContractError'
+	override readonly name: string = 'ContractError'
 	readonly code
 	readonly context: ContractErrorContext | undefined
 
@@ -44,8 +44,7 @@ export class ContractError extends Error {
 		// answering `declare` included, so this body and `pinMembers` cannot pin
 		// differently.
 		const members = INTRINSICS.reflect.members(this.prototype)
-		for (let index = 0; index < members.length; index += 1) {
-			const key = members[index]
+		for (const key of members) {
 			if (key === undefined) continue
 			const declared = INTRINSICS.describe(this.prototype, key)
 			const accessor = declared !== undefined && !INTRINSICS.own(declared, 'value')
@@ -69,7 +68,10 @@ export class ContractError extends Error {
  *
  * @remarks
  * Recognition combines a global own-property brand with the native `Error`
- * base, a subclass prototype, the fixed name, and a declared contract code.
+ * base, a subclass prototype, an own declared contract code, and valid context.
+ * Context may be a class instance or callable object; paths are checked by index.
+ * Optional context fields are read only when owned; inherited fields are ignored.
+ * A subclass may replace its name without changing recognition.
  * The brand stores the error itself and recognition requires that exact
  * identity. A transparent proxy is therefore refused because its forwarded
  * descriptor still stores the target, not the proxy.
@@ -96,19 +98,49 @@ export function isContractError(value: unknown): value is ContractError {
 		) {
 			return false
 		}
-		if (value.name !== 'ContractError' || !('code' in value)) return false
+		if (!INTRINSICS.own(value, 'code')) return false
 		const descriptor = INTRINSICS.describe(value, CONTRACT_ERROR_BRAND)
 		if (descriptor?.value !== value) return false
-		const code: unknown = value.code
-		// Indexed over the one declared vocabulary. `collectMembers` /
-		// `matchesMember` express the same membership everywhere else in the
-		// package, and this file cannot reach them: `helpers.ts` imports this
-		// module, so asking it would invert the dependency — the same reason this
-		// guard carries its own `try` / `catch`.
-		for (let index = 0; index < CONTRACT_CODES.length; index += 1) {
-			if (code === CONTRACT_CODES[index]) return true
+		const code: unknown = INTRINSICS.reflect.read(value, 'code')
+		if (
+			!INTRINSICS.reflect.apply(INTRINSICS.some, CONTRACT_CODES, [
+				(candidate: unknown) => candidate === code,
+			])
+		) {
+			return false
 		}
-		return false
+		const context: unknown = INTRINSICS.own(value, 'context')
+			? INTRINSICS.reflect.read(value, 'context')
+			: undefined
+		if (context === undefined) return true
+		if ((typeof context !== 'object' || context === null) && typeof context !== 'function') {
+			return false
+		}
+		const path: unknown = INTRINSICS.own(context, 'path')
+			? INTRINSICS.reflect.read(context, 'path')
+			: undefined
+		if (path !== undefined && typeof path !== 'string') {
+			if (!INTRINSICS.array(path)) return false
+			if (
+				INTRINSICS.reflect.apply(INTRINSICS.find, path, [
+					(segment: unknown) => typeof segment !== 'string',
+				]) !== -1
+			) {
+				return false
+			}
+		}
+		const shape: unknown = INTRINSICS.own(context, 'shape')
+			? INTRINSICS.reflect.read(context, 'shape')
+			: undefined
+		if (shape !== undefined && typeof shape !== 'string') return false
+		const limit: unknown = INTRINSICS.own(context, 'limit')
+			? INTRINSICS.reflect.read(context, 'limit')
+			: undefined
+		if (limit !== undefined && typeof limit !== 'number' && typeof limit !== 'string') return false
+		const received: unknown = INTRINSICS.own(context, 'received')
+			? INTRINSICS.reflect.read(context, 'received')
+			: undefined
+		return received === undefined || typeof received === 'string'
 	} catch {
 		return false
 	}

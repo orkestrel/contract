@@ -13,6 +13,14 @@ import type {
 	StringShape,
 } from '@src/core'
 import {
+	createSubstituteValues,
+	createMarker,
+	throwReplacement,
+	returnArgument,
+	polluteArrayConstruction,
+	ObservationCounter,
+	clearValues,
+	injectMarker,
 	BlankBrandDeclaration,
 	buildDeepNest,
 	ClassSampleMemo,
@@ -32,6 +40,7 @@ import {
 	NullBaseDeclaration,
 	pollutePrototype,
 	RECORD_BRAND_MEMBERS,
+	readStrings,
 	replaceIntrinsic,
 	replaceStringIterator,
 	replaceStringSlice,
@@ -43,6 +52,13 @@ import { createForeignPrototype, createForeignRecord } from '../../setupServer.j
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
 	admitMember,
+	buildPositions,
+	encodeParts,
+	iterateIndices,
+	previewParts,
+	readPresence,
+	readIndexView,
+	canonicalStringify,
 	admitVisited,
 	appendEntries,
 	arrayShape,
@@ -120,6 +136,110 @@ import {
 	unionShape,
 	valueToSchema,
 } from '@src/core'
+
+describe('protected array construction', () => {
+	it('keeps HEAD indexed failure and read order under an inherited empty iterator', () => {
+		const reads: PropertyKey[] = []
+		const sentinel = new Error('index failed')
+		const source = new Proxy([1, 2], {
+			get(target, key) {
+				reads.push(key)
+				if (key === '0') throw sentinel
+				return Reflect.get(target, key)
+			},
+		})
+		const actual = polluteArrayConstruction(() => readArrayEntries(source))
+		// HEAD helpers.ts:1102 and :1120 read length and index zero before stopping on its throw.
+		expect(actual).toEqual({ success: false, error: sentinel })
+		expect(reads).toEqual(['length', '0'])
+	})
+
+	it('keeps HEAD projections through INTRINSICS.project without species reads', () => {
+		const entries = new Set(['age', 'name'])
+		const actual = polluteArrayConstruction(() => readSetEntries(entries))
+		// HEAD helpers.ts:502 reads each collected pair by index and publishes its value.
+		expect(actual).toEqual({ success: true, value: ['age', 'name'] })
+	})
+
+	it('keeps HEAD sparse copies through INTRINSICS.expand without species reads', () => {
+		const entries = [1, 2, 3]
+		Reflect.deleteProperty(entries, '1')
+		const actual = polluteArrayConstruction(() => readArrayEntries(entries))
+		// HEAD helpers.ts:1124 walks own keys, retaining the absent middle position.
+		expect(actual.success).toBe(true)
+		if (!actual.success) throw actual.error
+		expect(actual.value.entries).toEqual(entries)
+		expect(Object.hasOwn(actual.value.entries, 1)).toBe(false)
+		expect(actual.value.dense).toBe(false)
+	})
+
+	it('forwards indexed reads and holes without retrieving a constructor or iterator', () => {
+		const reads: PropertyKey[] = []
+		const entries = [1, 2, 3]
+		Reflect.deleteProperty(entries, '1')
+		const source = new Proxy(entries, {
+			get(target, key) {
+				reads.push(key)
+				return Reflect.get(target, key)
+			},
+		})
+		const actual = polluteArrayConstruction(() =>
+			INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(source), [
+				(value: number) => value * 2,
+			]),
+		)
+		expect(actual).toEqual([2, undefined, 6])
+		expect(Object.hasOwn(actual, 1)).toBe(false)
+		expect(reads).toEqual(['length', '0', '2'])
+	})
+
+	it('keeps HEAD helper publications under polluted array construction', () => {
+		const actual = polluteArrayConstruction(() => ({
+			path: pathOf(['age'], undefined, 'value'),
+			limited: limitEntries(['a', 'b'], 1),
+			ordered: sortValues(['b', 'a']),
+			flags: readPattern(/x/gi).flags,
+			guards: readGuardShape({ age: isString }, ['age'], 'recordOf').names,
+			options: readOptions({ min: 1 }, ['min'], 'numberShape', 'number'),
+			preview: preview('age'),
+			canonical: canonicalStringify({ age: [1, 2] }),
+		}))
+		// HEAD helpers.ts:77, :144, :205, :641, :1188, :1289, :2239 and :1855.
+		expect(actual).toEqual({
+			path: ['age', 'value'],
+			limited: ['a'],
+			ordered: ['a', 'b'],
+			flags: 'i',
+			guards: ['age'],
+			options: { min: 1 },
+			preview: '"age"',
+			canonical: '{"age":[1,2]}',
+		})
+	})
+
+	it('keeps HEAD pathOf output without reading an inherited constructor', () => {
+		const reads = new ObservationCounter()
+		const descriptor = Object.getOwnPropertyDescriptor(Array.prototype, 'constructor')
+		if (descriptor === undefined) throw new Error('Array constructor descriptor is absent')
+		const actual = attempt(() => {
+			INTRINSICS.define(Array.prototype, 'constructor', {
+				configurable: true,
+				get() {
+					reads.increment()
+					throw new Error('inherited constructor')
+				},
+			})
+			try {
+				return pathOf(['age'])
+			} finally {
+				INTRINSICS.define(Array.prototype, 'constructor', descriptor)
+			}
+		})
+		// HEAD helpers.ts:81-92 appends the indexed segment without species lookup.
+		expect(actual).toEqual({ success: true, value: ['age'] })
+		expect(reads.value).toBe(0)
+	})
+})
 
 describe('ContractError', () => {
 	it('constructs without context or an own cause property', () => {
@@ -206,17 +326,17 @@ describe('ContractError', () => {
 	it('reads an accessor cause exactly once and preserves its value', () => {
 		const cause = Object.freeze({ source: 'accessor' })
 		const options: ContractErrorOptions = { code: 'structure' }
-		let reads = 0
+		const reads = new ObservationCounter()
 		Object.defineProperty(options, 'cause', {
 			get() {
-				reads += 1
+				reads.increment()
 				return cause
 			},
 		})
 
 		const error = new ContractError('Accessor origin', options)
 
-		expect(reads).toBe(1)
+		expect(reads.value).toBe(1)
 		expect(error.cause).toBe(cause)
 	})
 
@@ -229,13 +349,13 @@ describe('ContractError', () => {
 		}> = []
 
 		for (const owned of [true, false]) {
-			let reads = 0
+			const reads = new ObservationCounter()
 			const options = new Proxy<ContractErrorOptions>(
 				{ code: 'structure' },
 				{
 					get(target, property, receiver) {
 						if (property === 'cause') {
-							reads += 1
+							reads.increment()
 							return cause
 						}
 						return Reflect.get(target, property, receiver)
@@ -254,7 +374,7 @@ describe('ContractError', () => {
 			const error = new ContractError('Proxy origin', options)
 			observed.push({
 				owned,
-				reads,
+				reads: reads.value,
 				adopted: Object.hasOwn(error, 'cause') && error.cause === cause,
 			})
 		}
@@ -354,17 +474,17 @@ describe('isContractError', () => {
 
 describe('attempt', () => {
 	it('returns the exact value without mutation and invokes the callback once', () => {
-		let calls = 0
+		const calls = new ObservationCounter()
 		const value = { state: 'ready' }
 		const outcome = attempt(() => {
-			calls += 1
+			calls.increment()
 			return value
 		})
 
 		expect(outcome).toEqual({ success: true, value })
 		expect(outcome.success && outcome.value).toBe(value)
 		expect(value).toEqual({ state: 'ready' })
-		expect(calls).toBe(1)
+		expect(calls.value).toBe(1)
 	})
 
 	it('preserves Error and subclass identity', () => {
@@ -420,20 +540,20 @@ describe('attempt', () => {
 	})
 
 	it('does not invoke coercion hooks on a thrown value', () => {
-		let primitive = 0
-		let string = 0
-		let value = 0
+		const primitive = new ObservationCounter()
+		const string = new ObservationCounter()
+		const value = new ObservationCounter()
 		const hostile = Object.freeze({
 			[Symbol.toPrimitive]() {
-				primitive += 1
+				primitive.increment()
 				throw new Error('primitive coercion')
 			},
 			toString() {
-				string += 1
+				string.increment()
 				throw new Error('string coercion')
 			},
 			valueOf() {
-				value += 1
+				value.increment()
 				throw new Error('value coercion')
 			},
 		})
@@ -443,9 +563,13 @@ describe('attempt', () => {
 
 		expect(outcome.success).toBe(false)
 		expect(!outcome.success && outcome.error).toBe(hostile)
-		expect({ primitive, string, value }).toEqual({ primitive: 0, string: 0, value: 0 })
+		expect({ primitive: primitive.value, string: string.value, value: value.value }).toEqual({
+			primitive: 0,
+			string: 0,
+			value: 0,
+		})
 		expect(() => String(hostile)).toThrow('primitive coercion')
-		expect(primitive).toBe(1)
+		expect(primitive.value).toBe(1)
 	})
 
 	it('preserves a revoked Proxy reason without a secondary throw', () => {
@@ -459,16 +583,16 @@ describe('attempt', () => {
 	})
 
 	it('invokes a throwing callback exactly once', () => {
-		let calls = 0
+		const calls = new ObservationCounter()
 		const reason = Symbol('once')
 		const outcome = attempt(() => {
-			calls += 1
+			calls.increment()
 			throw reason
 		})
 
 		expect(outcome.success).toBe(false)
 		expect(!outcome.success && outcome.error).toBe(reason)
-		expect(calls).toBe(1)
+		expect(calls.value).toBe(1)
 	})
 
 	it('returns a rejecting Promise by identity without observing settlement', async () => {
@@ -483,13 +607,13 @@ describe('attempt', () => {
 	})
 
 	it('returns a hostile thenable by identity without reading or calling then', () => {
-		let reads = 0
-		let calls = 0
+		const reads = new ObservationCounter()
+		const calls = new ObservationCounter()
 		const thenable = Object.defineProperty({}, 'then', {
 			get() {
-				reads += 1
+				reads.increment()
 				return () => {
-					calls += 1
+					calls.increment()
 				}
 			},
 		})
@@ -497,9 +621,9 @@ describe('attempt', () => {
 
 		expect(outcome.success).toBe(true)
 		expect(outcome.success && outcome.value).toBe(thenable)
-		expect({ reads, calls }).toEqual({ reads: 0, calls: 0 })
+		expect({ reads: reads.value, calls: calls.value }).toEqual({ reads: 0, calls: 0 })
 		expect(Reflect.get(thenable, 'then')).toBeTypeOf('function')
-		expect(reads).toBe(1)
+		expect(reads.value).toBe(1)
 	})
 
 	it('exposes unknown after failure-discriminant narrowing', () => {
@@ -688,19 +812,19 @@ describe('readValue', () => {
 	})
 
 	it('refuses through its own error when a subject accessor changes its answer between reads', () => {
-		let reads = 0
-		const options = {
+		const reads = new ObservationCounter()
+		const options = Object.freeze({
 			get subject() {
-				reads += 1
-				return reads === 1
+				reads.increment()
+				return reads.value === 1
 					? 'thing'
-					: {
+					: Object.freeze({
 							toString() {
 								throw new Error('hostile toString')
 							},
-						}
+						})
 			},
-		}
+		})
 		const error = captureContractError(() =>
 			Reflect.apply(readValue, undefined, [
 				() => {
@@ -713,7 +837,7 @@ describe('readValue', () => {
 
 		expect(error).toBeInstanceOf(ContractError)
 		expect(error.message).toBe('door: thing could not be read')
-		expect(reads).toBe(1)
+		expect(reads.value).toBe(1)
 	})
 })
 
@@ -1216,16 +1340,16 @@ describe('readOptions', () => {
 	})
 
 	it('reads a consumed enumerable accessor once and snapshots that same value', () => {
-		let reads = 0
-		const source = {
+		const reads = new ObservationCounter()
+		const source = Object.freeze({
 			get min() {
-				reads += 1
-				return reads
+				reads.increment()
+				return reads.value
 			},
-		}
+		})
 		const snapshot = readOptions(source, ['min'], 'stringShape', 'string')
 
-		expect(reads).toBe(1)
+		expect(reads.value).toBe(1)
 		expect(snapshot).toEqual({ min: 1 })
 	})
 
@@ -1364,14 +1488,14 @@ describe('sanitizeBudget', () => {
 	})
 
 	it('refuses wrong-runtime fallbacks through the same safe diagnostic', () => {
-		const invalid: ReadonlyArray<readonly [unknown, string]> = [
+		const invalid: ReadonlyArray<readonly [unknown, string]> = Object.freeze([
 			[undefined, 'undefined'],
 			[null, 'null'],
 			['3', '"3"'],
 			[{}, 'object'],
 			[[], 'array'],
 			[() => 3, 'function'],
-		]
+		])
 
 		for (const [fallback, received] of invalid) {
 			const error = captureContractError(() =>
@@ -1386,10 +1510,10 @@ describe('sanitizeBudget', () => {
 	})
 
 	it('previews hostile selected fallbacks without coercion or traversal', () => {
-		let coercions = 0
+		const coercions = new ObservationCounter()
 		const hostile = Object.freeze({
 			[Symbol.toPrimitive]() {
-				coercions += 1
+				coercions.increment()
 				throw new Error('primitive coercion')
 			},
 		})
@@ -1402,7 +1526,7 @@ describe('sanitizeBudget', () => {
 
 		expect(objectError.context?.received).toBe('object')
 		expect(proxyError.context?.received).toBe('object')
-		expect(coercions).toBe(0)
+		expect(coercions.value).toBe(0)
 	})
 
 	it('returns a valid candidate without inspecting an invalid fallback', () => {
@@ -1584,6 +1708,28 @@ describe('resolveField', () => {
 		expect(resolveField({}, 'missing')).toBeUndefined()
 	})
 
+	it('stops observing the indexed path at its first missing field', () => {
+		const reads: PropertyKey[] = []
+		const path = new Proxy(['missing', 'later'], {
+			get(target, key, receiver) {
+				reads.push(key)
+				if (key === '1' || key === Symbol.iterator) throw new Error('past the missing field')
+				return Reflect.get(target, key, receiver)
+			},
+		})
+
+		expect(resolveField({}, path)).toBeUndefined()
+		expect(reads).toEqual(['length', '0'])
+	})
+
+	it('resolves a long cyclic path without recursive stack growth', () => {
+		const record: Record<string, unknown> = { value: 42 }
+		record.self = record
+		const path = [...Array.from({ length: 20_000 }, () => 'self'), 'value']
+
+		expect(resolveField(record, path)).toBe(42)
+	})
+
 	it('returns undefined when an intermediate segment is not an object', () => {
 		expect(resolveField({ a: 1 }, ['a', 'b'])).toBeUndefined()
 		expect(resolveField({ a: null }, ['a', 'b'])).toBeUndefined()
@@ -1674,10 +1820,10 @@ describe('matchesJSONValue', () => {
 
 describe('matchesJSONDepth', () => {
 	it('counts only array and plain-record containers at the fixed boundary', () => {
-		let emptyAtLimit: unknown = {}
-		for (let depth = 1; depth < GUARD_DEPTH_LIMIT; depth += 1) {
-			emptyAtLimit = { value: emptyAtLimit }
-		}
+		const emptyAtLimit = Array.from({ length: GUARD_DEPTH_LIMIT - 1 }).reduce<unknown>(
+			(value) => ({ value }),
+			{},
+		)
 		const emptyPastLimit = { value: emptyAtLimit }
 
 		expect(matchesJSONDepth(null)).toBe(true)
@@ -1693,13 +1839,16 @@ describe('matchesJSONDepth', () => {
 
 	it('revisits shared aliases on shallow and deep paths in both visitation orders', () => {
 		const shared = Object.freeze({})
-		let allowed: unknown = shared
-		let refused: unknown = shared
-		for (let depth = 0; depth < GUARD_DEPTH_LIMIT - 2; depth += 1) {
-			allowed = { value: allowed }
-			refused = { value: refused }
+		const allowed = Array.from({ length: GUARD_DEPTH_LIMIT - 2 }).reduce<unknown>(
+			(value) => ({ value }),
+			shared,
+		)
+		const refused = {
+			value: Array.from({ length: GUARD_DEPTH_LIMIT - 2 }).reduce<unknown>(
+				(value) => ({ value }),
+				shared,
+			),
 		}
-		refused = { value: refused }
 
 		expect(matchesJSONDepth({ shallow: shared, deep: allowed })).toBe(true)
 		expect(matchesJSONDepth({ deep: allowed, shallow: shared })).toBe(true)
@@ -1713,12 +1862,11 @@ describe('matchesJSONDepth', () => {
 		expect(matchesJSONDepth(shallow)).toBe(true)
 
 		const boundary: unknown[] = []
-		let cursor = boundary
-		for (let depth = 1; depth < GUARD_DEPTH_LIMIT; depth += 1) {
+		const cursor = Array.from({ length: GUARD_DEPTH_LIMIT - 1 }).reduce<unknown[]>((parent) => {
 			const child: unknown[] = []
-			cursor.push(child)
-			cursor = child
-		}
+			parent.push(child)
+			return child
+		}, boundary)
 		cursor.push(boundary)
 
 		expect(matchesJSONDepth(boundary)).toBe(true)
@@ -1778,24 +1926,24 @@ describe('matchesJSONDepth', () => {
 	})
 
 	it('reads plain-record keys once and contains hostile reflection', () => {
-		let readableReads = 0
+		const readableReads = new ObservationCounter()
 		const readable = Object.defineProperty({}, 'value', {
 			get() {
-				readableReads += 1
+				readableReads.increment()
 				return { nested: [] }
 			},
 			enumerable: true,
 		})
 		expect(matchesJSONDepth(readable)).toBe(true)
-		expect(readableReads).toBe(1)
+		expect(readableReads.value).toBe(1)
 
-		let membershipReads = 0
+		const membershipReads = new ObservationCounter()
 		const hostileMembership = new Proxy(
 			{ value: 1 },
 			{
 				getOwnPropertyDescriptor(target, property) {
-					membershipReads += 1
-					if (membershipReads > 1) throw new Error('record membership')
+					membershipReads.increment()
+					if (membershipReads.value > 1) throw new Error('record membership')
 					return Reflect.getOwnPropertyDescriptor(target, property)
 				},
 			},
@@ -1895,7 +2043,7 @@ describe('seededRandom', () => {
 		)
 		const revoked = Proxy.revocable({}, {})
 		revoked.revoke()
-		const values: readonly unknown[] = [
+		const values: readonly unknown[] = Object.freeze([
 			undefined,
 			null,
 			false,
@@ -1908,7 +2056,7 @@ describe('seededRandom', () => {
 			() => 42,
 			hostile,
 			revoked.proxy,
-		]
+		])
 
 		for (const value of values) {
 			const error = captureContractError(() => Reflect.apply(seededRandom, undefined, [value]))
@@ -1976,11 +2124,11 @@ describe('seededRandom', () => {
 
 	it('returns values within the [0, 1) range', () => {
 		const random = seededRandom(7)
-		for (let index = 0; index < 100; index += 1) {
+		Array.from({ length: 100 }).forEach(() => {
 			const value = random()
 			expect(value).toBeGreaterThanOrEqual(0)
 			expect(value).toBeLessThan(1)
-		}
+		})
 	})
 })
 
@@ -2137,12 +2285,12 @@ describe('schemaToObject', () => {
 
 describe('preview', () => {
 	it('does not retrieve a throwing mutable string-slice getter', () => {
-		let getters = 0
+		const getters = new ObservationCounter()
 		const reason = Object.freeze({ source: 'string slice' })
 		const sample = Symbol('sample')
 		const result = replaceStringSlice(
 			() => {
-				getters += 1
+				getters.increment()
 				throw reason
 			},
 			() => ({
@@ -2163,18 +2311,18 @@ describe('preview', () => {
 			received: 'Symbol(sample)',
 		})
 		expect(Object.hasOwn(result.error, 'cause')).toBe(false)
-		expect(getters).toBe(0)
+		expect(getters.value).toBe(0)
 	})
 
 	it('does not retrieve or call a hostile mutable string-slice replacement', () => {
-		let getters = 0
-		let calls = 0
+		const getters = new ObservationCounter()
+		const calls = new ObservationCounter()
 		const sample = Symbol('sample')
 		const result = replaceStringSlice(
 			() => {
-				getters += 1
+				getters.increment()
 				return () => {
-					calls += 1
+					calls.increment()
 					return '\n'
 				}
 			},
@@ -2193,8 +2341,8 @@ describe('preview', () => {
 			code: result.error.code,
 			context: result.error.context,
 			cause: Object.hasOwn(result.error, 'cause'),
-			getters,
-			calls,
+			getters: getters.value,
+			calls: calls.value,
 		}).toEqual({
 			string: '"safe"',
 			symbol: 'Symbol(sample)',
@@ -2398,7 +2546,7 @@ describe('preview', () => {
 		['carriage return', '\r', '\\r'],
 		['tab', '\t', '\\t'],
 	])('keeps every %s token atomic at its short boundaries', (_label, character, token) => {
-		for (let remaining = 0; remaining <= token.length; remaining += 1) {
+		for (const remaining of Array.from({ length: token.length + 1 }).keys()) {
 			const stringPrefix = `"${'x'.repeat(63 - remaining)}`
 			const symbolPrefix = `Symbol(${'x'.repeat(57 - remaining)}`
 			const suffix = remaining < token.length ? '…' : `${token}…`
@@ -2418,7 +2566,7 @@ describe('preview', () => {
 		['high surrogate', '\ud800', '\\ud800'],
 		['low surrogate', '\udc00', '\\udc00'],
 	])('keeps every %s token atomic at all unicode boundaries', (_label, character, token) => {
-		for (let remaining = 0; remaining <= token.length; remaining += 1) {
+		for (const remaining of Array.from({ length: token.length + 1 }).keys()) {
 			const stringPrefix = `"${'x'.repeat(63 - remaining)}`
 			const symbolPrefix = `Symbol(${'x'.repeat(57 - remaining)}`
 			const suffix = remaining < token.length ? '…' : `${token}…`
@@ -2526,18 +2674,18 @@ describe('preview', () => {
 		// encoded length is asserted as well, because a control that skipped the
 		// work would make the comparison meaningless.
 		const huge = '\n'.repeat(2_000_000)
-		let rendering = Number.POSITIVE_INFINITY
-		let encoding = Number.POSITIVE_INFINITY
-		let rendered = ''
-		let encoded = ''
-		for (let round = 0; round < 3; round += 1) {
+		const readings = Array.from({ length: 3 }, () => {
 			const renderStart = performance.now()
-			rendered = preview(huge)
-			rendering = Math.min(rendering, performance.now() - renderStart)
+			const rendered = preview(huge)
+			const renderTime = performance.now() - renderStart
 			const encodeStart = performance.now()
-			encoded = INTRINSICS.stringify(huge)
-			encoding = Math.min(encoding, performance.now() - encodeStart)
-		}
+			const encoded = INTRINSICS.stringify(huge)
+			return { rendered, encoded, renderTime, encodeTime: performance.now() - encodeStart }
+		})
+		const rendering = Math.min(...readings.map((reading) => reading.renderTime))
+		const encoding = Math.min(...readings.map((reading) => reading.encodeTime))
+		const rendered = readings.at(-1)?.rendered ?? ''
+		const encoded = readings.at(-1)?.encoded ?? ''
 
 		expect(rendered).toBe(`"${'\\n'.repeat(31)}…`)
 		expect(encoded.length).toBe(4_000_002)
@@ -2655,11 +2803,7 @@ describe('pathOf', () => {
 	})
 
 	it('publishes only its own segments while the array iterator injects', () => {
-		function* injectLeading(this: readonly unknown[]): Generator<unknown> {
-			yield 'INJECTED'
-			for (let index = 0; index < this.length; index += 1) yield this[index]
-		}
-		const built = replaceIntrinsic(Array.prototype, Symbol.iterator, injectLeading, () =>
+		const built = replaceIntrinsic(Array.prototype, Symbol.iterator, injectMarker, () =>
 			pathOf(['properties'], 'age'),
 		)
 
@@ -2683,12 +2827,8 @@ describe('appendEntries', () => {
 	})
 
 	it('appends its own elements while the array iterator injects', () => {
-		function* injectLeading(this: readonly unknown[]): Generator<unknown> {
-			yield 'INJECTED'
-			for (let index = 0; index < this.length; index += 1) yield this[index]
-		}
 		const target: string[] = ['a']
-		replaceIntrinsic(Array.prototype, Symbol.iterator, injectLeading, () => {
+		replaceIntrinsic(Array.prototype, Symbol.iterator, injectMarker, () => {
 			appendEntries(target, ['b'])
 		})
 
@@ -2710,8 +2850,7 @@ describe('limitEntries', () => {
 	})
 
 	it('bounds through an owned walk while Array.prototype.slice lies', () => {
-		const lie = (): readonly number[] => [9, 9, 9]
-		const bounded = replaceIntrinsic(Array.prototype, 'slice', lie, () =>
+		const bounded = replaceIntrinsic(Array.prototype, 'slice', createSubstituteValues, () =>
 			limitEntries([1, 2, 3, 4], 2),
 		)
 
@@ -2742,14 +2881,15 @@ describe('compareValues', () => {
 		// member has nothing to answer. Asked with both operand kinds, because the
 		// coercion a substituted `valueOf` or `toString` would supply is exactly
 		// what the default ordering does and this comparator must not.
-		function lie(): string {
-			return 'INJECTED'
-		}
-		const answers = replaceIntrinsic(Number.prototype, 'valueOf', lie, () =>
-			replaceIntrinsic(String.prototype, 'toString', lie, () => ({
-				numeric: compareValues(10, 2),
-				text: compareValues('a', 'b'),
-			})),
+		const answers = replaceIntrinsic(
+			Number.prototype,
+			'valueOf',
+			createMarker.bind(undefined, false),
+			() =>
+				replaceIntrinsic(String.prototype, 'toString', createMarker.bind(undefined, false), () => ({
+					numeric: compareValues(10, 2),
+					text: compareValues('a', 'b'),
+				})),
 		)
 
 		expect(answers).toEqual({ numeric: 1, text: -1 })
@@ -2772,11 +2912,7 @@ describe('sortValues', () => {
 	})
 
 	it('orders through the captured sort while Array.prototype.sort empties its receiver', () => {
-		function emptySort(this: unknown[]): unknown[] {
-			this.length = 0
-			return this
-		}
-		const ordered = replaceIntrinsic(Array.prototype, 'sort', emptySort, () =>
+		const ordered = replaceIntrinsic(Array.prototype, 'sort', clearValues, () =>
 			sortValues(['b', 'a']),
 		)
 
@@ -2825,12 +2961,8 @@ describe('INTRINSICS', () => {
 	})
 
 	it('keeps answering after the member it captured is replaced', () => {
-		const thrower = (): never => {
-			throw new Error('replaced')
-		}
-		const passthrough = (value: unknown): unknown => value
-		const answers = replaceIntrinsic(Object, 'freeze', passthrough, () =>
-			replaceIntrinsic(Date, 'now', thrower, () => ({
+		const answers = replaceIntrinsic(Object, 'freeze', returnArgument, () =>
+			replaceIntrinsic(Date, 'now', throwReplacement, () => ({
 				frozen: Object.isFrozen(INTRINSICS.freeze({ probe: 1 })),
 				clock: typeof INTRINSICS.now(),
 			})),
@@ -2848,6 +2980,24 @@ describe('INTRINSICS', () => {
 })
 
 describe('captured membership', () => {
+	it('constructs in indexed order while union and the native cursor are replaced', () => {
+		const reads: PropertyKey[] = []
+		const values = new Proxy(['b', 'a', 'b'], {
+			get(target, key, receiver) {
+				reads.push(key)
+				return Reflect.get(target, key, receiver)
+			},
+		})
+		const cursor = Object.getPrototypeOf([].values())
+		const reason = new Error('live collection operation')
+		const members = replaceIntrinsic(Set.prototype, 'union', throwSentinel(reason), () =>
+			replaceIntrinsic(cursor, 'next', throwSentinel(reason), () => collectMembers(values)),
+		)
+
+		expect(Array.from(members)).toEqual(['b', 'a'])
+		expect(reads).toEqual(['length', '0', 'length', '1', 'length', '2', 'length'])
+	})
+
 	it('answers SameValueZero membership over an indexed collection', () => {
 		const members = collectMembers(['a', Number.NaN, -0])
 
@@ -2926,11 +3076,8 @@ describe('captured collection reads', () => {
 	it('reads a set and a map through the captured sweep while their iterators lie', () => {
 		const set = new Set<unknown>(['a', 42])
 		const table = new Map<unknown, unknown>([['a', 1]])
-		const skipNumbers = function* onlyStrings(this: ReadonlySet<unknown>): Generator<unknown> {
-			for (const entry of Array.from(this.values())) if (typeof entry === 'string') yield entry
-		}
 
-		const entries = replaceIntrinsic(Set.prototype, Symbol.iterator, skipNumbers, () =>
+		const entries = replaceIntrinsic(Set.prototype, Symbol.iterator, readStrings, () =>
 			readSetEntries(set),
 		)
 		const pairs = readMapEntries(table)
@@ -3052,10 +3199,7 @@ describe('pinned prototypes', () => {
 				return 'ran'
 			}
 		}
-		const noop = function (target: object): object {
-			return target
-		}
-		replaceIntrinsic(Object, 'defineProperty', noop, () =>
+		replaceIntrinsic(Object, 'defineProperty', returnArgument, () =>
 			pinMembers(Captured.prototype, 'Captured'),
 		)
 		expect(Object.getOwnPropertyDescriptor(Captured.prototype, 'run')?.writable).toBe(false)
@@ -3118,8 +3262,7 @@ describe('matchesJSONValue — an iterative verdict (H9)', () => {
 		// the value: a strictly shallower document evaluated `false` moments after a
 		// deeper one evaluated `true`, and `parseJSONValue` republished the
 		// resulting `RangeError` as an unreadability refusal.
-		let payload: unknown = 1
-		for (let index = 0; index < 20_000; index += 1) payload = { a: payload }
+		const payload = Array.from({ length: 20_000 }).reduce<unknown>((child) => ({ a: child }), 1)
 
 		expect(matchesJSONValue(payload, new WeakSet())).toBe(true)
 		expect(isJSONValue(payload)).toBe(true)
@@ -3127,14 +3270,15 @@ describe('matchesJSONValue — an iterative verdict (H9)', () => {
 
 		// The same document reached from inside a deep walk of its own answers
 		// identically — the verdict is a function of the value, not of the frame.
-		let nested: unknown = payload
-		for (let index = 0; index < 20_000; index += 1) nested = [nested]
+		const nested = Array.from({ length: 20_000 }).reduce<unknown>((child) => [child], payload)
 		expect(matchesJSONValue(nested, new WeakSet())).toBe(true)
 
 		// Controls: the walk still refuses honest invalidity and still refuses a
 		// cycle, at depth.
-		let invalid: unknown = Number.NaN
-		for (let index = 0; index < 20_000; index += 1) invalid = { a: invalid }
+		const invalid = Array.from({ length: 20_000 }).reduce<unknown>(
+			(child) => ({ a: child }),
+			Number.NaN,
+		)
 		expect(matchesJSONValue(invalid, new WeakSet())).toBe(false)
 		expect(parseJSONValue(invalid)).toBeUndefined()
 
@@ -3316,14 +3460,14 @@ describe('buildStringFaults', () => {
 		// plain literal observes nothing. The accessor answers with the same
 		// pattern every time, so a differing read count is the only thing this can
 		// report.
-		let reads = 0
-		const shape: StringShape = {
+		const reads = new ObservationCounter()
+		const shape: StringShape = Object.freeze({
 			category: 'string',
 			get pattern() {
-				reads += 1
+				reads.increment()
 				return /^[0-9]+$/
 			},
-		}
+		})
 		const first = buildStringFaults(shape, 'abc', [])
 
 		expect(first).toEqual([
@@ -3339,24 +3483,24 @@ describe('buildStringFaults', () => {
 		// The rebuild that applied the pattern is also what the `limit` text is
 		// read from, so the accessor answers one read for it and one for the
 		// presence test that decides whether a pattern was declared at all.
-		expect(reads).toBe(2)
+		expect(reads.value).toBe(2)
 
 		expect(buildStringFaults(shape, 'abc', [])).toEqual(first)
-		expect(reads).toBe(4)
+		expect(reads.value).toBe(4)
 	})
 
 	it('answers from a supplied rebuild without asking the shape for its pattern', () => {
 		// A counting accessor is the only instrument that separates applying the
 		// supplied rebuild from rebuilding out of the shape regardless: the reports
 		// are identical either way, so only the read count binds the promise.
-		let reads = 0
-		const shape: StringShape = {
+		const reads = new ObservationCounter()
+		const shape: StringShape = Object.freeze({
 			category: 'string',
 			get pattern() {
-				reads += 1
+				reads.increment()
 				return /^[0-9]+$/
 			},
-		}
+		})
 		const supplied = buildStringFaults(shape, 'abc', [], readPattern(/^[0-9]+$/))
 
 		expect(supplied).toEqual([
@@ -3369,13 +3513,13 @@ describe('buildStringFaults', () => {
 				received: '"abc"',
 			},
 		])
-		expect(reads).toBe(0)
+		expect(reads.value).toBe(0)
 
 		// Control: the omitted form asks the same accessor, so a count that stayed
 		// at zero is the supplied rebuild being applied rather than an accessor
 		// that cannot count.
 		expect(buildStringFaults(shape, 'abc', [])).toEqual(supplied)
-		expect(reads).toBe(2)
+		expect(reads.value).toBe(2)
 	})
 
 	it('returns a fresh array per call and mutates neither the shape nor the path', () => {
@@ -3814,5 +3958,47 @@ describe('readSampleMemo', () => {
 		expect(captureContractError(() => readSampleMemo(corrupt, 'samplesToSchema')).message).toBe(
 			'samplesToSchema: memo must be a sample memo',
 		)
+	})
+})
+describe('indexed derivation helpers', () => {
+	it('rereads an index bound lazily and preserves fractional bounds', () => {
+		const bounds = [3, 2, 1]
+		const indices = iterateIndices(() => bounds.shift() ?? 0)
+		expect(indices.next()).toEqual({ done: false, value: 0 })
+		expect(bounds).toEqual([2, 1])
+		expect(indices.next()).toEqual({ done: false, value: 1 })
+		expect(indices.next().done).toBe(true)
+		expect(Array.from(iterateIndices(() => 2.5))).toEqual([0, 1, 2])
+		expect(Array.from(iterateIndices(() => Number.NaN))).toEqual([])
+	})
+
+	it('encodes the valid prefix without reading a later member', () => {
+		const members = Object.defineProperty([1, undefined, 2], '2', {
+			get() {
+				throw new Error('past the prefix')
+			},
+		})
+		expect(Array.from(encodeParts(members, undefined, new WeakMap()))).toEqual(['1'])
+		const child = {}
+		const encodings = new WeakMap([[child, '{"owned":true}']])
+		expect(Array.from(encodeParts([child], ['nested'], encodings))).toEqual([
+			'"nested":{"owned":true}',
+		])
+	})
+
+	it('keeps escaped tokens and surrogate pairs whole within a preview budget', () => {
+		expect(previewParts('abc', 0, 2, false)).toEqual(['a', 'b', '…'])
+		expect(previewParts('\n', 0, 1, true)).toEqual(['…'])
+		expect(previewParts('\n', 0, 3, true)).toEqual(['\\n', '"'])
+		expect(previewParts('😀', 0, 1, false)).toEqual(['…'])
+		expect(previewParts('😀', 0, 2, false)).toEqual(['😀'])
+	})
+
+	it('uses own positions for duplicate and prototype-shaped names', () => {
+		const positions = buildPositions(['id', '__proto__', 'id'])
+		expect(Object.getPrototypeOf(positions)).toBeNull()
+		expect(positions).toEqual({ id: 2, ['__proto__']: 1 })
+		expect(readPresence(['id', '__proto__', 'missing'], positions)).toBe(6)
+		expect(readPresence(['inherited'], Object.create({ inherited: 0 }))).toBe(0)
 	})
 })

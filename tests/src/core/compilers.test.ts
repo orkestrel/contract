@@ -1,6 +1,7 @@
-import type { ContractShape, Fault, Guard, JSONSchema, LiteralValue, RawShape } from '@src/core'
+import type { ContractShape, Fault, JSONSchema, LiteralValue, RawShape } from '@src/core'
 import type { TerminalIntrinsic } from '../../setup.js'
 import {
+	iterateIndices,
 	arrayShape,
 	attempt,
 	booleanShape,
@@ -41,6 +42,15 @@ import {
 	validateShape,
 } from '@src/core'
 import {
+	acceptValue,
+	denyValue,
+	createMarker,
+	createEmptyFaults,
+	findAgreementViolations,
+	acceptRecognition,
+	injectMarker,
+	ObservationCounter,
+	throwSentinel,
 	buildDeepShape,
 	buildSharedDagShape,
 	buildWideVocabulary,
@@ -52,7 +62,6 @@ import {
 	createProxiedBrandDeclaration,
 	createRevokedArrayProxy,
 	createNonEnumerableRecord,
-	buildSparseArray,
 	createRevokedProxy,
 	createStatefulGetter,
 	createThrowingGetter,
@@ -212,125 +221,124 @@ describe('validator consolidation (R6-A)', () => {
 })
 
 describe('validateShape', () => {
-	it.each([
-		[
-			'cloneShape',
-			(shape: ContractShape) => cloneShape(shape),
-			'validateShape: every structural child must be a shape',
-		],
-		[
-			'ownShape',
-			(shape: ContractShape) => ownShape(shape),
-			'validateShape: every structural child must be a shape',
-		],
-		[
-			'validateShape',
-			(shape: ContractShape) => validateShape(shape),
-			'validateShape: every structural child must be a shape',
-		],
-		[
-			'compileSchema',
-			(shape: ContractShape) => compileSchema(shape),
-			'validateShape: every structural child must be a shape',
-		],
-		[
-			'compileGuard',
-			(shape: ContractShape) => compileGuard(shape),
-			'validateShape: every structural child must be a shape',
-		],
-		[
-			'compileParser',
-			(shape: ContractShape) => compileParser(shape),
-			'validateShape: every structural child must be a shape',
-		],
-		[
-			'compileGenerator',
-			(shape: ContractShape) => compileGenerator(shape, () => 0),
-			'validateShape: every structural child must be a shape',
-		],
-		[
-			'compileReporter',
-			(shape: ContractShape) => compileReporter(shape, undefined),
-			'validateShape: every structural child must be a shape',
-		],
-		[
-			'compileAuditor',
-			(shape: ContractShape) => compileAuditor(shape, undefined),
-			'validateShape: every structural child must be a shape',
-		],
-		[
-			'createContract',
-			(shape: ContractShape) => createContract(shape),
-			'validateShape: every structural child must be a shape',
-		],
-	] satisfies ReadonlyArray<readonly [string, (shape: ContractShape) => unknown, string]>)(
-		'%s refuses an accessor-backed property entry without invoking it',
-		(_name, entry, message) => {
-			let reads = 0
-			const properties: Record<string, ContractShape> = {}
-			Object.defineProperty(properties, 'value', {
-				enumerable: true,
-				get() {
-					reads += 1
-					return stringShape()
-				},
-			})
-			const error = captureContractError(() => entry({ category: 'object', properties }))
+	it.each(
+		Object.freeze<ReadonlyArray<readonly [string, (shape: ContractShape) => unknown, string]>>([
+			[
+				'cloneShape',
+				(shape: ContractShape) => cloneShape(shape),
+				'validateShape: every structural child must be a shape',
+			],
+			[
+				'ownShape',
+				(shape: ContractShape) => ownShape(shape),
+				'validateShape: every structural child must be a shape',
+			],
+			[
+				'validateShape',
+				(shape: ContractShape) => validateShape(shape),
+				'validateShape: every structural child must be a shape',
+			],
+			[
+				'compileSchema',
+				(shape: ContractShape) => compileSchema(shape),
+				'validateShape: every structural child must be a shape',
+			],
+			[
+				'compileGuard',
+				(shape: ContractShape) => compileGuard(shape),
+				'validateShape: every structural child must be a shape',
+			],
+			[
+				'compileParser',
+				(shape: ContractShape) => compileParser(shape),
+				'validateShape: every structural child must be a shape',
+			],
+			[
+				'compileGenerator',
+				(shape: ContractShape) => compileGenerator(shape, () => 0),
+				'validateShape: every structural child must be a shape',
+			],
+			[
+				'compileReporter',
+				(shape: ContractShape) => compileReporter(shape, undefined),
+				'validateShape: every structural child must be a shape',
+			],
+			[
+				'compileAuditor',
+				(shape: ContractShape) => compileAuditor(shape, undefined),
+				'validateShape: every structural child must be a shape',
+			],
+			[
+				'createContract',
+				(shape: ContractShape) => createContract(shape),
+				'validateShape: every structural child must be a shape',
+			],
+		]),
+	)('%s refuses an accessor-backed property entry without invoking it', (_name, entry, message) => {
+		const reads = new ObservationCounter()
+		const properties: Record<string, ContractShape> = {}
+		Object.defineProperty(properties, 'value', {
+			enumerable: true,
+			get() {
+				reads.increment()
+				return stringShape()
+			},
+		})
+		const error = captureContractError(() => entry({ category: 'object', properties }))
 
-			expect(reads).toBe(0)
-			expect(error.code).toBe('structure')
-			expect(error.message).toBe(message)
-			expect(error.context?.path).toEqual(['properties', 'value'])
-		},
-	)
+		expect(reads.value).toBe(0)
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe(message)
+		expect(error.context?.path).toEqual(['properties', 'value'])
+	})
 
-	it.each([
-		['cloneShape', (shape: ContractShape) => cloneShape(shape), true],
-		['ownShape', (shape: ContractShape) => ownShape(shape), true],
-		['validateShape', (shape: ContractShape) => validateShape(shape), false],
-		['compileSchema', (shape: ContractShape) => compileSchema(shape), true],
-		['compileGuard', (shape: ContractShape) => compileGuard(shape), true],
-		['compileParser', (shape: ContractShape) => compileParser(shape), true],
-		['compileGenerator', (shape: ContractShape) => compileGenerator(shape, () => 0), true],
-		['compileReporter', (shape: ContractShape) => compileReporter(shape, undefined), true],
-		['compileAuditor', (shape: ContractShape) => compileAuditor(shape, undefined), true],
-		// `createContract` reaches the declaration through OWNERSHIP now, exactly
-		// like the six standalone compilers beside it. It used to gate the caller's
-		// live source first and answer in the gate's vocabulary; that pass was
-		// discarded work over a population the artifacts never saw, and removing it
-		// leaves one population with one refusal vocabulary at every entry.
-		['createContract', (shape: ContractShape) => createContract(shape), true],
-	] satisfies ReadonlyArray<readonly [string, (shape: ContractShape) => unknown, boolean]>)(
+	it.each(
+		Object.freeze<ReadonlyArray<readonly [string, (shape: ContractShape) => unknown, boolean]>>([
+			['cloneShape', (shape: ContractShape) => cloneShape(shape), true],
+			['ownShape', (shape: ContractShape) => ownShape(shape), true],
+			['validateShape', (shape: ContractShape) => validateShape(shape), false],
+			['compileSchema', (shape: ContractShape) => compileSchema(shape), true],
+			['compileGuard', (shape: ContractShape) => compileGuard(shape), true],
+			['compileParser', (shape: ContractShape) => compileParser(shape), true],
+			['compileGenerator', (shape: ContractShape) => compileGenerator(shape, () => 0), true],
+			['compileReporter', (shape: ContractShape) => compileReporter(shape, undefined), true],
+			['compileAuditor', (shape: ContractShape) => compileAuditor(shape, undefined), true],
+			// `createContract` reaches the declaration through OWNERSHIP now, exactly
+			// like the six standalone compilers beside it. It used to gate the caller's
+			// live source first and answer in the gate's vocabulary; that pass was
+			// discarded work over a population the artifacts never saw, and removing it
+			// leaves one population with one refusal vocabulary at every entry.
+			['createContract', (shape: ContractShape) => createContract(shape), true],
+		]),
+	)(
 		'%s applies descriptor-first accessor policy across all 38 node fields',
 		(_name, entry, ownership) => {
-			let fields = 0
-			for (const source of Object.values(COMPLETE_SHAPES)) {
+			const cases = Object.values(COMPLETE_SHAPES).flatMap((source) =>
+				Object.keys(source).map((field) => ({ source, field })),
+			)
+			for (const { source, field } of cases) {
 				const category = source.category
-				for (const field of Object.keys(source)) {
-					fields += 1
-					let reads = 0
-					let root: ContractShape = structuredClone(source)
-					let node = root
-					if (category === 'optional') {
-						root = { category: 'object', properties: { value: root } }
-						if (root.category === 'object') {
-							const child = root.properties.value
-							if (child !== undefined) node = child
-						}
-					}
+				{
+					const reads = new ObservationCounter()
+					const node: ContractShape = structuredClone(source)
+					const root: ContractShape =
+						category === 'optional' ? { category: 'object', properties: { value: node } } : node
 					const captured: unknown = Reflect.get(source, field)
 					Object.defineProperty(node, field, {
 						enumerable: true,
 						configurable: true,
 						get() {
-							reads += 1
+							reads.increment()
 							return field === 'pattern' ? Object.freeze(new RegExp('')) : captured
 						},
 					})
 
 					const outcome = attempt(() => entry(root))
 					expect(outcome.success, `${category}.${field}`).toBe(field === 'pattern')
-					expect(field === 'pattern' ? reads >= 2 : reads === 0, `${category}.${field}`).toBe(true)
+					expect(
+						field === 'pattern' ? reads.value >= 2 : reads.value === 0,
+						`${category}.${field}`,
+					).toBe(true)
 					if (outcome.success) continue
 					expect(isContractError(outcome.error), `${category}.${field}`).toBe(true)
 					if (!isContractError(outcome.error)) continue
@@ -349,36 +357,35 @@ describe('validateShape', () => {
 					expect(outcome.error.context?.path, `${category}.${field}`).toEqual(path)
 				}
 			}
-			expect(fields).toBe(38)
+			expect(cases.length).toBe(38)
 		},
 	)
 
-	it.each([
-		['cloneShape', (shape: ContractShape) => cloneShape(shape)],
-		['ownShape', (shape: ContractShape) => ownShape(shape)],
-		['compileSchema', (shape: ContractShape) => compileSchema(shape)],
-		['compileGuard', (shape: ContractShape) => compileGuard(shape)],
-		['compileParser', (shape: ContractShape) => compileParser(shape)],
-		['compileGenerator', (shape: ContractShape) => compileGenerator(shape, () => 0)],
-		['compileReporter', (shape: ContractShape) => compileReporter(shape, undefined)],
-		['compileAuditor', (shape: ContractShape) => compileAuditor(shape, undefined)],
-	] satisfies ReadonlyArray<readonly [string, (shape: ContractShape) => unknown]>)(
-		'%s performs two present-data node-field reads and none after capture',
-		(_name, entry) => {
-			let reads = 0
-			const source = new Proxy({ category: 'string', min: 1 } satisfies ContractShape, {
-				get(target, property, receiver) {
-					if (property !== 'min') return Reflect.get(target, property, receiver)
-					reads += 1
-					return reads <= 2 ? 1 : 3
-				},
-			})
+	it.each(
+		Object.freeze<ReadonlyArray<readonly [string, (shape: ContractShape) => unknown]>>([
+			['cloneShape', (shape: ContractShape) => cloneShape(shape)],
+			['ownShape', (shape: ContractShape) => ownShape(shape)],
+			['compileSchema', (shape: ContractShape) => compileSchema(shape)],
+			['compileGuard', (shape: ContractShape) => compileGuard(shape)],
+			['compileParser', (shape: ContractShape) => compileParser(shape)],
+			['compileGenerator', (shape: ContractShape) => compileGenerator(shape, () => 0)],
+			['compileReporter', (shape: ContractShape) => compileReporter(shape, undefined)],
+			['compileAuditor', (shape: ContractShape) => compileAuditor(shape, undefined)],
+		]),
+	)('%s performs two present-data node-field reads and none after capture', (_name, entry) => {
+		const reads = new ObservationCounter()
+		const source = new Proxy({ category: 'string', min: 1 } satisfies ContractShape, {
+			get(target, property, receiver) {
+				if (property !== 'min') return Reflect.get(target, property, receiver)
+				reads.increment()
+				return reads.value <= 2 ? 1 : 3
+			},
+		})
 
-			entry(source)
+		entry(source)
 
-			expect(reads).toBe(2)
-		},
-	)
+		expect(reads.value).toBe(2)
+	})
 
 	it('compiles the one population createContract captured, in ownership reads alone', () => {
 		// The single-population contract, bound by a source that would ANSWER
@@ -389,20 +396,20 @@ describe('validateShape', () => {
 		// reads and compiles exactly what ownership captured, so the phase this
 		// source would have offered a third and fourth reader is never reached and
 		// cannot appear in an artifact.
-		let reads = 0
-		let descriptors = 0
+		const reads = new ObservationCounter()
+		const descriptors = new ObservationCounter()
 		const source = new Proxy({ category: 'string', min: 1 } satisfies ContractShape, {
 			get(target, property, receiver) {
 				if (property !== 'min') return Reflect.get(target, property, receiver)
-				reads += 1
-				if (reads <= 2) return 1
+				reads.increment()
+				if (reads.value <= 2) return 1
 				return 3
 			},
 			getOwnPropertyDescriptor(target, property) {
 				const descriptor = Reflect.getOwnPropertyDescriptor(target, property)
 				if (property !== 'min' || descriptor === undefined) return descriptor
-				descriptors += 1
-				return { ...descriptor, value: descriptors === 1 ? 1 : 3 }
+				descriptors.increment()
+				return { ...descriptor, value: descriptors.value === 1 ? 1 : 3 }
 			},
 		})
 
@@ -411,45 +418,44 @@ describe('validateShape', () => {
 		expect(contract.schema.minLength).toBe(1)
 		expect(contract.is('x')).toBe(true)
 		expect(contract.is('')).toBe(false)
-		expect(reads).toBe(2)
-		expect(descriptors).toBe(1)
+		expect(reads.value).toBe(2)
+		expect(descriptors.value).toBe(1)
 	})
 
-	it.each([
-		['cloneShape', (shape: ContractShape) => cloneShape(shape)],
-		['ownShape', (shape: ContractShape) => ownShape(shape)],
-		['compileSchema', (shape: ContractShape) => compileSchema(shape)],
-		['compileGuard', (shape: ContractShape) => compileGuard(shape)],
-		['compileParser', (shape: ContractShape) => compileParser(shape)],
-		['compileGenerator', (shape: ContractShape) => compileGenerator(shape, () => 0)],
-		['compileReporter', (shape: ContractShape) => compileReporter(shape, undefined)],
-		['compileAuditor', (shape: ContractShape) => compileAuditor(shape, undefined)],
-		// The row this table gained when `createContract`'s discarded pre-ownership
-		// walk was removed: it now reads a property entry exactly as often as the
-		// eight doors above it, because it reaches the declaration the same way.
-		['createContract', (shape: ContractShape) => createContract(shape)],
-	] satisfies ReadonlyArray<readonly [string, (shape: ContractShape) => unknown]>)(
-		'%s retains the two-read property-entry population without a third read',
-		(_name, entry) => {
-			const captured = numberShape()
-			const later = stringShape()
-			let reads = 0
-			const properties = new Proxy(
-				{ value: captured },
-				{
-					get(target, property, receiver) {
-						if (property !== 'value') return Reflect.get(target, property, receiver)
-						reads += 1
-						return reads <= 2 ? captured : later
-					},
+	it.each(
+		Object.freeze<ReadonlyArray<readonly [string, (shape: ContractShape) => unknown]>>([
+			['cloneShape', (shape: ContractShape) => cloneShape(shape)],
+			['ownShape', (shape: ContractShape) => ownShape(shape)],
+			['compileSchema', (shape: ContractShape) => compileSchema(shape)],
+			['compileGuard', (shape: ContractShape) => compileGuard(shape)],
+			['compileParser', (shape: ContractShape) => compileParser(shape)],
+			['compileGenerator', (shape: ContractShape) => compileGenerator(shape, () => 0)],
+			['compileReporter', (shape: ContractShape) => compileReporter(shape, undefined)],
+			['compileAuditor', (shape: ContractShape) => compileAuditor(shape, undefined)],
+			// The row this table gained when `createContract`'s discarded pre-ownership
+			// walk was removed: it now reads a property entry exactly as often as the
+			// eight doors above it, because it reaches the declaration the same way.
+			['createContract', (shape: ContractShape) => createContract(shape)],
+		]),
+	)('%s retains the two-read property-entry population without a third read', (_name, entry) => {
+		const captured = numberShape()
+		const later = stringShape()
+		const reads = new ObservationCounter()
+		const properties = new Proxy(
+			{ value: captured },
+			{
+				get(target, property, receiver) {
+					if (property !== 'value') return Reflect.get(target, property, receiver)
+					reads.increment()
+					return reads.value <= 2 ? captured : later
 				},
-			)
+			},
+		)
 
-			entry({ category: 'object', properties })
+		entry({ category: 'object', properties })
 
-			expect(reads).toBe(2)
-		},
-	)
+		expect(reads.value).toBe(2)
+	})
 
 	it('compiles every artifact from the two-read createContract property population', () => {
 		// The control for the refusal below, and the positive half of the
@@ -458,14 +464,14 @@ describe('validateShape', () => {
 		// arrives to ask.
 		const captured = numberShape()
 		const later = stringShape()
-		let reads = 0
+		const reads = new ObservationCounter()
 		const properties = new Proxy(
 			{ value: captured },
 			{
 				get(target, property, receiver) {
 					if (property !== 'value') return Reflect.get(target, property, receiver)
-					reads += 1
-					return reads <= 2 ? captured : later
+					reads.increment()
+					return reads.value <= 2 ? captured : later
 				},
 			},
 		)
@@ -477,7 +483,7 @@ describe('validateShape', () => {
 		expect(contract.is({ value: 'x' })).toBe(false)
 		expect(contract.parse({ value: 1 })).toEqual({ value: 1 })
 		expect(contract.parse({ value: 'x' })).toBeUndefined()
-		expect(reads).toBe(2)
+		expect(reads.value).toBe(2)
 	})
 
 	it('refuses an invalid captured property population rather than compiling it', () => {
@@ -487,13 +493,13 @@ describe('validateShape', () => {
 		// case needed a fourth-read instrument to reach at all; it is now reachable
 		// on the entry's own first reads and refused there.
 		const invalid: ContractShape = JSON.parse('{"category":"string","min":"invalid"}')
-		let reads = 0
+		const reads = new ObservationCounter()
 		const properties = new Proxy(
 			{ value: invalid },
 			{
 				get(target, property, receiver) {
 					if (property !== 'value') return Reflect.get(target, property, receiver)
-					reads += 1
+					reads.increment()
 					return invalid
 				},
 			},
@@ -501,7 +507,7 @@ describe('validateShape', () => {
 
 		const error = captureContractError(() => createContract({ category: 'object', properties }))
 
-		expect(reads).toBe(2)
+		expect(reads.value).toBe(2)
 		expect(error.code).toBe('structure')
 		expect(error.message).toBe('validateShape: string min must be a number')
 		expect(error.context?.path).toEqual(['properties', 'value', 'min'])
@@ -558,43 +564,39 @@ describe('validateShape', () => {
 				expect(alternates.has(name)).toBe(true)
 				const alternate = alternates.get(name)
 
-				let stableRoot: ContractShape = structuredClone(source)
-				if (category === 'optional') {
-					stableRoot = { category: 'object', properties: { value: stableRoot } }
-				}
+				const stableRoot: ContractShape =
+					category === 'optional'
+						? { category: 'object', properties: { value: structuredClone(source) } }
+						: structuredClone(source)
 				const stableSchema = compileSchema(stableRoot)
 
-				let laterRoot: ContractShape = structuredClone(source)
-				let laterNode = laterRoot
-				if (category === 'optional') {
-					laterRoot = { category: 'object', properties: { value: laterRoot } }
-					if (laterRoot.category === 'object') {
-						const child = laterRoot.properties.value
-						if (child !== undefined) laterNode = child
-					}
-				}
+				const laterNode: ContractShape = structuredClone(source)
+				const laterRoot: ContractShape =
+					category === 'optional'
+						? { category: 'object', properties: { value: laterNode } }
+						: laterNode
 				Reflect.set(laterNode, field, alternate)
 				const laterSchema = compileSchema(laterRoot)
 				expect(laterSchema, `${name} observable opposite`).not.toEqual(stableSchema)
 
 				const target: ContractShape = structuredClone(source)
 				const captured: unknown = Reflect.get(target, field)
-				let reads = 0
+				const reads = new ObservationCounter()
 				const changing = new Proxy(target, {
 					get(current, property, receiver) {
 						if (property !== field) return Reflect.get(current, property, receiver)
-						reads += 1
-						return reads <= 2 ? captured : alternate
+						reads.increment()
+						return reads.value <= 2 ? captured : alternate
 					},
 				})
-				let changingRoot: ContractShape = changing
-				if (category === 'optional') {
-					changingRoot = { category: 'object', properties: { value: changing } }
-				}
+				const changingRoot: ContractShape =
+					category === 'optional'
+						? { category: 'object', properties: { value: changing } }
+						: changing
 
 				const clone = cloneShape(changingRoot)
 				expect(compileSchema(clone), `${name} carried population`).toEqual(stableSchema)
-				expect(reads, `${name} read schedule`).toBe(2)
+				expect(reads.value, `${name} read schedule`).toBe(2)
 
 				const prefix = category === 'optional' ? ['properties', 'value'] : []
 				const path = field === 'category' ? prefix : [...prefix, field]
@@ -610,29 +612,29 @@ describe('validateShape', () => {
 						return alternate
 					},
 				})
-				let describedRoot: ContractShape = described
-				if (category === 'optional') {
-					describedRoot = { category: 'object', properties: { value: described } }
-				}
+				const describedRoot: ContractShape =
+					category === 'optional'
+						? { category: 'object', properties: { value: described } }
+						: described
 				const describedError = captureContractError(() => cloneShape(describedRoot))
 				expect(describedError.code, `${name} descriptor disagreement`).toBe('structure')
 				expect(describedError.message, `${name} descriptor disagreement`).toBe(disagreementMessage)
 				expect(describedError.context?.path, `${name} descriptor disagreement`).toEqual(path)
 
-				let disagreementReads = 0
+				const disagreementReads = new ObservationCounter()
 				const repeatedTarget: ContractShape = structuredClone(source)
 				const repeatedCaptured: unknown = Reflect.get(repeatedTarget, field)
 				const repeated = new Proxy(repeatedTarget, {
 					get(current, property, receiver) {
 						if (property !== field) return Reflect.get(current, property, receiver)
-						disagreementReads += 1
-						return disagreementReads === 1 ? repeatedCaptured : alternate
+						disagreementReads.increment()
+						return disagreementReads.value === 1 ? repeatedCaptured : alternate
 					},
 				})
-				let repeatedRoot: ContractShape = repeated
-				if (category === 'optional') {
-					repeatedRoot = { category: 'object', properties: { value: repeated } }
-				}
+				const repeatedRoot: ContractShape =
+					category === 'optional'
+						? { category: 'object', properties: { value: repeated } }
+						: repeated
 				const repeatedError = captureContractError(() => cloneShape(repeatedRoot))
 				expect(repeatedError.code, `${name} repeated disagreement`).toBe('structure')
 				expect(repeatedError.message, `${name} repeated disagreement`).toBe(disagreementMessage)
@@ -640,7 +642,7 @@ describe('validateShape', () => {
 
 				const inheritedNode: ContractShape = structuredClone(source)
 				Reflect.deleteProperty(inheritedNode, field)
-				let inheritedReads = 0
+				const inheritedReads = new ObservationCounter()
 				// A genuine foreign realm's own `Object.prototype`, polluted only in
 				// that realm: the node stays a plain record whose declared field is
 				// reachable but inherited, which is the population this case exists
@@ -648,17 +650,17 @@ describe('validateShape', () => {
 				const prototype = createForeignPrototype()
 				Object.defineProperty(prototype, field, {
 					get() {
-						inheritedReads += 1
+						inheritedReads.increment()
 						return captured
 					},
 				})
 				Object.setPrototypeOf(inheritedNode, prototype)
-				let inheritedRoot: ContractShape = inheritedNode
-				if (category === 'optional') {
-					inheritedRoot = { category: 'object', properties: { value: inheritedNode } }
-				}
+				const inheritedRoot: ContractShape =
+					category === 'optional'
+						? { category: 'object', properties: { value: inheritedNode } }
+						: inheritedNode
 				const inheritedError = captureContractError(() => cloneShape(inheritedRoot))
-				expect(inheritedReads, `${name} inherited invocation`).toBe(0)
+				expect(inheritedReads.value, `${name} inherited invocation`).toBe(0)
 				expect(inheritedError.code, `${name} inherited code`).toBe('structure')
 				expect(inheritedError.message, `${name} inherited message`).toBe(
 					field === 'category'
@@ -669,10 +671,10 @@ describe('validateShape', () => {
 
 				const absentNode: ContractShape = structuredClone(source)
 				Reflect.deleteProperty(absentNode, field)
-				let absentRoot: ContractShape = absentNode
-				if (category === 'optional') {
-					absentRoot = { category: 'object', properties: { value: absentNode } }
-				}
+				const absentRoot: ContractShape =
+					category === 'optional'
+						? { category: 'object', properties: { value: absentNode } }
+						: absentNode
 				const required =
 					field === 'category' ||
 					(category === 'literal' && field === 'values') ||
@@ -699,10 +701,10 @@ describe('validateShape', () => {
 						return Reflect.getOwnPropertyDescriptor(current, property)
 					},
 				})
-				let descriptorRoot: ContractShape = descriptorTrap
-				if (category === 'optional') {
-					descriptorRoot = { category: 'object', properties: { value: descriptorTrap } }
-				}
+				const descriptorRoot: ContractShape =
+					category === 'optional'
+						? { category: 'object', properties: { value: descriptorTrap } }
+						: descriptorTrap
 				const descriptorError = captureContractError(() => cloneShape(descriptorRoot))
 				expect(descriptorError.code, `${name} descriptor trap`).toBe('clone')
 				expect(descriptorError.message, `${name} descriptor trap`).toBe(
@@ -716,10 +718,8 @@ describe('validateShape', () => {
 						return Reflect.get(current, property, receiver)
 					},
 				})
-				let getRoot: ContractShape = getTrap
-				if (category === 'optional') {
-					getRoot = { category: 'object', properties: { value: getTrap } }
-				}
+				const getRoot: ContractShape =
+					category === 'optional' ? { category: 'object', properties: { value: getTrap } } : getTrap
 				const getError = captureContractError(() => cloneShape(getRoot))
 				expect(getError.code, `${name} get trap`).toBe('clone')
 				expect(getError.message, `${name} get trap`).toBe(
@@ -736,10 +736,10 @@ describe('validateShape', () => {
 							return Reflect.has(current, property)
 						},
 					})
-					let presenceRoot: ContractShape = presenceTrap
-					if (category === 'optional') {
-						presenceRoot = { category: 'object', properties: { value: presenceTrap } }
-					}
+					const presenceRoot: ContractShape =
+						category === 'optional'
+							? { category: 'object', properties: { value: presenceTrap } }
+							: presenceTrap
 					presenceErrors.push(captureContractError(() => cloneShape(presenceRoot)))
 				}
 				expect(presenceErrors.map((error) => error.code)).toEqual(
@@ -803,7 +803,7 @@ describe('validateShape', () => {
 				context: { path: [], shape: 'string', received: '/a/i' },
 			},
 		]
-		let randomReads = 0
+		const randomReads = new ObservationCounter()
 
 		for (const entry of entries) {
 			const outcomes = [
@@ -824,7 +824,7 @@ describe('validateShape', () => {
 					name: 'compileGenerator',
 					outcome: attempt(() =>
 						compileGenerator(entry.shape, () => {
-							randomReads += 1
+							randomReads.increment()
 							return 0
 						}),
 					),
@@ -865,7 +865,7 @@ describe('validateShape', () => {
 				expect(Object.hasOwn(result.outcome.error, 'cause')).toBe(false)
 			}
 		}
-		expect(randomReads).toBe(0)
+		expect(randomReads.value).toBe(0)
 
 		for (const schema of [
 			{},
@@ -876,14 +876,14 @@ describe('validateShape', () => {
 		]) {
 			const error = captureContractError(() =>
 				compileGenerator({ category: 'raw', schema }, () => {
-					randomReads += 1
+					randomReads.increment()
 					return 0
 				}),
 			)
 			expect(error.code).toBe('generate')
 			expect(error.message).toContain('cannot be auto-generated')
 		}
-		expect(randomReads).toBe(0)
+		expect(randomReads.value).toBe(0)
 
 		const plain = { category: 'string', pattern: /a/ } satisfies ContractShape
 		const inline = { category: 'string', pattern: /[aA]/ } satisfies ContractShape
@@ -1304,7 +1304,7 @@ describe('validateShape', () => {
 	})
 
 	it('refuses an impossible literal length before indexed work', () => {
-		let reads = 0
+		const reads = new ObservationCounter()
 		const values = new Proxy(['value'], {
 			get(target, key, receiver) {
 				if (key === 'length') return 2 ** 32
@@ -1312,7 +1312,7 @@ describe('validateShape', () => {
 			},
 			getOwnPropertyDescriptor(target, key) {
 				if (key === '0') {
-					reads += 1
+					reads.increment()
 					throw new Error('index descriptor must not be read')
 				}
 				return Reflect.getOwnPropertyDescriptor(target, key)
@@ -1324,11 +1324,11 @@ describe('validateShape', () => {
 
 		expect(error.code).toBe('structure')
 		expect(error.message).toContain('validateShape: values must be a finite literal array')
-		expect(reads).toBe(0)
+		expect(reads.value).toBe(0)
 	})
 
 	it('refuses an impossible union length before indexed work', () => {
-		let reads = 0
+		const reads = new ObservationCounter()
 		const variants = new Proxy([stringShape()], {
 			get(target, key, receiver) {
 				if (key === 'length') return 2 ** 32
@@ -1336,7 +1336,7 @@ describe('validateShape', () => {
 			},
 			getOwnPropertyDescriptor(target, key) {
 				if (key === '0') {
-					reads += 1
+					reads.increment()
 					throw new Error('index descriptor must not be read')
 				}
 				return Reflect.getOwnPropertyDescriptor(target, key)
@@ -1348,7 +1348,7 @@ describe('validateShape', () => {
 
 		expect(error.code).toBe('structure')
 		expect(error.message).toContain('validateShape: variants must be a finite array')
-		expect(reads).toBe(0)
+		expect(reads.value).toBe(0)
 	})
 
 	it('refuses sparse literal and union populations at the shared declaration gate', () => {
@@ -1430,8 +1430,10 @@ describe('validateShape', () => {
 	})
 
 	it('rejects excessive depth at every standalone compiler entry before recursion', () => {
-		let shape: ContractShape = stringShape()
-		for (let level = 0; level < 5_000; level += 1) shape = { category: 'array', items: shape }
+		const shape = Array.from({ length: 5_000 }).reduce<ContractShape>(
+			(items) => ({ category: 'array', items }),
+			stringShape(),
+		)
 		const schemaError = captureContractError(() => compileSchema(shape))
 		const guardError = captureContractError(() => compileGuard(shape))
 		const parserError = captureContractError(() => compileParser(shape))
@@ -1462,7 +1464,7 @@ describe('validateShape', () => {
 		expect(() => createContract(accepted)).not.toThrow()
 
 		const refused = buildSharedDagShape(14)
-		const doors = [
+		const doors = Object.freeze([
 			() => compileSchema(refused),
 			() => compileGuard(refused),
 			() => compileParser(refused),
@@ -1472,7 +1474,7 @@ describe('validateShape', () => {
 			() => validateShape(refused),
 			() => validateShape(refused),
 			() => createContract(refused),
-		]
+		])
 		for (const door of doors) {
 			const error = captureContractError(door)
 			expect(error.code).toBe('expansion')
@@ -1547,7 +1549,7 @@ describe('malformed shape children', () => {
 		const source: { readonly shape: ContractShape } = JSON.parse('{}')
 		Object.defineProperty(source, 'shape', { value: createRevokedProxy() })
 		const shape = source.shape
-		const errors = [
+		const errors = Object.freeze([
 			() => compileSchema(shape),
 			() => compileGuard(shape),
 			() => compileParser(shape),
@@ -1555,7 +1557,7 @@ describe('malformed shape children', () => {
 			() => compileReporter(shape, undefined),
 			() => compileAuditor(shape, undefined),
 			() => createContract(shape),
-		].map((operation) => captureContractError(operation).code)
+		]).map((operation) => captureContractError(operation).code)
 
 		// Seven doors, one code. `createContract` used to answer `structure` here
 		// because a discarded pre-ownership walk met the revoked proxy first; it now
@@ -1578,16 +1580,16 @@ describe('malformed shape children', () => {
 			},
 		})
 
-		const revokedCodes = [
+		const revokedCodes = Object.freeze([
 			() => ownShape(revokedSource.shape),
 			() => cloneShape(revokedSource.shape),
 			() => validateShape(revokedSource.shape),
 			() => validateShape(revokedSource.shape),
-		].map((operation) => captureContractError(operation).code)
+		]).map((operation) => captureContractError(operation).code)
 
 		expect(revokedCodes).toEqual(['clone', 'clone', 'structure', 'structure'])
 
-		const throwingCodes = [
+		const throwingCodes = Object.freeze([
 			() => ownShape(throwing),
 			() => cloneShape(throwing),
 			() => validateShape(throwing),
@@ -1599,7 +1601,7 @@ describe('malformed shape children', () => {
 			() => compileReporter(throwing, undefined),
 			() => compileAuditor(throwing, undefined),
 			() => createContract(throwing),
-		].map((operation) => captureContractError(operation).code)
+		]).map((operation) => captureContractError(operation).code)
 
 		expect(throwingCodes).toEqual([
 			'structure',
@@ -1747,7 +1749,7 @@ describe('malformed shape children', () => {
 				enumerable: true,
 			})
 			Object.freeze(entry.shape)
-			const errors = [
+			const errors = Object.freeze([
 				captureContractError(() => validateShape(entry.shape)),
 				captureContractError(() => compileSchema(entry.shape)),
 				captureContractError(() => compileGuard(entry.shape)),
@@ -1756,7 +1758,7 @@ describe('malformed shape children', () => {
 				captureContractError(() => compileReporter(entry.shape, '')),
 				captureContractError(() => compileAuditor(entry.shape, '')),
 				captureContractError(() => createContract(entry.shape)),
-			]
+			])
 			for (const error of errors) {
 				expect(error.code).toBe('structure')
 				expect(error.context?.path).toEqual(entry.path)
@@ -1845,7 +1847,7 @@ describe('malformed shape children', () => {
 		]
 
 		for (const shape of cases) {
-			const errors = [
+			const errors = Object.freeze([
 				captureContractError(() => validateShape(shape)),
 				captureContractError(() => compileSchema(shape)),
 				captureContractError(() => compileGuard(shape)),
@@ -1853,7 +1855,7 @@ describe('malformed shape children', () => {
 				captureContractError(() => compileGenerator(shape, () => 0)),
 				captureContractError(() => compileReporter(shape, undefined)),
 				captureContractError(() => compileAuditor(shape, undefined)),
-			]
+			])
 			for (const error of errors) {
 				expect(error.code).toBe('structure')
 				expect(error).not.toBeInstanceOf(TypeError)
@@ -1862,13 +1864,13 @@ describe('malformed shape children', () => {
 	})
 
 	it('contains hostile fields and revoked proxies in every structural slot at depth', () => {
-		let reads = 0
+		const reads = new ObservationCounter()
 		const secondRead: ContractShape = JSON.parse('{"category":"string"}')
 		Object.defineProperty(secondRead, 'description', {
 			enumerable: true,
 			get() {
-				reads += 1
-				if (reads % 2 === 0) throw new Error('second read')
+				reads.increment()
+				if (reads.value % 2 === 0) throw new Error('second read')
 				return 'stable once'
 			},
 		})
@@ -2091,7 +2093,7 @@ describe('malformed shape children', () => {
 		]
 
 		for (const entry of cases) {
-			const errors = [
+			const errors = Object.freeze([
 				captureContractError(() => cloneShape(entry.shape)),
 				captureContractError(() => ownShape(entry.shape)),
 				captureContractError(() => validateShape(entry.shape)),
@@ -2102,7 +2104,7 @@ describe('malformed shape children', () => {
 				captureContractError(() => compileReporter(entry.shape, undefined)),
 				captureContractError(() => compileAuditor(entry.shape, undefined)),
 				captureContractError(() => createContract(entry.shape)),
-			]
+			])
 
 			for (const error of errors) {
 				expect(error.code).toBe('structure')
@@ -2151,7 +2153,7 @@ describe('malformed shape children', () => {
 		)
 
 		for (const entry of cases) {
-			const errors = [
+			const errors = Object.freeze([
 				captureContractError(() => cloneShape(entry.shape)),
 				captureContractError(() => ownShape(entry.shape)),
 				captureContractError(() => validateShape(entry.shape)),
@@ -2162,7 +2164,7 @@ describe('malformed shape children', () => {
 				captureContractError(() => compileReporter(entry.shape, undefined)),
 				captureContractError(() => compileAuditor(entry.shape, undefined)),
 				captureContractError(() => createContract(entry.shape)),
-			]
+			])
 
 			for (const error of errors) expect(error.code).toBe(entry.code)
 			expect(captureContractError(() => ownShape(Object.freeze(entry.shape))).code).toBe(entry.code)
@@ -2179,7 +2181,7 @@ describe('malformed shape children', () => {
 		]
 
 		for (const entry of cases) {
-			const errors = [
+			const errors = Object.freeze([
 				captureContractError(() => cloneShape(entry.shape)),
 				captureContractError(() => ownShape(entry.shape)),
 				captureContractError(() => validateShape(entry.shape)),
@@ -2190,7 +2192,7 @@ describe('malformed shape children', () => {
 				captureContractError(() => compileReporter(entry.shape, undefined)),
 				captureContractError(() => compileAuditor(entry.shape, undefined)),
 				captureContractError(() => createContract(entry.shape)),
-			]
+			])
 
 			for (const error of errors) {
 				expect(error.code).toBe('structure')
@@ -2211,10 +2213,10 @@ describe('malformed shape children', () => {
 		// the first door's rather than against itself.
 		const cyclic: ContractShape = { category: 'array', items: { category: 'string' } }
 		Reflect.set(cyclic, 'items', cyclic)
-		let deep: ContractShape = { category: 'string' }
-		for (let level = 0; level <= COMPILE_DEPTH_LIMIT + 1; level += 1) {
-			deep = { category: 'array', items: deep }
-		}
+		const deep = Array.from({ length: COMPILE_DEPTH_LIMIT + 1 + 1 }).reduce<ContractShape>(
+			(items) => ({ category: 'array', items }),
+			{ category: 'string' },
+		)
 		const cases: ReadonlyArray<{ readonly name: string; readonly shape: ContractShape }> = [
 			{
 				name: 'optional placement',
@@ -2246,7 +2248,7 @@ describe('malformed shape children', () => {
 		const disobedient: string[] = []
 
 		for (const entry of cases) {
-			const doors = [
+			const doors = Object.freeze([
 				{ name: 'cloneShape', outcome: attempt(() => cloneShape(entry.shape)) },
 				{ name: 'ownShape', outcome: attempt(() => ownShape(entry.shape)) },
 				{ name: 'validateShape', outcome: attempt(() => validateShape(entry.shape)) },
@@ -2264,7 +2266,7 @@ describe('malformed shape children', () => {
 				{ name: 'compileReporter', outcome: attempt(() => compileReporter(entry.shape, '')) },
 				{ name: 'compileAuditor', outcome: attempt(() => compileAuditor(entry.shape, '')) },
 				{ name: 'createContract', outcome: attempt(() => createContract(entry.shape)) },
-			]
+			])
 			const observed = doors.map((door) => {
 				if (door.outcome.success) return `${door.name}: accepted`
 				if (!isContractError(door.outcome.error)) return `${door.name}: not a ContractError`
@@ -2320,10 +2322,10 @@ describe('malformed shape children', () => {
 		const unreadable = new LateMutation({ a: unreadableHost }, () => {
 			Reflect.set(unreadableHost, 'items', createRevokedProxy())
 		})
-		let tower: ContractShape = { category: 'string' }
-		for (let level = 0; level <= COMPILE_DEPTH_LIMIT; level += 1) {
-			tower = { category: 'array', items: tower }
-		}
+		const tower = Array.from({ length: COMPILE_DEPTH_LIMIT + 1 }).reduce<ContractShape>(
+			(items) => ({ category: 'array', items }),
+			{ category: 'string' },
+		)
 		const deepHost: Record<string, unknown> = { category: 'array', items: { category: 'string' } }
 		const depth = new LateMutation({ a: deepHost }, () => {
 			Reflect.set(deepHost, 'items', tower)
@@ -2633,7 +2635,7 @@ describe('malformed shape children', () => {
 
 		for (const subject of subjects) {
 			const shape = subject.value
-			const doors = [
+			const doors = Object.freeze([
 				{
 					name: 'cloneShape',
 					outcome: attempt(() => Reflect.apply(cloneShape, undefined, [shape])),
@@ -2672,7 +2674,7 @@ describe('malformed shape children', () => {
 					outcome: attempt(() => Reflect.apply(createContract, undefined, [shape])),
 				},
 				{ name: 'ShapeValidator', outcome: attempt(() => new ShapeValidator(shape).validate()) },
-			]
+			])
 			for (const door of doors) {
 				if (!door.outcome.success) refused.push(`${subject.name} at ${door.name}`)
 			}
@@ -2721,12 +2723,12 @@ describe('malformed shape children', () => {
 	})
 
 	it('rejects forged and proxied patterns at validator, cloner, compiler, and contract doors', () => {
-		let reads = 0
+		const reads = new ObservationCounter()
 		const accessor = {}
 		for (const field of ['source', 'flags']) {
 			Object.defineProperty(accessor, field, {
 				get() {
-					reads += 1
+					reads.increment()
 					throw new Error('advertised pattern field')
 				},
 			})
@@ -2737,7 +2739,7 @@ describe('malformed shape children', () => {
 		revoked.revoke()
 
 		for (const pattern of [
-			{ source: '^a+$', flags: '', test() {} },
+			Object.freeze({ source: '^a+$', flags: '', test() {} }),
 			forged,
 			accessor,
 			new Proxy(/proxied/, {}),
@@ -2759,7 +2761,7 @@ describe('malformed shape children', () => {
 			expect(contract.code).toBe('structure')
 			expect(contract.message).toBe('validateShape: string pattern must be a RegExp')
 		}
-		expect(reads).toBe(0)
+		expect(reads.value).toBe(0)
 	})
 
 	it('refuses only an unfrozen accessor result among valid pattern declaration forms', () => {
@@ -2795,7 +2797,7 @@ describe('malformed shape children', () => {
 			expect(outcomes.every((outcome) => outcome.success)).toBe(true)
 		}
 
-		const errors = [
+		const errors = Object.freeze([
 			captureContractError(() => cloneShape(unownedAccessor)),
 			captureContractError(() => ownShape(unownedAccessor)),
 			captureContractError(() => validateShape(unownedAccessor)),
@@ -2806,7 +2808,7 @@ describe('malformed shape children', () => {
 			captureContractError(() => compileReporter(unownedAccessor, 'unowned')),
 			captureContractError(() => compileAuditor(unownedAccessor, 'unowned')),
 			captureContractError(() => createContract(unownedAccessor)),
-		]
+		])
 		for (const error of errors) {
 			expect(error.code).toBe('structure')
 			expect(error.context?.path).toEqual(['pattern'])
@@ -2819,8 +2821,10 @@ describe('malformed shape children', () => {
 		const malformed: ContractShape = JSON.parse('{}')
 		const malformedObject: ContractShape = JSON.parse('{"category":"object"}')
 		const malformedUnion: ContractShape = JSON.parse('{"category":"union"}')
-		let deep: ContractShape = { category: 'nullable', inner: missing }
-		for (let level = 0; level < 64; level += 1) deep = { category: 'array', items: deep }
+		const deep = Array.from({ length: 64 }).reduce<ContractShape>(
+			(items) => ({ category: 'array', items }),
+			{ category: 'nullable', inner: missing },
+		)
 
 		const nested = captureContractError(() =>
 			compileGuard({
@@ -2876,7 +2880,7 @@ describe('JSON Schema vocabulary safety', () => {
 		]
 
 		for (const entry of cases) {
-			const errors = [
+			const errors = Object.freeze([
 				captureContractError(() => validateShape(entry.shape)),
 				captureContractError(() => compileSchema(entry.shape)),
 				captureContractError(() => compileGuard(entry.shape)),
@@ -2885,7 +2889,7 @@ describe('JSON Schema vocabulary safety', () => {
 				captureContractError(() => compileReporter(entry.shape, undefined)),
 				captureContractError(() => compileAuditor(entry.shape, undefined)),
 				captureContractError(() => createContract(entry.shape)),
-			]
+			])
 			for (const error of errors) expect(error.code).toBe(entry.code)
 		}
 	})
@@ -3241,25 +3245,26 @@ describe('compileAuditor — strict soundness matrix', () => {
 	]
 
 	it('audit(v).length === 0 iff guard(v), across every leaf/composite shape and sample', () => {
-		const violations: string[] = []
-		let comparisons = 0
-		let refusals = 0
-		let uncoded = 0
-		for (const [label, shape] of shapes) {
+		const observed = shapes.flatMap(([label, shape]) => {
 			const guard = compileGuard(shape)
-			for (let index = 0; index < SOUNDNESS_SAMPLE.length; index += 1) {
-				const value = SOUNDNESS_SAMPLE[index]
+			return SOUNDNESS_SAMPLE.map((value, index) => {
 				const audited = attempt(() => compileAuditor(shape, value))
-				if (!audited.success) {
-					if (!isContractError(audited.error)) uncoded += 1
-					refusals += 1
-					continue
+				if (!audited.success)
+					return { refusal: true, uncoded: !isContractError(audited.error), violation: undefined }
+				return {
+					refusal: false,
+					uncoded: false,
+					violation:
+						(audited.value.length === 0) !== guard(value) ? `${label}@${String(index)}` : undefined,
 				}
-				const empty = audited.value.length === 0
-				if (empty !== guard(value)) violations.push(`${label}@${String(index)}`)
-				comparisons += 1
-			}
-		}
+			})
+		})
+		const comparisons = observed.filter((result) => !result.refusal).length
+		const refusals = observed.filter((result) => result.refusal).length
+		const uncoded = observed.filter((result) => result.uncoded).length
+		const violations = observed.flatMap((result) =>
+			result.violation === undefined ? [] : [result.violation],
+		)
 		expect(violations).toEqual([])
 		expect(uncoded).toBe(0)
 		expect(refusals).toBeGreaterThan(0)
@@ -3535,7 +3540,10 @@ describe('compileParser', () => {
 		const direct = createContract(arrayShape(numberShape()))
 		const nested = createContract(objectShape({ values: arrayShape(numberShape()) }))
 
-		for (const callback of [() => direct.parse(hostile), () => nested.parse({ values: hostile })]) {
+		for (const callback of Object.freeze([
+			() => direct.parse(hostile),
+			() => nested.parse({ values: hostile }),
+		])) {
 			const error = captureContractError(callback)
 			expect(error.code).toBe('structure')
 			expect(error.message).toBe('compileParser: array could not be read')
@@ -3709,7 +3717,7 @@ describe('compileParser', () => {
 		for (const [shapeIndex, shape] of shapes.entries()) {
 			const parse = compileParser(shape)
 			const guard = compileGuard(shape)
-			for (let index = 0; index < SOUNDNESS_SAMPLE.length; index += 1) {
+			for (const index of iterateIndices(() => SOUNDNESS_SAMPLE.length)) {
 				const outcome = attempt(() => parse(SOUNDNESS_SAMPLE[index]))
 				if (!outcome.success) {
 					if (!isContractError(outcome.error)) violations.push(`raw@shape${shapeIndex}@${index}`)
@@ -3747,7 +3755,7 @@ describe('compileReporter — soundness matrix', () => {
 		const violations: string[] = []
 		for (const [label, shape] of shapes) {
 			const parse = compileParser(shape)
-			for (let index = 0; index < SOUNDNESS_SAMPLE.length; index += 1) {
+			for (const index of iterateIndices(() => SOUNDNESS_SAMPLE.length)) {
 				const value = SOUNDNESS_SAMPLE[index]
 				const empty = compileReporter(shape, value).length === 0
 				const outcome = attempt(() => parse(value))
@@ -4192,7 +4200,7 @@ describe('Fault reason type', () => {
 describe('null / json compileGenerator', () => {
 	it('null generator always emits null and passes the null guard', () => {
 		const guard = compileGuard(nullShape())
-		for (let seed = 0; seed < 20; seed += 1) {
+		for (const seed of Array.from({ length: 20 }).keys()) {
 			const value = compileGenerator(nullShape(), seededRandom(seed))
 			expect(value).toBeNull()
 			expect(guard(value)).toBe(true)
@@ -4201,7 +4209,7 @@ describe('null / json compileGenerator', () => {
 
 	it('json generator output always passes the json guard, across many seeds', () => {
 		const guard = compileGuard(jsonShape())
-		for (let seed = 0; seed < 30; seed += 1) {
+		for (const seed of Array.from({ length: 30 }).keys()) {
 			const value = compileGenerator(jsonShape(), seededRandom(seed))
 			expect(guard(value)).toBe(true)
 		}
@@ -4234,9 +4242,9 @@ describe('compileGenerator', () => {
 		})
 		const guard = compileGuard(shape)
 		const random = seededRandom(7)
-		for (let index = 0; index < 20; index += 1) {
+		Array.from({ length: 20 }).forEach(() => {
 			expect(guard(compileGenerator(shape, random))).toBe(true)
-		}
+		})
 	})
 
 	it('produces bounded strings that satisfy the compiled guard', () => {
@@ -4250,9 +4258,9 @@ describe('compileGenerator', () => {
 		for (const shape of shapes) {
 			const guard = compileGuard(shape)
 			const random = seededRandom(11)
-			for (let index = 0; index < 20; index += 1) {
+			Array.from({ length: 20 }).forEach(() => {
 				expect(guard(compileGenerator(shape, random))).toBe(true)
-			}
+			})
 		}
 	})
 
@@ -4283,7 +4291,7 @@ describe('compileGenerator', () => {
 	it('generates an empty array when max:0 and passes the guard', () => {
 		const shape = arrayShape(stringShape(), { max: 0 })
 		const guard = compileGuard(shape)
-		for (let seed = 0; seed < 20; seed += 1) {
+		for (const seed of Array.from({ length: 20 }).keys()) {
 			const value = compileGenerator(shape, seededRandom(seed))
 			expect(value).toEqual([])
 			expect(guard(value)).toBe(true)
@@ -4293,7 +4301,7 @@ describe('compileGenerator', () => {
 	it('generates within a fractional-bounds integer range and passes the guard', () => {
 		const shape = integerShape({ min: 2.5, max: 3.4 })
 		const guard = compileGuard(shape)
-		for (let seed = 0; seed < 20; seed += 1) {
+		for (const seed of Array.from({ length: 20 }).keys()) {
 			const value = compileGenerator(shape, seededRandom(seed))
 			expect(value).toBe(3)
 			expect(guard(value)).toBe(true)
@@ -4303,7 +4311,7 @@ describe('compileGenerator', () => {
 	it('honors a one-sided negative maximum across one thousand seeds', () => {
 		const shape = numberShape({ max: -1 })
 		const guard = compileGuard(shape)
-		for (let seed = 0; seed < 1000; seed += 1) {
+		for (const seed of Array.from({ length: 1000 }).keys()) {
 			expect(guard(compileGenerator(shape, seededRandom(seed)))).toBe(true)
 		}
 	})
@@ -4388,7 +4396,7 @@ describe('compileGenerator', () => {
 			},
 		)
 		const contract = createContract(numberShape())
-		const errors = [
+		const errors = Object.freeze([
 			captureContractError(() =>
 				Reflect.apply(compileGenerator, undefined, [numberShape(), () => sample]),
 			),
@@ -4399,7 +4407,7 @@ describe('compileGenerator', () => {
 				]),
 			),
 			captureContractError(() => Reflect.apply(contract.generate, contract, [() => sample])),
-		]
+		])
 
 		expect(errors.map((error) => error.message)).toEqual([
 			'drawRandom: the random source must return a value in [0, 1)',
@@ -4460,7 +4468,7 @@ describe('compileGenerator', () => {
 		const sample = Symbol(`${'x'.repeat(56)}\\tail`)
 		const received = preview(sample)
 		const contract = createContract(numberShape())
-		const errors = [
+		const errors = Object.freeze([
 			captureContractError(() =>
 				Reflect.apply(compileGenerator, undefined, [numberShape(), () => sample]),
 			),
@@ -4471,7 +4479,7 @@ describe('compileGenerator', () => {
 				]),
 			),
 			captureContractError(() => Reflect.apply(contract.generate, contract, [() => sample])),
-		]
+		])
 
 		expect(received).toBe(`Symbol(${'x'.repeat(56)}…`)
 		expect(received).not.toMatch(/\\…$/)
@@ -4517,13 +4525,13 @@ describe('compileGenerator', () => {
 	})
 
 	it('does not retrieve a throwing string-slice getter through generator entries', () => {
-		let getters = 0
+		const getters = new ObservationCounter()
 		const reason = Object.freeze({ source: 'string slice' })
 		const sample = Symbol('sample')
 		const contract = createContract(numberShape())
 		const errors = replaceStringSlice(
 			() => {
-				getters += 1
+				getters.increment()
 				throw reason
 			},
 			() => [
@@ -4547,19 +4555,19 @@ describe('compileGenerator', () => {
 			{ shape: 'number', limit: '[0, 1)', received: 'Symbol(sample)' },
 		])
 		expect(errors.every((error) => !Object.hasOwn(error, 'cause'))).toBe(true)
-		expect(getters).toBe(0)
+		expect(getters.value).toBe(0)
 	})
 
 	it('does not call a hostile string-slice replacement through generator entries', () => {
-		let getters = 0
-		let calls = 0
+		const getters = new ObservationCounter()
+		const calls = new ObservationCounter()
 		const sample = Symbol('sample')
 		const contract = createContract(numberShape())
 		const errors = replaceStringSlice(
 			() => {
-				getters += 1
+				getters.increment()
 				return () => {
-					calls += 1
+					calls.increment()
 					return '\n'
 				}
 			},
@@ -4584,23 +4592,23 @@ describe('compileGenerator', () => {
 			{ shape: 'number', limit: '[0, 1)', received: 'Symbol(sample)' },
 		])
 		expect(errors.every((error) => !Object.hasOwn(error, 'cause'))).toBe(true)
-		expect(getters).toBe(0)
-		expect(calls).toBe(0)
+		expect(getters.value).toBe(0)
+		expect(calls.value).toBe(0)
 	})
 
 	it('propagates invalid and throwing random samples from inside a union variant', () => {
-		let invalidDraw = 0
+		const invalidDraw = new ObservationCounter()
 		const invalid = captureContractError(() =>
 			compileGenerator(unionShape(stringShape(), nullShape()), () => {
-				invalidDraw += 1
-				return invalidDraw === 1 ? 0 : 1
+				invalidDraw.increment()
+				return invalidDraw.value === 1 ? 0 : 1
 			}),
 		)
-		let throwingDraw = 0
+		const throwingDraw = new ObservationCounter()
 		const throwing = captureContractError(() =>
 			compileGenerator(unionShape(stringShape(), nullShape()), () => {
-				throwingDraw += 1
-				if (throwingDraw > 1) throw new Error('later draw')
+				throwingDraw.increment()
+				if (throwingDraw.value > 1) throw new Error('later draw')
 				return 0
 			}),
 		)
@@ -4651,7 +4659,7 @@ describe('compileGenerator', () => {
 	it('an open recordShape generates at least one synthetic entry and passes its own guard', () => {
 		const shape = recordShape(integerShape())
 		const guard = compileGuard(shape)
-		for (let seed = 0; seed < 20; seed += 1) {
+		for (const seed of Array.from({ length: 20 }).keys()) {
 			const value = compileGenerator(shape, seededRandom(seed))
 			expect(isRecord(value)).toBe(true)
 			const record = isRecord(value) ? value : {}
@@ -4807,10 +4815,10 @@ describe('compileGenerator generic inference', () => {
 
 describe('shape separation registry', () => {
 	it('demonstrates every declared parser-versus-guard separation', () => {
-		let count = 0
-		for (const separation of Object.values(SHAPE_SEPARATIONS)) {
-			if (separation.witness === undefined) continue
-			count += 1
+		const separations = Object.values(SHAPE_SEPARATIONS).filter(
+			(separation) => separation.witness !== undefined,
+		)
+		for (const separation of separations) {
 			const parse = compileParser(separation.shape)
 			const guard = compileGuard(separation.shape)
 
@@ -4819,31 +4827,36 @@ describe('shape separation registry', () => {
 			expect(compileAuditor(separation.shape, separation.witness).length).toBeGreaterThan(0)
 			expect(compileReporter(separation.shape, separation.witness)).toHaveLength(0)
 		}
-		expect(count).toBe(9)
+		expect(separations.length).toBe(9)
 	})
 
 	it('finds no corpus witness for source-argued coincident domains', () => {
-		let count = 0
-		let refusals = 0
-		let uncoded = 0
-		for (const separation of Object.values(SHAPE_SEPARATIONS)) {
-			if (separation.witness !== undefined) continue
-			count += 1
+		const separations = Object.values(SHAPE_SEPARATIONS).filter(
+			(separation) => separation.witness === undefined,
+		)
+		const observed = separations.flatMap((separation) => {
 			const parse = compileParser(separation.shape)
 			const guard = compileGuard(separation.shape)
-			const witnesses: unknown[] = []
-			for (const value of SOUNDNESS_SAMPLE) {
+			const outcomes = SOUNDNESS_SAMPLE.map((value) => {
 				const parsed = attempt(() => parse(value))
-				if (!parsed.success) {
-					if (!isContractError(parsed.error)) uncoded += 1
-					refusals += 1
-					continue
+				if (!parsed.success)
+					return { refusal: true, uncoded: !isContractError(parsed.error), witness: false, value }
+				return {
+					refusal: false,
+					uncoded: false,
+					witness: parsed.value !== undefined && !guard(value),
+					value,
 				}
-				if (parsed.value !== undefined && !guard(value)) witnesses.push(value)
-			}
+			})
+			const witnesses = outcomes
+				.filter((outcome) => outcome.witness)
+				.map((outcome) => outcome.value)
 			expect(witnesses).toEqual([])
-		}
-		expect(count).toBe(3)
+			return outcomes
+		})
+		const refusals = observed.filter((outcome) => outcome.refusal).length
+		const uncoded = observed.filter((outcome) => outcome.uncoded).length
+		expect(separations.length).toBe(3)
 		expect(uncoded).toBe(0)
 		expect(refusals).toBeGreaterThan(0)
 	})
@@ -4892,7 +4905,6 @@ describe('compiled artifacts answer through unredirectable dispatch', () => {
 	// a membership test that decides the published answer, and a publication walk
 	// that decides the published value. Each is asked here at the artifact door
 	// rather than only at the primitive it was fixed in.
-	const answerTrue = (): boolean => true
 	const shape = objectShape({
 		name: stringShape({ min: 1 }),
 		age: optionalShape(integerShape({ min: 0 })),
@@ -4900,7 +4912,7 @@ describe('compiled artifacts answer through unredirectable dispatch', () => {
 
 	it('contract.is rejects a non-member literal while Set.prototype.has answers true', () => {
 		const contract = createContract(literalShape(['a', 'b']))
-		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+		const answers = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () => ({
 			member: contract.is('a'),
 			stranger: contract.is('NOT-A-MEMBER'),
 		}))
@@ -4910,7 +4922,7 @@ describe('compiled artifacts answer through unredirectable dispatch', () => {
 
 	it('compileGuard still rejects an extra and a missing key while Set.prototype.has answers true', () => {
 		const guard = compileGuard(shape)
-		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+		const answers = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () => ({
 			exact: guard({ name: 'Ada' }),
 			extra: guard({ name: 'Ada', ghost: 1 }),
 			missing: guard({}),
@@ -4921,7 +4933,7 @@ describe('compiled artifacts answer through unredirectable dispatch', () => {
 
 	it('compileParser still refuses a missing required key while Set.prototype.has answers true', () => {
 		const parse = compileParser(shape)
-		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+		const answers = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () => ({
 			complete: parse({ name: 'Ada' }),
 			missing: parse({}),
 		}))
@@ -4930,7 +4942,7 @@ describe('compiled artifacts answer through unredirectable dispatch', () => {
 	})
 
 	it('compileReporter and compileAuditor still fault a missing key while Set.prototype.has answers true', () => {
-		const answers = replaceIntrinsic(Set.prototype, 'has', answerTrue, () => ({
+		const answers = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () => ({
 			reported: compileReporter(shape, {}),
 			audited: compileAuditor(shape, {}),
 		}))
@@ -4945,9 +4957,7 @@ describe('compiled artifacts answer through unredirectable dispatch', () => {
 		// first statement of the body, so no at-the-door boundary could reach it at
 		// any door count. The read moved into the body and onto the captured clock.
 		const sentinel = Object.freeze({ stage: 'date' })
-		const thrower = (): never => {
-			throw sentinel
-		}
+		const thrower = throwSentinel(sentinel)
 		const outcome = replaceIntrinsic(Date, 'now', thrower, () =>
 			attempt(() => compileGenerator(stringShape())),
 		)
@@ -4958,9 +4968,7 @@ describe('compiled artifacts answer through unredirectable dispatch', () => {
 
 	it('contract.generate publishes a coded refusal while Date.now throws', () => {
 		const sentinel = Object.freeze({ stage: 'date' })
-		const thrower = (): never => {
-			throw sentinel
-		}
+		const thrower = throwSentinel(sentinel)
 		const contract = createContract(stringShape())
 		const outcome = replaceIntrinsic(Date, 'now', thrower, () => attempt(() => contract.generate()))
 
@@ -4983,20 +4991,18 @@ describe('compiled artifacts answer through unredirectable dispatch', () => {
 		// `Array.prototype.map = () => ['INJECTED']` made this door SUCCEED and
 		// answer `{"anyOf":["INJECTED"]}` — the caller's content inside the
 		// package's own published schema.
-		const lie = (): readonly string[] => ['INJECTED']
-		const published = replaceIntrinsic(Array.prototype, 'map', lie, () =>
-			compileSchema(unionShape(stringShape(), integerShape())),
+		const published = replaceIntrinsic(
+			Array.prototype,
+			'map',
+			createMarker.bind(undefined, true),
+			() => compileSchema(unionShape(stringShape(), integerShape())),
 		)
 
 		expect(published).toEqual({ anyOf: [{ type: 'string' }, { type: 'integer' }] })
 	})
 
 	it('compileReporter publishes a marker-free diagnostic path while the array iterator injects', () => {
-		function* injectLeading(this: readonly unknown[]): Generator<unknown> {
-			yield 'INJECTED'
-			for (let index = 0; index < this.length; index += 1) yield this[index]
-		}
-		const outcomes = replaceIntrinsic(Array.prototype, Symbol.iterator, injectLeading, () => ({
+		const outcomes = replaceIntrinsic(Array.prototype, Symbol.iterator, injectMarker, () => ({
 			reported: attempt(() => compileReporter(shape, { name: 1 })),
 			audited: attempt(() => compileAuditor(shape, { name: 1 })),
 		}))
@@ -5012,9 +5018,8 @@ describe('compiled artifacts answer through unredirectable dispatch', () => {
 	})
 
 	it('bounds a report through an owned walk while Array.prototype.slice lies', () => {
-		const lie = (): readonly Fault[] => []
 		const wide = objectShape({ name: stringShape({ min: 1 }) })
-		const published = replaceIntrinsic(Array.prototype, 'slice', lie, () =>
+		const published = replaceIntrinsic(Array.prototype, 'slice', createEmptyFaults, () =>
 			compileReporter(wide, {}),
 		)
 
@@ -5032,12 +5037,12 @@ describe('four-door agreement (H9 soundness)', () => {
 		const contract = createContract(
 			objectShape({ a: stringShape() }, { additionalProperties: true }),
 		)
-		const value = {
+		const value = Object.freeze({
 			a: 'x',
 			get b(): unknown {
 				throw new Error('unreadable extra')
 			},
-		}
+		})
 
 		expect(contract.is(value)).toBe(false)
 		expect(captureContractError(() => contract.audit(value)).code).toBe('structure')
@@ -5050,11 +5055,11 @@ describe('four-door agreement (H9 soundness)', () => {
 		// probe read a key the shape drops, so `explain` published the empty report
 		// — its documented "parse will succeed" signal — while `parse` threw.
 		const contract = createContract(objectShape({}))
-		const value = {
+		const value = Object.freeze({
 			get a(): unknown {
 				throw new Error('unreadable extra')
 			},
-		}
+		})
 
 		expect(contract.is(value)).toBe(false)
 		expect(contract.audit(value)).toEqual([{ reason: 'extra', path: ['a'] }])
@@ -5069,8 +5074,7 @@ describe('four-door agreement (H9 soundness)', () => {
 		// and past ~4k `parse` republished the resulting RangeError as
 		// `parseJSONValue: value could not be read` for a value every read of which
 		// succeeded.
-		let payload: unknown = 1
-		for (let index = 0; index < 5_000; index += 1) payload = { a: payload }
+		const payload = Array.from({ length: 5_000 }).reduce<unknown>((a) => ({ a }), 1)
 
 		const flat = createContract(jsonShape())
 		expect(flat.is(payload)).toBe(true)
@@ -5078,12 +5082,11 @@ describe('four-door agreement (H9 soundness)', () => {
 		expect(flat.explain(payload)).toEqual([])
 		expect(flat.parse(payload)).toBe(payload)
 
-		let nested: ContractShape = jsonShape()
-		let wrapped: unknown = payload
-		for (let index = 0; index < 400; index += 1) {
-			nested = objectShape({ a: nested })
-			wrapped = { a: wrapped }
-		}
+		const nested = Array.from({ length: 400 }).reduce<ContractShape>(
+			(a) => objectShape({ a }),
+			jsonShape(),
+		)
+		const wrapped = Array.from({ length: 400 }).reduce<unknown>((a) => ({ a }), payload)
 		const deep = createContract(nested)
 		expect(deep.is(wrapped)).toBe(true)
 		expect(deep.audit(wrapped)).toEqual([])
@@ -5092,8 +5095,7 @@ describe('four-door agreement (H9 soundness)', () => {
 
 		// Control: an honestly invalid deep document is still refused as invalid,
 		// not as unreadable, at both call positions.
-		let invalid: unknown = Number.NaN
-		for (let index = 0; index < 5_000; index += 1) invalid = { a: invalid }
+		const invalid = Array.from({ length: 5_000 }).reduce<unknown>((a) => ({ a }), Number.NaN)
 		expect(flat.is(invalid)).toBe(false)
 		expect(flat.parse(invalid)).toBeUndefined()
 		expect(flat.explain(invalid)).toEqual([
@@ -5122,77 +5124,10 @@ describe('four-door agreement — the whole matrix (H9)', () => {
 		['json', jsonShape()],
 	]
 
-	function hostileValues(): readonly unknown[] {
-		const declaredThrows: Record<string, unknown> = {}
-		Object.defineProperty(declaredThrows, 'a', {
-			enumerable: true,
-			get() {
-				throw new Error('declared key')
-			},
-		})
-		const extraThrows: Record<string, unknown> = { a: 'x' }
-		Object.defineProperty(extraThrows, 'b', {
-			enumerable: true,
-			get() {
-				throw new Error('undeclared key')
-			},
-		})
-		const cyclic: Record<string, unknown> = { a: 'x' }
-		cyclic.self = cyclic
-		let deep: unknown = 1
-		for (let index = 0; index < 3_000; index += 1) deep = { a: deep }
-		return [declaredThrows, extraThrows, cyclic, buildSparseArray(), createRevokedProxy(), deep]
-	}
-
-	function agreementViolations(
-		shape: ContractShape,
-		foreign: Guard<unknown> | undefined,
-	): readonly string[] {
-		const guard = foreign ?? compileGuard(shape)
-		const parse = compileParser(shape)
-		const violations: string[] = []
-		const values = [...SOUNDNESS_SAMPLE, ...hostileValues()]
-		for (let index = 0; index < values.length; index += 1) {
-			const value = values[index]
-			const guarded = attempt(() => guard(value))
-			const audited = attempt(() => compileAuditor(shape, value))
-			const explained = attempt(() => compileReporter(shape, value))
-			const parsed = attempt(() => parse(value))
-			if (!guarded.success) {
-				violations[violations.length] = `guard threw @${String(index)}`
-				continue
-			}
-			const byGuard = guarded.value === true
-			const byAudit = audited.success && audited.value.length === 0
-			const byReport = explained.success && explained.value.length === 0
-			// The soundness question: a certification is a promise that `parse`
-			// succeeds, so no certifying door may sit beside a refusing parser.
-			if ((byGuard || byAudit || byReport) && !parsed.success) {
-				violations[violations.length] = `certified but refused @${String(index)}`
-			}
-			if (audited.success && byAudit !== byGuard) {
-				violations[violations.length] = `L1 @${String(index)}`
-			}
-			if (explained.success && parsed.success && byReport !== (parsed.value !== undefined)) {
-				violations[violations.length] = `L2 @${String(index)}`
-			}
-			if (parsed.success && parsed.value !== undefined && !guard(parsed.value)) {
-				violations[violations.length] = `L3 @${String(index)}`
-			}
-			if (byGuard && parsed.success && parsed.value === undefined) {
-				violations[violations.length] = `L4 @${String(index)}`
-			}
-			if (byAudit && explained.success && !byReport) {
-				violations[violations.length] = `L5 @${String(index)}`
-			}
-		}
-		return violations
-	}
-
 	it('lets no door certify a value another door refuses, across every shape category', () => {
 		const violations: string[] = []
 		for (const [label, shape] of shapes) {
-			for (const entry of agreementViolations(shape, undefined)) {
+			for (const entry of findAgreementViolations(shape, undefined)) {
 				violations[violations.length] = `${label}: ${entry}`
 			}
 		}
@@ -5204,7 +5139,7 @@ describe('four-door agreement — the whole matrix (H9)', () => {
 		// with another shape's guard must produce findings under the same run, or an
 		// empty verdict above would mean only that nothing was compared.
 		expect(
-			agreementViolations(objectShape({ a: stringShape() }), compileGuard(integerShape())),
+			findAgreementViolations(objectShape({ a: stringShape() }), compileGuard(integerShape())),
 		).not.toEqual([])
 	})
 
@@ -5223,8 +5158,8 @@ describe('four-door agreement — the whole matrix (H9)', () => {
 		// certifying NOTHING also produces findings here, because any foreign guard
 		// disagrees with the compiled auditor somewhere, so the empty-check passed
 		// in both directions and measured disagreement rather than certification.
-		const certifyEverything: Guard<unknown> = (_value: unknown): _value is unknown => true
-		const certified = agreementViolations(objectShape({ a: stringShape() }), certifyEverything)
+		const certifyEverything = acceptValue
+		const certified = findAgreementViolations(objectShape({ a: stringShape() }), certifyEverything)
 
 		expect(certified.some((entry) => entry.startsWith('certified but refused'))).toBe(true)
 
@@ -5233,8 +5168,8 @@ describe('four-door agreement — the whole matrix (H9)', () => {
 		// uncompiled and equally in disagreement, and must produce no FALSE
 		// CERTIFICATION at all. That is what makes the assertion above about
 		// certification rather than about being foreign.
-		const certifyNothing: Guard<unknown> = (_value: unknown): _value is unknown => false
-		const refusing = agreementViolations(objectShape({ a: stringShape() }), certifyNothing)
+		const certifyNothing = denyValue
+		const refusing = findAgreementViolations(objectShape({ a: stringShape() }), certifyNothing)
 
 		expect(refusing).not.toEqual([])
 		expect(refusing.some((entry) => entry.startsWith('certified but refused'))).toBe(false)
@@ -5355,7 +5290,7 @@ describe('R3 — the canonical door matrix', () => {
 
 		const messages: string[] = []
 		for (const root of roots) {
-			const errors = [
+			const errors = Object.freeze([
 				captureContractError(() => validateShape(root)),
 				captureContractError(() => compileSchema(root)),
 				captureContractError(() => compileGuard(root)),
@@ -5364,7 +5299,7 @@ describe('R3 — the canonical door matrix', () => {
 				captureContractError(() => compileReporter(root, undefined)),
 				captureContractError(() => compileAuditor(root, undefined)),
 				captureContractError(() => createContract(root)),
-			]
+			])
 
 			for (const error of errors) {
 				expect(isContractError(error)).toBe(true)
@@ -5457,14 +5392,14 @@ describe('R3 — the canonical door matrix', () => {
 		// governs the whole contract or none of it does.
 		const captured = integerShape({ min: 0, max: 9 })
 		const later = stringShape({ min: 8 })
-		let reads = 0
+		const reads = new ObservationCounter()
 		const properties = new Proxy(
 			{ value: captured },
 			{
 				get(target, property, receiver) {
 					if (property !== 'value') return Reflect.get(target, property, receiver)
-					reads += 1
-					return reads <= 2 ? captured : later
+					reads.increment()
+					return reads.value <= 2 ? captured : later
 				},
 			},
 		)
@@ -5472,7 +5407,7 @@ describe('R3 — the canonical door matrix', () => {
 		const contract = createContract({ category: 'object', properties })
 		const generated = contract.generate(seededRandom(3))
 
-		expect(reads).toBe(2)
+		expect(reads.value).toBe(2)
 		expect(contract.schema).toEqual({
 			type: 'object',
 			properties: { value: { type: 'integer', minimum: 0, maximum: 9 } },
@@ -5490,7 +5425,7 @@ describe('R3 — the canonical door matrix', () => {
 		expect(contract.parse({ value: 'aaaaaaaa' })).toBeUndefined()
 		expect(isRecord(generated) && typeof generated.value).toBe('number')
 		expect(contract.is(generated)).toBe(true)
-		expect(reads).toBe(2)
+		expect(reads.value).toBe(2)
 	})
 })
 
@@ -5526,19 +5461,27 @@ describe('compiled object presence decides the same keys at every plan width', (
 	})
 
 	it('decides presence identically at the mask width and one key past it', () => {
-		const maskedProperties: Record<string, ContractShape> = {}
-		const widenedProperties: Record<string, ContractShape> = {}
-		const maskedComplete: Record<string, unknown> = {}
-		const widenedComplete: Record<string, unknown> = {}
-		for (let index = 0; index <= PRESENCE_MASK_LIMIT; index += 1) {
-			const key = `key${String(index)}`
-			widenedProperties[key] = stringShape({ min: 1 })
-			widenedComplete[key] = 'value'
-			if (index < PRESENCE_MASK_LIMIT) {
-				maskedProperties[key] = stringShape({ min: 1 })
-				maskedComplete[key] = 'value'
-			}
-		}
+		const widenedProperties = Object.fromEntries(
+			Array.from({ length: PRESENCE_MASK_LIMIT + 1 }, (_, index) => [
+				`key${String(index)}`,
+				stringShape({ min: 1 }),
+			]),
+		)
+		const widenedComplete = Object.fromEntries(
+			Array.from({ length: PRESENCE_MASK_LIMIT + 1 }, (_, index) => [
+				`key${String(index)}`,
+				'value',
+			]),
+		)
+		const maskedProperties = Object.fromEntries(
+			Array.from({ length: PRESENCE_MASK_LIMIT }, (_, index) => [
+				`key${String(index)}`,
+				stringShape({ min: 1 }),
+			]),
+		)
+		const maskedComplete = Object.fromEntries(
+			Array.from({ length: PRESENCE_MASK_LIMIT }, (_, index) => [`key${String(index)}`, 'value']),
+		)
 		const masked = objectShape(maskedProperties)
 		const widened = objectShape(widenedProperties)
 		const maskedAbsent = { ...maskedComplete }
@@ -5582,13 +5525,18 @@ describe('compiled object presence decides the same keys at every plan width', (
 		// Twice the mask width plus one: a plan that assigned bit positions here
 		// would wrap `1 << position` back onto an earlier key's bit, so a value
 		// carrying the aliased key would read as carrying the absent one.
-		const properties: Record<string, ContractShape> = {}
-		const complete: Record<string, unknown> = {}
-		for (let index = 0; index <= PRESENCE_MASK_LIMIT * 2; index += 1) {
-			const key = `key${String(index)}`
-			properties[key] = stringShape({ min: 1 })
-			complete[key] = 'value'
-		}
+		const properties = Object.fromEntries(
+			Array.from({ length: PRESENCE_MASK_LIMIT * 2 + 1 }, (_, index) => [
+				`key${String(index)}`,
+				stringShape({ min: 1 }),
+			]),
+		)
+		const complete = Object.fromEntries(
+			Array.from({ length: PRESENCE_MASK_LIMIT * 2 + 1 }, (_, index) => [
+				`key${String(index)}`,
+				'value',
+			]),
+		)
 		const shape = objectShape(properties)
 		const aliased = { ...complete }
 		delete aliased[`key${String(PRESENCE_MASK_LIMIT * 2)}`]

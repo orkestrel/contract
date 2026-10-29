@@ -26,6 +26,10 @@ import {
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
+	polluteArrayConstruction,
+	createSubstitution,
+	ObservationCounter,
+	ObservedValue,
 	captureContractError,
 	createNativeMaximumSparseArray,
 	createShapeRetention,
@@ -45,6 +49,23 @@ import {
 } from '../../setupServer.js'
 
 describe('ShapeCloner', () => {
+	it('keeps HEAD cloned vocabularies under polluted array construction', () => {
+		const shape: ContractShape = {
+			category: 'object',
+			properties: {
+				choice: {
+					category: 'union',
+					variants: [{ category: 'literal', values: ['x', 1] }, { category: 'null' }],
+				},
+			},
+			additionalProperties: false,
+		}
+		const actual = polluteArrayConstruction(() => new ShapeCloner(shape).clone())
+		// HEAD ShapeCloner.ts:631, :874 and :919 preserve literal/property/variant order.
+		expect(actual).toEqual(shape)
+		expect(actual).not.toBe(shape)
+	})
+
 	it('is root-exported, conforms to its interface, and exposes only clone', () => {
 		const cloner: ShapeClonerInterface = new ShapeCloner({ category: 'string' })
 
@@ -106,12 +127,12 @@ describe('ShapeCloner', () => {
 		])
 
 		const reason = Object.freeze({ stage: 'prototype' })
-		let discriminants = 0
+		const discriminants = new ObservationCounter()
 		const hostile = new Proxy<ContractShape>(
 			{ category: 'string' },
 			{
 				getOwnPropertyDescriptor(target, key) {
-					if (key === 'category') discriminants += 1
+					if (key === 'category') discriminants.increment()
 					return Reflect.getOwnPropertyDescriptor(target, key)
 				},
 				getPrototypeOf() {
@@ -125,61 +146,61 @@ describe('ShapeCloner', () => {
 		expect(hostileError.code).toBe('clone')
 		expect(hostileError.context).toEqual({ shape: 'shape' })
 		expect(hostileError.cause).toBe(reason)
-		expect(discriminants).toBe(0)
+		expect(discriminants.value).toBe(0)
 		expect(captureContractError(() => hostileCloner.clone())).toBe(hostileError)
 	})
 
 	it('settles success once and replays the exact frozen root without rereading', () => {
-		let observations = 0
+		const observations = new ObservationCounter()
 		const source = new Proxy<StringShape>(
 			{ category: 'string', min: 1 },
 			{
 				get(target, key, receiver) {
-					observations += 1
+					observations.increment()
 					return Reflect.get(target, key, receiver)
 				},
 				getOwnPropertyDescriptor(target, key) {
-					observations += 1
+					observations.increment()
 					return Reflect.getOwnPropertyDescriptor(target, key)
 				},
 				has(target, key) {
-					observations += 1
+					observations.increment()
 					return Reflect.has(target, key)
 				},
 			},
 		)
 		const cloner = new ShapeCloner(source)
 		const first = cloner.clone()
-		const settled = observations
+		const settled = observations.value
 		const second = cloner.clone()
 
 		expect(second).toBe(first)
-		expect(observations).toBe(settled)
+		expect(observations.value).toBe(settled)
 		expect(Object.isFrozen(first)).toBe(true)
 	})
 
 	it('settles failure once without nominally adopting a caller error or rereading', () => {
-		let observations = 0
+		const observations = new ObservationCounter()
 		const caller = new ContractError('caller', { code: 'clone' })
 		const source = new Proxy<StringShape>(
 			{ category: 'string' },
 			{
 				getOwnPropertyDescriptor() {
-					observations += 1
+					observations.increment()
 					throw caller
 				},
 			},
 		)
 		const cloner = new ShapeCloner(source)
 		const first = captureContractError(() => cloner.clone())
-		const settled = observations
+		const settled = observations.value
 		const second = captureContractError(() => cloner.clone())
 
 		expect(second).toBe(first)
 		expect(first).not.toBe(caller)
 		expect(first.message).toBe('cloneShape: failed to create an owned shape snapshot')
 		expect(first.cause).toBe(caller)
-		expect(observations).toBe(settled)
+		expect(observations.value).toBe(settled)
 	})
 
 	it('wraps every foreign thrown category once with its exact cause', () => {
@@ -210,23 +231,23 @@ describe('ShapeCloner', () => {
 	})
 
 	it('keeps distinct instances independent', () => {
-		let observations = 0
+		const observations = new ObservationCounter()
 		const source = new Proxy<StringShape>(
 			{ category: 'string' },
 			{
 				getOwnPropertyDescriptor(target, key) {
-					observations += 1
+					observations.increment()
 					return Reflect.getOwnPropertyDescriptor(target, key)
 				},
 			},
 		)
 		const first = new ShapeCloner(source).clone()
-		const afterFirst = observations
+		const afterFirst = observations.value
 		const second = new ShapeCloner(source).clone()
 
 		expect(second).not.toBe(first)
 		expect(second).toEqual(first)
-		expect(observations).toBeGreaterThan(afterFirst)
+		expect(observations.value).toBeGreaterThan(afterFirst)
 	})
 
 	it('promotes caught reentry followed by apparent success to the shared poison', () => {
@@ -426,11 +447,11 @@ describe('ShapeCloner', () => {
 	})
 
 	it('refuses inherited or accessor ordinary fields without invocation', () => {
-		let inheritedReads = 0
+		const inheritedReads = new ObservationCounter()
 		const inheritedPrototype = Object.create(null)
 		Object.defineProperty(inheritedPrototype, 'min', {
 			get() {
-				inheritedReads += 1
+				inheritedReads.increment()
 				return 1
 			},
 		})
@@ -439,13 +460,13 @@ describe('ShapeCloner', () => {
 		const inheritedEngine = new ShapeCloner(inherited)
 		const inheritedError = captureContractError(() => inheritedEngine.clone())
 		expect(inheritedError).toBeInstanceOf(ContractError)
-		expect(inheritedReads).toBe(0)
+		expect(inheritedReads.value).toBe(0)
 
-		let accessorReads = 0
+		const accessorReads = new ObservationCounter()
 		const accessor: StringShape = { category: 'string' }
 		Object.defineProperty(accessor, 'description', {
 			get() {
-				accessorReads += 1
+				accessorReads.increment()
 				return 'unsafe'
 			},
 		})
@@ -453,20 +474,22 @@ describe('ShapeCloner', () => {
 		expect(() => accessorEngine.clone()).toThrow(
 			'cloneShape: shape accessors cannot be owned faithfully',
 		)
-		expect(accessorReads).toBe(0)
+		expect(accessorReads.value).toBe(0)
 	})
 
 	it('owns the two-read pattern exception and completes collection observations during capture', () => {
-		let patternReads = 0
-		const source: StringShape = {
-			category: 'string',
-			get pattern() {
-				patternReads += 1
+		const patternReads = new ObservationCounter()
+		const source: StringShape = { category: 'string' }
+		Object.defineProperty(source, 'pattern', {
+			enumerable: true,
+			configurable: true,
+			get() {
+				patternReads.increment()
 				return Object.freeze(new RegExp('x'))
 			},
-		}
+		})
 		const clone = new ShapeCloner(source).clone()
-		expect(patternReads).toBe(2)
+		expect(patternReads.value).toBe(2)
 		if (clone.category !== 'string') throw new Error('expected string clone')
 		const first = clone.pattern
 		const second = clone.pattern
@@ -475,56 +498,56 @@ describe('ShapeCloner', () => {
 		expect(first?.lastIndex).toBe(0)
 		expect(Object.isFrozen(first)).toBe(true)
 
-		let valueReads = 0
-		let valueDescriptors = 0
+		const valueReads = new ObservationCounter()
+		const valueDescriptors = new ObservationCounter()
 		const values = new Proxy(['x'], {
 			get(target, key, receiver) {
-				if (key === '0') valueReads += 1
+				if (key === '0') valueReads.increment()
 				return Reflect.get(target, key, receiver)
 			},
 			getOwnPropertyDescriptor(target, key) {
-				if (key === '0') valueDescriptors += 1
+				if (key === '0') valueDescriptors.increment()
 				return Reflect.getOwnPropertyDescriptor(target, key)
 			},
 		})
 		new ShapeCloner({ category: 'literal', values }).clone()
-		expect(valueReads).toBe(2)
-		expect(valueDescriptors).toBe(2)
+		expect(valueReads.value).toBe(2)
+		expect(valueDescriptors.value).toBe(2)
 
-		let variantReads = 0
-		let variantDescriptors = 0
+		const variantReads = new ObservationCounter()
+		const variantDescriptors = new ObservationCounter()
 		const variants = new Proxy<readonly ContractShape[]>([{ category: 'string' }], {
 			get(target, key, receiver) {
-				if (key === '0') variantReads += 1
+				if (key === '0') variantReads.increment()
 				return Reflect.get(target, key, receiver)
 			},
 			getOwnPropertyDescriptor(target, key) {
-				if (key === '0') variantDescriptors += 1
+				if (key === '0') variantDescriptors.increment()
 				return Reflect.getOwnPropertyDescriptor(target, key)
 			},
 		})
 		new ShapeCloner({ category: 'union', variants }).clone()
-		expect(variantReads).toBe(2)
-		expect(variantDescriptors).toBe(2)
+		expect(variantReads.value).toBe(2)
+		expect(variantDescriptors.value).toBe(2)
 
-		let keyReads = 0
-		let childReads = 0
+		const keyReads = new ObservationCounter()
+		const childReads = new ObservationCounter()
 		const properties = new Proxy<Readonly<Record<string, ContractShape>>>(
 			{ value: { category: 'string' } },
 			{
 				ownKeys(target) {
-					keyReads += 1
+					keyReads.increment()
 					return Reflect.ownKeys(target)
 				},
 				get(target, key, receiver) {
-					if (key === 'value') childReads += 1
+					if (key === 'value') childReads.increment()
 					return Reflect.get(target, key, receiver)
 				},
 			},
 		)
 		new ShapeCloner({ category: 'object', properties }).clone()
-		expect(keyReads).toBe(2)
-		expect(childReads).toBe(2)
+		expect(keyReads.value).toBe(2)
+		expect(childReads.value).toBe(2)
 	})
 
 	it('refuses native-maximum sparse union and literal populations before indexed work', () => {
@@ -664,12 +687,12 @@ describe('ShapeCloner', () => {
 	it('validates the completed root before applying the exact first fidelity error', () => {
 		const valid: ContractShape = { category: 'string' }
 		const replacement: ContractShape = { category: 'number' }
-		let reads = 0
+		const reads = new ObservationCounter()
 		const stableVariants = new Proxy<readonly ContractShape[]>([valid], {
 			get(target, key, receiver) {
 				if (key !== '0') return Reflect.get(target, key, receiver)
-				reads += 1
-				return reads === 1 ? valid : replacement
+				reads.increment()
+				return reads.value === 1 ? valid : replacement
 			},
 		})
 		const fidelityCloner = new ShapeCloner({ category: 'union', variants: stableVariants })
@@ -682,12 +705,12 @@ describe('ShapeCloner', () => {
 			items: valid,
 		}
 		Reflect.set(cycle, 'items', cycle)
-		let cycleReads = 0
+		const cycleReads = new ObservationCounter()
 		const cyclicVariants = new Proxy<readonly ContractShape[]>([cycle], {
 			get(target, key, receiver) {
 				if (key !== '0') return Reflect.get(target, key, receiver)
-				cycleReads += 1
-				return cycleReads === 1 ? cycle : replacement
+				cycleReads.increment()
+				return cycleReads.value === 1 ? cycle : replacement
 			},
 		})
 		const validation = captureContractError(() =>
@@ -704,25 +727,25 @@ describe('ShapeCloner', () => {
 		// still quotes the pattern's real text.
 		const pattern = /a/i
 		pattern.lastIndex = 4
-		let sourceReads = 0
-		let flagsReads = 0
-		let stringReads = 0
+		const sourceReads = new ObservationCounter()
+		const flagsReads = new ObservationCounter()
+		const stringReads = new ObservationCounter()
 		Object.defineProperties(pattern, {
 			flags: {
 				get() {
-					flagsReads += 1
+					flagsReads.increment()
 					return 'i'
 				},
 			},
 			source: {
 				get() {
-					sourceReads += 1
+					sourceReads.increment()
 					return 'a'
 				},
 			},
 			toString: {
 				get() {
-					stringReads += 1
+					stringReads.increment()
 					throw new Error('pattern stringification must not be observed')
 				},
 			},
@@ -737,9 +760,9 @@ describe('ShapeCloner', () => {
 		expect(reason.context).toEqual({ path: [], shape: 'string', received: '/a/i' })
 		expect(reason.context?.limit).toBeUndefined()
 		expect(Object.hasOwn(reason, 'cause')).toBe(false)
-		expect(sourceReads).toBe(0)
-		expect(flagsReads).toBe(0)
-		expect(stringReads).toBe(0)
+		expect(sourceReads.value).toBe(0)
+		expect(flagsReads.value).toBe(0)
+		expect(stringReads.value).toBe(0)
 
 		const min = captureContractError(() =>
 			new ShapeCloner({ category: 'string', min: -1, pattern: /a/i }).clone(),
@@ -890,9 +913,9 @@ describe('ShapeCloner', () => {
 			]
 
 			for (const subject of cloners) {
-				let redirected = false
+				const redirected = new ObservedValue(false)
 				const first = redirectIntrinsic(intrinsic, sentinel, (armed) => {
-					redirected = armed
+					redirected.value = armed
 					return attempt(() => subject.cloner.clone())
 				})
 				const replay = attempt(() => subject.cloner.clone())
@@ -900,7 +923,7 @@ describe('ShapeCloner', () => {
 				observed.push({
 					intrinsic: intrinsic.label,
 					source: subject.name,
-					redirected,
+					redirected: redirected.value,
 					escaped: !first.success && first.error === sentinel,
 					owned: first.success || isContractError(first.error),
 					caused:
@@ -948,8 +971,10 @@ describe('ShapeCloner', () => {
 	})
 
 	it('refuses excessive iterative depth without leaking a recursive stack failure', () => {
-		let source: ContractShape = { category: 'string' }
-		for (let level = 0; level < 600; level += 1) source = { category: 'array', items: source }
+		const source = Array.from({ length: 600 }).reduce<ContractShape>(
+			(items) => ({ category: 'array', items }),
+			{ category: 'string' },
+		)
 
 		const error = captureContractError(() => new ShapeCloner(source).clone())
 
@@ -1033,23 +1058,7 @@ describe('the property snapshot survives an arity-preserving iterator lie', () =
 
 	it('publishes the declared property names, not the caller substitution', () => {
 		const genuine = Array.prototype[Symbol.iterator]
-		function* substituteFirst(this: readonly unknown[]): Generator<unknown> {
-			if (this.length === 2 && this[0] === 'name') {
-				yield 'ghost'
-				yield this[1]
-				return
-			}
-			const inner: unknown = Reflect.apply(genuine, this, [])
-			if (inner === null || typeof inner !== 'object') return
-			for (;;) {
-				const next: unknown = Reflect.get(inner, 'next')
-				if (typeof next !== 'function') return
-				const step: unknown = Reflect.apply(next, inner, [])
-				if (step === null || typeof step !== 'object') return
-				if (Reflect.get(step, 'done') === true) return
-				yield Reflect.get(step, 'value')
-			}
-		}
+		const substituteFirst = createSubstitution(genuine)
 		const published = replaceIntrinsic(Array.prototype, Symbol.iterator, substituteFirst, () =>
 			attempt(() => JSON.stringify(cloneShape(shape))),
 		)
@@ -1061,23 +1070,7 @@ describe('the property snapshot survives an arity-preserving iterator lie', () =
 
 	it('carries the same guarantee into the compiled schema', () => {
 		const genuine = Array.prototype[Symbol.iterator]
-		function* substituteFirst(this: readonly unknown[]): Generator<unknown> {
-			if (this.length === 2 && this[0] === 'name') {
-				yield 'ghost'
-				yield this[1]
-				return
-			}
-			const inner: unknown = Reflect.apply(genuine, this, [])
-			if (inner === null || typeof inner !== 'object') return
-			for (;;) {
-				const next: unknown = Reflect.get(inner, 'next')
-				if (typeof next !== 'function') return
-				const step: unknown = Reflect.apply(next, inner, [])
-				if (step === null || typeof step !== 'object') return
-				if (Reflect.get(step, 'done') === true) return
-				yield Reflect.get(step, 'value')
-			}
-		}
+		const substituteFirst = createSubstitution(genuine)
 		const published = replaceIntrinsic(Array.prototype, Symbol.iterator, substituteFirst, () =>
 			attempt(() => JSON.stringify(compileSchema(shape))),
 		)
@@ -1143,10 +1136,10 @@ describe('ShapeCloner — one arbiter, one verdict (H9)', () => {
 		// every child registration copies its whole path, so the cost was quadratic:
 		// 4,000 levels took 142 ms against `validateShape`'s 2 ms for the identical
 		// verdict.
-		let declaration: ContractShape = { category: 'string' }
-		for (let index = 0; index < 8_000; index += 1) {
-			declaration = { category: 'array', items: declaration }
-		}
+		const declaration = Array.from({ length: 8_000 }).reduce<ContractShape>(
+			(items) => ({ category: 'array', items }),
+			{ category: 'string' },
+		)
 
 		const reference = captureContractError(() => validateShape(declaration))
 		const started = performance.now()
@@ -1160,10 +1153,10 @@ describe('ShapeCloner — one arbiter, one verdict (H9)', () => {
 
 		// Control: the boundary itself is unmoved — the last legal depth still
 		// clones, and the first illegal one still refuses.
-		let legal: ContractShape = { category: 'string' }
-		for (let index = 0; index < COMPILE_DEPTH_LIMIT; index += 1) {
-			legal = { category: 'array', items: legal }
-		}
+		const legal = Array.from({ length: COMPILE_DEPTH_LIMIT }).reduce<ContractShape>(
+			(items) => ({ category: 'array', items }),
+			{ category: 'string' },
+		)
 		expect(() => cloneShape(legal)).not.toThrow()
 		expect(captureContractError(() => cloneShape({ category: 'array', items: legal })).code).toBe(
 			'depth',

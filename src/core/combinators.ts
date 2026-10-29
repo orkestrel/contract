@@ -9,8 +9,9 @@ import type {
 	StringGuardOptions,
 	TupleFromGuards,
 } from './types.js'
-import { GUARD_DEPTH_LIMIT, INTRINSICS } from './constants.js'
+import { INTRINSICS } from './constants.js'
 import { ContractError } from './errors.js'
+import { LazyGuard } from './LazyGuard.js'
 import {
 	isArray,
 	isConstructor,
@@ -28,9 +29,11 @@ import {
 	isSymbol,
 } from './validators.js'
 import {
+	readIndexView,
 	collectMembers,
 	contain,
 	holds,
+	iterateIndices,
 	matchesMember,
 	matchesPattern,
 	ownPattern,
@@ -85,7 +88,7 @@ export function arrayOf(elementGuard: (value: unknown) => boolean): Guard<readon
 			if (!isArray(value)) return false
 			const entries = readArrayEntries(value)
 			if (!entries.success || !entries.value.dense) return false
-			for (let index = 0; index < entries.value.entries.length; index += 1) {
+			for (const index of iterateIndices(() => entries.value.entries.length)) {
 				if (!elementGuard(entries.value.entries[index])) return false
 			}
 			return true
@@ -128,7 +131,7 @@ export function tupleOf(
 			if (entries.value.entries.length !== guards.length) {
 				return false
 			}
-			for (let index = 0; index < guards.length; index += 1) {
+			for (const index of iterateIndices(() => guards.length)) {
 				const guard = guards[index]
 				if (guard === undefined || !guard(entries.value.entries[index])) {
 					return false
@@ -207,10 +210,9 @@ export function literalOf(
 			// earlier round repaired for exactly that reason. A boundary placed per
 			// statement is only ever as complete as the last sweep; an indexed read
 			// dispatches through nothing at all.
-			let literal = true
-			for (let index = 0; index < snapshot.length; index += 1) {
-				if (!isLiteralValue(snapshot[index])) literal = false
-			}
+			const literal = !INTRINSICS.reflect.apply(INTRINSICS.some, snapshot, [
+				(value: unknown) => !isLiteralValue(value),
+			])
 			if (!literal) {
 				throw new ContractError(
 					'literalOf: literals must contain only string, number, or boolean values',
@@ -336,7 +338,7 @@ export function setOf(elementGuard: (value: unknown) => boolean): Guard<Readonly
 			// exactly the silent lie the sibling `arrayOf` was already hardened against.
 			const entries = readSetEntries(value)
 			if (!entries.success) return false
-			for (let index = 0; index < entries.value.length; index += 1) {
+			for (const index of iterateIndices(() => entries.value.length)) {
 				if (!elementGuard(entries.value[index])) {
 					return false
 				}
@@ -381,7 +383,7 @@ export function mapOf(
 			// downstream check still passes.
 			const entries = readMapEntries(value)
 			if (!entries.success) return false
-			for (let index = 0; index < entries.value.length; index += 1) {
+			for (const index of iterateIndices(() => entries.value.length)) {
 				const entry = entries.value[index]
 				if (entry === undefined) return false
 				if (!keyGuard(entry[0]) || !valueGuard(entry[1])) {
@@ -458,14 +460,14 @@ export function recordOf<
 					return false
 				}
 				const members = INTRINSICS.reflect.members(value)
-				for (let index = 0; index < members.length; index += 1) {
+				for (const index of iterateIndices(() => members.length)) {
 					const key = members[index]
 					if (isString(key) && !matchesMember(declared.vocabulary, key)) {
 						return false
 					}
 				}
 
-				for (let index = 0; index < declared.names.length; index += 1) {
+				for (const index of iterateIndices(() => declared.names.length)) {
 					const key = declared.names[index]
 					if (key === undefined) continue
 					const guard = declared.guards[key]
@@ -549,7 +551,7 @@ export function objectOf<
 					return false
 				}
 
-				for (let index = 0; index < declared.names.length; index += 1) {
+				for (const index of iterateIndices(() => declared.names.length)) {
 					const key = declared.names[index]
 					if (key === undefined) continue
 					const guard = declared.guards[key]
@@ -641,19 +643,21 @@ export function pickOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 		)
 		return readValue(
 			() => {
-				const result: { [P in keyof S]: S[P] } = INTRINSICS.create(null)
 				const members = INTRINSICS.reflect.members(shape)
-				for (let index = 0; index < members.length; index += 1) {
-					const key = members[index]
-					if (isString(key) && matchesMember(selected, key)) {
-						INTRINSICS.define(result, key, {
-							value: shape[key],
-							enumerable: true,
-							configurable: true,
-							writable: true,
-						})
-					}
-				}
+				const descriptors = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(members), [
+					(key: PropertyKey) =>
+						isString(key) && matchesMember(selected, key)
+							? [[key, { value: shape[key], enumerable: true, configurable: true, writable: true }]]
+							: [],
+				])
+				const result: { [P in keyof S]: S[P] } = INTRINSICS.create(
+					null,
+					INTRINSICS.record<PropertyDescriptor>({
+						[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+							descriptors,
+						]),
+					}),
+				)
 				return result
 			},
 			'pickOf',
@@ -701,19 +705,21 @@ export function omitOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 		// `pickOf` — no `as` / `!` / `asserts`.
 		return readValue(
 			() => {
-				const result: { [P in keyof S]: S[P] } = INTRINSICS.create(null)
 				const members = INTRINSICS.reflect.members(shape)
-				for (let index = 0; index < members.length; index += 1) {
-					const key = members[index]
-					if (isString(key) && !matchesMember(skipped, key)) {
-						INTRINSICS.define(result, key, {
-							value: shape[key],
-							enumerable: true,
-							configurable: true,
-							writable: true,
-						})
-					}
-				}
+				const descriptors = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(members), [
+					(key: PropertyKey) =>
+						isString(key) && !matchesMember(skipped, key)
+							? [[key, { value: shape[key], enumerable: true, configurable: true, writable: true }]]
+							: [],
+				])
+				const result: { [P in keyof S]: S[P] } = INTRINSICS.create(
+					null,
+					INTRINSICS.record<PropertyDescriptor>({
+						[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+							descriptors,
+						]),
+					}),
+				)
 				return result
 			},
 			'omitOf',
@@ -876,7 +882,7 @@ export function unionOf(...guards: ReadonlyArray<(value: unknown) => boolean>): 
 	// around the whole loop made a throwing member erase every later passing one,
 	// so `unionOf(a, b)` and `unionOf(b, a)` answered differently for one value.
 	return (value: unknown): value is unknown => {
-		for (let index = 0; index < guards.length; index += 1) {
+		for (const index of iterateIndices(() => guards.length)) {
 			const guard = guards[index]
 			if (guard !== undefined && holds(() => guard(value))) return true
 		}
@@ -915,7 +921,7 @@ export function intersectionOf(
 			// is forbidden here for the reason `literalOf` states earlier in this file:
 			// a replaced `every` answering `true` for everything makes this guard accept
 			// a value no constituent guard admits.
-			for (let index = 0; index < guards.length; index += 1) {
+			for (const index of iterateIndices(() => guards.length)) {
 				const guard = guards[index]
 				if (guard === undefined || !guard(value)) return false
 			}
@@ -979,22 +985,16 @@ export function whereOf<T>(base: Guard<T>, predicate: (value: T) => boolean): Gu
  *
  * @example
  * ```ts
- * type Tree = { value: number; children: Tree[] }
- * let isTree: Guard<Tree>
- * isTree = recordOf({ value: isNumber, children: arrayOf(lazyOf(() => isTree)) })
+ * type Tree = { readonly value: number; readonly children: readonly Tree[] }
+ * const isTree: Guard<Tree> = recordOf({
+ *   value: isNumber,
+ *   children: arrayOf(lazyOf(() => isTree)),
+ * })
  * ```
  */
 export function lazyOf<T>(thunk: () => Guard<T>): Guard<T> {
-	let depth = 0
-	return (value: unknown): value is T => {
-		if (depth >= GUARD_DEPTH_LIMIT) return false
-		depth += 1
-		try {
-			return holds(() => thunk()(value))
-		} finally {
-			depth -= 1
-		}
-	}
+	const deferred = new LazyGuard(thunk)
+	return (value: unknown): value is T => deferred.test(value)
 }
 
 /**

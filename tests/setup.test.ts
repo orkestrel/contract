@@ -23,7 +23,17 @@ import {
 } from '@src/core'
 import * as core from '@src/core'
 import {
+	catchFailure,
+	readNest,
+	readWrappers,
+	measureLeaf,
 	ArrayRootSchema,
+	acceptRecognition,
+	clearValues,
+	injectMarker,
+	readStrings,
+	ObservationCounter,
+	ObservedValue,
 	BlankBrandDeclaration,
 	buildCountedGraph,
 	buildCountedSlots,
@@ -83,6 +93,7 @@ import {
 	OWNED_MEMBERS,
 	PatternFixture,
 	pollutePrototype,
+	polluteArrayConstruction,
 	ProxiedBrandDeclaration,
 	publicDoors,
 	RECORD_BRAND_MEMBERS,
@@ -138,6 +149,17 @@ describe('error capture', () => {
 })
 
 describe('redirection instruments', () => {
+	it('arms inherited array construction and restores both descriptors after failure', () => {
+		const iterator = Object.getOwnPropertyDescriptor(Object.prototype, Symbol.iterator)
+		const constructor = Object.getOwnPropertyDescriptor(Array.prototype, 'constructor')
+		expect(polluteArrayConstruction(() => Array.from({ length: 1 }))).toEqual([])
+		expect(() => polluteArrayConstruction(() => [1].map((value) => value))).toThrow(
+			'inherited array constructor',
+		)
+		expect(Object.getOwnPropertyDescriptor(Object.prototype, Symbol.iterator)).toEqual(iterator)
+		expect(Object.getOwnPropertyDescriptor(Array.prototype, 'constructor')).toEqual(constructor)
+	})
+
 	it('installs a data replacement for one operation and restores it after a throw', () => {
 		const honest = Reflect.getOwnPropertyDescriptor(Number.prototype, 'toFixed')
 		expect(
@@ -151,12 +173,9 @@ describe('redirection instruments', () => {
 		expect((5).toFixed(2)).toBe('5.00')
 
 		const sentinel = Object.freeze({ stage: 'restore' })
-		let raised: unknown
-		try {
+		const raised = catchFailure(() => {
 			replaceIntrinsic(Number.prototype, 'toFixed', () => 'replaced', throwSentinel(sentinel))
-		} catch (error) {
-			raised = error
-		}
+		})
 		expect(raised).toBe(sentinel)
 		expect((5).toFixed(2)).toBe('5.00')
 		expect(Reflect.getOwnPropertyDescriptor(Number.prototype, 'toFixed')?.value).toBe(honest?.value)
@@ -178,12 +197,9 @@ describe('redirection instruments', () => {
 		expect(Reflect.has({}, 'probeCause')).toBe(false)
 
 		const sentinel = Object.freeze({ stage: 'pollution' })
-		let raised: unknown
-		try {
+		const raised = catchFailure(() => {
 			pollutePrototype(Object.prototype, 'probeCause', () => 'polluted', throwSentinel(sentinel))
-		} catch (error) {
-			raised = error
-		}
+		})
 		expect(raised).toBe(sentinel)
 		expect(Reflect.has({}, 'probeCause')).toBe(false)
 
@@ -227,19 +243,16 @@ describe('redirection instruments', () => {
 
 		// Both install a GETTER, so a read of the member during the operation
 		// reaches the replacement rather than the intrinsic.
-		let raised: unknown
-		try {
+		const raised = catchFailure(() => {
 			replaceStringSlice(throwHostileAccess, () => 'abc'.slice(1))
-		} catch (error) {
-			raised = error
-		}
+		})
 		expect(raised).toBeInstanceOf(Error)
 		expect('abc'.slice(1)).toBe('bc')
 	})
 
 	it('arms a replacement row and a pollution row through the installation each names', () => {
 		const sentinel = Object.freeze({ stage: 'redirect' })
-		let raised: unknown
+		const raised = new ObservedValue<unknown>(undefined)
 		const replacement: TerminalIntrinsic = {
 			label: 'Array.prototype.at',
 			target: Array.prototype,
@@ -251,15 +264,15 @@ describe('redirection instruments', () => {
 				try {
 					;['a'].at(0)
 				} catch (error) {
-					raised = error
+					raised.value = error
 				}
 				return armed
 			}),
 		).toBe(true)
-		expect(raised).toBe(sentinel)
+		expect(raised.value).toBe(sentinel)
 		expect(['a'].at(0)).toBe('a')
 
-		raised = undefined
+		raised.value = undefined
 		const pollution: TerminalIntrinsic = {
 			label: 'Object.prototype.probeCause',
 			target: Object.prototype,
@@ -271,12 +284,12 @@ describe('redirection instruments', () => {
 				try {
 					Reflect.get({}, 'probeCause')
 				} catch (error) {
-					raised = error
+					raised.value = error
 				}
 				return armed
 			}),
 		).toBe(true)
-		expect(raised).toBe(sentinel)
+		expect(raised.value).toBe(sentinel)
 		expect(Reflect.has({}, 'probeCause')).toBe(false)
 
 		// The unarmed pass of the same sweep carries this instead of a door answer,
@@ -289,31 +302,22 @@ describe('redirection instruments', () => {
 		const sentinel = Object.freeze({ stage: 'cause' })
 		const thrower = throwSentinel(sentinel)
 
-		let called: unknown
-		try {
+		const called = catchFailure(() => {
 			thrower()
-		} catch (error) {
-			called = error
-		}
+		})
 		expect(called).toBe(sentinel)
 
-		let constructed: unknown
-		try {
+		const constructed = catchFailure(() => {
 			Reflect.construct(thrower, [])
-		} catch (error) {
-			constructed = error
-		}
+		})
 		expect(constructed).toBe(sentinel)
 
 		// The control from outside the population: an arrow is not constructible,
 		// so a redirected constructor reached through `new` would raise the host's
 		// own refusal rather than the caller's value.
-		let arrow: unknown
-		try {
+		const arrow = catchFailure(() => {
 			Reflect.construct(() => 1, [])
-		} catch (error) {
-			arrow = error
-		}
+		})
 		expect(arrow).toBeInstanceOf(TypeError)
 		expect(arrow).not.toBe(sentinel)
 	})
@@ -369,12 +373,9 @@ describe('redirection instruments', () => {
 		expect([bound.deny(), bound.deny(), bound.deny()]).toEqual([false, false, false])
 		expect(bound.count()).toBe(3)
 
-		let raised: unknown
-		try {
+		const raised = catchFailure(() => {
 			bound.deny()
-		} catch (error) {
-			raised = error
-		}
+		})
 		expect(raised).toBe(overflow)
 		expect(bound.count()).toBe(4)
 	})
@@ -744,12 +745,9 @@ describe('retention fixtures', () => {
 		const schema = createSchemaRetention('y', true)
 		expect(Reflect.ownKeys(schema.fixture.source)).toEqual(['child', 'bad'])
 		expect(schema.reason.message).toBe('y schema read')
-		let raised: unknown
-		try {
+		const raised = catchFailure(() => {
 			Reflect.get(schema.fixture.source, 'bad')
-		} catch (error) {
-			raised = error
-		}
+		})
 		expect(raised).toBe(schema.reason)
 		expect(Reflect.ownKeys(createSchemaRetention('y', false).fixture.source)).toEqual(['child'])
 	})
@@ -780,12 +778,9 @@ describe('hostile sources', () => {
 
 		const reason = new Error('prototype read')
 		const prototype = createThrowingPrototype(reason)
-		let raised: unknown
-		try {
+		const raised = catchFailure(() => {
 			Reflect.getPrototypeOf(prototype)
-		} catch (error) {
-			raised = error
-		}
+		})
 		expect(raised).toBe(reason)
 		expect(Object.keys(prototype)).toEqual(['b', 'a'])
 	})
@@ -850,18 +845,7 @@ describe('structural fixtures', () => {
 		expect(buildDeepNest(1)).toEqual(['leaf'])
 		expect(buildDeepNest(2)).toEqual({ value: ['leaf'] })
 
-		let node: unknown = buildDeepNest(9)
-		let layers = 0
-		for (let step = 0; step < 16; step += 1) {
-			if (Array.isArray(node)) {
-				node = node[0]
-				layers += 1
-				continue
-			}
-			if (typeof node !== 'object' || node === null) break
-			node = Reflect.get(node, 'value')
-			layers += 1
-		}
+		const { node, layers } = readNest(buildDeepNest(9), 16)
 		expect(node).toBe('leaf')
 		expect(layers).toBe(9)
 	})
@@ -897,14 +881,9 @@ describe('structural fixtures', () => {
 describe('shape factories', () => {
 	it('nests one array level per requested depth', () => {
 		expect(buildDeepShape(0)).toEqual({ category: 'string' })
-		let node: ContractShape = buildDeepShape(3)
-		let levels = 0
-		for (let step = 0; step < 8 && node.category === 'array'; step += 1) {
-			node = node.items
-			levels += 1
-		}
+		const { node, levels } = readWrappers(buildDeepShape(3), 8)
 		expect(levels).toBe(3)
-		expect(node.category).toBe('string')
+		expect(node?.category).toBe('string')
 	})
 
 	it('binds one child into both properties of every level', () => {
@@ -916,15 +895,14 @@ describe('shape factories', () => {
 
 		// The gap the fixture exists for: an expansion that does not share reads
 		// one node per emitted edge, so the emitted total doubles per level.
-		let emitted = 0
 		const pending: ContractShape[] = [dag]
-		for (let step = 0; step < 64 && pending.length > 0; step += 1) {
+		const emitted = Array.from({ length: 64 }).reduce<number>((count) => {
 			const node = pending.pop()
-			if (node === undefined) continue
-			emitted += 1
+			if (node === undefined) return count
 			if (node.category === 'object')
 				for (const child of Object.values(node.properties)) pending.push(child)
-		}
+			return count + 1
+		}, 0)
 		expect(emitted).toBe(2 ** 4 - 1)
 	})
 
@@ -936,12 +914,7 @@ describe('shape factories', () => {
 		expect(Object.keys(staircase.properties)).toEqual(['k0', 'k1', 'k2'])
 		expect(Reflect.get(staircase.properties, 'k0')).toBe(child)
 
-		let node: ContractShape | undefined = Reflect.get(staircase.properties, 'k2')
-		let wrappers = 0
-		for (let step = 0; step < 8 && node !== undefined && node.category === 'array'; step += 1) {
-			node = node.items
-			wrappers += 1
-		}
+		const { node, levels: wrappers } = readWrappers(Reflect.get(staircase.properties, 'k2'), 8)
 		expect(wrappers).toBe(2)
 		expect(node).toBe(child)
 	})
@@ -1115,29 +1088,10 @@ describe('sample corpora', () => {
 
 		// The nest the inference round trip needs is the one that outruns the
 		// package's own depth limit, so the walk that finds it must reach past it.
-		let deepest = 0
-		for (const value of SOUNDNESS_SAMPLE) {
-			let node: unknown = value
-			let depth = 0
-			for (let step = 0; step <= INFER_DEPTH_LIMIT + 16; step += 1) {
-				if (Array.isArray(node)) {
-					node = node[0]
-					depth += 1
-					continue
-				}
-				if (typeof node !== 'object' || node === null) break
-				let descriptor: PropertyDescriptor | undefined
-				try {
-					descriptor = Object.getOwnPropertyDescriptor(node, 'value')
-				} catch {
-					break
-				}
-				if (descriptor === undefined || !Object.hasOwn(descriptor, 'value')) break
-				node = descriptor.value
-				depth += 1
-			}
-			if (node === 'leaf' && depth > deepest) deepest = depth
-		}
+		const deepest = SOUNDNESS_SAMPLE.reduce<number>(
+			(depth, value) => Math.max(depth, measureLeaf(value, INFER_DEPTH_LIMIT + 17)),
+			0,
+		)
 		expect(deepest).toBeGreaterThan(INFER_DEPTH_LIMIT)
 	})
 
@@ -1287,21 +1241,17 @@ describe('schema and memo fixtures', () => {
 	it('builds a complete two-child tree at the requested depth', () => {
 		expect(buildTree(() => 1, 0)).toEqual({ value: 1, children: [] })
 
-		let drawn = 0
-		const tree = buildTree(() => {
-			drawn += 1
-			return drawn
-		}, 2)
-		let nodes = 0
+		const drawn = new ObservationCounter()
+		const tree = buildTree(() => drawn.increment(), 2)
 		const pending = [tree]
-		for (let step = 0; step < 32 && pending.length > 0; step += 1) {
+		const nodes = Array.from({ length: 32 }).reduce<number>((count) => {
 			const node = pending.pop()
-			if (node === undefined) continue
-			nodes += 1
+			if (node === undefined) return count
 			for (const child of node.children) pending.push(child)
-		}
+			return count + 1
+		}, 0)
 		expect(nodes).toBe(2 ** 3 - 1)
-		expect(drawn).toBe(nodes)
+		expect(drawn.value).toBe(nodes)
 		expect(tree.children).toHaveLength(2)
 	})
 })
@@ -1383,5 +1333,43 @@ describe('roundtrip readings', () => {
 		const assignable: Equal<{ a: string }, { a: string; b?: never }> = false
 		expect(identical).toBe(true)
 		expect(assignable).toBe(false)
+	})
+})
+
+describe('callback observations', () => {
+	it('supplies an unconditional positive recognition answer', () => {
+		expect(acceptRecognition()).toBe(true)
+	})
+
+	it('counts calls independently and clears the recorded count', () => {
+		const first = new ObservationCounter()
+		const second = new ObservationCounter()
+		expect(first.value).toBe(0)
+		expect(first.increment()).toBe(1)
+		expect(first.increment()).toBe(2)
+		expect(first.value).toBe(2)
+		expect(second.value).toBe(0)
+		first.clear()
+		expect(first.value).toBe(0)
+		expect(first.increment()).toBe(1)
+	})
+
+	it('retains the exact callback value and admits undefined', () => {
+		const observation = new ObservedValue<unknown>(undefined)
+		expect(observation.value).toBeUndefined()
+		const value = { message: 'observed' }
+		observation.value = value
+		expect(observation.value).toBe(value)
+		observation.value = undefined
+		expect(observation.value).toBeUndefined()
+	})
+})
+describe('host publication controls', () => {
+	it('empties a receiver and injects a marker before its original members', () => {
+		const values = ['a', 'b']
+		expect(Array.from(Reflect.apply(injectMarker, values, []))).toEqual(['INJECTED', 'a', 'b'])
+		expect(Reflect.apply(clearValues, values, [])).toBe(values)
+		expect(values).toEqual([])
+		expect(Array.from(Reflect.apply(readStrings, new Set(['a', 42, 'b']), []))).toEqual(['a', 'b'])
 	})
 })

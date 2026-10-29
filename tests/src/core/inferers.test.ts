@@ -28,6 +28,12 @@ import {
 	valueToSchema,
 } from '@src/core'
 import {
+	polluteArrayConstruction,
+	createMarker,
+	acceptRecognition,
+	clearValues,
+	injectMarker,
+	ObservationCounter,
 	buildCyclicArray,
 	buildCyclicRecord,
 	buildSparseArray,
@@ -45,6 +51,18 @@ import {
 import { createForeignPrototype } from '../../setupServer.js'
 
 describe('valueToSchema — leaf kinds', () => {
+	it('keeps HEAD schema unification and enum projection under polluted array construction', () => {
+		const actual = polluteArrayConstruction(() => ({
+			union: unifySchemas([{ type: 'string' }, { type: 'integer' }, { type: 'number' }]),
+			enum: inferPrimitiveEnum(['a', 'b', 'a'], 2),
+		}))
+		// HEAD inferers.ts:68 subsumes integer; :258 preserves the primitive vocabulary.
+		expect(actual).toEqual({
+			union: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+			enum: { enum: ['a', 'b'] },
+		})
+	})
+
 	it('infers null', () => {
 		expect(valueToSchema(null)).toEqual({ type: 'null' })
 	})
@@ -208,10 +226,10 @@ describe('valueToSchema — objects', () => {
 			readonly format = true
 		}
 		for (const options of [[], new Options()]) {
-			for (const [reader, run] of [
+			for (const [reader, run] of Object.freeze<ReadonlyArray<readonly [string, () => unknown]>>([
 				['valueToSchema', () => Reflect.apply(valueToSchema, undefined, ['value', options])],
 				['samplesToSchema', () => Reflect.apply(samplesToSchema, undefined, [['value'], options])],
-			] satisfies ReadonlyArray<readonly [string, () => unknown]>) {
+			])) {
 				const error = captureContractError(run)
 				expect(error.code).toBe('structure')
 				expect(error.message).toBe(`${reader}: options must be a plain record`)
@@ -324,11 +342,10 @@ describe('valueToSchema — hostile input', () => {
 describe('valueToSchema — depth and breadth caps', () => {
 	it('emits {} once the depth budget is exhausted', () => {
 		const deeplyNested: Record<string, unknown> = { value: 1 }
-		let current = deeplyNested
-		for (let level = 0; level < 5; level += 1) {
-			const next: Record<string, unknown> = { child: current }
-			current = next
-		}
+		const current = Array.from({ length: 5 }).reduce<Record<string, unknown>>(
+			(child) => ({ child }),
+			deeplyNested,
+		)
 		const shallow = valueToSchema(current, { limits: { depth: 1 } })
 		expect(shallow).toEqual({
 			type: 'object',
@@ -561,7 +578,7 @@ describe('stringToFormat — direct classification', () => {
 		)
 		const revoked = Proxy.revocable({}, {})
 		revoked.revoke()
-		const values: readonly unknown[] = [
+		const values: readonly unknown[] = Object.freeze([
 			undefined,
 			null,
 			false,
@@ -573,7 +590,7 @@ describe('stringToFormat — direct classification', () => {
 			() => 'date',
 			poisoned,
 			revoked.proxy,
-		]
+		])
 
 		for (const value of values) {
 			expect(Reflect.apply(stringToFormat, undefined, [value])).toBeUndefined()
@@ -937,16 +954,17 @@ describe('array inference — hostile own-getter / Proxy-over-array refusal (C1)
 
 describe('valueToSchema / samplesToSchema — option sanitization (C2)', () => {
 	it('does not hang on a 40000-deep array chain with a valid budget', () => {
-		let current: unknown = 'leaf'
-		for (let level = 0; level < 40000; level += 1) current = [current]
+		const current = Array.from({ length: 40000 }).reduce<unknown>((child) => [child], 'leaf')
 		expect(() => valueToSchema(current)).not.toThrow()
 	})
 
 	it.each([Number.NaN, Number.POSITIVE_INFINITY, 1e9, -1, 2.5])(
 		'never hangs or throws for a hostile depth limit of %s',
 		(depth) => {
-			let current: unknown = 'leaf'
-			for (let level = 0; level < 500; level += 1) current = { child: current }
+			const current = Array.from({ length: 500 }).reduce<unknown>(
+				(child) => ({ child: child }),
+				'leaf',
+			)
 			expect(() => valueToSchema(current, { limits: { depth } })).not.toThrow()
 		},
 	)
@@ -1015,10 +1033,9 @@ describe('samplesToSchema — truncation opens the schema for record samples (C3
 
 describe('valueToSchema — shared-subtree DAG (C4)', () => {
 	it('resolves a depth-24 diamond DAG quickly with a deterministic schema', () => {
-		let node: unknown = { leaf: 1 }
-		for (let level = 0; level < 24; level += 1) {
-			node = { a: node, b: node }
-		}
+		const node = Array.from({ length: 24 }).reduce<unknown>((child) => ({ a: child, b: child }), {
+			leaf: 1,
+		})
 		const start = performance.now()
 		const schema = valueToSchema(node)
 		const elapsed = performance.now() - start
@@ -1032,10 +1049,10 @@ describe('valueToSchema — shared-subtree DAG (C4)', () => {
 	})
 
 	it('resolves a fan-3 shared-reference DAG quickly', () => {
-		let node: unknown = { leaf: 1 }
-		for (let level = 0; level < 16; level += 1) {
-			node = { a: node, b: node, c: node }
-		}
+		const node = Array.from({ length: 16 }).reduce<unknown>(
+			(child) => ({ a: child, b: child, c: child }),
+			{ leaf: 1 },
+		)
 		const start = performance.now()
 		expect(() => valueToSchema(node)).not.toThrow()
 		expect(performance.now() - start).toBeLessThan(5000)
@@ -1325,17 +1342,17 @@ describe('canonicalStringify — the walk at its door', () => {
 describe('unifySchemas / inferPrimitiveEnum — un-canonicalizable members', () => {
 	it('propagates a classification failure reached after the consumer record gate', () => {
 		const sentinel = new Error('second prototype read')
-		let reads = 0
+		const reads = new ObservationCounter()
 		const schema = new Proxy({ type: 'string' } satisfies JSONSchema, {
 			getPrototypeOf(target) {
-				reads += 1
-				if (reads === 2) throw sentinel
+				reads.increment()
+				if (reads.value === 2) throw sentinel
 				return Reflect.getPrototypeOf(target)
 			},
 		})
 
 		const error = captureContractError(() => unifySchemas([schema]))
-		expect(reads).toBe(2)
+		expect(reads.value).toBe(2)
 		expect(error.code).toBe('structure')
 		expect(error.message).toBe('unifySchemas: schemas could not be read')
 		expect(isContractError(error.cause)).toBe(true)
@@ -1657,8 +1674,7 @@ describe('caller-owned inference arrays', () => {
 		// at the last index was never reached by either — the row compared one
 		// degenerate answer with another and could not have failed if the budget
 		// were ignored.
-		const values: unknown[] = []
-		for (let index = 0; index < INFER_BREADTH_LIMIT; index += 1) values[index] = 1
+		const values: unknown[] = Array.from({ length: INFER_BREADTH_LIMIT }, () => 1)
 		values[INFER_BREADTH_LIMIT] = new Proxy([], {
 			get() {
 				throw new Error('breadth exceeded')
@@ -1682,8 +1698,10 @@ describe('caller-owned inference arrays', () => {
 				throw new Error('depth exceeded')
 			},
 		})
-		let values: readonly unknown[] = [hostile]
-		for (let level = 0; level < INFER_DEPTH_LIMIT; level += 1) values = [values]
+		const values = Array.from({ length: INFER_DEPTH_LIMIT }).reduce<readonly unknown[]>(
+			(child) => [child],
+			[hostile],
+		)
 		const expected = valueToSchema(values, {
 			limits: { depth: INFER_DEPTH_LIMIT, properties: 1 },
 		})
@@ -1816,22 +1834,22 @@ describe('caller-owned inference arrays', () => {
 	})
 
 	it('performs no row read when record depth is exhausted', () => {
-		let reads = 0
+		const reads = new ObservationCounter()
 		const hostile = new Proxy([{ value: 1 }], {
 			get() {
-				reads += 1
+				reads.increment()
 				throw new Error('sample read')
 			},
 			getOwnPropertyDescriptor() {
-				reads += 1
+				reads.increment()
 				throw new Error('sample descriptor')
 			},
 			has() {
-				reads += 1
+				reads.increment()
 				throw new Error('sample membership')
 			},
 			ownKeys() {
-				reads += 1
+				reads.increment()
 				throw new Error('sample keys')
 			},
 		})
@@ -1841,7 +1859,7 @@ describe('caller-owned inference arrays', () => {
 		// budget under test is the one the record branch applies to the ROWS: an
 		// exhausted depth answers without touching a single row.
 		expect(samplesToSchema(samples, { limits: { depth: 0, properties: 8 } })).toEqual({})
-		expect(reads).toBe(0)
+		expect(reads.value).toBe(0)
 
 		// One level in, the row is read and the hostile column widens without being
 		// descended into — the budget stops the walk one step short of it.
@@ -1851,7 +1869,7 @@ describe('caller-owned inference arrays', () => {
 			required: ['nested'],
 			additionalProperties: false,
 		})
-		expect(reads).toBe(0)
+		expect(reads.value).toBe(0)
 
 		// Two levels in, the same column IS descended into and the hostile reads
 		// refuse the whole call — the control that proves the rows above were
@@ -1861,7 +1879,7 @@ describe('caller-owned inference arrays', () => {
 		)
 		expect(error.code).toBe('structure')
 		expect(error.message).toBe('samplesToSchema: samples could not be read')
-		expect(reads).toBeGreaterThan(0)
+		expect(reads.value).toBeGreaterThan(0)
 	})
 })
 
@@ -1901,13 +1919,9 @@ describe('inference publishes its own answer under a lying publication walk', ()
 	// Every emitted schema is ordered and assembled through array operations the
 	// caller can rewrite. A `sort` that empties its receiver TRUNCATED a published
 	// schema and a substituted `map` replaced one wholesale, both silently.
-	function emptySort(this: unknown[]): unknown[] {
-		this.length = 0
-		return this
-	}
 
 	it('valueToSchema publishes every property while Array.prototype.sort empties', () => {
-		const published = replaceIntrinsic(Array.prototype, 'sort', emptySort, () =>
+		const published = replaceIntrinsic(Array.prototype, 'sort', clearValues, () =>
 			valueToSchema({ b: 1, a: 2 }),
 		)
 
@@ -1920,16 +1934,18 @@ describe('inference publishes its own answer under a lying publication walk', ()
 	})
 
 	it('valueToSchema publishes its own items while Array.prototype.map lies', () => {
-		const lie = (): readonly string[] => ['INJECTED']
-		const published = replaceIntrinsic(Array.prototype, 'map', lie, () =>
-			valueToSchema({ a: [1, 2] }),
+		const published = replaceIntrinsic(
+			Array.prototype,
+			'map',
+			createMarker.bind(undefined, true),
+			() => valueToSchema({ a: [1, 2] }),
 		)
 
 		expect(JSON.stringify(published)).not.toContain('INJECTED')
 	})
 
 	it('samplesToSchema publishes every sampled key while Array.prototype.sort empties', () => {
-		const published = replaceIntrinsic(Array.prototype, 'sort', emptySort, () =>
+		const published = replaceIntrinsic(Array.prototype, 'sort', clearValues, () =>
 			samplesToSchema([
 				{ b: 1, a: 2 },
 				{ b: 3, a: 4 },
@@ -1941,7 +1957,7 @@ describe('inference publishes its own answer under a lying publication walk', ()
 	})
 
 	it('unifySchemas publishes its own members while Array.prototype.sort empties', () => {
-		const published = replaceIntrinsic(Array.prototype, 'sort', emptySort, () =>
+		const published = replaceIntrinsic(Array.prototype, 'sort', clearValues, () =>
 			unifySchemas([{ type: 'string' }, { type: 'boolean' }]),
 		)
 
@@ -1949,11 +1965,7 @@ describe('inference publishes its own answer under a lying publication walk', ()
 	})
 
 	it('canonicalStringify publishes a marker-free key while the array iterator injects', () => {
-		function* injectLeading(this: readonly unknown[]): Generator<unknown> {
-			yield 'INJECTED'
-			for (let index = 0; index < this.length; index += 1) yield this[index]
-		}
-		const published = replaceIntrinsic(Array.prototype, Symbol.iterator, injectLeading, () =>
+		const published = replaceIntrinsic(Array.prototype, Symbol.iterator, injectMarker, () =>
 			attempt(() => canonicalStringify({ a: [1, 2] })),
 		)
 
@@ -1962,8 +1974,7 @@ describe('inference publishes its own answer under a lying publication walk', ()
 	})
 
 	it('inferPrimitiveEnum publishes its own vocabulary while Set.prototype.has answers true', () => {
-		const answerTrue = (): boolean => true
-		const published = replaceIntrinsic(Set.prototype, 'has', answerTrue, () =>
+		const published = replaceIntrinsic(Set.prototype, 'has', acceptRecognition, () =>
 			inferPrimitiveEnum(['b', 'a', 'b'], INFER_ENUM_LIMIT),
 		)
 
@@ -1982,17 +1993,19 @@ describe('samplesToSchema — bounded work on shared references (H9, H10-B)', ()
 		// Red before green: `samplesToSchema([{id:1,detail:c},{id:2,detail:c}])` over
 		// an 18-level shared-child DAG took 6.5 s and read the shared leaf 32,768
 		// times at 14 levels, because the memo keyed only the one-row slot.
-		let reads = 0
+		const reads = new ObservationCounter()
 		const leaf: Record<string, unknown> = {}
 		Object.defineProperty(leaf, 'v', {
 			enumerable: true,
 			get() {
-				reads += 1
+				reads.increment()
 				return 1
 			},
 		})
-		let node: unknown = leaf
-		for (let index = 0; index < 18; index += 1) node = { a: node, b: node }
+		const node = Array.from({ length: 18 }).reduce<unknown>(
+			(child) => ({ a: child, b: child }),
+			leaf,
+		)
 
 		// Outside the fixed population, case 1: two DISTINCT rows sharing one child.
 		const started = performance.now()
@@ -2002,41 +2015,40 @@ describe('samplesToSchema — bounded work on shared references (H9, H10-B)', ()
 		])
 		const elapsed = performance.now() - started
 
-		expect(reads).toBeLessThanOrEqual(INFER_DEPTH_LIMIT)
+		expect(reads.value).toBeLessThanOrEqual(INFER_DEPTH_LIMIT)
 		expect(elapsed).toBeLessThan(1_000)
 		expect(distinct.type).toBe('object')
 
 		// Outside the fixed population, case 2: the same row repeated.
-		reads = 0
+		reads.clear()
 		expect(samplesToSchema([node, node]).type).toBe('object')
-		expect(reads).toBeLessThanOrEqual(INFER_DEPTH_LIMIT)
+		expect(reads.value).toBeLessThanOrEqual(INFER_DEPTH_LIMIT)
 
 		// Outside the fixed population, case 3: rows whose per-key value LISTS
 		// differ at every level, so no slot is ever a repeated single object. This
 		// is the case a first-row-only memo would still miss.
-		let left: Record<string, unknown> = { leaf: 1 }
-		let right: Record<string, unknown> = { leaf: 2 }
-		for (let index = 0; index < 16; index += 1) {
-			const nextLeft = { a: left, b: right }
-			const nextRight = { a: right, b: left }
-			left = nextLeft
-			right = nextRight
-		}
+		const { left, right } = Array.from({ length: 16 }).reduce<{
+			readonly left: Record<string, unknown>
+			readonly right: Record<string, unknown>
+		}>(
+			(pair) => ({ left: { a: pair.left, b: pair.right }, right: { a: pair.right, b: pair.left } }),
+			{ left: { leaf: 1 }, right: { leaf: 2 } },
+		)
 		const swapped = performance.now()
 		expect(samplesToSchema([left, right]).type).toBe('object')
 		expect(performance.now() - swapped).toBeLessThan(1_000)
 
 		// Inside the population, kept as the control the H9 round had: one row.
-		reads = 0
+		reads.clear()
 		expect(samplesToSchema([node]).type).toBe('object')
-		expect(reads).toBeLessThanOrEqual(INFER_DEPTH_LIMIT)
+		expect(reads.value).toBeLessThanOrEqual(INFER_DEPTH_LIMIT)
 
 		// The negative control the counter needs: the same instrument reports the
 		// LINEAR sibling truthfully, so it discriminates a bounded walk from an
 		// unbounded one rather than failing uniformly.
-		reads = 0
+		reads.clear()
 		valueToSchema(node)
-		expect(reads).toBe(1)
+		expect(reads.value).toBe(1)
 	})
 
 	it('serves no answer across a differing budget or flag from one walk to the next', () => {

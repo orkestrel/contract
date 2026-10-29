@@ -24,8 +24,12 @@ const MODULES = Object.freeze({ '@orkestrel/contract': 'src/core', '@src/core': 
  * here stops being stranded, so the list cannot rot.
  */
 const INTERNAL: readonly string[] = Object.freeze([
+	'class EvaluationScope',
+	'class LazyGuard',
+	'class RandomSource',
 	'class SampleInferer',
 	'class SchemaShaper',
+	'class ShapePass',
 	'class ValueInferer',
 ])
 
