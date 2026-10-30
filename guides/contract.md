@@ -29,7 +29,7 @@ In a guard table a `Shape` cell holds the type the guard narrows to.
 
 ### Primitive & null-ish guards
 
-| Guard                  | Kind     | Shape             | Summary                                                                                               |
+| Name                   | Kind     | Shape             | Summary                                                                                               |
 | ---------------------- | -------- | ----------------- | ----------------------------------------------------------------------------------------------------- |
 | `isNull`               | function | `null`            | Determines whether a value is `null`.                                                                 |
 | `isUndefined`          | function | `undefined`       | Determines whether a value is `undefined`.                                                            |
@@ -52,7 +52,7 @@ In a guard table a `Shape` cell holds the type the guard narrows to.
 
 ### Structural & collection guards
 
-| Guard                 | Kind     | Shape                      | Summary                                                                                                          |
+| Name                  | Kind     | Shape                      | Summary                                                                                                          |
 | --------------------- | -------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `isObject`            | function | `object`                   | Determines whether a value is a non-null object.                                                                 |
 | `isRecord`            | function | `Record<string, unknown>`  | Determines whether a value is a plain record (object literal or null-prototype), not an array or class instance. |
@@ -78,7 +78,7 @@ That is a structural test rather than a provenance one, and the residual is exac
 
 ### Array & typed-array guards
 
-| Guard                 | Kind     | Shape               | Summary                                                                             |
+| Name                  | Kind     | Shape               | Summary                                                                             |
 | --------------------- | -------- | ------------------- | ----------------------------------------------------------------------------------- |
 | `isArray`             | function | `readonly T[]`      | Determines whether a value is an array.                                             |
 | `isDataView`          | function | `DataView`          | Determines whether a value is a `DataView`.                                         |
@@ -97,7 +97,7 @@ That is a structural test rather than a provenance one, and the residual is exac
 
 ### Emptiness guards
 
-| Guard              | Kind     | Shape                               | Summary                                                                                                                         |
+| Name               | Kind     | Shape                               | Summary                                                                                                                         |
 | ------------------ | -------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `isEmptyString`    | function | `''`                                | Determines whether a value is the empty string `''`.                                                                            |
 | `isEmptyArray`     | function | `readonly []`                       | Determines whether a value is an empty array.                                                                                   |
@@ -112,7 +112,7 @@ That is a structural test rather than a provenance one, and the residual is exac
 
 ### Function & constructor guards
 
-| Guard                      | Kind     | Shape                                                               | Summary                                                                                                      |
+| Name                       | Kind     | Shape                                                               | Summary                                                                                                      |
 | -------------------------- | -------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `isFunction`               | function | `AnyFunction`                                                       | Determines whether a value is callable.                                                                      |
 | `isZeroArg`                | function | `ZeroArgFunction`                                                   | Determines whether a value is a function that declares zero parameters (`Function.length === 0`).            |
@@ -130,7 +130,7 @@ That is a structural test rather than a provenance one, and the residual is exac
 Each combinator builds a fresh guard out of guards you already hold. There is no
 `iterableOf`; guard a `Set`, a `Map`, or an array with `setOf`, `mapOf`, or `arrayOf`.
 
-| Combinator       | Kind     | Summary                                                                                                                                                                                                                                    |
+| Name             | Kind     | Summary                                                                                                                                                                                                                                    |
 | ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `arrayOf`        | function | Builds a guard that accepts DENSE arrays whose every element satisfies `elementGuard`.                                                                                                                                                     |
 | `tupleOf`        | function | Builds a guard that accepts fixed-arity DENSE tuples, testing each index with the corresponding guard.                                                                                                                                     |
@@ -162,7 +162,7 @@ Each combinator builds a fresh guard out of guards you already hold. There is no
 The bound the combinators carry is not itself a combinator, and its `Value` cell holds
 the constant's own literal:
 
-| Bound               | Kind  | Value | Summary                                                                       |
+| Name                | Kind  | Value | Summary                                                                       |
 | ------------------- | ----- | ----- | ----------------------------------------------------------------------------- |
 | `GUARD_DEPTH_LIMIT` | const | `512` | Caps the active recursion or JSON container depth for runtime guards, frozen. |
 
@@ -170,7 +170,7 @@ the constant's own literal:
 
 **Coercion policy.** Number and string coerce into each other bidirectionally by design: `parseNumber` accepts a numeric string (`'42'` → `42`) and `parseString` accepts a finite number, stringifying it (`42` → `'42'`) — use `isString` / `isFiniteNumber` directly when you need strict rejection with no coercion. Boolean is a coercion **sink only**, never a source: `parseBoolean` accepts `'true'` / `'false'` / `'1'` / `'0'` / `1` / `0` and coerces them TO a boolean, but `parseNumber` and `parseString` both reject booleans outright — a boolean never coerces into a number or string. `'1'` meaning "the number one" and `'1'` meaning "true" are different domains; only the boolean parser treats the numeric/string forms as booleans.
 
-| Parser                | Kind     | Summary                                                                                                      |
+| Name                  | Kind     | Summary                                                                                                      |
 | --------------------- | -------- | ------------------------------------------------------------------------------------------------------------ |
 | `parseString`         | function | Parses an unknown value to a string.                                                                         |
 | `parseNumber`         | function | Parses an unknown value to a finite number.                                                                  |
@@ -200,7 +200,7 @@ optional member and `plus` introducing its call-signature members, and a type al
 literal with a union's arms escaped as `\|`. A function row's `Shape` cell holds its signature, and a
 guard row's the type it narrows to.
 
-| API                   | Kind      | Shape                                                                                                                                                                                        | Summary                                                                                                                                     |
+| Name                  | Kind      | Shape                                                                                                                                                                                        | Summary                                                                                                                                     |
 | --------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `isJSONPrimitive`     | function  | `JSONPrimitive`                                                                                                                                                                              | Determines whether a value is a primitive JSON value.                                                                                       |
 | `isJSONValue`         | function  | `JSONValue`                                                                                                                                                                                  | Determines whether a value is a cycle-safe JSON value.                                                                                      |
@@ -218,11 +218,11 @@ guard row's the type it narrows to.
 
 ### Helper
 
-| Constant               | Kind  | Summary                                                                                       |
+| Name                   | Kind  | Summary                                                                                       |
 | ---------------------- | ----- | --------------------------------------------------------------------------------------------- |
 | `CONTRACT_ERROR_BRAND` | const | Holds the registry-global key used to recognize `ContractError` values across package copies. |
 
-| Helper                  | Kind     | Summary                                                                                                                                                                                                                                                                |
+| Name                    | Kind     | Summary                                                                                                                                                                                                                                                                |
 | ----------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `attempt`               | function | Invokes a callback once and synchronously captures its exact outcome as a `Result`.                                                                                                                                                                                    |
 | `INTRINSICS`            | const    | Captures every host operation this package dispatches through, while this module evaluates.                                                                                                                                                                            |
@@ -265,7 +265,7 @@ guard row's the type it narrows to.
 | `pinMembers`            | function | Pins every own member of a class prototype as a non-configurable member — non-writable too when it is a data property — and verify the pin took.                                                                                                                       |
 | `refuseExpansion`       | function | Refuses a validated declaration whose compiled expansion exceeds `COMPILE_NODE_LIMIT`.                                                                                                                                                                                 |
 
-| API                  | Kind     | Summary                                                                      |
+| Name                 | Kind     | Summary                                                                      |
 | -------------------- | -------- | ---------------------------------------------------------------------------- |
 | `iterateIndices`     | function | Iterates indices while rereading the upper bound before every step.          |
 | `encodeParts`        | function | Encodes ordered members, stopping before the first unencodable member.       |
@@ -313,7 +313,7 @@ A `Shape` cell holds an interface's data members as bare names in braces, `?` ma
 optional member and `plus` introducing its call-signature members, and a type alias's own type
 literal with a union's arms escaped as `\|`.
 
-| Type                     | Kind      | Shape                                                                                                                            | Summary                                                                                                                                        |
+| Name                     | Kind      | Shape                                                                                                                            | Summary                                                                                                                                        |
 | ------------------------ | --------- | -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Failure`                | interface | `{ success, error }`                                                                                                             | Represents the discriminated failure branch of a `Result`.                                                                                     |
 | `ArrayRead<T = unknown>` | interface | `{ entries, dense }`                                                                                                             | Represents the owned result of reading one array through its reflected own-index lens.                                                         |
@@ -347,7 +347,7 @@ literal with a union's arms escaped as `\|`.
 
 `ContractError` is documented in full under its own heading following this table.
 
-| API             | Kind  | Summary                                                                                      |
+| Name            | Kind  | Summary                                                                                      |
 | --------------- | ----- | -------------------------------------------------------------------------------------------- |
 | `ContractError` | class | Carries a machine-readable contract category, optional context, and an exact optional cause. |
 
@@ -374,7 +374,7 @@ optional member and `plus` introducing its call-signature members, and a type al
 literal with a union's arms escaped as `\|`. A function row's `Shape` cell holds its signature, and a
 guard row's the type it narrows to.
 
-| API                    | Kind      | Shape                                                                                                                                                             | Summary                                                                  |
+| Name                   | Kind      | Shape                                                                                                                                                             | Summary                                                                  |
 | ---------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
 | `isContractError`      | function  | `ContractError`                                                                                                                                                   | Checks whether an unknown value is a `ContractError`.                    |
 | `ContractCode`         | type      | `'bound' \| 'range' \| 'empty' \| 'placement' \| 'structure' \| 'literal' \| 'cycle' \| 'pattern' \| 'generate' \| 'random' \| 'clone' \| 'depth' \| 'expansion'` | Names the machine-readable category carried by a `ContractError`.        |
@@ -395,7 +395,7 @@ optional member and `plus` introducing its call-signature members, and a type al
 literal with a union's arms escaped as `\|`. A class row's `Shape` cell holds the interface it
 implements, or its constructor signature where it implements none.
 
-| API                     | Kind      | Shape                   | Summary                                                                   |
+| Name                    | Kind      | Shape                   | Summary                                                                   |
 | ----------------------- | --------- | ----------------------- | ------------------------------------------------------------------------- |
 | `JSONCloner`            | class     | `JSONClonerInterface`   | Owns the state of one exact JSON snapshot operation.                      |
 | `JSONClonerInterface`   | interface | `{} plus clone`         | Settles one exact JSON snapshot of a retained source, then replays it.    |
@@ -410,7 +410,7 @@ implements, or its constructor signature where it implements none.
 
 The machinery behind owned snapshots (see Shape builders, below) — from [`JSONCloner.ts`](../src/core/JSONCloner.ts), [`SchemaCloner.ts`](../src/core/SchemaCloner.ts), [`ShapeCloner.ts`](../src/core/ShapeCloner.ts), and the eager boundaries in [`cloners.ts`](../src/core/cloners.ts). The JSON cloner accepts only exact acyclic JSON data, rejects sparse or decorated arrays and non-data record properties without invoking accessors, and builds deeply frozen standard arrays plus null-prototype records. “Decorated” means the array own-key set contains anything other than intrinsic `length` and every canonical index, including an extra, substituted, symbol, hidden, or accessor key. Index writability and configurability are normalized rather than treated as JSON data, so frozen arrays and nonwritable data indices remain valid. Because JSON persistence is a tree, repeated noncyclic source aliases are duplicated into distinct equal output branches; active-path back-edges fail as cycles. `cloneJSONRecord` adds record-root validation over the same engine. `cloneSchema` preserves shared-child identity and closes cyclic schema edges onto its clone; `cloneShape` preserves sharing, carries one accepted declaration population into its clone, and runs the complete declaration gate on that carried clone before returning, so a cyclic shape is refused with the same `cycle` diagnosis as every other shape entry. A key literally named `__proto__` stays own data. Every hostile reflective operation is contained through the sanctioned total boundary, and so is every caller-reachable dispatch on the declaration gate's own path: `ShapeValidator.validate` and `validateShape` translate a failure they did not author into a coded `ContractError` carrying the exact thrown value, rather than rethrowing it verbatim. JSON reflection failures and schema enumeration failures remain cause-free. A schema property-read failure instead retains the exact thrown value as its cause, including an explicit `undefined`; caller-owned errors never become terminal errors by identity. Only the exact errors owned or explicitly adopted by an engine can replay by terminal identity.
 
-| API                | Kind     | Summary                                                                                        |
+| Name               | Kind     | Summary                                                                                        |
 | ------------------ | -------- | ---------------------------------------------------------------------------------------------- |
 | `cloneJSONValue`   | function | Deep-clones exact JSON data into an owned frozen snapshot.                                     |
 | `cloneJSONRecord`  | function | Deep-clones an exact JSON object record into an owned frozen snapshot.                         |
@@ -454,7 +454,7 @@ Declarative constructors for the `ContractShape` union (`src/core/shapers.ts`). 
 
 **The snapshot-ownership model.** A builder freezes the node it returns and copies every collection you hand it — a `values` list, a `properties` map, a variant list, a `rawShape` fragment — while a `pattern` is captured and re-exposed as a fresh frozen `RegExp` per read, so editing your originals afterwards cannot reach the shape. `objectShape` enumerates a caller-owned property declaration once and carries that key/value snapshot. `cloneShape`, which must also validate a hand-authored graph, first requires every node to be a plain, null-prototype, or foreign-realm record before it reads the discriminant, then captures each declared field through own descriptors plus two agreeing reads before it builds the shell. Missing fields are carried as absent without a read; inherited fields and ordinary accessors are refused without invocation. The documented `pattern` accessor is the one exception, and its two frozen genuine-RegExp results must independently expose agreeing primitive-string `source` and `flags` pairs; no caller scalar object or conversion hook is retained. Structural children, literal values, variants, property maps, and raw-schema roots are then wired only from those captured references, never by rereading the source node. Property maps retain their separate stability mechanism: `cloneShape` compares exactly two caller enumerations and refuses second-population disagreement, while the first enumeration obtains every property child's own data descriptor and requires its value plus two reads to agree by identity. The complete declaration gate validates the carried cloned root; it does not repair or replace a captured population. Consequently, `createContract` reads a property entry exactly as often as `cloneShape` does — twice, and the two readings must agree — because it reaches the declaration the same way: there is no discarded pre-ownership walk, so there is no second caller population to disagree with the captured one. That single captured clone controls every artifact, an invalid captured population is refused by the gate that runs over the clone, and no third caller value read occurs. `ownShape` retains the already-performed `cloneShape` result for frozen and unfrozen inputs alike, so no caller-owned root or reference-bearing child is returned by identity. Thus a malformed value container, raw-schema child, discriminant, scalar, or structural slot cannot become plausible merely because copying would normalize it. A hand-authored `{ category: 'string', pattern }` node receives the same accessor-owned pattern snapshot as builder output and must likewise use an unflagged genuine local- or foreign-realm `RegExp`; inline constructs express the supported flag-like behavior. `createContract` takes its own `cloneShape` snapshot of the whole graph, so its `schema` / `is` / `parse` / `audit` / `explain` / `generate` are fixed at construction and cannot drift with a later edit to the shape you passed. The practical rule: build shapes with the builders, and treat a shape you assemble by hand as caller-owned until a compiler or `ownShape` has copied it.
 
-| Builder              | Kind     | Summary                                                                                                                                                                                                                                                                                 |
+| Name                 | Kind     | Summary                                                                                                                                                                                                                                                                                 |
 | -------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `stringShape`        | function | Builds a string `StringShape`.                                                                                                                                                                                                                                                          |
 | `numberShape`        | function | Builds a numeric `NumberShape`.                                                                                                                                                                                                                                                         |
@@ -508,7 +508,7 @@ optional member and `plus` introducing its call-signature members, and a type al
 literal with a union's arms escaped as `\|`. A resolver whose value is a multi-branch
 conditional carries none, and its `Summary` states what the resolution produces.
 
-| Type                  | Kind      | Shape                                                                                                                                                                           | Summary                                                                                                                                                                                                           |
+| Name                  | Kind      | Shape                                                                                                                                                                           | Summary                                                                                                                                                                                                           |
 | --------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ContractShape`       | type      | `StringShape \| NumberShape \| BooleanShape \| NullShape \| LiteralShape \| ArrayShape \| ObjectShape \| UnionShape \| OptionalShape \| NullableShape \| JSONShape \| RawShape` | Describes a value declaratively — a declaration the shape builders build and the compilers turn into a guard, a parser, a JSON Schema, and a generator.                                                           |
 | `StringShape`         | interface | `{ category, min?, max?, pattern?, description? }`                                                                                                                              | Describes a string with optional length and pattern constraints.                                                                                                                                                  |
@@ -549,7 +549,7 @@ literal with a union's arms escaped as `\|`. A function row's `Shape` cell holds
 guard row's the type it narrows to. A class row's `Shape` cell holds the interface it
 implements, or its constructor signature where it implements none.
 
-| API                         | Kind      | Shape                                                                      | Summary                                                                                                                                                                                    |
+| Name                        | Kind      | Shape                                                                      | Summary                                                                                                                                                                                    |
 | --------------------------- | --------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `ShapeValidator`            | class     | `ShapeValidatorInterface`                                                  | Validates one retained contract-shape source live on every call.                                                                                                                           |
 | `ShapeValidatorInterface`   | interface | `{ expansion } plus validate`                                              | Validates one retained contract-shape source on demand.                                                                                                                                    |
@@ -622,7 +622,7 @@ optional member and `plus` introducing its call-signature members, and a type al
 literal with a union's arms escaped as `\|`. A function row's `Shape` cell holds its signature, and a
 guard row's the type it narrows to.
 
-| API                    | Kind      | Shape                                                                         | Summary                                                                                                                                                                           |
+| Name                   | Kind      | Shape                                                                         | Summary                                                                                                                                                                           |
 | ---------------------- | --------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `valueToSchema`        | function  | `(value: unknown, options?: ValueToSchemaOptions) => JSONSchema`              | Infers a `JSONSchema` for one unknown value — the reverse direction of `compileSchema`.                                                                                           |
 | `samplesToSchema`      | function  | `(samples: readonly unknown[], options?: ValueToSchemaOptions) => JSONSchema` | Infers a `JSONSchema` from a set of example values — the multi-example counterpart of `valueToSchema` (for example inferring one schema from several database rows).              |
@@ -678,7 +678,7 @@ optional member and `plus` introducing its call-signature members, and a type al
 literal with a union's arms escaped as `\|`. A function row's `Shape` cell holds its signature, and a
 guard row's the type it narrows to.
 
-| API                   | Kind      | Shape                                                                                                                                                                                                                                            | Summary                                                                                                                                 |
+| Name                  | Kind      | Shape                                                                                                                                                                                                                                            | Summary                                                                                                                                 |
 | --------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `compileAuditor`      | function  | `(shape: ContractShape, value: unknown, path?: readonly string[]) => readonly AuditFault[]`                                                                                                                                                      | Audits a value against the strict acceptance domain of a `ContractShape`.                                                               |
 | `compileReporter`     | function  | `(shape: ContractShape, value: unknown, path?: readonly string[]) => readonly Fault[]`                                                                                                                                                           | Compiles a `ContractShape` into a structured fault report for a value — the diagnostic counterpart of `compileGuard` / `compileParser`. |
