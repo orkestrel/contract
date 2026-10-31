@@ -8,6 +8,8 @@ import {
 	attempt,
 	iterateIndices,
 	collectMembers,
+	isFailure,
+	isSuccess,
 	matchesMember,
 	matchesVisited,
 	omitVisited,
@@ -105,7 +107,7 @@ export class ShapePass {
 	validate(): number {
 		const outcome = attempt(() => this.#execute())
 		if (this.#poison !== undefined) throw this.#poison
-		if (outcome.success) return this.#counts[0] ?? 1
+		if (isSuccess(outcome)) return this.#counts[0] ?? 1
 		if (isContractError(outcome.error)) throw outcome.error
 		throw new ContractError('validateShape: shape reflection failed', {
 			code: 'structure',
@@ -188,7 +190,7 @@ export class ShapePass {
 		this.#category = undefined
 		this.#raw = 0
 		const outcome = attempt(() => this.#observe(current, frame.depth))
-		if (!outcome.success || !outcome.value) {
+		if (isFailure(outcome) || !outcome.value) {
 			this.#structure ??= new ContractError(
 				'validateShape: every node must be a recognized shape',
 				{
@@ -226,7 +228,7 @@ export class ShapePass {
 		if (category === 'raw') {
 			const schema = current.schema
 			const outcome = attempt(() => this.#inspect(schema))
-			if (!outcome.success) {
+			if (isFailure(outcome)) {
 				return this.#refuse('validateShape: every node must be a recognized shape', 'schema')
 			}
 			if (!outcome.value) return false
@@ -243,21 +245,21 @@ export class ShapePass {
 		}
 		if (category === 'object') {
 			const outcome = attempt(() => this.#populate(current))
-			if (!outcome.success) {
+			if (isFailure(outcome)) {
 				return this.#refuse('validateShape: every node must be a recognized shape', 'properties')
 			}
 			return outcome.value
 		}
 		if (category === 'union') {
 			const outcome = attempt(() => this.#populate(current))
-			if (!outcome.success) {
+			if (isFailure(outcome)) {
 				return this.#refuse('validateShape: every node must be a recognized shape', 'variants')
 			}
 			return outcome.value
 		}
 		if (category === 'literal') {
 			const outcome = attempt(() => this.#populate(current))
-			if (!outcome.success) {
+			if (isFailure(outcome)) {
 				return this.#refuse('validateShape: every node must be a recognized shape', 'values')
 			}
 			return outcome.value
@@ -321,7 +323,7 @@ export class ShapePass {
 					INTRINSICS.frozen(second)
 				)
 			})
-			if (!outcome.success || !outcome.value) {
+			if (isFailure(outcome) || !outcome.value) {
 				return this.#refuse('validateShape: every node must be a recognized shape', field)
 			}
 		}
@@ -688,7 +690,7 @@ export class ShapePass {
 				const pattern = attempt(() =>
 					INTRINSICS.reflect.apply(INTRINSICS.pattern, undefined, [schema.pattern]),
 				)
-				if (!pattern.success) {
+				if (isFailure(pattern)) {
 					return this.#refuse('validateShape: raw schema pattern must be valid', 'schema')
 				}
 			}
@@ -723,7 +725,7 @@ export class ShapePass {
 					return this.#refuse('validateShape: raw schema enum must be a non-empty array', 'schema')
 				}
 				const snapshot = readArrayEntries(population)
-				if (!snapshot.success || snapshot.value.entries.length === 0) {
+				if (isFailure(snapshot) || snapshot.value.entries.length === 0) {
 					return this.#refuse('validateShape: raw schema enum must be a non-empty array', 'schema')
 				}
 				if (!snapshot.value.dense) {
@@ -758,7 +760,7 @@ export class ShapePass {
 					return this.#refuse('validateShape: raw schema required must be an array', 'schema')
 				}
 				const snapshot = readArrayEntries(names)
-				if (!snapshot.success) {
+				if (isFailure(snapshot)) {
 					return this.#refuse('validateShape: raw schema required must be an array', 'schema')
 				}
 				if (!snapshot.value.dense) {
@@ -811,7 +813,7 @@ export class ShapePass {
 					return this.#refuse('validateShape: raw schema unions must be non-empty arrays', 'schema')
 				}
 				const snapshot = readArrayEntries(variants)
-				if (!snapshot.success || snapshot.value.entries.length === 0) {
+				if (isFailure(snapshot) || snapshot.value.entries.length === 0) {
 					return this.#refuse('validateShape: raw schema unions must be non-empty arrays', 'schema')
 				}
 				if (!snapshot.value.dense) {
@@ -872,7 +874,7 @@ export class ShapePass {
 					const key = keys[keyIndex]
 					if (key === undefined) continue
 					const descriptorOutcome = attempt(() => INTRINSICS.describe(properties, key))
-					if (!descriptorOutcome.success) {
+					if (isFailure(descriptorOutcome)) {
 						return this.#refuse(
 							'validateShape: every node must be a recognized shape',
 							'properties',
@@ -890,7 +892,7 @@ export class ShapePass {
 						continue
 					}
 					const childOutcome = attempt(() => current.properties[key])
-					if (!childOutcome.success) {
+					if (isFailure(childOutcome)) {
 						return this.#refuse(
 							'validateShape: every node must be a recognized shape',
 							'properties',
@@ -903,7 +905,7 @@ export class ShapePass {
 							INTRINSICS.same(current.properties[key], child) &&
 							INTRINSICS.same(descriptor.value, child),
 					)
-					if (!stable.success) {
+					if (isFailure(stable)) {
 						return this.#refuse(
 							'validateShape: every node must be a recognized shape',
 							'properties',
@@ -941,7 +943,7 @@ export class ShapePass {
 					return this.#refuse('validateShape: variants must be a finite array', 'variants')
 				}
 				const snapshot = readArrayEntries(current.variants)
-				if (!snapshot.success) {
+				if (isFailure(snapshot)) {
 					return this.#refuse('validateShape: variants must be a finite array', 'variants')
 				}
 				if (!snapshot.value.dense) {
@@ -961,7 +963,7 @@ export class ShapePass {
 				for (const index of iterateIndices(() => length)) {
 					const key = INTRINSICS.text(index)
 					const descriptorOutcome = attempt(() => INTRINSICS.describe(current.variants, key))
-					if (!descriptorOutcome.success) {
+					if (isFailure(descriptorOutcome)) {
 						return this.#refuse(
 							'validateShape: every node must be a recognized shape',
 							'variants',
@@ -984,7 +986,7 @@ export class ShapePass {
 							INTRINSICS.same(current.variants[index], variant) &&
 							INTRINSICS.same(descriptor.value, variant),
 					)
-					if (!stable.success) {
+					if (isFailure(stable)) {
 						return this.#refuse(
 							'validateShape: every node must be a recognized shape',
 							'variants',
@@ -1014,7 +1016,7 @@ export class ShapePass {
 					return this.#refuse('validateShape: values must be a finite literal array', 'values')
 				}
 				const snapshot = readArrayEntries(current.values)
-				if (!snapshot.success) {
+				if (isFailure(snapshot)) {
 					return this.#refuse('validateShape: values must be a finite literal array', 'values')
 				}
 				if (!snapshot.value.dense) {
@@ -1039,7 +1041,7 @@ export class ShapePass {
 				for (const index of iterateIndices(() => length)) {
 					const key = INTRINSICS.text(index)
 					const descriptorOutcome = attempt(() => INTRINSICS.describe(current.values, key))
-					if (!descriptorOutcome.success) {
+					if (isFailure(descriptorOutcome)) {
 						return this.#refuse(
 							'validateShape: every node must be a recognized shape',
 							'values',
@@ -1056,7 +1058,7 @@ export class ShapePass {
 							INTRINSICS.same(current.values[index], value) &&
 							INTRINSICS.same(descriptor.value, value),
 					)
-					if (!stable.success) {
+					if (isFailure(stable)) {
 						return this.#refuse(
 							'validateShape: every node must be a recognized shape',
 							'values',

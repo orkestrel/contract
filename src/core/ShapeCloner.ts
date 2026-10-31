@@ -24,6 +24,9 @@ import {
 	readIndexView,
 	admitVisited,
 	attempt,
+	failure,
+	isFailure,
+	isSuccess,
 	iterateIndices,
 	matchesRecordBrand,
 	matchesVisited,
@@ -143,7 +146,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 	clone(): ContractShape {
 		const state = this.#state
 		if (state.phase === 'settled') {
-			if (state.result.success) return state.result.value
+			if (isSuccess(state.result)) return state.result.value
 			throw state.result.error
 		}
 		if (state.phase === 'running' || state.phase === 'interrupted') {
@@ -162,9 +165,9 @@ export class ShapeCloner implements ShapeClonerInterface {
 	#complete(outcome: Result<ContractShape>): ContractShape {
 		const state = this.#state
 		if (state.phase === 'interrupted') {
-			return this.#settle({ success: false, error: state.poison })
+			return this.#settle(failure(state.poison))
 		}
-		if (outcome.success) return this.#settle(outcome)
+		if (isSuccess(outcome)) return this.#settle(outcome)
 
 		const error = this.#owns(outcome.error)
 			? outcome.error
@@ -173,7 +176,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 					context: { shape: 'shape' },
 					cause: outcome.error,
 				})
-		return this.#settle({ success: false, error })
+		return this.#settle(failure(error))
 	}
 
 	#execute(): ContractShape {
@@ -408,7 +411,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		if (
 			typeof sourceText !== 'string' ||
 			typeof flags !== 'string' ||
-			!repeated.success ||
+			isFailure(repeated) ||
 			typeof repeated.value.source !== 'string' ||
 			typeof repeated.value.flags !== 'string' ||
 			repeated.value.source !== sourceText ||
@@ -589,7 +592,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		}
 		this.#validateShape({ category: 'raw', schema })
 		const outcome = attempt(() => new SchemaCloner(schema).clone())
-		if (!outcome.success) {
+		if (isFailure(outcome)) {
 			if (isContractError(outcome.error)) {
 				admitVisited(this.#owned, outcome.error)
 			}
@@ -609,7 +612,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 			})
 		}
 		const snapshot = readArrayEntries(values)
-		if (!snapshot.success) {
+		if (isFailure(snapshot)) {
 			throw this.#create('validateShape: values must be a finite literal array', {
 				code: 'structure',
 				context: { path: pathOf(path, 'values') },
@@ -638,7 +641,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		const descriptor = attempt(() => INTRINSICS.describe(values, key))
 		const repeated = attempt(() => values[index])
 		if (
-			!descriptor.success ||
+			isFailure(descriptor) ||
 			descriptor.value === undefined ||
 			!INTRINSICS.own(descriptor.value, 'value')
 		) {
@@ -647,7 +650,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 				context: { path: pathOf(path, 'values', key) },
 			})
 		} else if (
-			!repeated.success ||
+			isFailure(repeated) ||
 			!INTRINSICS.same(repeated.value, value) ||
 			!INTRINSICS.same(descriptor.value.value, value)
 		) {
@@ -728,7 +731,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 			})
 		}
 		const snapshot = readArrayEntries(variants)
-		if (!snapshot.success) {
+		if (isFailure(snapshot)) {
 			throw this.#create('validateShape: variants must be a finite array', {
 				code: 'structure',
 				context: { path: pathOf(path, 'variants') },
@@ -750,10 +753,10 @@ export class ShapeCloner implements ShapeClonerInterface {
 			const descriptor = attempt(() => INTRINSICS.describe(variants, key))
 			const repeated = attempt(() => variants[index])
 			if (
-				!descriptor.success ||
+				isFailure(descriptor) ||
 				descriptor.value === undefined ||
 				!INTRINSICS.own(descriptor.value, 'value') ||
-				!repeated.success ||
+				isFailure(repeated) ||
 				!INTRINSICS.same(repeated.value, variant) ||
 				!INTRINSICS.same(descriptor.value.value, variant)
 			) {
@@ -984,7 +987,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 
 	#validateShape(shape: ContractShape): void {
 		const outcome = attempt(() => new ShapeValidator(shape).validate())
-		if (outcome.success) return
+		if (isSuccess(outcome)) return
 		if (isContractError(outcome.error)) {
 			admitVisited(this.#owned, outcome.error)
 		}
@@ -1024,7 +1027,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		this.#sources = ShapeCloner.#emptySources
 		this.#fidelity = undefined
 		this.#state = { phase: 'settled', result }
-		if (result.success) return result.value
+		if (isSuccess(result)) return result.value
 		throw result.error
 	}
 

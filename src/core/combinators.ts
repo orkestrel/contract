@@ -33,6 +33,7 @@ import {
 	collectMembers,
 	contain,
 	holds,
+	isFailure,
 	iterateIndices,
 	matchesMember,
 	matchesPattern,
@@ -87,7 +88,7 @@ export function arrayOf(elementGuard: (value: unknown) => boolean): Guard<readon
 		holds(() => {
 			if (!isArray(value)) return false
 			const entries = readArrayEntries(value)
-			if (!entries.success || !entries.value.dense) return false
+			if (isFailure(entries) || !entries.value.dense) return false
 			for (const index of iterateIndices(() => entries.value.entries.length)) {
 				if (!elementGuard(entries.value.entries[index])) return false
 			}
@@ -125,7 +126,7 @@ export function tupleOf(
 				return false
 			}
 			const entries = readArrayEntries(value)
-			if (!entries.success || !entries.value.dense) {
+			if (isFailure(entries) || !entries.value.dense) {
 				return false
 			}
 			if (entries.value.entries.length !== guards.length) {
@@ -192,7 +193,7 @@ export function literalOf(
 					? readValue(
 							() => {
 								const entries = readArrayEntries(first)
-								if (!entries.success) throw entries.error
+								if (isFailure(entries)) throw entries.error
 								if (!entries.value.dense) {
 									throw new INTRINSICS.error('Literal vocabulary must be dense')
 								}
@@ -337,7 +338,7 @@ export function setOf(elementGuard: (value: unknown) => boolean): Guard<Readonly
 			// guard's verdict and every other view of the same object disagreeing is
 			// exactly the silent lie the sibling `arrayOf` was already hardened against.
 			const entries = readSetEntries(value)
-			if (!entries.success) return false
+			if (isFailure(entries)) return false
 			for (const index of iterateIndices(() => entries.value.length)) {
 				if (!elementGuard(entries.value[index])) {
 					return false
@@ -382,7 +383,7 @@ export function mapOf(
 			// substituting iterator can replace one half of a pair while every
 			// downstream check still passes.
 			const entries = readMapEntries(value)
-			if (!entries.success) return false
+			if (isFailure(entries)) return false
 			for (const index of iterateIndices(() => entries.value.length)) {
 				const entry = entries.value[index]
 				if (entry === undefined) return false
@@ -634,7 +635,7 @@ export function pickOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 		const selected = readValue(
 			() => {
 				const entries = readArrayEntries(keys)
-				if (!entries.success) throw entries.error
+				if (isFailure(entries)) throw entries.error
 				if (!entries.value.dense) throw new INTRINSICS.error('Picked key list must be dense')
 				return collectMembers(entries.value.entries)
 			},
@@ -693,7 +694,7 @@ export function omitOf<S extends GuardsShape, K extends ReadonlyArray<keyof S & 
 		const skipped = readValue(
 			() => {
 				const entries = readArrayEntries(keys)
-				if (!entries.success) throw entries.error
+				if (isFailure(entries)) throw entries.error
 				if (!entries.value.dense) throw new INTRINSICS.error('Omitted key list must be dense')
 				return collectMembers(entries.value.entries)
 			},

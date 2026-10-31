@@ -34,6 +34,7 @@ import {
 	iterateIndices,
 	attempt,
 	contain,
+	isFailure,
 	matchesRecordBrand,
 	preview,
 	readArrayEntries,
@@ -291,16 +292,16 @@ export function literalShape(
 	return contain(() => {
 		const input: unknown = values
 		const array = attempt(() => INTRINSICS.array(input))
-		if (!array.success || !array.value) {
+		if (isFailure(array) || !array.value) {
 			throw new ContractError('literalShape: values must be an array', {
 				code: 'structure',
 				context: { path: ['values'], shape: 'literal' },
-				...(!array.success ? { cause: array.error } : {}),
+				...(isFailure(array) ? { cause: array.error } : {}),
 			})
 		}
 		const safe = readOptions(options, ['description'], 'literalShape', 'literal')
 		const snapshot = readArrayEntries(values)
-		if (!snapshot.success) {
+		if (isFailure(snapshot)) {
 			throw new ContractError('literalShape: values could not be copied', {
 				code: 'structure',
 				context: { path: ['values'], shape: 'literal' },

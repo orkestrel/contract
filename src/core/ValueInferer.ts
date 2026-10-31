@@ -6,6 +6,7 @@ import {
 	admitVisited,
 	attempt,
 	enumerableKeys,
+	isFailure,
 	limitEntries,
 	matchesVisited,
 	omitVisited,
@@ -153,7 +154,7 @@ export class ValueInferer {
 		admitVisited(this.#visited, value)
 		const outcome = attempt(() => {
 			const snapshot = readArrayEntries(value)
-			if (!snapshot.success) throw snapshot.error
+			if (isFailure(snapshot)) throw snapshot.error
 			// A HOLE is an absent own property, and that is the lens every other
 			// door in this package applies: `arrayOf`, `parseArray`, `isJSONValue`,
 			// `cloneJSONValue`, `canonicalStringify` and the compiled array guard
@@ -174,7 +175,7 @@ export class ValueInferer {
 			)
 		})
 		omitVisited(this.#visited, value)
-		if (!outcome.success) throw outcome.error
+		if (isFailure(outcome)) throw outcome.error
 		const sampled = outcome.value
 		const schema: JSONSchema =
 			sampled === undefined
@@ -265,7 +266,7 @@ export class ValueInferer {
 			return { properties, required, partial: truncated || dropped }
 		})
 		omitVisited(this.#visited, value)
-		if (!outcome.success) throw outcome.error
+		if (isFailure(outcome)) throw outcome.error
 		const { properties, required, partial } = outcome.value
 		const schema: JSONSchema = {
 			type: 'object',

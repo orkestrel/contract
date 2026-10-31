@@ -6,6 +6,7 @@ import {
 	attempt,
 	buildSampleMemo,
 	enumerableKeys,
+	isFailure,
 	limitEntries,
 	readSampleMemo,
 	sortValues,
@@ -207,7 +208,7 @@ export class SampleInferer {
 					])
 					return { values, dropped }
 				})
-				if (!valuesOutcome.success) throw valuesOutcome.error
+				if (isFailure(valuesOutcome)) throw valuesOutcome.error
 				const { values, dropped } = valuesOutcome.value
 				return {
 					key,

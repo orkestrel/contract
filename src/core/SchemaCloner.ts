@@ -4,7 +4,9 @@ import { ContractError } from './errors.js'
 import {
 	admitVisited,
 	attempt,
+	failure,
 	enumerableKeys,
+	isSuccess,
 	matchesVisited,
 	pathOf,
 	pinMembers,
@@ -104,7 +106,7 @@ export class SchemaCloner implements SchemaClonerInterface {
 		const state = this.#state
 		switch (state.phase) {
 			case 'settled':
-				if (state.result.success) return state.result.value
+				if (isSuccess(state.result)) return state.result.value
 				throw state.result.error
 			case 'running':
 			case 'interrupted':
@@ -122,16 +124,16 @@ export class SchemaCloner implements SchemaClonerInterface {
 	#complete(outcome: Result<JSONSchema>): JSONSchema {
 		const state = this.#state
 		if (state.phase === 'interrupted') {
-			return this.#settle({ success: false, error: state.poison })
+			return this.#settle(failure(state.poison))
 		}
-		if (outcome.success) return this.#settle(outcome)
+		if (isSuccess(outcome)) return this.#settle(outcome)
 
 		const error = this.#owns(outcome.error)
 			? outcome.error
 			: this.#create('cloneSchema: failed to create an owned schema snapshot', {
 					cause: outcome.error,
 				})
-		return this.#settle({ success: false, error })
+		return this.#settle(failure(error))
 	}
 
 	#execute(): JSONSchema {
@@ -224,7 +226,7 @@ export class SchemaCloner implements SchemaClonerInterface {
 
 	#read(source: object, key: string, path: readonly string[]): unknown {
 		const outcome = attempt(() => INTRINSICS.reflect.read(source, key))
-		if (outcome.success) return outcome.value
+		if (isSuccess(outcome)) return outcome.value
 		throw this.#create('cloneSchema: property access failed', {
 			path,
 			cause: outcome.error,
@@ -284,7 +286,7 @@ export class SchemaCloner implements SchemaClonerInterface {
 		this.#pending = SchemaCloner.#emptyPending
 		this.#memo = undefined
 		this.#state = { phase: 'settled', result }
-		if (result.success) return result.value
+		if (isSuccess(result)) return result.value
 		throw result.error
 	}
 

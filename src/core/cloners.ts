@@ -1,7 +1,7 @@
 import type { ContractShape, JSONRecord, JSONSchema, JSONValue, StringShape } from './types.js'
 import { INTRINSICS } from './constants.js'
 import { ContractError, isContractError } from './errors.js'
-import { attempt, contain, holds } from './helpers.js'
+import { attempt, contain, holds, isFailure, isSuccess } from './helpers.js'
 import { isRecord } from './validators.js'
 import { JSONCloner } from './JSONCloner.js'
 import { SchemaCloner } from './SchemaCloner.js'
@@ -182,13 +182,13 @@ export function ownShape(shape: ContractShape): ContractShape {
 	return contain(() => {
 		const frozen = holds(() => INTRINSICS.frozen(shape))
 		const fidelity = attempt(() => cloneShape(shape))
-		if (fidelity.success) return fidelity.value
+		if (isSuccess(fidelity)) return fidelity.value
 		if (isContractError(fidelity.error) && fidelity.error.code !== 'clone') {
 			throw fidelity.error
 		}
 		if (!frozen) throw fidelity.error
 		const validation = attempt(() => new ShapeValidator(shape).validate())
-		if (!validation.success && isContractError(validation.error)) throw validation.error
+		if (isFailure(validation) && isContractError(validation.error)) throw validation.error
 		throw fidelity.error
 	}, 'ownShape')
 }

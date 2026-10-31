@@ -578,3 +578,75 @@ export const FORMAT_PATTERNS: Readonly<Record<'uuid' | 'email' | 'uri', RegExp>>
 	email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
 	uri: /^[a-z][a-z0-9+.-]*:\/\//i,
 })
+
+// Schema retention limits, declared for a package whose schema retains authored data.
+
+/**
+ * Caps at `1024` the number of choices one schema field may offer, frozen.
+ *
+ * @remarks
+ * A retention limit that a declaring package, such as a form or table schema
+ * package, enforces; this package enforces none of the retention limits itself.
+ *
+ * @example
+ * ```ts
+ * CHOICE_LIMIT // 1024
+ * ```
+ */
+export const CHOICE_LIMIT = 1024
+
+/**
+ * Caps at `128` the length, in UTF-16 code units, of one name a schema declares, frozen:
+ * a schema, group, or field name, or a column key.
+ *
+ * @remarks
+ * A retention limit that a declaring package enforces, as {@link CHOICE_LIMIT} states.
+ *
+ * @example
+ * ```ts
+ * NAME_LIMIT // 128
+ * ```
+ */
+export const NAME_LIMIT = 128
+
+/**
+ * Caps at `65536` the length, in UTF-16 code units, of any single string one schema
+ * retains, frozen.
+ *
+ * @remarks
+ * A retention limit that a declaring package enforces, as {@link CHOICE_LIMIT} states.
+ *
+ * @example
+ * ```ts
+ * STRING_LIMIT // 65536
+ * ```
+ */
+export const STRING_LIMIT = 65_536
+
+/**
+ * Caps at `1048576` the total length, in UTF-16 code units, of every string one schema
+ * retains, frozen.
+ *
+ * @remarks
+ * A retention limit that a declaring package enforces, as {@link CHOICE_LIMIT} states.
+ *
+ * @example
+ * ```ts
+ * TEXT_LIMIT // 1048576
+ * ```
+ */
+export const TEXT_LIMIT = 1_048_576
+
+/**
+ * Caps at `16384` the total number of records, arrays, and leaves one schema retains,
+ * frozen.
+ *
+ * @remarks
+ * A retention limit that a declaring package enforces, as {@link CHOICE_LIMIT} states.
+ *
+ * @example
+ * ```ts
+ * NODE_LIMIT // 16384
+ * ```
+ */
+export const NODE_LIMIT = 16_384

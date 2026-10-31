@@ -352,4 +352,18 @@ await new GuideCommand({
 			expect(guideText).toContain('compiler.contract.is === compiler.guard // true')
 		})
 	})
+
+	describe('retention limits', () => {
+		it('holds the value each Summary cell states', () => {
+			const { CHOICE_LIMIT, NAME_LIMIT, NODE_LIMIT, STRING_LIMIT, TEXT_LIMIT } = barrel
+
+			expect({ CHOICE_LIMIT, NAME_LIMIT, NODE_LIMIT, STRING_LIMIT, TEXT_LIMIT }).toEqual({
+				CHOICE_LIMIT: 1024,
+				NAME_LIMIT: 128,
+				NODE_LIMIT: 16384,
+				STRING_LIMIT: 65536,
+				TEXT_LIMIT: 1048576,
+			})
+		})
+	})
 })

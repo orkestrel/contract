@@ -9,6 +9,8 @@ import {
 	canonicalStringify,
 	classifyFormat,
 	contain,
+	isFailure,
+	isSuccess,
 	readArrayEntries,
 	readOptions,
 	readValue,
@@ -68,7 +70,7 @@ export function unifySchemas(schemas: readonly JSONSchema[]): JSONSchema {
 		return readValue(
 			() => {
 				const snapshot = readArrayEntries(schemas)
-				if (!snapshot.success) throw snapshot.error
+				if (isFailure(snapshot)) throw snapshot.error
 				if (!snapshot.value.dense) throw new INTRINSICS.error('unifySchemas: schemas must be dense')
 				const owned = snapshot.value.entries
 				if (owned.length === 0) return {}
@@ -174,7 +176,7 @@ export function stringToFormat(value: string): SchemaFormat | undefined {
 	// name, and this reader is documented to answer `SchemaFormat | undefined`
 	// with no `@throws` at all.
 	const outcome = attempt(() => classifyFormat(value))
-	return outcome.success ? outcome.value : undefined
+	return isSuccess(outcome) ? outcome.value : undefined
 }
 
 /**
@@ -205,7 +207,7 @@ export function samplesToFormat(values: readonly unknown[]): SchemaFormat | unde
 		return readValue(
 			() => {
 				const snapshot = readArrayEntries(values)
-				if (!snapshot.success) throw snapshot.error
+				if (isFailure(snapshot)) throw snapshot.error
 				if (!snapshot.value.dense)
 					throw new INTRINSICS.error('samplesToFormat: values must be dense')
 				const owned = snapshot.value.entries
@@ -271,7 +273,7 @@ export function inferPrimitiveEnum(
 		return readValue(
 			() => {
 				const snapshot = readArrayEntries(values)
-				if (!snapshot.success) throw snapshot.error
+				if (isFailure(snapshot)) throw snapshot.error
 				if (!snapshot.value.dense)
 					throw new INTRINSICS.error('inferPrimitiveEnum: values must be dense')
 				const owned = snapshot.value.entries
@@ -459,7 +461,7 @@ export function samplesToSchema(
 		const read = readValue(
 			() => {
 				const snapshot = readArrayEntries(samples)
-				if (!snapshot.success) throw snapshot.error
+				if (isFailure(snapshot)) throw snapshot.error
 				return snapshot.value
 			},
 			'samplesToSchema',

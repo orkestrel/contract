@@ -1,6 +1,6 @@
 import type { EvaluationFunction } from './types.js'
 import { INTRINSICS } from './constants.js'
-import { readSetEntries } from './helpers.js'
+import { isFailure, readSetEntries } from './helpers.js'
 import { isObject } from './validators.js'
 
 /** Owns compiled-node memo entries for one synchronous evaluation. */
@@ -18,7 +18,7 @@ export class EvaluationScope {
 	): T {
 		if (!isObject(value)) return plan(value, path)
 		const entries = readSetEntries(EvaluationScope.#active)
-		if (!entries.success) throw entries.error
+		if (isFailure(entries)) throw entries.error
 		const active = entries.value[0]
 		if (active instanceof EvaluationScope) return active.#evaluate(plan, value, path, clean)
 		if (active !== undefined) throw new INTRINSICS.error('Evaluation scope is unavailable')

@@ -39,6 +39,8 @@ import {
 	buildStringFaults,
 	drawRandom,
 	enumerableKeys,
+	isFailure,
+	isSuccess,
 	limitEntries,
 	matchesMember,
 	ownPattern,
@@ -347,7 +349,7 @@ export class ContractCompiler<
 	#leave<T>(outcome: Result<T>): T {
 		const state = this.#state
 		if (state.phase === 'interrupted') return this.#fail(state.poison)
-		if (!outcome.success) {
+		if (isFailure(outcome)) {
 			return this.#fail(
 				isContractError(outcome.error)
 					? outcome.error
@@ -934,7 +936,7 @@ export class ContractCompiler<
 						}
 						return true
 					})
-					return outcome.success && outcome.value
+					return isSuccess(outcome) && outcome.value
 				}
 			}
 			case 'union': {
@@ -1066,7 +1068,7 @@ export class ContractCompiler<
 					}
 					if (!isArray(value)) return undefined
 					const entries = readArrayEntries(value)
-					if (!entries.success) {
+					if (isFailure(entries)) {
 						return readValue(
 							() => {
 								throw entries.error
@@ -1219,7 +1221,7 @@ export class ContractCompiler<
 							null,
 						)
 					})
-					if (outcome.success) return outcome.value
+					if (isSuccess(outcome)) return outcome.value
 					if (isContractError(outcome.error)) throw outcome.error
 					return readValue(
 						() => {
@@ -1419,7 +1421,7 @@ export class ContractCompiler<
 						return [{ reason: 'type', path, expected: 'array', received: preview(value) }]
 					}
 					const entries = readArrayEntries(value)
-					if (!entries.success) {
+					if (isFailure(entries)) {
 						return readValue(
 							() => {
 								throw entries.error
@@ -1479,7 +1481,7 @@ export class ContractCompiler<
 				// rebuilds it inside the walk's own containment, where that failure
 				// reaches the coded refusal this door publishes, carrying the path.
 				const planned = attempt(() => collectMembers(declaredKeys))
-				const declared = planned.success ? planned.value : undefined
+				const declared = isSuccess(planned) ? planned.value : undefined
 				const maskable = entries.length <= PRESENCE_MASK_LIMIT
 				const positions = buildPositions(
 					maskable
@@ -1552,7 +1554,7 @@ export class ContractCompiler<
 							}
 						}
 					})
-					if (!outcome.success) {
+					if (isFailure(outcome)) {
 						if (isContractError(outcome.error)) throw outcome.error
 						return readValue(
 							() => {
@@ -1724,7 +1726,7 @@ export class ContractCompiler<
 						return [{ reason: 'type', path, expected: 'array', received: preview(value) }]
 					}
 					const entries = readArrayEntries(value)
-					if (!entries.success) {
+					if (isFailure(entries)) {
 						return [{ reason: 'type', path, expected: 'array', received: preview(value) }]
 					}
 					const faults: Fault[] = []
@@ -1787,7 +1789,7 @@ export class ContractCompiler<
 				// the walk's own containment, which keeps this door's answer a fault
 				// array in exactly the regime its totality promise names.
 				const planned = attempt(() => collectMembers(names))
-				const known = planned.success ? planned.value : undefined
+				const known = isSuccess(planned) ? planned.value : undefined
 				const maskable = entries.length <= PRESENCE_MASK_LIMIT
 				const positions = buildPositions(
 					maskable
@@ -1868,7 +1870,7 @@ export class ContractCompiler<
 							}
 						}
 					})
-					if (!outcome.success) {
+					if (isFailure(outcome)) {
 						return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
 					}
 					return limitEntries(faults, FAULT_LIMIT)
@@ -2173,13 +2175,13 @@ export class ContractCompiler<
 						if (plan === undefined) continue
 						const outcome = attempt(() => plan(random))
 						if (
-							!outcome.success &&
+							isFailure(outcome) &&
 							isContractError(outcome.error) &&
 							outcome.error.code === 'random'
 						) {
 							throw outcome.error
 						}
-						if (outcome.success && guard(outcome.value)) return outcome.value
+						if (isSuccess(outcome) && guard(outcome.value)) return outcome.value
 					}
 					throw new ContractError(
 						'compileGenerator: no union candidate satisfied the compiled guard',

@@ -14,6 +14,8 @@ import {
 	collectMembers,
 	contain,
 	holds,
+	isFailure,
+	isSuccess,
 	iterateIndices,
 	matchesJSONValue,
 	matchesMember,
@@ -120,7 +122,7 @@ export function parseNumber(value: unknown): number | undefined {
 		const parsed = INTRINSICS.numeric(value)
 		return INTRINSICS.finite(parsed) ? parsed : undefined
 	})
-	return outcome.success ? outcome.value : undefined
+	return isSuccess(outcome) ? outcome.value : undefined
 }
 
 /**
@@ -238,7 +240,7 @@ export function parseArray<T = unknown>(
 	if (!isArray<T>(value)) return undefined
 	if (guard === undefined) return value
 	const entries = readArrayEntries(value)
-	if (!entries.success || !entries.value.dense) return undefined
+	if (isFailure(entries) || !entries.value.dense) return undefined
 	if (
 		!holds(
 			() =>
@@ -321,7 +323,7 @@ export function parseEnum(
 	allowed: readonly LiteralValue[],
 ): LiteralValue | undefined {
 	const outcome = readArrayEntries(allowed)
-	if (!outcome.success || !outcome.value.dense) return undefined
+	if (isFailure(outcome) || !outcome.value.dense) return undefined
 	// A parser answers `undefined`, never throws, so the vocabulary is built and
 	// consulted inside the never-throw boundary — and the membership question is
 	// asked through a module binding rather than any property, because a coercer
@@ -583,5 +585,5 @@ export function parseJSONAs<T>(value: string, guard: Guard<T>): T | undefined {
 	// the callback assigns into: the narrowed value IS the callback's answer, so
 	// it is returned rather than ferried out of the branch that proved it.
 	const checked = attempt(() => (guard(parsed) ? parsed : undefined))
-	return checked.success ? checked.value : undefined
+	return isSuccess(checked) ? checked.value : undefined
 }

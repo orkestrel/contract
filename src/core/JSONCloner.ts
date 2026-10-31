@@ -5,7 +5,10 @@ import {
 	iterateIndices,
 	admitVisited,
 	attempt,
+	failure,
 	collectMembers,
+	isFailure,
+	isSuccess,
 	matchesMember,
 	matchesVisited,
 	omitVisited,
@@ -106,13 +109,13 @@ export class JSONCloner implements JSONClonerInterface {
 	clone(): JSONValue {
 		const terminal = this.#terminal
 		if (terminal !== undefined) {
-			if (terminal.success) return terminal.value
+			if (isSuccess(terminal)) return terminal.value
 			throw terminal.error
 		}
 
 		const poison = this.#poison
 		if (poison !== undefined) {
-			this.#terminal = { success: false, error: poison }
+			this.#terminal = failure(poison)
 			throw poison
 		}
 
@@ -120,10 +123,10 @@ export class JSONCloner implements JSONClonerInterface {
 		const outcome = attempt(() => this.#execute())
 		const interruption = this.#terminal
 		if (interruption !== undefined) {
-			if (interruption.success) return interruption.value
+			if (isSuccess(interruption)) return interruption.value
 			this.#fail(interruption.error)
 		}
-		if (outcome.success) {
+		if (isSuccess(outcome)) {
 			this.#terminal = outcome
 			return outcome.value
 		}
@@ -139,7 +142,7 @@ export class JSONCloner implements JSONClonerInterface {
 	// instead of held by an emptied array. `length` is a caller-reachable write on
 	// the instance's own array; an assignment reaches no member at all.
 	#fail(error: ContractError): never {
-		this.#terminal = { success: false, error }
+		this.#terminal = failure(error)
 		this.#pending = JSONCloner.#emptyPending
 		throw error
 	}
@@ -204,7 +207,7 @@ export class JSONCloner implements JSONClonerInterface {
 	#captureObject(source: object): JSONValue[] | JSONRecord {
 		if (matchesVisited(this.#active, source)) this.#refuse('cloneJSONValue: cycle detected')
 		const arrayOutcome = attempt(() => INTRINSICS.array(source))
-		if (!arrayOutcome.success) this.#refuse('cloneJSONValue: value brand could not be inspected')
+		if (isFailure(arrayOutcome)) this.#refuse('cloneJSONValue: value brand could not be inspected')
 		if (arrayOutcome.value) return this.#schedule(source, true)
 		if (isRecord(source)) return this.#schedule(source, false)
 		this.#refuse('cloneJSONValue: object is not a plain record')
@@ -225,9 +228,10 @@ export class JSONCloner implements JSONClonerInterface {
 
 	#captureArray(source: object): ReadonlyArray<readonly [key: string, value: unknown]> {
 		const keysOutcome = attempt(() => INTRINSICS.reflect.members(source))
-		if (!keysOutcome.success) this.#refuse('cloneJSONValue: own keys could not be inspected')
+		if (isFailure(keysOutcome)) this.#refuse('cloneJSONValue: own keys could not be inspected')
 		const lengthOutcome = attempt(() => INTRINSICS.reflect.describe(source, 'length'))
-		if (!lengthOutcome.success) this.#refuse('cloneJSONValue: array length could not be inspected')
+		if (isFailure(lengthOutcome))
+			this.#refuse('cloneJSONValue: array length could not be inspected')
 		const lengthDescriptor = lengthOutcome.value
 		if (
 			lengthDescriptor === undefined ||
@@ -264,7 +268,7 @@ export class JSONCloner implements JSONClonerInterface {
 					this.#refuse('cloneJSONValue: array own keys are not exact')
 				}
 				const descriptorOutcome = attempt(() => INTRINSICS.reflect.describe(source, key))
-				if (!descriptorOutcome.success) {
+				if (isFailure(descriptorOutcome)) {
 					this.#refuse('cloneJSONValue: array index could not be inspected')
 				}
 				const descriptor = descriptorOutcome.value
@@ -282,7 +286,7 @@ export class JSONCloner implements JSONClonerInterface {
 
 	#captureRecord(source: object): ReadonlyArray<readonly [key: string, value: unknown]> {
 		const keysOutcome = attempt(() => INTRINSICS.reflect.members(source))
-		if (!keysOutcome.success) this.#refuse('cloneJSONValue: own keys could not be inspected')
+		if (isFailure(keysOutcome)) this.#refuse('cloneJSONValue: own keys could not be inspected')
 		const names = keysOutcome.value
 		// Indexed, not iterated: this walk decides the published record's own-key
 		// population, and an iterator is a caller-writable member that can yield a
@@ -293,7 +297,7 @@ export class JSONCloner implements JSONClonerInterface {
 				const key = names[index]
 				if (typeof key !== 'string') this.#refuse('cloneJSONValue: record has a symbol property')
 				const descriptorOutcome = attempt(() => INTRINSICS.reflect.describe(source, key))
-				if (!descriptorOutcome.success) {
+				if (isFailure(descriptorOutcome)) {
 					this.#refuse('cloneJSONValue: record property could not be inspected')
 				}
 				const descriptor = descriptorOutcome.value
@@ -324,7 +328,7 @@ export class JSONCloner implements JSONClonerInterface {
 
 	#refuse(message: string): never {
 		const terminal = this.#terminal
-		if (terminal !== undefined && !terminal.success) throw terminal.error
+		if (terminal !== undefined && isFailure(terminal)) throw terminal.error
 		throw this.#create(message)
 	}
 

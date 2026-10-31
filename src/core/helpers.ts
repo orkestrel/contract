@@ -7,6 +7,7 @@ import type {
 	ContractCode,
 	ContractShape,
 	EntryCollectorFunction,
+	Failure,
 	Fault,
 	FaultKind,
 	FieldPath,
@@ -23,6 +24,7 @@ import type {
 	SampleMemo,
 	SchemaFormat,
 	StringShape,
+	Success,
 } from './types.js'
 import {
 	COMPILE_NODE_LIMIT,
@@ -37,6 +39,7 @@ import { ContractError, isContractError } from './errors.js'
 import {
 	isBigInt,
 	isArray,
+	isError,
 	isBoolean,
 	isFiniteNumber,
 	isInteger,
@@ -243,10 +246,10 @@ export function limitEntries<T>(entries: readonly T[], limit: number): readonly 
  *
  * @example
  * ```ts
- * compareValues('a', 'b') // -1
+ * comparePrimitives('a', 'b') // -1
  * ```
  */
-export function compareValues<T extends string | number>(left: T, right: T): number {
+export function comparePrimitives<T extends string | number>(left: T, right: T): number {
 	return left < right ? -1 : left > right ? 1 : 0
 }
 
@@ -261,7 +264,7 @@ export function compareValues<T extends string | number>(left: T, right: T): num
  * `valueToSchema({ b: 1, a: 2 })` publish `{"type":"object","additionalProperties":false}`
  * — a successful answer with the caller's properties silently gone. The copy is
  * taken first so a caller-owned array is never reordered in place, and the order
- * is decided by {@link compareValues}, whose `<` / `>` comparison dispatches
+ * is decided by {@link comparePrimitives}, whose `<` / `>` comparison dispatches
  * through nothing.
  *
  * @param values - The keys or indices to order
@@ -280,7 +283,7 @@ export function sortValues<T extends string | number>(values: readonly T[]): rea
 	const owned: T[] = INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(observed), [
 		(value: T | undefined) => value !== undefined,
 	])
-	INTRINSICS.reflect.apply(INTRINSICS.order, owned, [compareValues])
+	INTRINSICS.reflect.apply(INTRINSICS.order, owned, [comparePrimitives])
 	return owned
 }
 
@@ -542,7 +545,7 @@ export function readSampleMemo(memo: SampleMemo, reader: string): SampleMemo {
  *
  * @remarks
  * Extracted rather than written inline for the same reason
- * {@link compareValues} is: `Reflect.apply` takes its arguments as a LIST, so an
+ * {@link comparePrimitives} is: `Reflect.apply` takes its arguments as a LIST, so an
  * inline collector is a function expression inside an array literal rather than
  * one passed directly as an argument — a hidden function assignment this
  * repository forbids wherever it appears. Returned directly from a factory it is
@@ -704,6 +707,50 @@ export function matchesPattern(pattern: RegExp, value: string): boolean {
 }
 
 /**
+ * Escapes every regular-expression metacharacter in a text, so the text
+ * matches literally inside a larger `RegExp` source.
+ *
+ * @remarks
+ * Prefixes each of `\ ^ $ . * + ? ( ) [ ] { } |` with a backslash and leaves
+ * every other character, `-` and `/` included, unchanged; the empty string
+ * returns unchanged. The escape is an INDEXED character map rather than
+ * `String.prototype.replace`, which dispatches through the caller-writable
+ * `RegExp.prototype[Symbol.replace]` and `exec` members.
+ *
+ * @param value - The literal text to escape
+ * @returns The text with every metacharacter backslash-escaped
+ *
+ * @example
+ * ```ts
+ * escapeRegExp('a.b*c') // 'a\\.b\\*c'
+ * new RegExp(`^${escapeRegExp('a.b')}$`).test('axb') // false
+ * ```
+ */
+export function escapeRegExp(value: string): string {
+	const metacharacters = collectMembers([
+		'\\',
+		'^',
+		'$',
+		'.',
+		'*',
+		'+',
+		'?',
+		'(',
+		')',
+		'[',
+		']',
+		'{',
+		'}',
+		'|',
+	])
+	const characters = INTRINSICS.from(
+		iterateIndices(() => value.length),
+		(index) => (matchesMember(metacharacters, value[index]) ? `\\${value[index]}` : value[index]),
+	)
+	return INTRINSICS.reflect.apply(INTRINSICS.join, characters, [''])
+}
+
+/**
  * Rebuilds a caller's regular expression as a stateless pattern this package
  * owns.
  *
@@ -846,6 +893,66 @@ export function pinMembers(prototype: object, owner: string): void {
 // === Result helpers
 
 /**
+ * Boxes a value as the {@link Success} branch of a {@link Result}.
+ *
+ * @param value - The value to box, retained exactly
+ * @returns A fresh `{ success: true, value }` record
+ *
+ * @example
+ * ```ts
+ * success(42) // { success: true, value: 42 }
+ * ```
+ */
+export function success<T>(value: T): Success<T> {
+	return { success: true, value }
+}
+
+/**
+ * Boxes an error as the {@link Failure} branch of a {@link Result}.
+ *
+ * @param error - The error to box, retained exactly
+ * @returns A fresh `{ success: false, error }` record
+ *
+ * @example
+ * ```ts
+ * failure('offline') // { success: false, error: 'offline' }
+ * ```
+ */
+export function failure<E>(error: E): Failure<E> {
+	return { success: false, error }
+}
+
+/**
+ * Narrows a {@link Result} to its {@link Success} branch.
+ *
+ * @param result - The result to narrow
+ * @returns True if the result succeeded; false otherwise
+ *
+ * @example
+ * ```ts
+ * isSuccess(success(1)) // true
+ * ```
+ */
+export function isSuccess<T, E>(result: Result<T, E>): result is Success<T> {
+	return result.success
+}
+
+/**
+ * Narrows a {@link Result} to its {@link Failure} branch.
+ *
+ * @param result - The result to narrow
+ * @returns True if the result failed; false otherwise
+ *
+ * @example
+ * ```ts
+ * isFailure(failure('offline')) // true
+ * ```
+ */
+export function isFailure<T, E>(result: Result<T, E>): result is Failure<E> {
+	return !result.success
+}
+
+/**
  * Invokes a callback once and synchronously captures its exact outcome as a
  * {@link Result}.
  *
@@ -873,15 +980,43 @@ export function pinMembers(prototype: object, owner: string): void {
  * @example
  * ```ts
  * const outcome = attempt(() => predicate(value))
- * return outcome.success && outcome.value
+ * return isSuccess(outcome) && outcome.value
  * ```
  */
 export function attempt<T>(callback: () => T): Result<T> {
 	try {
-		return { success: true, value: callback() }
+		return success(callback())
 	} catch (error) {
-		return { success: false, error }
+		return failure(error)
 	}
+}
+
+/**
+ * Renders a thrown value as a non-empty message.
+ *
+ * @remarks
+ * Reads an `Error`'s `message` and converts any other value with the `String`
+ * function {@link INTRINSICS} captured at load, so a symbol renders as
+ * `Symbol(description)` and a caller that replaces the global `String` does not
+ * change the result. Returns `'unknown failure'` when
+ * that read throws, as a throwing `message` getter or `toString` method does,
+ * when an `Error`'s `message` is not a string, and when the rendered text is
+ * empty. Never throws.
+ *
+ * @param error - The caught value, of any shape
+ * @returns The rendered message, never empty
+ *
+ * @example
+ * ```ts
+ * errorToMessage(new Error('boom')) // 'boom'
+ * errorToMessage('') // 'unknown failure'
+ * ```
+ */
+export function errorToMessage(error: unknown): string {
+	const read = attempt(() => (isError(error) ? error.message : INTRINSICS.text(error)))
+	return isSuccess(read) && isString(read.value) && read.value.length > 0
+		? read.value
+		: 'unknown failure'
 }
 
 /**
@@ -950,14 +1085,14 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 			owned,
 		}
 	})
-	if (!diagnostics.success) {
+	if (isFailure(diagnostics)) {
 		throw new ContractError('readValue: options could not be read', {
 			code: 'structure',
 			cause: diagnostics.error,
 		})
 	}
 	const outcome = attempt(callback)
-	if (!outcome.success) {
+	if (isFailure(outcome)) {
 		// Only a refusal publishes a context, so the published object is assembled
 		// in this branch rather than beside the copy. `owned` already holds copied
 		// values, so assembling it outside the contained read cannot throw.
@@ -1029,7 +1164,7 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
  */
 export function contain<T>(callback: () => T, door: string, options?: ContainOptions): T {
 	const outcome = attempt(callback)
-	if (outcome.success) return outcome.value
+	if (isSuccess(outcome)) return outcome.value
 	if (isContractError(outcome.error)) throw outcome.error
 	throw new ContractError(`${door}: a host operation this door depends on failed`, {
 		code: options?.code ?? 'structure',
@@ -1056,7 +1191,7 @@ export function contain<T>(callback: () => T, door: string, options?: ContainOpt
  */
 export function holds(callback: () => boolean): boolean {
 	const outcome = attempt(callback)
-	return outcome.success && outcome.value === true
+	return isSuccess(outcome) && outcome.value === true
 }
 
 /**
@@ -1330,7 +1465,7 @@ export function readGuardShape(
 			if (optional === true) return collectMembers(declared.names)
 			if (!INTRINSICS.array(optional)) return collectMembers([])
 			const entries = readArrayEntries(optional)
-			if (!entries.success) throw entries.error
+			if (isFailure(entries)) throw entries.error
 			if (!entries.value.dense) throw new INTRINSICS.error('Optional key list must be dense')
 			return collectMembers(
 				INTRINSICS.from(
@@ -1377,7 +1512,7 @@ export function enumerableKeys(value: object): readonly string[] | undefined {
 	// out of a helper documented to answer `undefined`, and out of every compiled
 	// guard and parser layered on it.
 	const outcome = attempt(() => INTRINSICS.freeze(INTRINSICS.keys(value)))
-	return outcome.success ? outcome.value : undefined
+	return isSuccess(outcome) ? outcome.value : undefined
 }
 
 /**
@@ -1518,7 +1653,7 @@ export function readOptions<T extends object>(
 export function drawRandom(random: RandomFunction, shape: string): number {
 	return contain(() => {
 		const outcome = attempt(random)
-		if (!outcome.success) {
+		if (isFailure(outcome)) {
 			throw new ContractError('drawRandom: the random source threw', {
 				code: 'random',
 				context: { shape, limit: '[0, 1)', received: 'threw' },
@@ -1579,7 +1714,7 @@ export function resolveField(record: Readonly<Record<string, unknown>>, path: Fi
 			record,
 		])
 	})
-	return outcome.success ? outcome.value : undefined
+	return isSuccess(outcome) ? outcome.value : undefined
 }
 
 /**
@@ -1644,7 +1779,7 @@ export function matchesJSONDepth(value: unknown): boolean {
 
 			if (array) {
 				const snapshot = readArrayEntries(entry)
-				if (!snapshot.success) return false
+				if (isFailure(snapshot)) return false
 				const children = INTRINSICS.values(snapshot.value.entries)
 				for (const index of iterateIndices(() => children.length)) {
 					stack[stack.length] = { operation: 'enter', value: children[index], depth }
@@ -1737,7 +1872,7 @@ export function matchesJSONValue(entry: unknown, ancestors: WeakSet<object>): en
 					if (matchesVisited(ancestors, node)) return false
 					if (matchesVisited(proved, node)) continue
 					const snapshot = readArrayEntries(node)
-					if (!snapshot.success) throw snapshot.error
+					if (isFailure(snapshot)) throw snapshot.error
 					if (!snapshot.value.dense) return false
 					admitVisited(ancestors, node)
 					stack[stack.length] = { operation: 'exit', value: node }
@@ -1993,7 +2128,7 @@ export function canonicalStringify(value: unknown): string | undefined {
 				if (INTRINSICS.reflect.apply(INTRINSICS.recall, encodings, [container]) !== undefined)
 					continue
 				const snapshot = isArray(container) ? readArrayEntries(container) : undefined
-				if (snapshot !== undefined && !snapshot.success) throw snapshot.error
+				if (snapshot !== undefined && isFailure(snapshot)) throw snapshot.error
 				if (snapshot !== undefined && !snapshot.value.dense) return undefined
 				const keys = snapshot === undefined ? sortValues(INTRINSICS.keys(container)) : undefined
 				const members =
@@ -2084,7 +2219,7 @@ export function matchesISOInstant(value: string): boolean {
 		const date = new INTRINSICS.date(value)
 		return !INTRINSICS.nan(INTRINSICS.reflect.apply(INTRINSICS.instant, date, []))
 	})
-	return outcome.success && outcome.value
+	return isSuccess(outcome) && outcome.value
 }
 
 /**

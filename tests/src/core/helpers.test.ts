@@ -5,12 +5,14 @@ import type {
 	ContractErrorContext,
 	ContractShape,
 	ContractErrorOptions,
+	Failure,
 	Fault,
 	JSONSchema,
 	JSONSchemaType,
 	NumberShape,
 	Result,
 	StringShape,
+	Success,
 } from '@src/core'
 import {
 	createSubstituteValues,
@@ -66,7 +68,13 @@ import {
 	buildSampleMemo,
 	collectEntries,
 	collectMembers,
-	compareValues,
+	comparePrimitives,
+	errorToMessage,
+	escapeRegExp,
+	failure,
+	isFailure,
+	isSuccess,
+	success,
 	compileAuditor,
 	compileReporter,
 	COMPILE_NODE_LIMIT,
@@ -469,6 +477,107 @@ describe('isContractError', () => {
 			denied: { own: true, forged: false },
 			thrown: { own: true, forged: false },
 		})
+	})
+})
+
+describe('success / failure', () => {
+	it('boxes a value and an error exactly', () => {
+		const error = new Error('boom')
+
+		expect(success(42)).toEqual({ success: true, value: 42 })
+		expect(success('x')).toEqual({ success: true, value: 'x' })
+		expect(failure(error)).toEqual({ success: false, error })
+		expect(failure(error).error).toBe(error)
+		expect(failure('plain reason')).toEqual({ success: false, error: 'plain reason' })
+	})
+
+	it('keeps an undefined value present and returns a fresh record per call', () => {
+		const boxed = success(undefined)
+
+		expect(boxed).toEqual({ success: true, value: undefined })
+		expect(Object.hasOwn(boxed, 'value')).toBe(true)
+		expect(success(1)).not.toBe(success(1))
+		expect(failure(1)).not.toBe(failure(1))
+	})
+})
+
+describe('isSuccess / isFailure', () => {
+	it('answers each branch of a Result', () => {
+		const results: ReadonlyArray<Result<number, string>> = [success(1), failure('nope')]
+
+		expect(results.map((result) => isSuccess(result))).toEqual([true, false])
+		expect(results.map((result) => isFailure(result))).toEqual([false, true])
+	})
+
+	it('narrows both branches of a Result the declaration leaves un-narrowed', () => {
+		// Read from an array so the initializer cannot narrow the declared union.
+		const results: ReadonlyArray<Result<number, string>> = [success(1), failure('nope')]
+		const values: number[] = []
+		const errors: string[] = []
+
+		for (const result of results) {
+			if (isSuccess(result)) {
+				expectTypeOf(result).toEqualTypeOf<Success<number>>()
+				values.push(result.value)
+			} else {
+				expectTypeOf(result).toEqualTypeOf<Failure<string>>()
+				errors.push(result.error)
+			}
+			if (isFailure(result)) {
+				expectTypeOf(result).toEqualTypeOf<Failure<string>>()
+				errors.push(result.error)
+			} else {
+				expectTypeOf(result).toEqualTypeOf<Success<number>>()
+				values.push(result.value)
+			}
+		}
+
+		expect(values).toEqual([1, 1])
+		expect(errors).toEqual(['nope', 'nope'])
+	})
+
+	it('reads the outcome attempt captures', () => {
+		expect(isSuccess(attempt(() => 1))).toBe(true)
+		expect(isFailure(attempt(throwReplacement))).toBe(true)
+	})
+})
+
+describe('errorToMessage', () => {
+	it('reads an Error message and stringifies anything else', () => {
+		expect(errorToMessage(new Error('boom'))).toBe('boom')
+		expect(errorToMessage('plain')).toBe('plain')
+		expect(errorToMessage(42)).toBe('42')
+		expect(errorToMessage(undefined)).toBe('undefined')
+		expect(errorToMessage(Symbol('reason'))).toBe('Symbol(reason)')
+	})
+
+	it('falls back for an empty message', () => {
+		expect(errorToMessage('')).toBe('unknown failure')
+		expect(errorToMessage(new Error(''))).toBe('unknown failure')
+	})
+
+	it('falls back for a message it cannot read, without throwing', () => {
+		const throwingMessage: unknown = Object.create(Error.prototype, {
+			message: { get: throwReplacement },
+		})
+		const throwingConversion = { toString: throwReplacement }
+		const numericMessage = Object.assign(new Error('boom'), { message: 42 })
+
+		expect(errorToMessage(throwingMessage)).toBe('unknown failure')
+		expect(errorToMessage(throwingConversion)).toBe('unknown failure')
+		expect(errorToMessage(Object.create(null))).toBe('unknown failure')
+		expect(errorToMessage(numericMessage)).toBe('unknown failure')
+		// The control: a readable value still reports its own message rather than the fallback.
+		expect(errorToMessage(new Error('readable'))).toBe('readable')
+	})
+
+	it('converts through the captured String while the global is replaced', () => {
+		const answers = replaceIntrinsic(globalThis, 'String', throwReplacement, () => ({
+			control: attempt(() => String(42)).success,
+			numeric: errorToMessage(42),
+		}))
+
+		expect(answers).toEqual({ control: false, numeric: '42' })
 	})
 })
 
@@ -2858,22 +2967,22 @@ describe('limitEntries', () => {
 	})
 })
 
-describe('compareValues', () => {
+describe('comparePrimitives', () => {
 	it('answers the three orderings for strings and for numbers', () => {
-		expect(compareValues('a', 'b')).toBe(-1)
-		expect(compareValues('b', 'a')).toBe(1)
-		expect(compareValues('a', 'a')).toBe(0)
-		expect(compareValues(2, 10)).toBe(-1)
-		expect(compareValues(10, 2)).toBe(1)
-		expect(compareValues(2, 2)).toBe(0)
+		expect(comparePrimitives('a', 'b')).toBe(-1)
+		expect(comparePrimitives('b', 'a')).toBe(1)
+		expect(comparePrimitives('a', 'a')).toBe(0)
+		expect(comparePrimitives(2, 10)).toBe(-1)
+		expect(comparePrimitives(10, 2)).toBe(1)
+		expect(comparePrimitives(2, 2)).toBe(0)
 	})
 
 	it('compares numbers numerically rather than as text', () => {
 		// The reason the captured sort is handed a comparator at all: the default
 		// ordering coerces to string, where 10 sorts before 2 and a published
 		// schema's index order stops matching its data.
-		expect(compareValues(10, 2)).toBe(1)
-		expect(compareValues(9, 10)).toBe(-1)
+		expect(comparePrimitives(10, 2)).toBe(1)
+		expect(comparePrimitives(9, 10)).toBe(-1)
 	})
 
 	it('dispatches through no replaceable member while the comparison primitives lie', () => {
@@ -2887,12 +2996,63 @@ describe('compareValues', () => {
 			createMarker.bind(undefined, false),
 			() =>
 				replaceIntrinsic(String.prototype, 'toString', createMarker.bind(undefined, false), () => ({
-					numeric: compareValues(10, 2),
-					text: compareValues('a', 'b'),
+					numeric: comparePrimitives(10, 2),
+					text: comparePrimitives('a', 'b'),
 				})),
 		)
 
 		expect(answers).toEqual({ numeric: 1, text: -1 })
+	})
+})
+
+describe('escapeRegExp', () => {
+	it('escapes every regular-expression metacharacter', () => {
+		expect(escapeRegExp('.*+?^${}()|[]\\')).toBe('\\.\\*\\+\\?\\^\\$\\{\\}\\(\\)\\|\\[\\]\\\\')
+		expect(escapeRegExp('a.b+c*d?e^f$g(h)i[j]k{l}m|n\\o')).toBe(
+			'a\\.b\\+c\\*d\\?e\\^f\\$g\\(h\\)i\\[j\\]k\\{l\\}m\\|n\\\\o',
+		)
+		expect(escapeRegExp('a.b*c')).toBe('a\\.b\\*c')
+		expect(escapeRegExp('a.b+c')).toBe('a\\.b\\+c')
+	})
+
+	it('leaves ordinary text, the empty string, and astral characters unchanged', () => {
+		expect(escapeRegExp('')).toBe('')
+		expect(escapeRegExp('WidgetInterface')).toBe('WidgetInterface')
+		expect(escapeRegExp('hello world 123')).toBe('hello world 123')
+		expect(escapeRegExp('alpha-123_value')).toBe('alpha-123_value')
+		expect(escapeRegExp('a/b')).toBe('a/b')
+		expect(escapeRegExp('\u{1F600}.')).toBe('\u{1F600}\\.')
+	})
+
+	it('makes the escaped text match itself and nothing else', () => {
+		const metacharacters = '.*+?^${}()|[]\\'
+		const dotted = new RegExp(`^${escapeRegExp('A.B')}$`)
+		const file = new RegExp(`^${escapeRegExp('file[1].ts?')}$`)
+
+		expect({ literal: dotted.test('A.B'), wildcard: dotted.test('AxB') }).toEqual({
+			literal: true,
+			wildcard: false,
+		})
+		expect({ literal: file.test('file[1].ts?'), unescaped: file.test('file1.ts') }).toEqual({
+			literal: true,
+			unescaped: false,
+		})
+		expect(new RegExp(escapeRegExp('a.b*c')).test('axbyc')).toBe(false)
+		expect(new RegExp(`^${escapeRegExp('.*')}$`).test('.*')).toBe(true)
+		expect(new RegExp(`^${escapeRegExp(metacharacters)}$`).test(metacharacters)).toBe(true)
+	})
+
+	it('dispatches through no replaceable member while the string and pattern members lie', () => {
+		const answers = replaceIntrinsic(String.prototype, 'replace', throwReplacement, () =>
+			replaceIntrinsic(RegExp.prototype, Symbol.replace, throwReplacement, () =>
+				replaceIntrinsic(Array.prototype, 'join', throwReplacement, () => ({
+					control: attempt(() => 'a.b'.replace(/\./g, '\\.')).success,
+					escaped: escapeRegExp('a.b'),
+				})),
+			),
+		)
+
+		expect(answers).toEqual({ control: false, escaped: 'a\\.b' })
 	})
 })
 
