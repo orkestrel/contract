@@ -868,7 +868,7 @@ for (const [index, source] of copies.entries()) {
 		assert.equal(target.isContractError(Object.assign(new Error('look-alike'), { code: 'structure' })), false)
 		assert.equal(target.isContractError(new Proxy(error, {})), false)
 		const plain = {}
-		Object.defineProperty(plain, Symbol.for('@orkestrel/contract.error'), { value: plain })
+		Object.defineProperty(plain, Symbol.for('@orkestrel/contract.ContractError'), { value: plain })
 		assert.equal(target.isContractError(plain), false)
 	}
 }

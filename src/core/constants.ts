@@ -10,7 +10,7 @@ import type { ContractCode, JSONSchemaType } from './types.js'
  * own. The registry makes the key discoverable; it is a recognition mechanism,
  * not an unforgeable provenance marker.
  */
-export const CONTRACT_ERROR_BRAND = Symbol.for('@orkestrel/contract.error')
+export const CONTRACT_ERROR_BRAND = Symbol.for('@orkestrel/contract.ContractError')
 
 // === Captured host operations
 

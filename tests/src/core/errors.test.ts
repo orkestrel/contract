@@ -127,14 +127,14 @@ describe('contract error', () => {
 	it('accepts a subclass with its own name and retains the identity brand', () => {
 		const error = new DetailedContractError('detail', { code: 'structure' })
 		expect(isContractError(error)).toBe(true)
-		expect(Object.getOwnPropertyDescriptor(error, Symbol.for('@orkestrel/contract.error'))).toEqual(
-			{
-				value: error,
-				writable: false,
-				enumerable: false,
-				configurable: true,
-			},
-		)
+		expect(
+			Object.getOwnPropertyDescriptor(error, Symbol.for('@orkestrel/contract.ContractError')),
+		).toEqual({
+			value: error,
+			writable: false,
+			enumerable: false,
+			configurable: true,
+		})
 	})
 
 	it('refuses malformed declared context members', () => {
@@ -187,7 +187,9 @@ describe('contract error', () => {
 			class extends ContractError {},
 		)
 
-		expect(Reflect.deleteProperty(error, Symbol.for('@orkestrel/contract.error'))).toBe(true)
+		expect(Reflect.deleteProperty(error, Symbol.for('@orkestrel/contract.ContractError'))).toBe(
+			true,
+		)
 		expect(Reflect.get(error, 'name')).toBe('ContractError')
 		expect(Reflect.get(error, 'code')).toBe('structure')
 		expect(isContractError(error)).toBe(false)
@@ -197,7 +199,7 @@ describe('contract error', () => {
 		const forgery = Reflect.construct(Error, ['forged'], class extends Error {})
 		Reflect.set(forgery, 'name', 'ContractError')
 		Reflect.set(forgery, 'code', 'structure')
-		Object.defineProperty(forgery, Symbol.for('@orkestrel/contract.error'), {
+		Object.defineProperty(forgery, Symbol.for('@orkestrel/contract.ContractError'), {
 			value: forgery,
 		})
 
@@ -257,7 +259,7 @@ describe('contract error', () => {
 		])
 		const lookalike = Object.defineProperty(
 			new Error('invalid contract'),
-			Symbol.for('@orkestrel/contract.error'),
+			Symbol.for('@orkestrel/contract.ContractError'),
 			{ value: true },
 		)
 

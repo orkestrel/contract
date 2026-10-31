@@ -553,7 +553,7 @@ describe('error recognition', () => {
 			'for',
 			() => liar,
 			() => ({
-				key: Symbol.for('@orkestrel/contract.error'),
+				key: Symbol.for('@orkestrel/contract.ContractError'),
 				recognized: isContractError(authored),
 			}),
 		)
