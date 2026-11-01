@@ -59,8 +59,11 @@ import {
 	pollutePrototype,
 	polluteArrayConstruction,
 	throwHostileAccess,
+	COMBINATOR_WALKS,
+	throwReplacement,
 } from '../../setup.js'
 import { createForeignPrototype, createForeignRegExp } from '../../setupServer.js'
+import { createRecorder } from '@orkestrel/test'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 
 describe('element combinators', () => {
@@ -1498,5 +1501,51 @@ describe('membership answered through an unredirectable vocabulary', () => {
 		}))
 
 		expect(answers).toEqual({ picked: ['name'], omitted: ['name'] })
+	})
+})
+
+describe('combinator walks', () => {
+	// Each pollution is armed around one guard call only, so the walk over the table and
+	// the comparison run on the genuine intrinsics.
+	it('answers alike with no pollution', () => {
+		const answers = COMBINATOR_WALKS.map((walk) => [walk.label, walk.guard(walk.input)])
+		expect(answers).toEqual(COMBINATOR_WALKS.map((walk) => [walk.label, walk.answer]))
+	})
+
+	it('answers alike under a replaced next', () => {
+		const cursor: object = Object.getPrototypeOf([].values())
+		const answers = COMBINATOR_WALKS.map((walk) => [
+			walk.label,
+			replaceIntrinsic(cursor, 'next', throwReplacement, () => walk.guard(walk.input)),
+		])
+		expect(answers).toEqual(COMBINATOR_WALKS.map((walk) => [walk.label, walk.answer]))
+	})
+
+	it('answers alike under array pollution', () => {
+		const answers = COMBINATOR_WALKS.map((walk) => [
+			walk.label,
+			polluteArrayConstruction(() => walk.guard(walk.input)),
+		])
+		expect(answers).toEqual(COMBINATOR_WALKS.map((walk) => [walk.label, walk.answer]))
+	})
+
+	it('answers alike under a replaced self', () => {
+		const answers = COMBINATOR_WALKS.map((walk) => [
+			walk.label,
+			replaceIntrinsic(Iterator.prototype, Symbol.iterator, throwReplacement, () =>
+				walk.guard(walk.input),
+			),
+		])
+		expect(answers).toEqual(COMBINATOR_WALKS.map((walk) => [walk.label, walk.answer]))
+	})
+
+	it('answers alike under a polluted return', () => {
+		const recorder = createRecorder()
+		const answers = COMBINATOR_WALKS.map((walk) => [
+			walk.label,
+			pollutePrototype(Object.prototype, 'return', recorder.handler, () => walk.guard(walk.input)),
+		])
+		expect(answers).toEqual(COMBINATOR_WALKS.map((walk) => [walk.label, walk.answer]))
+		expect(recorder.calls).toEqual([])
 	})
 })

@@ -16,6 +16,7 @@ import {
 	ContractError,
 	INFER_DEPTH_LIMIT,
 	integerShape,
+	isString,
 	literalShape,
 	numberShape,
 	objectShape,
@@ -43,6 +44,11 @@ import {
 	buildDeepShape,
 	buildSharedDagShape,
 	buildSparseArray,
+	buildJudgmentPool,
+	buildRecordPool,
+	buildStringArray,
+	buildStringRecord,
+	COMBINATOR_WALKS,
 	buildStaircaseShape,
 	buildTree,
 	buildTypeFault,
@@ -1371,5 +1377,128 @@ describe('host publication controls', () => {
 		expect(Reflect.apply(clearValues, values, [])).toBe(values)
 		expect(values).toEqual([])
 		expect(Array.from(Reflect.apply(readStrings, new Set(['a', 42, 'b']), []))).toEqual(['a', 'b'])
+	})
+})
+
+describe('combinator bench fixtures', () => {
+	it('builds a frozen dense array of distinct strings', () => {
+		const strings = buildStringArray(3)
+		expect(strings).toEqual(['entry0', 'entry1', 'entry2'])
+		expect(Object.isFrozen(strings)).toBe(true)
+		expect(buildStringArray(0)).toEqual([])
+	})
+
+	it('builds a shape on the supplied guard and a record of exactly its keys', () => {
+		const fixture = buildStringRecord(3, isString)
+		expect(Object.keys(fixture.shape)).toEqual(['field0', 'field1', 'field2'])
+		expect(Object.values(fixture.shape).every((guard) => guard === isString)).toBe(true)
+		expect(fixture.record).toEqual({ field0: 'value0', field1: 'value1', field2: 'value2' })
+		expect(Object.isFrozen(fixture)).toBe(true)
+		expect(Object.isFrozen(fixture.shape)).toBe(true)
+		expect(Object.isFrozen(fixture.record)).toBe(true)
+	})
+
+	it('places the failing records of a small-record pool', () => {
+		const pool = buildRecordPool(8)
+		expect(pool).toHaveLength(8)
+		expect(Object.isFrozen(pool)).toBe(true)
+		expect(pool.every((record) => Object.isFrozen(record) && Object.isFrozen(record.tags))).toBe(
+			true,
+		)
+		expect(pool.map((record) => typeof record.id)).toEqual([
+			'string',
+			'string',
+			'string',
+			'string',
+			'string',
+			'number',
+			'string',
+			'string',
+		])
+		expect(pool.map((record) => record.state)).toEqual([
+			'open',
+			'open',
+			'open',
+			'open',
+			'open',
+			'open',
+			0,
+			'open',
+		])
+		expect(pool[0]).toEqual({
+			id: 'record0',
+			title: 'title0',
+			state: 'open',
+			model: 'small',
+			tags: ['tag0'],
+		})
+		expect(pool[7]?.tags).toEqual(['tag0', 'tag1', 'tag2', 'tag3', 'tag4', 'tag5', 'tag6', 0])
+	})
+
+	it('builds frozen judgment records with usage on every second one', () => {
+		const pool = buildJudgmentPool(4)
+		expect(pool).toHaveLength(4)
+		expect(Object.isFrozen(pool)).toBe(true)
+		expect(pool[1]).toEqual({
+			id: 'judgment1',
+			question: { form: 'noul', text: 'question1' },
+			model: 'judge',
+			sources: ['source0'],
+			state: 'text',
+			time: 1,
+			answer: { form: 'noul', noul: 0.01 },
+		})
+		expect(pool.map((record) => Object.hasOwn(record, 'usage'))).toEqual([true, false, true, false])
+		expect(pool[2]?.usage).toEqual({ input: 64, output: 8 })
+		expect(
+			pool.every(
+				(record) =>
+					Object.isFrozen(record) &&
+					Object.isFrozen(record.question) &&
+					Object.isFrozen(record.sources) &&
+					Object.isFrozen(record.answer),
+			),
+		).toBe(true)
+	})
+
+	it('lists an accepted input and three failing steps for each combinator walk', () => {
+		expect(COMBINATOR_WALKS.map((walk) => walk.label)).toEqual([
+			'arrayOf accept',
+			'arrayOf first',
+			'arrayOf middle',
+			'arrayOf last',
+			'tupleOf accept',
+			'tupleOf first',
+			'tupleOf middle',
+			'tupleOf last',
+			'setOf accept',
+			'setOf first',
+			'setOf middle',
+			'setOf last',
+			'mapOf accept',
+			'mapOf first',
+			'mapOf middle',
+			'mapOf last',
+			'recordOf accept',
+			'recordOf key first',
+			'recordOf key middle',
+			'recordOf key last',
+			'recordOf extra first',
+			'recordOf extra middle',
+			'recordOf extra last',
+			'objectOf accept',
+			'objectOf first',
+			'objectOf middle',
+			'objectOf last',
+		])
+		expect(COMBINATOR_WALKS.filter((walk) => walk.answer).map((walk) => walk.label)).toEqual([
+			'arrayOf accept',
+			'tupleOf accept',
+			'setOf accept',
+			'mapOf accept',
+			'recordOf accept',
+			'objectOf accept',
+		])
+		expect(Object.isFrozen(COMBINATOR_WALKS)).toBe(true)
 	})
 })

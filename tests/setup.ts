@@ -9,6 +9,7 @@ import type {
 	FaultConstraint,
 	FaultKind,
 	Guard,
+	GuardsShape,
 	JSONSchema,
 	JSONSchemaType,
 	Result,
@@ -83,6 +84,7 @@ import {
 	nullableShape,
 	nullShape,
 	numberShape,
+	objectOf,
 	objectShape,
 	omitOf,
 	oneOfShape,
@@ -4201,4 +4203,287 @@ export function createAsyncLeaf() {
 
 export class DetailedContractError extends ContractError {
 	override readonly name = 'DetailedContractError'
+}
+
+/** Pairs one combinator guard and one input with the answer the guard gives that input. */
+export interface CombinatorWalk {
+	/** Names the guard and the step at which the input fails, for an assertion message. */
+	readonly label: string
+	/** The guard a container combinator built. */
+	readonly guard: (value: unknown) => boolean
+	/** The value the guard checks. */
+	readonly input: unknown
+	/** The answer the guard gives the input. */
+	readonly answer: boolean
+}
+
+/**
+ * Lists one accepted input and one input failing at the first, a middle, and the last
+ * step of each container combinator's walk.
+ *
+ * @remarks
+ * Every array is canonical, holding index keys and `length` only, so `readArrayEntries`
+ * takes its canonical pass. `recordOf` carries both of its walks: a declared key whose
+ * value fails, and an own key it does not declare.
+ */
+export const COMBINATOR_WALKS: readonly CombinatorWalk[] = Object.freeze([
+	{ label: 'arrayOf accept', guard: arrayOf(isString), input: ['a', 'b', 'c'], answer: true },
+	{ label: 'arrayOf first', guard: arrayOf(isString), input: [1, 'b', 'c'], answer: false },
+	{ label: 'arrayOf middle', guard: arrayOf(isString), input: ['a', 1, 'c'], answer: false },
+	{ label: 'arrayOf last', guard: arrayOf(isString), input: ['a', 'b', 1], answer: false },
+	{
+		label: 'tupleOf accept',
+		guard: tupleOf(isString, isString, isString),
+		input: ['a', 'b', 'c'],
+		answer: true,
+	},
+	{
+		label: 'tupleOf first',
+		guard: tupleOf(isString, isString, isString),
+		input: [1, 'b', 'c'],
+		answer: false,
+	},
+	{
+		label: 'tupleOf middle',
+		guard: tupleOf(isString, isString, isString),
+		input: ['a', 1, 'c'],
+		answer: false,
+	},
+	{
+		label: 'tupleOf last',
+		guard: tupleOf(isString, isString, isString),
+		input: ['a', 'b', 1],
+		answer: false,
+	},
+	{ label: 'setOf accept', guard: setOf(isString), input: new Set(['a', 'b', 'c']), answer: true },
+	{ label: 'setOf first', guard: setOf(isString), input: new Set([1, 'b', 'c']), answer: false },
+	{ label: 'setOf middle', guard: setOf(isString), input: new Set(['a', 1, 'c']), answer: false },
+	{ label: 'setOf last', guard: setOf(isString), input: new Set(['a', 'b', 1]), answer: false },
+	{
+		label: 'mapOf accept',
+		guard: mapOf(isString, isNumber),
+		input: new Map([
+			['a', 1],
+			['b', 2],
+			['c', 3],
+		]),
+		answer: true,
+	},
+	{
+		label: 'mapOf first',
+		guard: mapOf(isString, isNumber),
+		input: new Map<unknown, unknown>([
+			[1, 1],
+			['b', 2],
+			['c', 3],
+		]),
+		answer: false,
+	},
+	{
+		label: 'mapOf middle',
+		guard: mapOf(isString, isNumber),
+		input: new Map<unknown, unknown>([
+			['a', 1],
+			['b', 'x'],
+			['c', 3],
+		]),
+		answer: false,
+	},
+	{
+		label: 'mapOf last',
+		guard: mapOf(isString, isNumber),
+		input: new Map<unknown, unknown>([
+			['a', 1],
+			['b', 2],
+			['c', 'x'],
+		]),
+		answer: false,
+	},
+	{
+		label: 'recordOf accept',
+		guard: recordOf({ a: isString, b: isString, c: isString }),
+		input: { a: 'x', b: 'y', c: 'z' },
+		answer: true,
+	},
+	{
+		label: 'recordOf key first',
+		guard: recordOf({ a: isString, b: isString, c: isString }),
+		input: { a: 1, b: 'y', c: 'z' },
+		answer: false,
+	},
+	{
+		label: 'recordOf key middle',
+		guard: recordOf({ a: isString, b: isString, c: isString }),
+		input: { a: 'x', b: 1, c: 'z' },
+		answer: false,
+	},
+	{
+		label: 'recordOf key last',
+		guard: recordOf({ a: isString, b: isString, c: isString }),
+		input: { a: 'x', b: 'y', c: 1 },
+		answer: false,
+	},
+	{
+		label: 'recordOf extra first',
+		guard: recordOf({ a: isString, b: isString, c: isString }),
+		input: { z: 'w', a: 'x', b: 'y', c: 'z' },
+		answer: false,
+	},
+	{
+		label: 'recordOf extra middle',
+		guard: recordOf({ a: isString, b: isString, c: isString }),
+		input: { a: 'x', z: 'w', b: 'y', c: 'z' },
+		answer: false,
+	},
+	{
+		label: 'recordOf extra last',
+		guard: recordOf({ a: isString, b: isString, c: isString }),
+		input: { a: 'x', b: 'y', c: 'z', z: 'w' },
+		answer: false,
+	},
+	{
+		label: 'objectOf accept',
+		guard: objectOf({ a: isString, b: isString, c: isString }),
+		input: { a: 'x', b: 'y', c: 'z' },
+		answer: true,
+	},
+	{
+		label: 'objectOf first',
+		guard: objectOf({ a: isString, b: isString, c: isString }),
+		input: { a: 1, b: 'y', c: 'z' },
+		answer: false,
+	},
+	{
+		label: 'objectOf middle',
+		guard: objectOf({ a: isString, b: isString, c: isString }),
+		input: { a: 'x', b: 1, c: 'z' },
+		answer: false,
+	},
+	{
+		label: 'objectOf last',
+		guard: objectOf({ a: isString, b: isString, c: isString }),
+		input: { a: 'x', b: 'y', c: 1 },
+		answer: false,
+	},
+])
+
+/** Pairs a guard shape of string keys with a record holding exactly those keys. */
+export interface StringRecordFixture {
+	/** One declared key per record key, each checked by the supplied guard. */
+	readonly shape: GuardsShape
+	/** A frozen plain record of string values under the declared keys. */
+	readonly record: Readonly<Record<string, string>>
+}
+
+/**
+ * Builds a frozen dense array of distinct strings.
+ *
+ * @param size - The element count
+ * @returns The frozen array
+ *
+ * @example
+ * ```ts
+ * buildStringArray(2) // ['entry0', 'entry1']
+ * ```
+ */
+export function buildStringArray(size: number): readonly string[] {
+	return Object.freeze(Array.from({ length: size }, (_, index) => `entry${String(index)}`))
+}
+
+/**
+ * Builds a guard shape of string keys and a frozen record holding exactly those keys.
+ *
+ * @remarks
+ * The guard is a parameter, so a bench builds the shape from the guard of the build it
+ * loaded rather than from this module's own import.
+ *
+ * @param size - The key count
+ * @param guard - The guard each declared key carries
+ * @returns The shape and the record
+ *
+ * @example
+ * ```ts
+ * buildStringRecord(1, isString) // { shape: { field0: isString }, record: { field0: 'value0' } }
+ * ```
+ */
+export function buildStringRecord(size: number, guard: Guard<string>): StringRecordFixture {
+	const keys = Array.from({ length: size }, (_, index) => `field${String(index)}`)
+	return Object.freeze({
+		shape: Object.freeze(Object.fromEntries(keys.map((key) => [key, guard]))),
+		record: Object.freeze(
+			Object.fromEntries(keys.map((key, index) => [key, `value${String(index)}`])),
+		),
+	})
+}
+
+/**
+ * Builds a frozen pool of small records with a tag array, some failing their check.
+ *
+ * @remarks
+ * Each record holds `id`, `title`, `state`, `model`, and `tags`, the size of the records
+ * the fleet's guards check most, with 1 to 16 tags. Of every 8 records, the sixth holds a
+ * numeric `id`, which fails at the first declared key; the seventh a numeric `state`,
+ * which fails at a middle one; and the eighth a numeric last tag, which fails at the last
+ * step of the last declared key.
+ *
+ * @param size - The record count
+ * @returns The frozen pool, each record and tag array frozen
+ *
+ * @example
+ * ```ts
+ * buildRecordPool(1) // [{ id: 'record0', title: 'title0', state: 'open', model: 'small', tags: ['tag0'] }]
+ * ```
+ */
+export function buildRecordPool(size: number): ReadonlyArray<Readonly<Record<string, unknown>>> {
+	return Object.freeze(
+		Array.from({ length: size }, (_, index) => {
+			const variant = index % 8
+			const length = 1 + (index % 16)
+			return Object.freeze({
+				id: variant === 5 ? index : `record${String(index)}`,
+				title: `title${String(index)}`,
+				state: variant === 6 ? 0 : 'open',
+				model: 'small',
+				tags: Object.freeze(
+					Array.from({ length }, (_tag, position) =>
+						variant === 7 && position === length - 1 ? 0 : `tag${String(position)}`,
+					),
+				),
+			})
+		}),
+	)
+}
+
+/**
+ * Builds a frozen pool of accepted judgment-shaped records.
+ *
+ * @remarks
+ * Each record holds `id`, `question`, `model`, 0 to 3 `sources`, `state`, `time`, and an
+ * `answer`; every second record also holds `usage`.
+ *
+ * @param size - The record count
+ * @returns The frozen pool, each record and nested value frozen
+ *
+ * @example
+ * ```ts
+ * buildJudgmentPool(1)[0]?.id // 'judgment0'
+ * ```
+ */
+export function buildJudgmentPool(size: number): ReadonlyArray<Readonly<Record<string, unknown>>> {
+	return Object.freeze(
+		Array.from({ length: size }, (_, index) =>
+			Object.freeze({
+				id: `judgment${String(index)}`,
+				question: Object.freeze({ form: 'noul', text: `question${String(index)}` }),
+				model: 'judge',
+				sources: Object.freeze(
+					Array.from({ length: index % 4 }, (_source, position) => `source${String(position)}`),
+				),
+				state: 'text',
+				time: index,
+				...(index % 2 === 0 ? { usage: Object.freeze({ input: 64, output: 8 }) } : {}),
+				answer: Object.freeze({ form: 'noul', noul: (index % 100) / 100 }),
+			}),
+		),
+	)
 }
