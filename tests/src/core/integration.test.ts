@@ -76,8 +76,13 @@ import {
 	compositeShape,
 	createInertOutcome,
 	createWorkBound,
+	buildDefaultCases,
+	buildDefaultedShape,
 	buildJSONRoundtrip,
 	buildLockstep,
+	defaultedShapeVariations,
+	denyValue,
+	findAgreementViolations,
 	findInstallationControls,
 	findVacuousControls,
 	fingerprintOwnership,
@@ -1023,5 +1028,70 @@ describe('no caller-reachable member decides a membership answer', () => {
 		const outcome = await readUnpinnedModule()
 
 		expect(outcome.success).toBe(false)
+	})
+})
+
+describe('the contract laws over shapes that carry a default', () => {
+	for (const [label, shape] of defaultedShapeVariations()) {
+		it(`hold for ${label}`, () => {
+			expect(findAgreementViolations(shape, undefined, buildDefaultCases(shape))).toEqual([])
+		})
+	}
+
+	it('hold over seeded shapes whose defaults their own generators drew', () => {
+		const shapes = Array.from({ length: 64 }, (_entry, seed) =>
+			buildDefaultedShape(seededRandom(seed)),
+		)
+		const violations = shapes.flatMap((shape) =>
+			findAgreementViolations(shape, undefined, buildDefaultCases(shape)),
+		)
+
+		expect(violations).toEqual([])
+	})
+
+	it('reach a fill, a clean absence, and a refusal on the seeded population', () => {
+		const shapes = Array.from({ length: 64 }, (_entry, seed) =>
+			buildDefaultedShape(seededRandom(seed)),
+		)
+		const carried = shapes.filter((shape) => JSON.stringify(shape).includes('"default"'))
+		const readings = carried.flatMap((shape) => {
+			const contract = compileWidenedContract(shape)
+			return buildDefaultCases(shape).map((value) => {
+				const parsed = contract.parse(value)
+				return {
+					refused: parsed === undefined,
+					filled: JSON.stringify(parsed) !== JSON.stringify(value) && contract.is(value),
+				}
+			})
+		})
+
+		expect(carried.length).toBeGreaterThan(32)
+		expect(readings.filter((reading) => reading.filled).length).toBeGreaterThan(0)
+		expect(readings.filter((reading) => reading.refused).length).toBeGreaterThan(0)
+		expect(readings.filter((reading) => !reading.refused).length).toBeGreaterThan(0)
+	})
+
+	it('report a violation when the guard they compare is wrong', () => {
+		const shape = objectShape({ a: optionalShape(numberShape(), { default: 3 }) })
+		const violations = findAgreementViolations(shape, denyValue, buildDefaultCases(shape))
+
+		expect(violations.length).toBeGreaterThan(0)
+	})
+
+	it('generate only values the guard accepts', () => {
+		const shapes = [
+			...defaultedShapeVariations()
+				.filter(([label]) => label !== 'a raw value')
+				.map(([, shape]) => shape),
+			...Array.from({ length: 64 }, (_entry, seed) => buildDefaultedShape(seededRandom(seed))),
+		]
+		const refused = shapes.flatMap((shape) => {
+			const contract = compileWidenedContract(shape)
+			return Array.from({ length: 16 }, (_entry, seed) =>
+				contract.generate(seededRandom(seed)),
+			).filter((value) => !contract.is(value))
+		})
+
+		expect(refused).toEqual([])
 	})
 })

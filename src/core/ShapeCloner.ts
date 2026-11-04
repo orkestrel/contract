@@ -36,7 +36,8 @@ import {
 	readPatternFlags,
 	readPatternSource,
 } from './helpers.js'
-import { isLiteralValue, isObject, isRecord, isRegExp } from './validators.js'
+import { isJSONValue, isLiteralValue, isObject, isRecord, isRegExp } from './validators.js'
+import { JSONCloner } from './JSONCloner.js'
 import { SchemaCloner } from './SchemaCloner.js'
 import { ShapeValidator } from './ShapeValidator.js'
 
@@ -278,9 +279,9 @@ export class ShapeCloner implements ShapeClonerInterface {
 			case 'union':
 				return this.#captureUnion(source, path)
 			case 'optional':
-				return this.#captureWrapper(source, path, 'optional')
+				return this.#captureOptional(source, path)
 			case 'nullable':
-				return this.#captureWrapper(source, path, 'nullable')
+				return this.#captureNullable(source, path)
 			case 'json':
 				return this.#captureSimple(source, path, 'json')
 			case 'raw':
@@ -565,11 +566,27 @@ export class ShapeCloner implements ShapeClonerInterface {
 		}
 	}
 
-	#captureWrapper(
-		source: OptionalShape | NullableShape,
-		path: readonly string[],
-		category: 'optional' | 'nullable',
-	): OptionalShape | NullableShape {
+	#captureOptional(source: OptionalShape, path: readonly string[]): OptionalShape {
+		const inner = this.#captureInner(source, path)
+		const value = this.#captureField(source, 'default', path)
+		if (!INTRINSICS.own(source, 'default')) return { category: 'optional', inner }
+		// The one domain rule capture must answer itself, because a value that cannot be
+		// copied cannot be carried to the gate; it refuses as that gate does.
+		const owned = isJSONValue(value) ? attempt(() => new JSONCloner(value).clone()) : undefined
+		if (owned === undefined || isFailure(owned)) {
+			throw this.#create('validateShape: an optional default must be a JSON value', {
+				code: 'structure',
+				context: { path: pathOf(path, 'default') },
+			})
+		}
+		return { category: 'optional', inner, default: owned.value }
+	}
+
+	#captureNullable(source: NullableShape, path: readonly string[]): NullableShape {
+		return { category: 'nullable', inner: this.#captureInner(source, path) }
+	}
+
+	#captureInner(source: OptionalShape | NullableShape, path: readonly string[]): ContractShape {
 		const inner = this.#captureField(source, 'inner', path)
 		if (inner === undefined) {
 			throw this.#create('validateShape: every structural child must be a shape', {
@@ -577,9 +594,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 				context: { path: pathOf(path, 'inner') },
 			})
 		}
-		return category === 'optional'
-			? { category: 'optional', inner }
-			: { category: 'nullable', inner }
+		return inner
 	}
 
 	#captureRaw(source: RawShape, path: readonly string[]): RawShape {

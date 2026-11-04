@@ -8,6 +8,7 @@ import type {
 import {
 	attempt,
 	COMPILE_DEPTH_LIMIT,
+	compileSchema,
 	optionalShape,
 	stringShape,
 	ContractError,
@@ -20,6 +21,7 @@ import {
 } from '@src/core'
 import type { TerminalIntrinsic } from '../../setup.js'
 import {
+	buildNonJSONValues,
 	polluteArrayConstruction,
 	validateSource,
 	createPatternStub,
@@ -31,6 +33,7 @@ import {
 	captureContractError,
 	createNativeMaximumSparseArray,
 	createShapeValidationCase,
+	createUndefinedOptional,
 	createUndefinedSchema,
 	denyRecognition,
 	NullBaseDeclaration,
@@ -1449,5 +1452,226 @@ describe('the cyclic fallback agrees with an unmemoized walk (R6-A-fix)', () => 
 			other: verdicts.filter((verdict) => verdict === 'other').length,
 		}
 		expect(tally).toEqual({ accepted: 46, cycle: 283, depth: 71, other: 0 })
+	})
+})
+
+describe('ShapeValidator — optional defaults', () => {
+	const defaulted: ContractShape = {
+		category: 'optional',
+		inner: { category: 'number' },
+		default: 3,
+	}
+	const closed: ContractShape = { category: 'object', properties: { a: defaulted } }
+
+	it('accepts a default on a property of a closed object', () => {
+		const shapes: readonly ContractShape[] = [
+			closed,
+			{ category: 'object', properties: { a: defaulted }, additionalProperties: false },
+			{ category: 'array', items: closed },
+			{ category: 'nullable', inner: closed },
+			{ category: 'object', properties: {}, additionalProperties: closed },
+			{ category: 'optional', inner: closed, default: {} },
+		]
+		const wrapped = [
+			...shapes.slice(0, 5),
+			{ category: 'object', properties: { outer: shapes[5] ?? closed } } satisfies ContractShape,
+		]
+
+		expect(wrapped.map((shape) => attempt(() => validateShape(shape)).success)).toEqual(
+			wrapped.map(() => true),
+		)
+	})
+
+	it('refuses a default under a union ancestor with placement', () => {
+		const cases: ReadonlyArray<readonly [ContractShape, readonly string[]]> = [
+			[
+				{ category: 'union', variants: [closed, { category: 'null' }] },
+				['variants', '0', 'properties', 'a'],
+			],
+			[
+				{ category: 'union', variants: [{ category: 'null' }, closed], mode: 'oneOf' },
+				['variants', '1', 'properties', 'a'],
+			],
+			[
+				{ category: 'union', variants: [{ category: 'array', items: closed }] },
+				['variants', '0', 'items', 'properties', 'a'],
+			],
+			[
+				{
+					category: 'object',
+					properties: { u: { category: 'union', variants: [closed] } },
+				},
+				['properties', 'u', 'variants', '0', 'properties', 'a'],
+			],
+		]
+		const refusals = cases.map(([shape]) => {
+			const error = captureContractError(() => validateShape(shape))
+			return [error.code, error.context?.path]
+		})
+
+		expect(refusals).toEqual(cases.map(([, path]) => ['placement', path]))
+	})
+
+	it('refuses a shared node whichever route discovery reaches first', () => {
+		const union: ContractShape = { category: 'union', variants: [closed, { category: 'null' }] }
+		const shapes: readonly ContractShape[] = [
+			{ category: 'object', properties: { plain: closed, joined: union } },
+			{ category: 'object', properties: { joined: union, plain: closed } },
+		]
+		const refusals = shapes.map((shape) => {
+			const error = captureContractError(() => validateShape(shape))
+			return [error.code, error.context?.path]
+		})
+		const path = ['properties', 'joined', 'variants', '0', 'properties', 'a']
+
+		expect(refusals).toEqual([
+			['placement', path],
+			['placement', path],
+		])
+	})
+
+	it('refuses a default on a property of an open object with placement', () => {
+		const opened: readonly ContractShape[] = [
+			{ category: 'object', properties: { a: defaulted }, additionalProperties: true },
+			{
+				category: 'object',
+				properties: { a: defaulted },
+				additionalProperties: { category: 'string' },
+			},
+		]
+		const refusals = opened.map((shape) => {
+			const error = captureContractError(() => validateShape(shape))
+			return [error.code, error.context?.path]
+		})
+
+		expect(refusals).toEqual(opened.map(() => ['placement', ['properties', 'a']]))
+	})
+
+	it('refuses a shared optional when any slot holding it is open', () => {
+		const shape: ContractShape = {
+			category: 'object',
+			properties: {
+				shut: closed,
+				loose: { category: 'object', properties: { a: defaulted }, additionalProperties: true },
+			},
+		}
+		const error = captureContractError(() => validateShape(shape))
+
+		expect(error.code).toBe('placement')
+		expect(error.context?.path).toEqual(['properties', 'loose', 'properties', 'a'])
+	})
+
+	it('leaves a bare optional legal in every position a default refuses', () => {
+		const bare: ContractShape = { category: 'optional', inner: { category: 'number' } }
+		const shapes: readonly ContractShape[] = [
+			{ category: 'object', properties: { a: bare }, additionalProperties: true },
+			{ category: 'union', variants: [{ category: 'object', properties: { a: bare } }] },
+		]
+
+		expect(shapes.map((shape) => attempt(() => validateShape(shape)).success)).toEqual([true, true])
+	})
+
+	it('refuses a default the validator cannot read as JSON, with structure at its path', () => {
+		const values = buildNonJSONValues()
+		const refusals = values.map((value) => {
+			const child: Record<string, unknown> = { category: 'optional', inner: stringShape() }
+			Reflect.set(child, 'default', value)
+			const properties: Record<string, unknown> = { a: child }
+			const shape: Record<string, unknown> = { category: 'object', properties }
+			const outcome = attempt(() => Reflect.apply(validateShape, undefined, [shape]))
+			if (outcome.success) throw new Error('expected a refusal')
+			return isContractError(outcome.error) ? [outcome.error.code, outcome.error.context?.path] : []
+		})
+
+		expect(refusals).toEqual(values.map(() => ['structure', ['properties', 'a', 'default']]))
+	})
+
+	it('refuses an accessor default without invoking it, and an inherited default', () => {
+		const counter = new ObservationCounter()
+		const accessor: Record<string, unknown> = { category: 'optional', inner: stringShape() }
+		Object.defineProperty(accessor, 'default', {
+			enumerable: true,
+			get: () => counter.increment(),
+		})
+		const inherited: Record<string, unknown> = Object.create({ default: 3 })
+		inherited.category = 'optional'
+		inherited.inner = stringShape()
+		const outcomes = [accessor, inherited].map((child) =>
+			attempt(() =>
+				Reflect.apply(validateShape, undefined, [{ category: 'object', properties: { a: child } }]),
+			),
+		)
+
+		expect(outcomes.map((outcome) => outcome.success)).toEqual([false, false])
+		expect(counter.value).toBe(0)
+	})
+
+	it('refuses a present undefined default', () => {
+		const error = captureContractError(() =>
+			validateShape({
+				category: 'object',
+				properties: { a: createUndefinedOptional({ category: 'number' }) },
+			}),
+		)
+
+		expect(error.code).toBe('structure')
+		expect(error.context?.path).toEqual(['properties', 'a', 'default'])
+	})
+
+	it('judges structure only: a default its inner refuses passes this gate', () => {
+		const shape: ContractShape = {
+			category: 'object',
+			properties: {
+				a: { category: 'optional', inner: { category: 'number', min: 0 }, default: -5 },
+			},
+		}
+
+		expect(attempt(() => validateShape(shape)).success).toBe(true)
+	})
+
+	it('outranks a placement refusal with an earlier structure refusal', () => {
+		const shape: Record<string, unknown> = {
+			category: 'object',
+			properties: { a: defaulted, b: 1 },
+			additionalProperties: true,
+		}
+		const outcome = attempt(() => Reflect.apply(validateShape, undefined, [shape]))
+		if (outcome.success) throw new Error('expected a refusal')
+
+		expect(isContractError(outcome.error) ? outcome.error.code : undefined).toBe('structure')
+	})
+
+	it('keeps a raw schema default as a JSON value', () => {
+		const accepted: readonly JSONSchema[] = [
+			{ type: 'number', default: 3 },
+			{ type: 'null', default: null },
+			{ type: 'object', default: { nested: [1, 'x', null] } },
+			{ default: { type: 'not read as a schema' } },
+		]
+		const owned = accepted.map((schema) => rawShape(schema).schema.default)
+
+		expect(owned).toEqual(accepted.map((schema) => schema.default))
+		expect(compileSchema(rawShape({ type: 'number', default: 3 }))).toEqual({
+			type: 'number',
+			default: 3,
+		})
+	})
+
+	it('accepts a raw default of 3 and refuses a raw default that is not JSON', () => {
+		expect(rawShape({ default: 3 }).schema.default).toBe(3)
+		const malformed: readonly JSONSchema[] = [
+			createUndefinedSchema('default'),
+			...buildNonJSONValues().map((value) => {
+				const schema: JSONSchema = { type: 'number' }
+				Reflect.set(schema, 'default', value)
+				return schema
+			}),
+		]
+		const refusals = malformed.map((schema) => {
+			const error = captureContractError(() => rawShape(schema))
+			return [error.code, error.context?.path]
+		})
+
+		expect(refusals).toEqual(malformed.map(() => ['structure', ['schema']]))
 	})
 })

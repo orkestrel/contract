@@ -8,6 +8,7 @@ import type {
 	LiteralValue,
 	NumberShape,
 	ObjectShape,
+	OptionalShapeOptions,
 	Result,
 	StringShapeOptions,
 	StringShape,
@@ -47,6 +48,7 @@ import {
 } from '@src/core'
 import type { Equal, Expect } from '../../setup.js'
 import {
+	buildNonJSONValues,
 	polluteArrayConstruction,
 	buildCycle,
 	ObservationCounter,
@@ -62,9 +64,11 @@ import {
 	createNonEnumerableRecord,
 	createStatefulGetter,
 	createThrowingGetter,
+	createUndefinedDefault,
 	createUndefinedSchema,
 	createUnstableArray,
 	NullBaseDeclaration,
+	pollutePrototype,
 	SOUNDNESS_SAMPLE,
 } from '../../setup.js'
 import { createForeignRegExp } from '../../setupServer.js'
@@ -203,8 +207,14 @@ const BUILDER_CASES: readonly BuilderCase[] = [
 	},
 	{
 		name: 'optionalShape',
-		valid: [[stringShape()], [nullableShape(stringShape())]],
-		positions: { 0: 'shape' },
+		valid: [
+			[stringShape()],
+			[nullableShape(stringShape())],
+			[stringShape(), {}],
+			[numberShape(), { default: 3 }],
+		],
+		positions: { 0: 'shape', 1: 'options' },
+		options: { 1: ['default'] },
 		run: (args) => Reflect.apply(optionalShape, undefined, [...args]),
 	},
 	{
@@ -2011,5 +2021,77 @@ describe('schemaToShape — readable malformed vocabulary (H9)', () => {
 		expect(JSON.stringify(compileSchema(schemaToShape(buildCycle(true))))).toBe(
 			JSON.stringify(cyclicFirst),
 		)
+	})
+})
+
+describe('optionalShape — default', () => {
+	it('carries a default on the frozen node', () => {
+		const shape = optionalShape(numberShape(), { default: 3 })
+
+		expect(shape).toMatchObject({ category: 'optional', inner: { category: 'number' }, default: 3 })
+		expect(Object.isFrozen(shape)).toBe(true)
+	})
+
+	it('carries null and other falsy defaults', () => {
+		const values: readonly JSONValue[] = [null, 0, '', false]
+		const carried = values.map((value) => optionalShape(jsonShape(), { default: value }).default)
+
+		expect(carried).toEqual(values)
+	})
+
+	it('owns a frozen copy of a container default', () => {
+		const value = { tags: ['x'] }
+		const shape = optionalShape(jsonShape(), { default: value })
+
+		expect(shape.default).not.toBe(value)
+		expect(shape.default).toEqual(value)
+		expect(Object.isFrozen(shape.default)).toBe(true)
+		value.tags.push('y')
+		expect(shape.default).toEqual({ tags: ['x'] })
+	})
+
+	it('carries no key without a default option', () => {
+		expect(Object.hasOwn(optionalShape(stringShape()), 'default')).toBe(false)
+		expect(Object.hasOwn(optionalShape(stringShape(), {}), 'default')).toBe(false)
+	})
+
+	it('refuses a present undefined default with structure', () => {
+		const error = captureContractError(() => optionalShape(stringShape(), createUndefinedDefault()))
+
+		expect(error.code).toBe('structure')
+		expect(error.context?.path).toEqual(['default'])
+	})
+
+	it('refuses a default that is not JSON with structure', () => {
+		const values = buildNonJSONValues()
+		const codes = values.map(
+			(value) =>
+				captureContractError(() =>
+					Reflect.apply(optionalShape, undefined, [stringShape(), { default: value }]),
+				).code,
+		)
+
+		expect(codes).toEqual(values.map(() => 'structure'))
+	})
+
+	it('refuses rather than carries a default the options only inherit', () => {
+		const options: OptionalShapeOptions = {}
+		const error = captureContractError(() =>
+			pollutePrototype(
+				Object.prototype,
+				'default',
+				() => 3,
+				() => optionalShape(stringShape(), options),
+			),
+		)
+
+		expect(error.code).toBe('structure')
+	})
+
+	it('types a defaulted key as a key that may be absent', () => {
+		const shape = objectShape({ a: optionalShape(numberShape(), { default: 3 }) })
+
+		expectTypeOf<Infer<typeof shape>>().toEqualTypeOf<{ readonly a?: number }>()
+		expectTypeOf(shape.properties.a.inner).toEqualTypeOf<NumberShape>()
 	})
 })

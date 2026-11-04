@@ -151,7 +151,7 @@ const COMPLETE_SHAPES = {
 		mode: 'anyOf',
 		description: 'complete',
 	},
-	optional: { category: 'optional', inner: { category: 'string' } },
+	optional: { category: 'optional', inner: { category: 'string' }, default: 'complete' },
 	nullable: { category: 'nullable', inner: { category: 'string' } },
 	json: { category: 'json', description: 'complete' },
 	raw: { category: 'raw', schema: COMPLETE_RAW_SCHEMA },
@@ -311,7 +311,7 @@ describe('validateShape', () => {
 			['createContract', (shape: ContractShape) => createContract(shape), true],
 		]),
 	)(
-		'%s applies descriptor-first accessor policy across all 38 node fields',
+		'%s applies descriptor-first accessor policy across all 39 node fields',
 		(_name, entry, ownership) => {
 			const cases = Object.values(COMPLETE_SHAPES).flatMap((source) =>
 				Object.keys(source).map((field) => ({ source, field })),
@@ -357,7 +357,7 @@ describe('validateShape', () => {
 					expect(outcome.error.context?.path, `${category}.${field}`).toEqual(path)
 				}
 			}
-			expect(cases.length).toBe(38)
+			expect(cases.length).toBe(39)
 		},
 	)
 
@@ -546,7 +546,8 @@ describe('validateShape', () => {
 			['union.mode', 'oneOf'],
 			['union.description', 'alternate'],
 			['optional.category', 'nullable'],
-			['optional.inner', { category: 'number' }],
+			['optional.inner', { category: 'string', min: 1 }],
+			['optional.default', 'alternate'],
 			['nullable.category', 'boolean'],
 			['nullable.inner', { category: 'number' }],
 			['json.category', 'boolean'],
@@ -751,7 +752,7 @@ describe('validateShape', () => {
 			}
 		}
 
-		expect(members).toHaveLength(38)
+		expect(members).toHaveLength(39)
 		expect([...alternates.keys()].sort()).toEqual([...members].sort())
 		const incomplete = new Set(members)
 		const omitted = incomplete.values().next().value

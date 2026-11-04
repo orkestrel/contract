@@ -53,9 +53,10 @@ import { ShapeValidator } from './ShapeValidator.js'
  * eager well-formedness pass — there is no second prepass and no alias for it:
  * it enforces every bound domain and range used by the artifacts, including
  * non-empty literal/union vocabularies, finite literal numbers, integer-range
- * satisfiability, unflagged string patterns, optional-shape placement, and the
- * recursively supported raw-schema vocabulary where every present property or
- * dense union member is a record.
+ * satisfiability, unflagged string patterns, optional-shape and default
+ * placement, and the recursively supported raw-schema vocabulary where every
+ * present property or dense union member is a record. It judges a default's
+ * structure only; each compiler refuses a default its inner guard refuses.
  * Active ancestors are tracked so shared children remain legal. Every
  * standalone compiler reaches this same validation once, over its owned
  * snapshot, through {@link ContractCompiler} preparation.

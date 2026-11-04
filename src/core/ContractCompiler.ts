@@ -10,6 +10,7 @@ import type {
 	Guard,
 	Infer,
 	JSONSchema,
+	JSONValue,
 	LiteralValue,
 	NumberShape,
 	Parser,
@@ -80,7 +81,7 @@ import {
 	whereOf,
 } from './combinators.js'
 import { parseBoolean, parseInteger, parseJSONValue, parseNumber, parseString } from './parsers.js'
-import { cloneSchema, ownShape } from './cloners.js'
+import { cloneJSONValue, cloneSchema, ownShape } from './cloners.js'
 import { ShapeValidator } from './ShapeValidator.js'
 import { EvaluationScope } from './EvaluationScope.js'
 import { seededRandom } from './seeders.js'
@@ -107,7 +108,9 @@ import { seededRandom } from './seeders.js'
  * getters after it replay. A getter builds its own family and no other, except
  * that `parser`, `reporter` and `generator` build the guard plan when the graph
  * holds a union, because a union's membership question IS a guard question in
- * all three.
+ * all three, and every getter builds it when the graph holds a default, because
+ * a default that its inner shape refuses refuses at whichever artifact is read
+ * first.
  *
  * One terminal lifecycle covers preparation and every family. A failure settles
  * the compiler: later getters rethrow that exact error, while an artifact
@@ -554,6 +557,69 @@ export class ContractCompiler<
 		return false
 	}
 
+	// A default is judged by the guard of the shape it fills, and a declaration that
+	// refuses has to refuse at whichever artifact is read first, so every family builds
+	// the guard plan when — and only when — the graph holds a default.
+	#defaults(): boolean {
+		for (const index of iterateIndices(() => this.#nodes.length)) {
+			const node = this.#nodes[index]
+			if (node?.category === 'optional' && INTRINSICS.own(node, 'default')) return true
+		}
+		return false
+	}
+
+	// Walks the declaration rather than the node list, because the path a refusal names
+	// exists only on the way down. Validation bounded the tree this expands into, and
+	// `#buildGuard` runs this once, on a graph that holds a default.
+	#checkDefaults(shape: ContractShape, path: readonly string[]): void {
+		switch (shape.category) {
+			case 'array':
+				this.#checkDefaults(shape.items, pathOf(path, 'items'))
+				return
+			case 'nullable':
+				this.#checkDefaults(shape.inner, pathOf(path, 'inner'))
+				return
+			case 'optional': {
+				this.#checkDefaults(shape.inner, pathOf(path, 'inner'))
+				if (!INTRINSICS.own(shape, 'default') || this.#guardAt(shape.inner)(shape.default)) return
+				throw new ContractError(
+					'ContractCompiler: a default must satisfy the shape it fills; change the default or the shape',
+					{
+						code: 'structure',
+						context: {
+							path: pathOf(path, 'default'),
+							shape: 'optional',
+							received: preview(shape.default),
+						},
+					},
+				)
+			}
+			case 'union':
+				for (const index of iterateIndices(() => shape.variants.length)) {
+					const variant = shape.variants[index]
+					if (variant === undefined) continue
+					this.#checkDefaults(variant, pathOf(path, 'variants', INTRINSICS.text(index)))
+				}
+				return
+			case 'object': {
+				const keys = INTRINSICS.keys(shape.properties)
+				for (const index of iterateIndices(() => keys.length)) {
+					const key = keys[index]
+					const child = key === undefined ? undefined : shape.properties[key]
+					if (child === undefined) continue
+					this.#checkDefaults(child, pathOf(path, 'properties', key))
+				}
+				const extra = shape.additionalProperties
+				if (extra !== undefined && extra !== true && extra !== false) {
+					this.#checkDefaults(extra, pathOf(path, 'additionalProperties'))
+				}
+				return
+			}
+			default:
+				return
+		}
+	}
+
 	// Each root evaluation owns the answers for its active synchronous walk.
 	// Shared objects reuse one answer per compiled node; the scope is removed
 	// in finally so later calls always observe the caller's current value.
@@ -590,6 +656,7 @@ export class ContractCompiler<
 		const ready = this.#schema
 		if (ready !== undefined) return ready
 		this.#prepare()
+		if (this.#defaults()) this.#buildGuard()
 		for (const step of iterateIndices(() => this.#order.length)) {
 			const index = this.#order[step]
 			if (index === undefined) continue
@@ -694,7 +761,7 @@ export class ContractCompiler<
 							return [
 								{
 									key,
-									schema: this.#schemaAt(child.category === 'optional' ? child.inner : child),
+									schema: this.#schemaAt(child),
 									required: child.category !== 'optional',
 								},
 							]
@@ -754,8 +821,11 @@ export class ContractCompiler<
 					...(owned.description !== undefined ? { description: owned.description } : {}),
 				})
 			}
-			case 'optional':
-				return this.#schemaAt(owned.inner)
+			case 'optional': {
+				const emitted = this.#schemaAt(owned.inner)
+				const value = owned.default
+				return value === undefined ? emitted : INTRINSICS.freeze({ ...emitted, default: value })
+			}
 			case 'nullable':
 				return INTRINSICS.freeze({
 					anyOf: INTRINSICS.freeze([
@@ -781,6 +851,7 @@ export class ContractCompiler<
 			this.#guards[index] = this.#repeats(index) ? this.#trackGuard(plan) : plan
 		}
 		const root = this.#guardAt(this.#node(0))
+		if (this.#defaults()) this.#checkDefaults(this.#node(0), [])
 		this.#guard = root
 		return root
 	}
@@ -980,7 +1051,7 @@ export class ContractCompiler<
 		const ready = this.#parser
 		if (ready !== undefined) return ready
 		this.#prepare()
-		if (this.#unions()) this.#buildGuard()
+		if (this.#unions() || this.#defaults()) this.#buildGuard()
 		for (const step of iterateIndices(() => this.#order.length)) {
 			const index = this.#order[step]
 			if (index === undefined) continue
@@ -1107,6 +1178,7 @@ export class ContractCompiler<
 					readonly key: string
 					readonly parse: Parser<unknown>
 					readonly optional: boolean
+					readonly fill: JSONValue | undefined
 				}> = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(keyList), [
 					(key: string) => {
 						const child = owned.properties[key]
@@ -1118,6 +1190,7 @@ export class ContractCompiler<
 								key,
 								parse: this.#parserAt(inner),
 								optional,
+								fill: optional ? child.default : undefined,
 							},
 						]
 					},
@@ -1185,14 +1258,15 @@ export class ContractCompiler<
 								present === undefined
 									? (seen & (1 << entryIndex)) === 0
 									: !matchesMember(present, entry.key)
-							if (absent) {
-								if (entry.optional) continue
-								return undefined
-							}
-							const raw = record[entry.key]
+							const raw = absent ? undefined : record[entry.key]
 							if (raw === undefined) {
-								if (entry.optional) continue
-								return undefined
+								if (!entry.optional) return undefined
+								// Parsed from a fresh copy, so nested defaults apply and no two
+								// results share a tree, whichever parser the inner shape holds.
+								if (entry.fill !== undefined) {
+									selected[selected.length] = [entry.key, entry.parse(cloneJSONValue(entry.fill))]
+								}
+								continue
 							}
 							const parsed = entry.parse(raw)
 							if (parsed === undefined) return undefined
@@ -1308,6 +1382,7 @@ export class ContractCompiler<
 		const ready = this.#auditor
 		if (ready !== undefined) return ready
 		this.#prepare()
+		if (this.#defaults()) this.#buildGuard()
 		for (const step of iterateIndices(() => this.#order.length)) {
 			const index = this.#order[step]
 			if (index === undefined) continue
@@ -1633,7 +1708,7 @@ export class ContractCompiler<
 		const ready = this.#reporter
 		if (ready !== undefined) return ready
 		this.#prepare()
-		if (this.#unions()) this.#buildGuard()
+		if (this.#unions() || this.#defaults()) this.#buildGuard()
 		for (const step of iterateIndices(() => this.#order.length)) {
 			const index = this.#order[step]
 			if (index === undefined) continue
@@ -1957,7 +2032,7 @@ export class ContractCompiler<
 		const ready = this.#generator
 		if (ready !== undefined) return ready
 		this.#prepare()
-		if (this.#unions()) this.#buildGuard()
+		if (this.#unions() || this.#defaults()) this.#buildGuard()
 		for (const step of iterateIndices(() => this.#order.length)) {
 			const index = this.#order[step]
 			if (index === undefined) continue

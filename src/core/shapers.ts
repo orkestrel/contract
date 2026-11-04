@@ -18,23 +18,25 @@ import type {
 	ObjectShape,
 	ObjectShapeOptions,
 	OptionalShape,
+	OptionalShapeOptions,
 	RawShape,
 	RecordShapeOptions,
+	SchemaToShapeOptions,
 	StringShape,
 	StringShapeOptions,
 	UnionShape,
 } from './types.js'
-import { cloneSchema, cloneShape } from './cloners.js'
+import { cloneJSONValue, cloneSchema, cloneShape } from './cloners.js'
 import { SchemaShaper } from './SchemaShaper.js'
 import { ShapeValidator } from './ShapeValidator.js'
 import { INTRINSICS } from './constants.js'
-import { ContractError } from './errors.js'
 import {
 	readIndexView,
 	iterateIndices,
 	attempt,
 	contain,
 	isFailure,
+	isSuccess,
 	matchesRecordBrand,
 	preview,
 	readArrayEntries,
@@ -43,7 +45,8 @@ import {
 	readPatternSource,
 	readValue,
 } from './helpers.js'
-import { isLiteralValue, isObject, isRegExp } from './validators.js'
+import { isJSONValue, isLiteralValue, isObject, isRegExp } from './validators.js'
+import { ContractError, isContractError } from './errors.js'
 
 // The builders return the parameterized types.ts interfaces (for example `ArrayShape<S>`,
 // `ObjectShape<P>`), never inline object literals — the generic parameter keeps
@@ -595,14 +598,43 @@ export function oneOfShape<V extends readonly ContractShape[]>(
  *
  * @remarks
  * As an {@link objectShape} property, the field becomes a true optional property
- * in the inferred type.
+ * in the inferred type. A `default` is captured as an owned frozen copy, and the
+ * compiled parser fills it where the property is absent or `undefined`; the guard,
+ * the audit, the report, and the generator keep treating the property as optional.
+ * The compilers refuse a default `inner` refuses, a default under a union, and a
+ * default on a property of an open object.
  *
  * @param inner - The wrapped shape
+ * @param options - Optional `default`, a JSON value
  * @returns An optional shape
+ * @throws {ContractError} When a present `default` is not a JSON value, `undefined` included
+ *
+ * @example
+ * ```ts
+ * const retries = optionalShape(integerShape({ min: 0 }), { default: 3 })
+ * ```
  */
-export function optionalShape<S extends ContractShape>(inner: S): OptionalShape<S> {
+export function optionalShape<S extends ContractShape>(
+	inner: S,
+	options?: OptionalShapeOptions,
+): OptionalShape<S> {
 	return contain(() => {
-		const shape: OptionalShape<S> = { category: 'optional', inner }
+		const safe = readOptions(options, ['default'], 'optionalShape', 'optional')
+		// Own presence, read apart from the value: the snapshot above omits a present
+		// `undefined` and keeps an inherited value, and neither may decide this field.
+		const present = options !== undefined && INTRINSICS.own(options, 'default')
+		const value = present ? safe?.default : undefined
+		if (present && !isJSONValue(value)) {
+			throw new ContractError('optionalShape: default must be a JSON value', {
+				code: 'structure',
+				context: { path: ['default'], shape: 'optional', received: preview(value) },
+			})
+		}
+		const shape: OptionalShape<S> = {
+			category: 'optional',
+			inner,
+			...(value === undefined ? {} : { default: cloneJSONValue(value) }),
+		}
 		new ShapeValidator({ category: 'object', properties: { value: shape } }).validate()
 		return INTRINSICS.freeze(shape)
 	}, 'optionalShape')
@@ -737,8 +769,9 @@ export function rawShape(schema: JSONSchema): RawShape {
 /**
  * Converts a runtime `JSONSchema` value into a validating {@link ContractShape}
  * — the inverse of {@link compileSchema}. Unlike direct {@link rawShape}
- * construction, which rejects malformed supported-vocabulary keywords, this
- * conversion is total and widens an inexpressible input to a valid raw `{}`.
+ * construction, which rejects malformed supported-vocabulary keywords, the
+ * lenient conversion is total and widens an inexpressible input to a valid raw
+ * `{}`, and a strict conversion refuses that input.
  *
  * @remarks
  * Readable malformed, cyclic, or deeply nested schema nodes widen to
@@ -789,9 +822,23 @@ export function rawShape(schema: JSONSchema): RawShape {
  * when the conversion widened anywhere — `schema` / `is` / `parse` / `explain`
  * stay total.
  *
+ * DEFAULTS: a lenient conversion carries a property's `default` when the key is
+ * not `required`, its object is closed with no union ancestor, and the value is
+ * one the property's primitive or literal guard accepts. It drops every other
+ * `default`, because carrying it would make the shape refuse to compile.
+ *
+ * STRICT: `{ strict: true }` is the door for a foreign schema. It refuses, with
+ * code `structure`, every node the lenient walk would widen, every keyword it
+ * would ignore (`pattern`, `format`, and anything outside the {@link JSONSchema}
+ * vocabulary included), a malformed keyword, a contradictory bound, a `required`
+ * name not in `properties`, breadth past {@link INFER_BREADTH_LIMIT}, and a
+ * `default` with no optional property to fill. An object with no
+ * `additionalProperties` closes rather than opens.
+ *
  * @param schema - The JSON Schema value to convert
+ * @param options - Optional `strict`, default `false`
  * @returns The built {@link ContractShape}
- * @throws {ContractError} When schema traversal fails
+ * @throws {ContractError} When schema traversal fails, or when a strict conversion refuses
  *
  * @example
  * ```ts
@@ -801,8 +848,17 @@ export function rawShape(schema: JSONSchema): RawShape {
  * contract.parse({ id: 'nope' })          // undefined
  * ```
  */
-export function schemaToShape(schema: JSONSchema): ContractShape {
+export function schemaToShape(schema: JSONSchema, options?: SchemaToShapeOptions): ContractShape {
 	return contain(() => {
+		const safe = readOptions(options, ['strict'], 'schemaToShape', 'schema')
+		const named = options !== undefined && INTRINSICS.own(options, 'strict')
+		const strict = named ? safe?.strict : undefined
+		if (strict !== undefined && typeof strict !== 'boolean') {
+			throw new ContractError('schemaToShape: strict must be a boolean', {
+				code: 'structure',
+				context: { path: ['strict'], shape: 'schema', received: preview(strict) },
+			})
+		}
 		// The whole walk runs inside this door's own read boundary, so a hostile
 		// keyword, enumeration, or recursion anywhere below it is published under
 		// this door's name rather than under the name of an engine method no
@@ -811,9 +867,24 @@ export function schemaToShape(schema: JSONSchema): ContractShape {
 		// replaces `globalThis.WeakSet` or `globalThis.WeakMap` can no longer make
 		// construction throw a raw value out of a door documented to refuse with a
 		// `ContractError`.
-		return readValue(() => new SchemaShaper(schema).shape(), 'schemaToShape', {
-			subject: 'schema',
-			context: { shape: 'schema' },
-		})
+		const shaper = new SchemaShaper(schema, strict === true)
+		if (strict !== true) {
+			return readValue(() => shaper.shape(), 'schemaToShape', {
+				subject: 'schema',
+				context: { shape: 'schema' },
+			})
+		}
+		// A strict refusal names the keyword it refuses, so it passes through the
+		// boundary that would otherwise restate it as an unreadable schema.
+		const outcome = attempt(() => shaper.shape())
+		if (isSuccess(outcome)) return outcome.value
+		if (isContractError(outcome.error)) throw outcome.error
+		return readValue(
+			() => {
+				throw outcome.error
+			},
+			'schemaToShape',
+			{ subject: 'schema', context: { shape: 'schema' } },
+		)
 	}, 'schemaToShape')
 }

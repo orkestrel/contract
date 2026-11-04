@@ -55,6 +55,7 @@ await new GuideCommand({
 		createContract,
 		integerShape,
 		objectShape,
+		optionalShape,
 		stringShape,
 	} = barrel
 	const { DriftedMethods, readMembers, SMUGGLED_KEY, SmuggledMember } = await import('./setup.js')
@@ -350,6 +351,28 @@ await new GuideCommand({
 			expect(guideText).toContain("compiler.guard({ id: 'a' }) // true")
 			expect(guideText).toContain('compiler.guard === compiler.guard // true')
 			expect(guideText).toContain('compiler.contract.is === compiler.guard // true')
+		})
+
+		it('fills a default in the parser and leaves the guard on canonical absence', () => {
+			// The field-defaults fence. Each expectation is that fence's own comment, executed.
+			const retries = createContract(
+				objectShape({ limit: optionalShape(integerShape({ min: 0 }), { default: 3 }) }),
+			)
+
+			expect(retries.parse({})).toEqual({ limit: 3 })
+			expect(retries.parse({ limit: '5' })).toEqual({ limit: 5 })
+			expect(retries.is({})).toBe(true)
+			expect(retries.schema.properties?.limit?.default).toBe(3)
+		})
+
+		it('carries the field-defaults fence lines the transcription copies', () => {
+			expect(guideText).toContain(
+				'objectShape({ limit: optionalShape(integerShape({ min: 0 }), { default: 3 }) }),',
+			)
+			expect(guideText).toContain('retries.parse({}) // { limit: 3 }')
+			expect(guideText).toContain("retries.parse({ limit: '5' }) // { limit: 5 }")
+			expect(guideText).toContain('retries.is({}) // true — an absent optional stays canonical')
+			expect(guideText).toContain('retries.schema.properties?.limit?.default // 3')
 		})
 	})
 

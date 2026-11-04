@@ -26,6 +26,7 @@ import {
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
+	buildNonJSONValues,
 	polluteArrayConstruction,
 	createSubstitution,
 	ObservationCounter,
@@ -33,6 +34,7 @@ import {
 	captureContractError,
 	createNativeMaximumSparseArray,
 	createShapeRetention,
+	createUndefinedOptional,
 	createVariantRetention,
 	NullBaseDeclaration,
 	PatternFixture,
@@ -1161,5 +1163,109 @@ describe('ShapeCloner — one arbiter, one verdict (H9)', () => {
 		expect(captureContractError(() => cloneShape({ category: 'array', items: legal })).code).toBe(
 			'depth',
 		)
+	})
+})
+
+describe('ShapeCloner — optional defaults', () => {
+	it('keeps a frozen copy of a default, not the caller reference', () => {
+		const value = { tags: ['x'] }
+		const source: ContractShape = {
+			category: 'optional',
+			inner: { category: 'json' },
+			default: value,
+		}
+		const root = cloneShape({ category: 'object', properties: { a: source } })
+		const clone = root.category === 'object' ? root.properties.a : undefined
+		const copy = clone?.category === 'optional' ? clone.default : undefined
+
+		expect(copy).toEqual(value)
+		expect(copy).not.toBe(value)
+		expect(Object.isFrozen(copy)).toBe(true)
+		value.tags.push('y')
+		expect(copy).toEqual({ tags: ['x'] })
+	})
+
+	it('keeps a primitive default and null', () => {
+		const clones = [3, 0, '', false, null].map((value) => {
+			const root = cloneShape({
+				category: 'object',
+				properties: { a: { category: 'optional', inner: { category: 'json' }, default: value } },
+			})
+			const clone = root.category === 'object' ? root.properties.a : undefined
+			return clone?.category === 'optional' ? clone.default : undefined
+		})
+
+		expect(clones).toEqual([3, 0, '', false, null])
+	})
+
+	it('carries no default key when the source holds none', () => {
+		const root = cloneShape(objectShape({ a: optionalShape(stringShape()) }))
+		const clone = root.category === 'object' ? root.properties.a : undefined
+
+		expect(clone === undefined ? true : Object.hasOwn(clone, 'default')).toBe(false)
+	})
+
+	it('refuses a default that is not JSON, with structure at its path', () => {
+		const inner: ContractShape = { category: 'json' }
+		const values = buildNonJSONValues()
+		const refusals = values.map((value) => {
+			const child: Record<string, unknown> = { category: 'optional', inner }
+			Reflect.set(child, 'default', value)
+			const properties: Record<string, unknown> = { a: child }
+			const shape: Record<string, unknown> = { category: 'object', properties }
+			const source = attempt(() => Reflect.apply(cloneShape, undefined, [shape]))
+			if (source.success) throw new Error('expected a refusal')
+			return isContractError(source.error) ? [source.error.code, source.error.context?.path] : []
+		})
+
+		expect(refusals).toEqual(values.map(() => ['structure', ['properties', 'a', 'default']]))
+	})
+
+	it('refuses a present undefined default rather than dropping it', () => {
+		const shape: ContractShape = {
+			category: 'object',
+			properties: { a: createUndefinedOptional(stringShape()) },
+		}
+		const error = captureContractError(() => cloneShape(shape))
+
+		expect(error.code).toBe('structure')
+		expect(error.context?.path).toEqual(['properties', 'a', 'default'])
+	})
+
+	it('refuses an accessor default without invoking it', () => {
+		const counter = new ObservationCounter()
+		const child: Record<string, unknown> = { category: 'optional', inner: stringShape() }
+		Object.defineProperty(child, 'default', {
+			enumerable: true,
+			get: () => counter.increment(),
+		})
+		const properties: Record<string, unknown> = { a: child }
+		const shape: Record<string, unknown> = { category: 'object', properties }
+		const outcome = attempt(() => Reflect.apply(cloneShape, undefined, [shape]))
+
+		expect(outcome.success).toBe(false)
+		expect(counter.value).toBe(0)
+	})
+
+	it('refuses an inherited default', () => {
+		const child: Record<string, unknown> = Object.create({ default: 3 })
+		child.category = 'optional'
+		child.inner = stringShape()
+		const properties: Record<string, unknown> = { a: child }
+		const shape: Record<string, unknown> = { category: 'object', properties }
+
+		expect(attempt(() => Reflect.apply(cloneShape, undefined, [shape])).success).toBe(false)
+	})
+
+	it('keeps a nullable node free of a default', () => {
+		const child: Record<string, unknown> = {
+			category: 'nullable',
+			inner: stringShape(),
+			default: 'ignored',
+		}
+		const outcome = attempt(() => Reflect.apply(cloneShape, undefined, [child]))
+		if (!outcome.success) throw new Error('expected the nullable node to clone')
+
+		expect(Object.hasOwn(outcome.value, 'default')).toBe(false)
 	})
 })

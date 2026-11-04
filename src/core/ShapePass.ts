@@ -18,7 +18,7 @@ import {
 	readPatternFlags,
 	readPatternSource,
 } from './helpers.js'
-import { isLiteralValue, isRecord, isRegExp } from './validators.js'
+import { isJSONValue, isLiteralValue, isRecord, isRegExp } from './validators.js'
 
 /** Owns the traversal and reentry poison of one validation call. */
 export class ShapePass {
@@ -57,6 +57,8 @@ export class ShapePass {
 			readonly second?: string
 		}>
 		readonly raw: number
+		readonly defaulted: boolean
+		readonly open: boolean
 	}> = []
 	// Discovery postorder: children finish before parents, so reading it forwards
 	// solves any bottom-up fact in one pass and reading it backwards solves any
@@ -69,6 +71,9 @@ export class ShapePass {
 	// deepest occurrence and reported at the first-discovered one accuses a slot
 	// the same declaration proves legal on its own.
 	#via: Array<{ readonly parent: number; readonly first: string; readonly second?: string }> = []
+	// The edge that first put a node below a union, so a default's refusal can spell
+	// the route through that union rather than the node's deepest one.
+	#within: Array<{ readonly parent: number; readonly first: string; readonly second?: string }> = []
 	// One node per node per incoming edge: the size of the TREE a compiler would
 	// build from this DAG, which is what actually bounds compilation.
 	#counts: number[] = []
@@ -81,6 +86,8 @@ export class ShapePass {
 	}> = []
 	#category: ContractShape['category'] | undefined
 	#raw = 0
+	#defaulted = false
+	#open = false
 	#structure: ContractError | undefined
 	#cycle: ContractError | undefined
 	#domain: ContractError | undefined
@@ -189,6 +196,8 @@ export class ShapePass {
 		this.#children = []
 		this.#category = undefined
 		this.#raw = 0
+		this.#defaulted = false
+		this.#open = false
 		const outcome = attempt(() => this.#observe(current, frame.depth))
 		if (isFailure(outcome) || !outcome.value) {
 			this.#structure ??= new ContractError(
@@ -286,6 +295,7 @@ export class ShapePass {
 			case 'union':
 				return ['variants', 'mode', 'description']
 			case 'optional':
+				return ['inner', 'default']
 			case 'nullable':
 				return ['inner']
 			case 'raw':
@@ -339,6 +349,12 @@ export class ShapePass {
 			typeof current.description !== 'string'
 		) {
 			return this.#refuse('validateShape: description must be a string', 'description')
+		}
+		if (current.category === 'optional' && INTRINSICS.own(current, 'default')) {
+			if (!isJSONValue(current.default)) {
+				return this.#refuse('validateShape: an optional default must be a JSON value', 'default')
+			}
+			this.#defaulted = true
 		}
 		if (current.category === 'string') {
 			if (current.min !== undefined && typeof current.min !== 'number') {
@@ -638,6 +654,7 @@ export class ShapePass {
 				if (
 					key !== 'type' &&
 					key !== 'description' &&
+					key !== 'default' &&
 					key !== 'enum' &&
 					key !== 'minLength' &&
 					key !== 'maxLength' &&
@@ -676,6 +693,9 @@ export class ShapePass {
 			}
 			if (schema.description !== undefined && typeof schema.description !== 'string') {
 				return this.#refuse('validateShape: raw schema description must be a string', 'schema')
+			}
+			if (INTRINSICS.own(schema, 'default') && !isJSONValue(schema.default)) {
+				return this.#refuse('validateShape: raw schema default must be a JSON value', 'schema')
 			}
 			if (schema.format !== undefined && typeof schema.format !== 'string') {
 				return this.#refuse('validateShape: raw schema format must be a string', 'schema')
@@ -929,6 +949,7 @@ export class ShapePass {
 					}
 				}
 				const extra = current.additionalProperties
+				this.#open = extra !== undefined && extra !== false
 				if (extra !== undefined && extra !== true && extra !== false) {
 					this.#children[this.#children.length] = {
 						shape: extra,
@@ -1156,7 +1177,14 @@ export class ShapePass {
 		}>,
 	): number {
 		const index = this.#captures.length
-		this.#captures[index] = { shape, category: this.#category, children, raw: this.#raw }
+		this.#captures[index] = {
+			shape,
+			category: this.#category,
+			children,
+			raw: this.#raw,
+			defaulted: this.#defaulted,
+			open: this.#open,
+		}
 		INTRINSICS.reflect.apply(INTRINSICS.retain, this.#index, [shape, index])
 		return index
 	}
@@ -1246,6 +1274,75 @@ export class ShapePass {
 				{ code: 'structure', context: { path: pathOf(this.#ascend(index), 'schema') } },
 			)
 		}
+		this.#placeDefaults()
+	}
+
+	// Where a default can fill is a fact about every route to it, and a shared node is
+	// discovered through one route alone, so this is asked over the captured graph. It
+	// reads the reverse postorder top-down: a node's union ancestry is final before its
+	// edges are read, so one pass answers every route. A union's parser returns a
+	// guard-valid value by identity, so a default below one fills only the inputs that
+	// needed a coercion. An open object takes a misspelled key as an extra, so a default
+	// beside one fills the real key with no fault to report it.
+	#placeDefaults(): void {
+		const carried = INTRINSICS.reflect.apply(INTRINSICS.some, this.#captures, [
+			(capture: { readonly defaulted: boolean }) => capture.defaulted,
+		])
+		if (!carried) return
+		for (const offset of iterateIndices(() => this.#post.length)) {
+			const index = this.#post[this.#post.length - 1 - offset]
+			if (index === undefined) continue
+			const capture = this.#captures[index]
+			if (capture === undefined) continue
+			const enclosed = capture.category === 'union' || this.#within[index] !== undefined
+			for (const edge of iterateIndices(() => capture.children.length)) {
+				const child = capture.children[edge]
+				if (child === undefined) continue
+				const located = this.#locate(child.shape)
+				if (located === undefined) continue
+				if (enclosed && this.#within[located] === undefined) {
+					this.#within[located] = {
+						parent: index,
+						first: child.first,
+						...(child.second === undefined ? {} : { second: child.second }),
+					}
+				}
+				if (this.#captures[located]?.defaulted !== true) continue
+				if (enclosed) {
+					this.#domain ??= new ContractError(
+						'validateShape: a default may not sit under a union, whose parser can return a valid value without filling it; move the default outside the union or remove it',
+						{
+							code: 'placement',
+							context: {
+								path: pathOf(this.#route(index), child.first, child.second),
+								shape: 'optional',
+							},
+						},
+					)
+				}
+				if (capture.open) {
+					this.#domain ??= new ContractError(
+						'validateShape: a default may not sit on a property of an open object, where a misspelled key would fill it unreported; close the object or remove the default',
+						{
+							code: 'placement',
+							context: {
+								path: pathOf(this.#ascend(index), child.first, child.second),
+								shape: 'optional',
+							},
+						},
+					)
+				}
+			}
+		}
+	}
+
+	// The path to a node through the union edge recorded for it, falling back to its
+	// deepest occurrence above the union that encloses it.
+	#route(index: number): readonly string[] {
+		const edge = this.#within[index]
+		return edge === undefined
+			? this.#ascend(index)
+			: pathOf(this.#route(edge.parent), edge.first, edge.second)
 	}
 
 	// The declaration path to a node's DEEPEST occurrence, spelled out by walking

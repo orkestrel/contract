@@ -501,6 +501,7 @@ export type JSONSchemaType =
 export interface JSONSchema {
 	readonly type?: JSONSchemaType
 	readonly description?: string
+	readonly default?: JSONValue
 	readonly enum?: readonly LiteralValue[]
 	readonly minLength?: number
 	readonly maxLength?: number
@@ -714,10 +715,19 @@ export interface UnionShape<V extends readonly ContractShape[] = readonly Contra
 	readonly description?: string
 }
 
-/** Wraps an inner shape that may be absent (`undefined`). */
+/**
+ * Wraps an inner shape that may be absent (`undefined`).
+ *
+ * @remarks
+ * `default` holds the JSON value the compiled parser fills when the property is
+ * absent or `undefined`. It leaves `is`, `audit`, `explain`, and `generate`
+ * unchanged, because an absent optional stays canonical. It must satisfy `inner`,
+ * and it may sit only on a property of a closed object with no union ancestor.
+ */
 export interface OptionalShape<S extends ContractShape = ContractShape> {
 	readonly category: 'optional'
 	readonly inner: S
+	readonly default?: JSONValue
 }
 
 /** Wraps an inner shape that may be `null`. */
@@ -1005,6 +1015,22 @@ export interface ObjectShapeOptions<A extends boolean | ContractShape = boolean 
 /** Groups the options for record shapes (through `recordShape`). */
 export interface RecordShapeOptions {
 	readonly description?: string
+}
+
+/** Groups the options for {@link OptionalShape} (through `optionalShape`). */
+export interface OptionalShapeOptions {
+	readonly default?: JSONValue
+}
+
+/**
+ * Groups the options for converting a JSON Schema (through `schemaToShape`).
+ *
+ * @remarks
+ * `strict` (default `false`) refuses what the lenient conversion widens or
+ * ignores, and closes an object with no `additionalProperties`.
+ */
+export interface SchemaToShapeOptions {
+	readonly strict?: boolean
 }
 
 // === Contract reporting

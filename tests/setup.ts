@@ -12,6 +12,9 @@ import type {
 	GuardsShape,
 	JSONSchema,
 	JSONSchemaType,
+	OptionalShape,
+	OptionalShapeOptions,
+	RandomFunction,
 	Result,
 	SampleMemo,
 	StringShape,
@@ -2336,7 +2339,9 @@ export function replaceStringSlice<T>(replacement: () => unknown, operation: () 
  * @param keyword - Structural keyword to populate
  * @returns A schema carrying the hostile keyword through reflected mutation
  */
-export function createUndefinedSchema(keyword: 'items' | 'additionalProperties'): JSONSchema {
+export function createUndefinedSchema(
+	keyword: 'items' | 'additionalProperties' | 'default',
+): JSONSchema {
 	const schema: JSONSchema = {}
 	Reflect.set(schema, keyword, undefined)
 	return schema
@@ -4014,16 +4019,18 @@ export function buildCompilerInputs(): readonly unknown[] {
 export function findAgreementViolations(
 	shape: ContractShape,
 	foreign: Guard<unknown> | undefined,
+	samples: readonly unknown[] = [],
 ): readonly string[] {
-	const guard = foreign ?? compileGuard(shape)
-	const parse = compileParser(shape)
+	const compiled = compileWidenedContract(shape)
+	const guard = foreign ?? compiled.is
+	const parse = compiled.parse
 	const violations: string[] = []
-	const values = [...SOUNDNESS_SAMPLE, ...buildCompilerInputs()]
+	const values = [...SOUNDNESS_SAMPLE, ...buildCompilerInputs(), ...samples]
 	for (const index of iterateIndices(() => values.length)) {
 		const value = values[index]
 		const guarded = attempt(() => guard(value))
-		const audited = attempt(() => compileAuditor(shape, value))
-		const explained = attempt(() => compileReporter(shape, value))
+		const audited = attempt(() => compiled.audit(value))
+		const explained = attempt(() => compiled.explain(value))
 		const parsed = attempt(() => parse(value))
 		if (!guarded.success) {
 			violations[violations.length] = `guard threw @${String(index)}`
@@ -4487,3 +4494,414 @@ export function buildJudgmentPool(size: number): ReadonlyArray<Readonly<Record<s
 		),
 	)
 }
+
+// === Field defaults
+//
+// The shapes, samples, and refusals the field-default and strict-conversion proofs
+// share. Every shape here carries a default, and each sample is chosen to reach the
+// parser's fill, the guard's canonical absence, or a refusal.
+
+/**
+ * Builds `optionalShape` options holding one present-but-undefined `default`.
+ *
+ * @returns The options, carrying the key through reflected mutation
+ */
+export function createUndefinedDefault(): OptionalShapeOptions {
+	const options: OptionalShapeOptions = {}
+	Reflect.set(options, 'default', undefined)
+	return options
+}
+
+/**
+ * Lists values that are not JSON, for the doors that refuse them as a default.
+ *
+ * @returns One value of each kind `isJSONValue` refuses
+ */
+export function buildNonJSONValues(): readonly unknown[] {
+	return [
+		Number.NaN,
+		Number.POSITIVE_INFINITY,
+		new Date(),
+		() => 1,
+		Symbol('non-JSON'),
+		1n,
+		buildCyclicRecord(),
+		buildCyclicArray(),
+		buildSparseArray(),
+		createClassInstance(),
+	]
+}
+
+/**
+ * Lists every door that compiles a shape, each driven so its first artifact is built.
+ *
+ * @param shape - The shape each door compiles
+ * @returns The labeled doors
+ */
+export function listCompilerDoors(
+	shape: ContractShape,
+): ReadonlyArray<readonly [string, () => unknown]> {
+	return [
+		['createContract', () => createContract(shape)],
+		['compileSchema', () => compileSchema(shape)],
+		['compileGuard', () => compileGuard(shape)],
+		['compileParser', () => compileParser(shape)],
+		['compileAuditor', () => compileAuditor(shape, {})],
+		['compileReporter', () => compileReporter(shape, {})],
+		['compileGenerator', () => compileGenerator(shape, seededRandom(1))],
+		['ContractCompiler.schema', () => new ContractCompiler(shape).schema],
+		['ContractCompiler.guard', () => new ContractCompiler(shape).guard],
+		['ContractCompiler.parser', () => new ContractCompiler(shape).parser],
+		['ContractCompiler.auditor', () => new ContractCompiler(shape).auditor],
+		['ContractCompiler.reporter', () => new ContractCompiler(shape).reporter],
+		['ContractCompiler.generator', () => new ContractCompiler(shape).generator],
+	]
+}
+
+/**
+ * Builds a restored optional node holding one present-but-undefined `default`.
+ *
+ * @param inner - The wrapped shape
+ * @returns The node, carrying the key through reflected mutation
+ */
+export function createUndefinedOptional(inner: ContractShape): ContractShape {
+	const shape: OptionalShape = { category: 'optional', inner }
+	Reflect.set(shape, 'default', undefined)
+	return shape
+}
+
+/**
+ * Lists one labeled shape per position and inner category a default may occupy.
+ *
+ * @returns The labeled shapes, each holding at least one default
+ */
+export function defaultedShapeVariations(): ReadonlyArray<readonly [string, ContractShape]> {
+	return [
+		['a number', objectShape({ a: optionalShape(numberShape(), { default: 3 }) })],
+		['zero', objectShape({ a: optionalShape(numberShape(), { default: 0 }) })],
+		[
+			'a bounded integer beside a required key',
+			objectShape({
+				a: optionalShape(integerShape({ min: 0, max: 9 }), { default: 3 }),
+				b: stringShape(),
+			}),
+		],
+		['a string', objectShape({ a: optionalShape(stringShape({ min: 1 }), { default: 'x' }) })],
+		['the empty string', objectShape({ a: optionalShape(stringShape(), { default: '' }) })],
+		['false', objectShape({ a: optionalShape(booleanShape(), { default: false }) })],
+		['null', objectShape({ a: optionalShape(nullShape(), { default: null }) })],
+		[
+			'null on a nullable',
+			objectShape({ a: optionalShape(nullableShape(numberShape()), { default: null }) }),
+		],
+		[
+			'a literal',
+			objectShape({ a: optionalShape(literalShape(['low', 'high']), { default: 'low' }) }),
+		],
+		['an array', objectShape({ a: optionalShape(arrayShape(numberShape()), { default: [1, 2] }) })],
+		[
+			'an object',
+			objectShape({
+				a: optionalShape(objectShape({ b: numberShape() }), { default: { b: 2 } }),
+			}),
+		],
+		[
+			'a nested default',
+			objectShape({
+				a: optionalShape(objectShape({ b: optionalShape(numberShape(), { default: 1 }) }), {
+					default: {},
+				}),
+			}),
+		],
+		['a JSON value', objectShape({ a: optionalShape(jsonShape(), { default: { k: [1] } }) })],
+		['a raw value', objectShape({ a: optionalShape(rawShape({}), { default: { k: [1] } }) })],
+		[
+			'a union inner',
+			objectShape({ a: optionalShape(unionShape(numberShape(), nullShape()), { default: null }) }),
+		],
+		[
+			'an array ancestor',
+			arrayShape(objectShape({ a: optionalShape(numberShape(), { default: 3 }) })),
+		],
+		[
+			'a nullable ancestor',
+			nullableShape(objectShape({ a: optionalShape(numberShape(), { default: 3 }) })),
+		],
+		[
+			'an open tail ancestor',
+			objectShape(
+				{},
+				{ additionalProperties: objectShape({ a: optionalShape(numberShape(), { default: 3 }) }) },
+			),
+		],
+	]
+}
+
+/**
+ * Draws one seeded closed object whose properties mix required keys, bare optional keys, and
+ * defaults the inner shape's own generator produced.
+ *
+ * @param random - The deterministic source
+ * @param depth - The object levels left to nest
+ * @returns The drawn shape
+ */
+export function buildDefaultedShape(random: RandomFunction, depth = 2): ContractShape {
+	const leaves: readonly ContractShape[] = [
+		numberShape({ min: 0, max: 9 }),
+		integerShape({ min: -3, max: 3 }),
+		stringShape({ min: 1, max: 4 }),
+		booleanShape(),
+		nullShape(),
+		literalShape(['low', 'high', 1]),
+		nullableShape(numberShape()),
+		arrayShape(stringShape(), { max: 2 }),
+		jsonShape(),
+	]
+	const count = 1 + Math.floor(random() * 3)
+	const entries = Array.from({ length: count }, (_entry, index) => {
+		const nested = depth > 0 && random() < 0.3
+		const inner = nested
+			? buildDefaultedShape(random, depth - 1)
+			: (leaves[Math.floor(random() * leaves.length)] ?? numberShape())
+		const roll = random()
+		if (roll < 0.25) return [`k${String(index)}`, inner]
+		if (roll < 0.4) return [`k${String(index)}`, optionalShape(inner)]
+		const seed = compileWidenedContract(inner).generate(random)
+		return [
+			`k${String(index)}`,
+			isJSONValue(seed) ? optionalShape(inner, { default: seed }) : inner,
+		]
+	})
+	return objectShape(Object.fromEntries(entries))
+}
+
+/**
+ * Lists the values a defaulted shape's laws are checked over: seeded generated values, each
+ * one mutated at every top-level key, and curated absences, near misses, and extras.
+ *
+ * @param shape - The shape whose generator seeds the samples
+ * @returns The sample values
+ */
+export function buildDefaultCases(shape: ContractShape): readonly unknown[] {
+	const contract = compileWidenedContract(shape)
+	const generated = [0, 1, 2, 7, 42].flatMap((seed) => {
+		const outcome = attempt(() => contract.generate(seededRandom(seed)))
+		return outcome.success ? [outcome.value] : []
+	})
+	const wrong: readonly unknown[] = ['x', '3', 3, -1, 1.5, true, null, [], {}, Number.NaN]
+	const mutated = generated.flatMap((value) => {
+		if (!isRecord(value)) return []
+		const keys = Object.keys(value)
+		return [
+			{ ...value, undeclared: 1 },
+			...keys.flatMap((key) => [
+				Object.fromEntries(keys.filter((name) => name !== key).map((name) => [name, value[name]])),
+				{ ...value, [key]: undefined },
+				...wrong.map((replacement) => ({ ...value, [key]: replacement })),
+			]),
+		]
+	})
+	return [
+		...generated,
+		...mutated,
+		{},
+		{ a: undefined },
+		{ a: 3 },
+		{ a: '3' },
+		{ a: 'x' },
+		{ a: -1 },
+		{ a: null },
+		{ a: [] },
+		{ a: {} },
+		{ a: { b: 2 } },
+		{ a: { b: 'x' } },
+		{ a: {}, b: 'y' },
+		{ b: 'y' },
+		{ z: 1 },
+		{ a: 3, z: 1 },
+		{ z: {} },
+		{ z: { a: 'x' } },
+		[],
+		[{}],
+		[{ a: undefined }],
+		[{ a: 'x' }],
+		[{ a: 3, z: 1 }],
+	]
+}
+
+/**
+ * Builds an object schema over the given properties, for the conversion tables.
+ *
+ * @param properties - The `properties` keyword
+ * @returns The schema, with no `additionalProperties`
+ */
+export function typedObject(
+	properties: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+	return { type: 'object', properties }
+}
+
+/**
+ * Builds a closed object schema holding one property, for the conversion tables.
+ *
+ * @param property - The schema of the property `a`
+ * @returns The schema
+ */
+export function closedOf(
+	property: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+	return { type: 'object', properties: { a: property }, additionalProperties: false }
+}
+
+/**
+ * Supplies the keyword that makes a lenient conversion close an object strict conversion closes.
+ *
+ * @param schema - The schema a strict conversion accepted
+ * @returns `additionalProperties: false` for an object node, otherwise nothing
+ */
+export function closedWhenObject(schema: JSONSchema): JSONSchema {
+	return schema.type === 'object' ? { additionalProperties: false } : {}
+}
+
+/** Lists each schema strict conversion refuses, with the `structure` path it names. */
+export const STRICT_SCHEMA_REFUSALS: ReadonlyArray<
+	readonly [string, Readonly<Record<string, unknown>>, readonly string[]]
+> = Object.freeze([
+	['a root type typo', { type: 'strng' }, ['type']],
+	['a nested type typo', { type: 'array', items: { type: 'strng' } }, ['items', 'type']],
+	['a property type typo', typedObject({ a: { type: 'strng' } }), ['properties', 'a', 'type']],
+	['pattern', { type: 'string', pattern: '^a' }, ['pattern']],
+	['format', { type: 'string', format: 'email' }, ['format']],
+	['an empty schema', {}, []],
+	['a schema with only a description', { description: 'text' }, []],
+	['an unsupported keyword', { type: 'string', const: 'x' }, ['const']],
+	['a reference', { $ref: '#/definitions/x' }, ['$ref']],
+	['a composition keyword', { type: 'object', allOf: [] }, ['allOf']],
+	['a malformed description', { type: 'string', description: 3 }, ['description']],
+	['a malformed enum', { enum: 'a' }, ['enum']],
+	['an empty enum', { enum: [] }, ['enum']],
+	['an enum holding null', { enum: ['a', null] }, ['enum']],
+	['an enum holding a non-finite number', { enum: [Number.NaN] }, ['enum']],
+	['an enum holding a duplicate', { enum: ['a', 'a'] }, ['enum']],
+	['an enum its type contradicts', { type: 'number', enum: ['a'] }, ['enum']],
+	['a bound beside an enum', { enum: ['a'], minLength: 1 }, ['minLength']],
+	['a malformed oneOf', { oneOf: {} }, ['oneOf']],
+	['a malformed anyOf', { anyOf: 'a' }, ['anyOf']],
+	['an empty oneOf', { oneOf: [] }, ['oneOf']],
+	['an empty anyOf', { anyOf: [] }, ['anyOf']],
+	['a variant that is not a record', { anyOf: [1] }, ['anyOf', '0']],
+	['both union keywords', { anyOf: [{ type: 'string' }], oneOf: [{ type: 'string' }] }, ['anyOf']],
+	['a type beside a union', { type: 'string', anyOf: [{ type: 'string' }] }, ['type']],
+	['an empty type list', { type: [] }, ['type']],
+	['a type list holding a duplicate', { type: ['string', 'string'] }, ['type']],
+	['a type list holding a typo', { type: ['string', 'strng'] }, ['type']],
+	['a malformed type', { type: 3 }, ['type']],
+	['a negative length', { type: 'string', minLength: -1 }, ['minLength']],
+	['a fractional length', { type: 'string', maxLength: 1.5 }, ['maxLength']],
+	['a text length', { type: 'string', minLength: '1' }, ['minLength']],
+	['a contradictory length', { type: 'string', minLength: 5, maxLength: 1 }, ['minLength']],
+	['a text range bound', { type: 'number', minimum: '1' }, ['minimum']],
+	['a non-finite range bound', { type: 'number', maximum: Infinity }, ['maximum']],
+	['a contradictory range', { type: 'number', minimum: 5, maximum: 1 }, ['minimum']],
+	['an empty integer range', { type: 'integer', minimum: 1.2, maximum: 1.8 }, ['minimum']],
+	[
+		'a contradictory item count',
+		{ type: 'array', items: { type: 'string' }, minItems: 3, maxItems: 1 },
+		['minItems'],
+	],
+	[
+		'a negative item count',
+		{ type: 'array', items: { type: 'string' }, minItems: -1 },
+		['minItems'],
+	],
+	['a range on a string', { type: 'string', minimum: 0 }, ['minimum']],
+	['a length on a number', { type: 'number', maxLength: 1 }, ['maxLength']],
+	['items on a string', { type: 'string', items: { type: 'string' } }, ['items']],
+	['properties on a string', { type: 'string', properties: {} }, ['properties']],
+	['a bound with no type', { minimum: 0 }, ['minimum']],
+	[
+		'a required name not in properties',
+		{ ...typedObject({ a: { type: 'string' } }), required: ['b'] },
+		['required'],
+	],
+	['required with no properties', { type: 'object', required: ['a'] }, ['required']],
+	['a malformed required', { type: 'object', properties: {}, required: 'a' }, ['required']],
+	['a required entry that is not text', { ...typedObject({}), required: [1] }, ['required']],
+	[
+		'a duplicate required name',
+		{ ...typedObject({ a: { type: 'string' } }), required: ['a', 'a'] },
+		['required'],
+	],
+	['malformed properties', { type: 'object', properties: [] }, ['properties']],
+	['a property that is not a record', typedObject({ a: 1 }), ['properties', 'a']],
+	[
+		'a malformed additionalProperties',
+		{ type: 'object', additionalProperties: 'no' },
+		['additionalProperties'],
+	],
+	['an array with no items', { type: 'array' }, ['items']],
+	['items that are not a record', { type: 'array', items: true }, ['items']],
+	['an empty item schema', { type: 'array', items: {} }, ['items']],
+	['an empty property schema', typedObject({ a: {} }), ['properties', 'a']],
+	[
+		'a nested empty property schema',
+		typedObject({ a: typedObject({ b: {} }) }),
+		['properties', 'a', 'properties', 'b'],
+	],
+	['an empty tail schema', { type: 'object', additionalProperties: {} }, ['additionalProperties']],
+	['an empty variant', { anyOf: [{}] }, ['anyOf', '0']],
+	['a default on the root', { type: 'number', default: 3 }, ['default']],
+	[
+		'a default on items',
+		{ type: 'array', items: { type: 'number', default: 3 } },
+		['items', 'default'],
+	],
+	[
+		'a default on a required key',
+		{ ...typedObject({ a: { type: 'number', default: 3 } }), required: ['a'] },
+		['properties', 'a', 'default'],
+	],
+	[
+		'a default that is not JSON',
+		typedObject({ a: { type: 'number', default: Number.NaN } }),
+		['properties', 'a', 'default'],
+	],
+	[
+		'a default its leaf refuses',
+		typedObject({ a: { type: 'number', minimum: 0, default: -5 } }),
+		['properties', 'a', 'default'],
+	],
+])
+
+/** Lists each schema whose `default` the lenient conversion drops. */
+export const LENIENT_DEFAULT_DROPS: ReadonlyArray<
+	readonly [string, Readonly<Record<string, unknown>>]
+> = Object.freeze([
+	['a text default on a number', closedOf({ type: 'number', default: 'x' })],
+	['a default past a minimum', closedOf({ type: 'number', minimum: 0, default: -5 })],
+	['a default past a maximum', closedOf({ type: 'number', maximum: 0, default: 5 })],
+	['a fractional default on an integer', closedOf({ type: 'integer', default: 1.5 })],
+	['a short default on a string', closedOf({ type: 'string', minLength: 2, default: 'x' })],
+	['a long default on a string', closedOf({ type: 'string', maxLength: 1, default: 'xy' })],
+	['a number default on a boolean', closedOf({ type: 'boolean', default: 1 })],
+	['a default on null', closedOf({ type: 'null', default: 0 })],
+	['a default outside an enum', closedOf({ enum: ['a', 'b'], default: 'c' })],
+	['an array default', closedOf({ type: 'array', items: { type: 'number' }, default: [1] })],
+	['an object default', closedOf({ type: 'object', properties: {}, default: {} })],
+	['a default on a widened node', closedOf({ default: 3 })],
+	['a default on a union', closedOf({ type: ['number', 'null'], default: 3 })],
+	['a non-finite default', closedOf({ type: 'number', default: Number.NaN })],
+	['a required key', { ...closedOf({ type: 'number', default: 3 }), required: ['a'] }],
+	['an open object', typedObject({ a: { type: 'number', default: 3 } })],
+	[
+		'an explicitly open object',
+		{ ...typedObject({ a: { type: 'number', default: 3 } }), additionalProperties: true },
+	],
+	[
+		'an object with a tail',
+		{
+			...typedObject({ a: { type: 'number', default: 3 } }),
+			additionalProperties: { type: 'string' },
+		},
+	],
+])

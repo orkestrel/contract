@@ -13,6 +13,7 @@ import {
 	cloneJSONValue,
 	createContract,
 	integerShape,
+	isRecord,
 	jsonShape,
 	literalShape,
 	nullableShape,
@@ -36,6 +37,7 @@ import {
 	buildSharedDagShape,
 	buildStaircaseShape,
 	captureContractError,
+	listCompilerDoors,
 	ObservedShape,
 	ReentrantShape,
 } from '../../setup.js'
@@ -530,5 +532,278 @@ describe('ContractCompiler', () => {
 			compileGenerator(shape, seededRandom(11)),
 		)
 		expect(compiler.guard(compiler.generator(seededRandom(11)))).toBe(true)
+	})
+})
+
+describe('ContractCompiler — field defaults', () => {
+	const flat = objectShape({ a: optionalShape(numberShape(), { default: 3 }) })
+
+	it('fills an absent key and an undefined key alike', () => {
+		const contract = createContract(flat)
+
+		expect(contract.parse({})).toEqual({ a: 3 })
+		expect(contract.parse({ a: undefined })).toEqual({ a: 3 })
+		expect(contract.parse({ a: 4 })).toEqual({ a: 4 })
+		expect(contract.parse({ a: '5' })).toEqual({ a: 5 })
+	})
+
+	it('leaves the strict doors on canonical absence', () => {
+		const contract = createContract(flat)
+
+		expect(contract.schema.properties?.a?.default).toBe(3)
+		expect(contract.is({})).toBe(true)
+		expect(contract.audit({})).toEqual([])
+		expect(contract.explain({})).toEqual([])
+		// An own `undefined` keeps its standing: the strict doors refuse it, and the parser
+		// and its report treat it as absent, so the fill reaches it and nothing else moves.
+		expect(contract.is({ a: undefined })).toBe(false)
+		expect(contract.audit({ a: undefined }).length).toBeGreaterThan(0)
+		expect(contract.explain({ a: undefined })).toEqual([])
+	})
+
+	it('still refuses what a present value gets wrong', () => {
+		const contract = createContract(flat)
+
+		expect(contract.parse({ a: 'x' })).toBeUndefined()
+		expect(contract.parse({ a: null })).toBeUndefined()
+		expect(contract.is({ a: 'x' })).toBe(false)
+		expect(contract.explain({ a: 'x' }).length).toBeGreaterThan(0)
+	})
+
+	it('fills falsy defaults, null included', () => {
+		const cases: ReadonlyArray<readonly [ContractShape, unknown]> = [
+			[optionalShape(numberShape(), { default: 0 }), 0],
+			[optionalShape(stringShape(), { default: '' }), ''],
+			[optionalShape(booleanShape(), { default: false }), false],
+			[optionalShape(nullShape(), { default: null }), null],
+			[optionalShape(nullableShape(numberShape()), { default: null }), null],
+		]
+		const filled = cases.map(([shape]) => compileParser(objectShape({ a: shape }))({}))
+
+		expect(filled).toEqual(cases.map(([, value]) => ({ a: value })))
+	})
+
+	it('leaves a key absent when its optional carries no default', () => {
+		const parsed = compileParser(objectShape({ a: optionalShape(numberShape()) }))({})
+
+		expect(parsed).toEqual({})
+		expect(compileSchema(objectShape({ a: optionalShape(numberShape()) }))).toEqual({
+			type: 'object',
+			properties: { a: { type: 'number' } },
+			additionalProperties: false,
+		})
+	})
+
+	it('builds a distinct tree per parse for every inner category', () => {
+		const value = { k: [1] }
+		const cases: readonly ContractShape[] = [
+			optionalShape(objectShape({ k: arrayShape(numberShape()) }), { default: value }),
+			optionalShape(jsonShape(), { default: value }),
+			optionalShape(rawShape({}), { default: value }),
+			optionalShape(unionShape(objectShape({ k: arrayShape(numberShape()) }), nullShape()), {
+				default: value,
+			}),
+		]
+		const pairs = cases.map((shape) => {
+			const parse = compileParser(objectShape({ a: shape }))
+			return [parse({}), parse({})]
+		})
+
+		for (const [first, second] of pairs) {
+			expect(first).toEqual({ a: value })
+			expect(second).toEqual({ a: value })
+			if (!isRecord(first) || !isRecord(second)) throw new Error('expected two filled records')
+			expect(first.a).not.toBe(second.a)
+			if (!isRecord(first.a) || !isRecord(second.a)) throw new Error('expected two filled trees')
+			expect(first.a.k).not.toBe(second.a.k)
+		}
+	})
+
+	it('applies a nested default inside a filled default', () => {
+		const shape = objectShape({
+			a: optionalShape(objectShape({ b: optionalShape(numberShape(), { default: 1 }) }), {
+				default: {},
+			}),
+		})
+		const contract = createContract(shape)
+
+		expect(contract.parse({})).toEqual({ a: { b: 1 } })
+		expect(contract.parse({ a: {} })).toEqual({ a: { b: 1 } })
+		expect(contract.is(contract.parse({}))).toBe(true)
+	})
+
+	it('emits the default on the property schema alone', () => {
+		const schema = compileSchema(flat)
+
+		expect(schema.properties?.a?.default).toBe(3)
+		expect(schema.required).toBeUndefined()
+		expect(Object.isFrozen(schema.properties?.a)).toBe(true)
+		expect(
+			compileSchema(objectShape({ a: optionalShape(nullShape(), { default: null }) })).properties?.a
+				?.default,
+		).toBeNull()
+	})
+
+	it('compiles a JSON round trip of a defaulted shape equal to its source', () => {
+		const shape = objectShape({
+			a: optionalShape(numberShape({ min: 0 }), { default: 3 }),
+			b: optionalShape(objectShape({ c: optionalShape(stringShape(), { default: 'x' }) }), {
+				default: {},
+			}),
+			d: optionalShape(nullableShape(stringShape()), { default: null }),
+		})
+		const restored: ContractShape = JSON.parse(JSON.stringify(shape))
+		const original = createContract(shape)
+		const reloaded = compileParser(restored)
+
+		expect(compileSchema(restored)).toEqual(original.schema)
+		expect(JSON.stringify(compileSchema(restored))).toBe(JSON.stringify(original.schema))
+		expect(reloaded({})).toEqual(original.parse({}))
+		expect(reloaded({})).toEqual({ a: 3, b: { c: 'x' }, d: null })
+	})
+
+	it('refuses a default its inner shape refuses, at every door', () => {
+		const shape: ContractShape = {
+			category: 'object',
+			properties: {
+				a: { category: 'optional', inner: { category: 'number', min: 0 }, default: -5 },
+			},
+		}
+		const doors = listCompilerDoors(shape)
+		const refusals = doors.map(([label, door]) => {
+			const error = captureContractError(door)
+			return [label, error.code, error.context?.path]
+		})
+
+		expect(refusals).toEqual(
+			doors.map(([label]) => [label, 'structure', ['properties', 'a', 'default']]),
+		)
+	})
+
+	it('checks a default against every refinement of its inner shape', () => {
+		const refused: readonly ContractShape[] = [
+			{ category: 'optional', inner: { category: 'number', max: 1 }, default: 2 },
+			{ category: 'optional', inner: { category: 'number', integer: true }, default: 1.5 },
+			{ category: 'optional', inner: { category: 'string', min: 2 }, default: 'x' },
+			{ category: 'optional', inner: { category: 'string', max: 1 }, default: 'xy' },
+			{ category: 'optional', inner: { category: 'literal', values: ['a'] }, default: 'b' },
+			{ category: 'optional', inner: { category: 'boolean' }, default: 1 },
+			{ category: 'optional', inner: { category: 'null' }, default: 0 },
+			{
+				category: 'optional',
+				inner: { category: 'array', items: { category: 'number' }, max: 1 },
+				default: [1, 2],
+			},
+			{ category: 'optional', inner: { category: 'object', properties: {} }, default: { z: 1 } },
+			{
+				category: 'optional',
+				inner: { category: 'object', properties: { b: { category: 'number' } } },
+				default: {},
+			},
+			{ category: 'optional', inner: stringShape({ pattern: /^a$/ }), default: 'b' },
+			{ category: 'optional', inner: numberShape(), default: '3' },
+		]
+		const codes = refused.map(
+			(child) => captureContractError(() => createContract(objectShape({ a: child }))).code,
+		)
+
+		expect(codes).toEqual(refused.map(() => 'structure'))
+	})
+
+	it('names the deepest default that fails, below an array and a nested object', () => {
+		const shape: ContractShape = {
+			category: 'array',
+			items: {
+				category: 'object',
+				properties: {
+					a: {
+						category: 'optional',
+						inner: {
+							category: 'object',
+							properties: {
+								b: { category: 'optional', inner: { category: 'number', min: 0 }, default: -1 },
+							},
+						},
+					},
+				},
+			},
+		}
+
+		expect(captureContractError(() => compileSchema(shape)).context?.path).toEqual([
+			'items',
+			'properties',
+			'a',
+			'inner',
+			'properties',
+			'b',
+			'default',
+		])
+	})
+
+	it('keeps the failed compiler terminal on the one refusal', () => {
+		const compiler = new ContractCompiler<ContractShape>({
+			category: 'object',
+			properties: {
+				a: { category: 'optional', inner: { category: 'number', min: 0 }, default: -5 },
+			},
+		})
+		const first = captureContractError(() => compiler.schema)
+
+		expect(captureContractError(() => compiler.guard)).toBe(first)
+		expect(captureContractError(() => compiler.contract)).toBe(first)
+	})
+
+	it('generates only values its guard accepts and never fills a default', () => {
+		const shape = objectShape({
+			a: optionalShape(integerShape({ min: 1000, max: 2000 }), { default: 1500 }),
+		})
+		const contract = createContract(shape)
+		const drawn = Array.from({ length: 64 }, (_entry, seed) =>
+			contract.generate(seededRandom(seed)),
+		)
+		const present = drawn.filter((value) => Object.hasOwn(value, 'a'))
+
+		expect(drawn.filter((value) => !contract.is(value))).toEqual([])
+		// The generator keeps its own choice: it omits the key or draws from `inner`. An omitted
+		// key stays omitted, and a drawn value is not the default repeated.
+		expect(contract.parse({})).toEqual({ a: 1500 })
+		expect(present.length).toBeLessThan(drawn.length)
+		expect(present.length).toBeGreaterThan(0)
+		expect(present.filter((value) => value.a !== 1500).length).toBeGreaterThan(0)
+	})
+
+	it('reports nothing about a default the parser fills beside a key it refuses', () => {
+		const shape = objectShape({
+			a: optionalShape(numberShape(), { default: 3 }),
+			b: stringShape(),
+		})
+		const contract = createContract(shape)
+
+		expect(contract.parse({})).toBeUndefined()
+		expect(contract.explain({}).map((fault) => fault.path)).toEqual([['b']])
+		expect(contract.audit({}).map((fault) => fault.path)).toEqual([['b']])
+		expect(contract.parse({ b: 'x' })).toEqual({ a: 3, b: 'x' })
+	})
+
+	it('drops an undeclared key while it fills, as a closed parser does', () => {
+		expect(compileParser(flat)({ z: 1 })).toEqual({ a: 3 })
+		expect(compileGuard(flat)({ z: 1 })).toBe(false)
+	})
+
+	it('fills past the presence mask width as it does within it', () => {
+		const entries = Array.from({ length: 40 }, (_entry, index) => [
+			`k${String(index)}`,
+			optionalShape(numberShape(), { default: index }),
+		])
+		const parsed = compileParser(objectShape(Object.fromEntries(entries)))({ k3: 99 })
+
+		expect(parsed).toEqual(
+			Object.fromEntries(
+				Array.from({ length: 40 }, (_entry, index) => [
+					`k${String(index)}`,
+					index === 3 ? 99 : index,
+				]),
+			),
+		)
 	})
 })
