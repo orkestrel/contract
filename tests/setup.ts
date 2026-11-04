@@ -87,6 +87,7 @@ import {
 	andOf,
 	arrayOf,
 	ContractCompiler,
+	COMPILE_DEPTH_LIMIT,
 	arrayShape,
 	attempt,
 	booleanShape,
@@ -3952,8 +3953,16 @@ export function buildAliasDefault(
 export function buildCaptureDoors(
 	shape: ContractShape,
 	compiled: ContractShape = shape,
+	schema: JSONSchema = {},
+	value: JSONValue = null,
 ): ReadonlyArray<readonly [string, () => unknown]> {
 	return [
+		['rawShape', () => rawShape(schema)],
+		['jsonShape with default', () => optionalShape(jsonShape(), { default: value })],
+		['schemaToShape lenient', () => schemaToShape(schema)],
+		['schemaToShape strict', () => schemaToShape(schema, { strict: true })],
+		['cloneSchema', () => cloneSchema(schema)],
+		['SchemaCloner.clone', () => new SchemaCloner(schema).clone()],
 		['arrayShape', () => arrayShape(shape)],
 		['objectShape', () => objectShape({ value: shape })],
 		['recordShape', () => recordShape(shape)],
@@ -3982,6 +3991,72 @@ export function buildCaptureDoors(
 		['ContractCompiler.contract', () => new ContractCompiler(compiled).contract],
 		['is', () => createContract(shapeShape()).is(compiled)],
 	]
+}
+
+/** Lists schema and default doors exercised separately from the expensive shape expansion cases. */
+export const SCHEMA_CAPTURE_DOORS = [
+	'rawShape',
+	'jsonShape with default',
+	'schemaToShape lenient',
+	'schemaToShape strict',
+	'cloneSchema',
+	'SchemaCloner.clone',
+] as const
+
+/** Lists the shared-container case and the first depth refused by schema cloning. */
+export const SCHEMA_CAPTURE_DEPTHS = [0, COMPILE_DEPTH_LIMIT + 1] as const
+
+/** Builds small shared containers or a chain beyond the schema cloning depth limit. */
+export function buildSchemaCaptureFixture(depth = 0): {
+	readonly schema: JSONSchema
+	readonly value: JSONValue
+	readonly reads: ObservationCounter
+} {
+	const reads = new ObservationCounter()
+	const properties: Readonly<Record<string, JSONSchema>> = new Proxy(
+		Object.fromEntries(
+			Array.from({ length: 16 }, (_, index) => [String(index), { type: 'string' }]),
+		),
+		{
+			get: (target, key, receiver) => {
+				reads.increment()
+				return Reflect.get(target, key, receiver)
+			},
+		},
+	)
+	const shared: JSONSchema = { type: 'object', properties }
+	const schema =
+		depth === 0
+			? {
+					type: 'object' as const,
+					properties: Object.fromEntries(
+						Array.from({ length: 16 }, (_, index) => [String(index), shared]),
+					),
+				}
+			: Array.from({ length: depth }).reduce<JSONSchema>(
+					(items) =>
+						new Proxy(
+							{ type: 'array', items },
+							{
+								get: (target, key, receiver) => {
+									reads.increment()
+									return Reflect.get(target, key, receiver)
+								},
+							},
+						),
+					{ type: 'string' },
+				)
+	const leaf: JSONValue = new Proxy(
+		Object.fromEntries(Array.from({ length: 16 }, (_, index) => [String(index), 1])),
+		{
+			get: (target, key, receiver) => {
+				reads.increment()
+				return Reflect.get(target, key, receiver)
+			},
+		},
+	)
+	const value = Object.fromEntries(Array.from({ length: 16 }, (_, index) => [String(index), leaf]))
+	return { schema, value, reads }
 }
 
 /** Shares a container between owners while counting its entry reads. */

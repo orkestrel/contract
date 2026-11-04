@@ -11,6 +11,7 @@ import {
 	COMPILE_DEPTH_LIMIT,
 	compileSchema,
 	optionalShape,
+	jsonShape,
 	objectShape,
 	stringShape,
 	ContractError,
@@ -29,6 +30,9 @@ import {
 	buildNonJSONValues,
 	buildCaptureDoors,
 	buildCaptureFixture,
+	buildSchemaCaptureFixture,
+	SCHEMA_CAPTURE_DOORS,
+	SCHEMA_CAPTURE_DEPTHS,
 	buildPollutedEdges,
 	buildAliasDefault,
 	polluteArrayConstruction,
@@ -117,8 +121,9 @@ describe('raw schema refusal paths', () => {
 			const doors = buildCaptureDoors(shape, fixture === 'properties' ? expanded : shape)
 			for (const [door, open] of doors.filter(
 				([name]) =>
-					fixture === 'properties' ||
-					['arrayShape', 'ShapeValidator.validate', 'ShapeCloner.clone'].includes(name),
+					!SCHEMA_CAPTURE_DOORS.some((entry) => entry === name) &&
+					(fixture === 'properties' ||
+						['arrayShape', 'ShapeValidator.validate', 'ShapeCloner.clone'].includes(name)),
 			)) {
 				reads.clear()
 				compact.reads.clear()
@@ -140,6 +145,30 @@ describe('raw schema refusal paths', () => {
 			}
 		}
 	}, 45000)
+	it('bounds the schema and JSON default declaration doors', () => {
+		for (const depth of SCHEMA_CAPTURE_DEPTHS) {
+			const fixture = buildSchemaCaptureFixture(depth)
+			const shape = jsonShape()
+			for (const [door, open] of buildCaptureDoors(
+				shape,
+				shape,
+				fixture.schema,
+				fixture.value,
+			).filter(([name]) => SCHEMA_CAPTURE_DOORS.some((entry) => entry === name))) {
+				fixture.reads.clear()
+				const result = attempt(open)
+				expect(
+					result.success || isContractError(result.error),
+					`${depth}/${door} coded result`,
+				).toBe(true)
+				expect(result.success, `${depth}/${door} acceptance`).toBe(
+					depth === 0 || door === 'jsonShape with default' || door === 'schemaToShape lenient',
+				)
+				expect(fixture.reads.value, `${depth}/${door} reached fixture`).toBeGreaterThan(0)
+				expect(fixture.reads.value, `${depth}/${door} bounded work`).toBeLessThanOrEqual(8192)
+			}
+		}
+	})
 	it('keeps declaration corpus answers and paths under vocabulary pollution', () => {
 		const leaf = {
 			category: 'number',
