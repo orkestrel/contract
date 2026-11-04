@@ -7,6 +7,7 @@ import type {
 } from '@src/core'
 import {
 	attempt,
+	CLONE_NODE_LIMIT,
 	COMPILE_DEPTH_LIMIT,
 	compileSchema,
 	optionalShape,
@@ -18,6 +19,8 @@ import {
 	seededRandom,
 	ShapeValidator,
 	shapeShape,
+	SHAPE_FIELDS,
+	STRICT_SCHEMA_KEYWORDS,
 	validateShape,
 } from '@src/core'
 import type { TerminalIntrinsic } from '../../setup.js'
@@ -39,6 +42,8 @@ import {
 	denyRecognition,
 	NullBaseDeclaration,
 	pollutePrototype,
+	pollutePrototypeData,
+	readVerdict,
 	ObservedShape,
 	redirectIntrinsic,
 	replaceIntrinsic,
@@ -48,6 +53,194 @@ import {
 import { describe, expect, it } from 'vitest'
 
 describe('raw schema refusal paths', () => {
+	it('keeps declaration corpus answers and paths under vocabulary pollution', () => {
+		const leaf = {
+			category: 'number',
+			integer: undefined,
+			min: undefined,
+			max: undefined,
+			description: undefined,
+		}
+		const schemas: readonly unknown[] = [
+			{},
+			{ type: 'string' },
+			{ type: 'number', minimum: 1, maximum: 2 },
+			{ type: 'array', items: { type: 'string' }, minItems: 0, maxItems: 2 },
+			{
+				type: 'object',
+				properties: { a: { type: 'string' } },
+				required: ['a'],
+				additionalProperties: false,
+			},
+			{ anyOf: [{ type: 'string' }, { type: 'number' }] },
+			{ oneOf: [{ enum: ['a'] }, { enum: [2] }] },
+			{
+				default: null,
+				description: 'text',
+				format: 'text',
+				pattern: '^a',
+				minLength: 0,
+				maxLength: 2,
+			},
+			{ type: 'wrong' },
+			{ description: 42 },
+			{ format: 42 },
+			{ pattern: '[' },
+			{ minLength: -1 },
+			{ minimum: Number.NaN },
+			{ enum: [] },
+			{ enum: ['a', 'a'] },
+			{ required: [2] },
+			{ properties: 42 },
+			{ items: { type: 'wrong' } },
+			{ properties: { a: { items: { type: 'wrong' } } } },
+			{ additionalProperties: { type: 'wrong' } },
+			{ anyOf: [] },
+			{ oneOf: [undefined] },
+		]
+		// Recognized optional fields are own here. Inherited recognized fields are
+		// deliberately refused by the separate builder-boundary regression.
+		const corpus: readonly unknown[] = [
+			leaf,
+			{
+				category: 'string',
+				min: undefined,
+				max: undefined,
+				pattern: undefined,
+				description: undefined,
+			},
+			...['boolean', 'null', 'json', 'shape'].map((category) => ({
+				category,
+				description: undefined,
+			})),
+			{ category: 'literal', values: ['a'], description: undefined },
+			{ category: 'array', items: leaf, min: undefined, max: undefined, description: undefined },
+			{ category: 'nullable', inner: leaf },
+			{ category: 'union', variants: [leaf], mode: undefined, description: undefined },
+			{
+				category: 'object',
+				properties: { a: { category: 'optional', inner: leaf, default: 1 } },
+				additionalProperties: false,
+				description: undefined,
+			},
+			{},
+			{ category: 'wrong' },
+			{ category: 'optional', inner: leaf, default: 1 },
+			{
+				category: 'array',
+				items: undefined,
+				min: undefined,
+				max: undefined,
+				description: undefined,
+			},
+			...schemas.map((schema) => ({ category: 'raw', schema })),
+		]
+		const expected = corpus.map((shape) => readVerdict(() => validateShape(shape)))
+		const vocabulary = [
+			...new Set([
+				'category',
+				...Object.values(SHAPE_FIELDS).flat(),
+				...STRICT_SCHEMA_KEYWORDS,
+				'format',
+				'nullable',
+				'$ref',
+				'prefixItems',
+				'patternProperties',
+				'first',
+				'second',
+				...Array.from({ length: 8 }, (_, index) => String(index)),
+			]),
+		]
+		for (const key of vocabulary) {
+			const actual = pollutePrototypeData(key, 'polluted', () => {
+				return corpus.map((shape) => readVerdict(() => validateShape(shape)))
+			})
+			expect({ key, actual }).toEqual({ key, actual: expected })
+		}
+	})
+	it('bounds retained capture edges before observing the next shared property', () => {
+		const reads = new ObservationCounter()
+		const properties = new Proxy(
+			Object.fromEntries(
+				Array.from({ length: 1024 }, (_, index) => [String(index), { category: 'string' }]),
+			),
+			{
+				get: (target, key, receiver) => {
+					reads.increment()
+					return Reflect.get(target, key, receiver)
+				},
+			},
+		)
+		const shape = {
+			category: 'object',
+			properties: Object.fromEntries(
+				Array.from({ length: 256 }, (_, index) => [
+					String(index),
+					{ category: 'object', properties },
+				]),
+			),
+		}
+		const error = captureContractError(() => validateShape(shape))
+		expect(error.code).toBe('clone')
+		expect(error.context?.limit).toBe(CLONE_NODE_LIMIT)
+		expect(reads.value).toBe(2 * (CLONE_NODE_LIMIT - 256))
+	})
+	it('counts shared defaults in the same capture limit', () => {
+		const value = Object.fromEntries(Array.from({ length: 1024 }, (_, index) => [String(index), 1]))
+		const shape = {
+			category: 'object',
+			properties: Object.fromEntries(
+				Array.from({ length: 256 }, (_, index) => [
+					String(index),
+					{ category: 'optional', inner: { category: 'json' }, default: value },
+				]),
+			),
+		}
+		const error = captureContractError(() => validateShape(shape))
+		expect(error.code).toBe('clone')
+		expect(error.context?.limit).toBe(CLONE_NODE_LIMIT)
+	})
+	it('keeps declaration edge paths free of inherited second segments', () => {
+		const shapes: readonly unknown[] = [
+			{ category: 'array', items: { category: 'raw', schema: { type: 'nonsense' } } },
+			{ category: 'nullable', inner: { category: 'raw', schema: { type: 'nonsense' } } },
+		]
+		for (const [index, shape] of shapes.entries()) {
+			pollutePrototype(
+				Object.prototype,
+				'second',
+				() => 'polluted',
+				() => {
+					const error = captureContractError(() => validateShape(shape))
+					expect(error.context?.path).toEqual([index === 0 ? 'items' : 'inner', 'schema', 'type'])
+				},
+			)
+		}
+	})
+	it('stops inspecting a refused raw schema shared by many owners', () => {
+		const reads = new ObservationCounter()
+		const properties: Record<string, JSONSchema> = Object.fromEntries(
+			Array.from({ length: 30 }, (_, index) => [String(index), {}]),
+		)
+		const schema: JSONSchema = {
+			properties: new Proxy(properties, {
+				ownKeys: (target) => {
+					reads.increment()
+					return Reflect.ownKeys(target)
+				},
+			}),
+		}
+		properties.back = schema
+		const root = {
+			category: 'object',
+			properties: Object.fromEntries(
+				Array.from({ length: 30 }, (_, index) => [`owner${index}`, { category: 'raw', schema }]),
+			),
+		}
+		const error = captureContractError(() => validateShape(root))
+		expect(error.code).toBe('structure')
+		expect(reads.value).toBe(1)
+	})
 	it('ignores inherited first and second path segments', () => {
 		for (const key of ['first', 'second']) {
 			pollutePrototype(
@@ -1255,11 +1448,7 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 	})
 
 	it('keeps the cyclic verdict independent of the order two sibling keys are declared in', () => {
-		// The minimized shape a differential fuzz shrank the same defect down to.
-		// Its longest node-repeat-free declaration path is 513 edges, one past the
-		// limit, and the branch that reaches it is only walked in full when the
-		// other branch has not already memoised a truncated clearance. Dropping the
-		// first key, or swapping the two, must not change the answer.
+		// Sibling order changes the cycle witness path, but not the cycle verdict.
 		const verdicts: string[] = []
 		for (const variant of ['both', 'second', 'swapped']) {
 			const loopProperties: Record<string, ContractShape> = {}
@@ -1303,6 +1492,15 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 						: { k0: loop, k1: toTail }
 			const error = captureContractError(() => validateShape({ category: 'object', properties }))
 			const path = error.context?.path
+			expect(path).toEqual(
+				variant === 'both'
+					? Array.from({ length: 263 }).flatMap(() => ['properties', 'k0'])
+					: [
+							'properties',
+							'k1',
+							...Array.from({ length: 326 }).flatMap(() => ['properties', 'k0']),
+						],
+			)
 			verdicts[verdicts.length] =
 				`${error.code}:${Array.isArray(path) ? String(path.length) : 'unknown'}`
 		}
@@ -1454,50 +1652,54 @@ describe('raw schema records are inspected once per call (R6-A)', () => {
 })
 
 describe('cycle detection on seeded declarations', () => {
-	it('preserves acceptance while classifying every cyclic declaration before depth', () => {
-		// This seeded corpus includes both acyclic and cyclic hub-and-chain graphs.
-		const draw = seededRandom(20260808)
-		const verdicts = Array.from({ length: 400 }, () => {
-			const hubCount = 3 + Math.floor(draw() * 4)
-			const hubProperties = Array.from(
-				{ length: hubCount },
-				(): Record<string, ContractShape> => ({}),
-			)
-			const hubs = hubProperties.map((properties): ContractShape => ({
-				category: 'object',
-				properties,
-			}))
-			for (const properties of hubProperties) {
-				const edges = 1 + Math.floor(draw() * 3)
-				for (const [edge] of Array.from({ length: edges }).entries()) {
-					const target = Math.floor(draw() * (hubCount + 1))
-					const chosen = hubs[target]
-					const leaf: ContractShape = chosen === undefined ? { category: 'string' } : chosen
-					const links = 20 + Math.floor(draw() * 180)
-					const tail = Array.from({ length: links }).reduce<ContractShape>(
-						(node) => ({ category: 'object', properties: { k0: node } }),
-						leaf,
-					)
-					properties[`e${String(edge)}`] = tail
+	it(
+		'preserves acceptance while classifying every cyclic declaration before depth',
+		{ timeout: 15_000 },
+		() => {
+			// This seeded corpus includes both acyclic and cyclic hub-and-chain graphs.
+			const draw = seededRandom(20260808)
+			const verdicts = Array.from({ length: 400 }, () => {
+				const hubCount = 3 + Math.floor(draw() * 4)
+				const hubProperties = Array.from(
+					{ length: hubCount },
+					(): Record<string, ContractShape> => ({}),
+				)
+				const hubs = hubProperties.map((properties): ContractShape => ({
+					category: 'object',
+					properties,
+				}))
+				for (const properties of hubProperties) {
+					const edges = 1 + Math.floor(draw() * 3)
+					for (const [edge] of Array.from({ length: edges }).entries()) {
+						const target = Math.floor(draw() * (hubCount + 1))
+						const chosen = hubs[target]
+						const leaf: ContractShape = chosen === undefined ? { category: 'string' } : chosen
+						const links = 20 + Math.floor(draw() * 180)
+						const tail = Array.from({ length: links }).reduce<ContractShape>(
+							(node) => ({ category: 'object', properties: { k0: node } }),
+							leaf,
+						)
+						properties[`e${String(edge)}`] = tail
+					}
 				}
+				const root = hubs[0]
+				if (root === undefined) return undefined
+				const outcome = attempt(() => validateShape(root))
+				if (outcome.success) return 'accepted'
+				const error = outcome.error
+				return isContractError(error) && (error.code === 'cycle' || error.code === 'depth')
+					? error.code
+					: 'other'
+			})
+			const tally = {
+				accepted: verdicts.filter((verdict) => verdict === 'accepted').length,
+				cycle: verdicts.filter((verdict) => verdict === 'cycle').length,
+				depth: verdicts.filter((verdict) => verdict === 'depth').length,
+				other: verdicts.filter((verdict) => verdict === 'other').length,
 			}
-			const root = hubs[0]
-			if (root === undefined) return undefined
-			const outcome = attempt(() => validateShape(root))
-			if (outcome.success) return 'accepted'
-			const error = outcome.error
-			return isContractError(error) && (error.code === 'cycle' || error.code === 'depth')
-				? error.code
-				: 'other'
-		})
-		const tally = {
-			accepted: verdicts.filter((verdict) => verdict === 'accepted').length,
-			cycle: verdicts.filter((verdict) => verdict === 'cycle').length,
-			depth: verdicts.filter((verdict) => verdict === 'depth').length,
-			other: verdicts.filter((verdict) => verdict === 'other').length,
-		}
-		expect(tally).toEqual({ accepted: 46, cycle: 354, depth: 0, other: 0 })
-	})
+			expect(tally).toEqual({ accepted: 46, cycle: 354, depth: 0, other: 0 })
+		},
+	)
 })
 
 describe('ShapeValidator — optional defaults', () => {

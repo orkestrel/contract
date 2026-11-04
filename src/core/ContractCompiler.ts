@@ -435,9 +435,9 @@ export class ContractCompiler<
 		// owns that rule authors its diagnosis, so the refusal reads identically
 		// however the caller arrived.
 		const owned = ownShape(source)
-		const validator = new ShapeValidator(owned)
-		validator.validate()
-		refuseExpansion(validator.expansion)
+		// Ownership has already bounded capture. This existing validation checks
+		// that bounded graph without opening a second capture budget for this call.
+		refuseExpansion(new ShapePass(owned).validate())
 		this.#discover(owned)
 		this.#source = undefined
 	}
@@ -800,7 +800,7 @@ export class ContractCompiler<
 					type: 'object',
 					description:
 						owned.description ??
-						'Over-approximates the declaration language as JSON carries it; is decides whether the complete shape is valid.',
+						'Over-approximates declarations whose JSON projection preserves their own enumerable data; values without that projection are outside this schema. is decides whether the complete shape is valid.',
 					properties: INTRINSICS.freeze({
 						category: INTRINSICS.freeze({ enum: INTRINSICS.freeze(INTRINSICS.keys(SHAPE_FIELDS)) }),
 					}),
@@ -1493,9 +1493,7 @@ export class ContractCompiler<
 							(variant: { readonly guard: Guard<unknown> }) => variant.guard(value),
 						])
 						const only = matching[0]
-						return matching.length === 1 && only !== undefined
-							? ContractCompiler.#parseArm(only, value)
-							: undefined
+						return matching.length === 1 && only !== undefined ? value : undefined
 					}
 				}
 				return (value) => {

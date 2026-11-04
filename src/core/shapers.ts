@@ -565,7 +565,7 @@ export function unionShape<V extends readonly ContractShape[]>(
  *   {@link unionShape}'s guard.
  * - **Parser**: judged on the RAW input's guard matches only, with NO
  *   coercion fallback for an ambiguous input. When exactly one variant's
- *   guard accepts the raw value, that variant's parser runs. Zero matches or
+ *   guard accepts the raw value, the input itself is returned. Zero matches or
  *   two-or-more matches both parse to `undefined` — a value ambiguous
  *   between variants has no well-defined coercion target. A value that names one
  *   arm through a required literal is not ambiguous, so as in {@link unionShape}

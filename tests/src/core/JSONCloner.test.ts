@@ -586,8 +586,8 @@ describe('JSONCloner — bounded produced work (H9)', () => {
 		const elapsed = performance.now() - started
 
 		expect(error.code).toBe('clone')
-		expect(error.message).toBe('cloneJSONValue: snapshot exceeds the node limit')
-		expect(error.context).toEqual({ shape: 'json' })
+		expect(error.message).toBe('cloneJSONValue: snapshot exceeds the node limit 262144')
+		expect(error.context).toEqual({ shape: 'json', limit: 262_144 })
 		// Bounded WORK: the worst case is a function of the constant, not of the
 		// caller's graph. Unbounded, this input is 2^30 produced nodes.
 		expect(elapsed).toBeLessThan(2_000)

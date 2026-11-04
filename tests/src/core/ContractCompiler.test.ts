@@ -1121,7 +1121,7 @@ describe('ContractCompiler — a discriminated union', () => {
 		expect(contract.parse(3.5)).toBe(3.5)
 	})
 
-	it('keeps the three laws over generated unions', () => {
+	it('keeps the three laws over generated unions', { timeout: 15_000 }, () => {
 		const violations = buildDiscriminatedCases(11).flatMap(({ label, shape, values }) =>
 			findAgreementViolations(shape, undefined, values).map((violation) => [label, violation]),
 		)

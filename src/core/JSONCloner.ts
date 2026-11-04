@@ -83,10 +83,6 @@ export class JSONCloner implements JSONClonerInterface {
 		entries: ReadonlyArray<readonly [key: string, value: unknown]> | undefined
 		index: number
 	}>
-	// Every node this walk PRODUCES, not every node the source holds: the two
-	// differ by exactly the alias duplication the tree contract requires, and it
-	// is the produced count that grows exponentially.
-	#produced: number
 	#poison: ContractError | undefined
 	#terminal: Result<JSONValue, ContractError> | undefined
 
@@ -95,7 +91,6 @@ export class JSONCloner implements JSONClonerInterface {
 		this.#owned = new JSONCloner.#weakSet()
 		this.#active = new JSONCloner.#weakSet()
 		this.#pending = []
-		this.#produced = 0
 		this.#poison = undefined
 		this.#terminal = undefined
 	}
@@ -103,10 +98,11 @@ export class JSONCloner implements JSONClonerInterface {
 	/**
 	 * Clones the retained source into exact, deeply frozen JSON data.
 	 *
+	 * @param budget - Remaining nodes shared with an enclosing ownership operation
 	 * @returns The settled JSON snapshot
 	 * @throws {ContractError} When the source is inexact, cyclic, unreadable, or cloning is reentered
 	 */
-	clone(): JSONValue {
+	clone(budget: { left: number } = { left: CLONE_NODE_LIMIT }): JSONValue {
 		const terminal = this.#terminal
 		if (terminal !== undefined) {
 			if (isSuccess(terminal)) return terminal.value
@@ -120,7 +116,7 @@ export class JSONCloner implements JSONClonerInterface {
 		}
 
 		this.#poison = this.#create('JSONCloner.clone: JSON cloning may not be reentered')
-		const outcome = attempt(() => this.#execute())
+		const outcome = attempt(() => this.#execute(budget))
 		const interruption = this.#terminal
 		if (interruption !== undefined) {
 			if (isSuccess(interruption)) return interruption.value
@@ -147,13 +143,15 @@ export class JSONCloner implements JSONClonerInterface {
 		throw error
 	}
 
-	#execute(): JSONValue {
-		const root = this.#capture(this.#source)
-		this.#drain()
+	#execute(budget: { left: number }): JSONValue {
+		if (!INTRINSICS.safe(budget.left)) this.#refuse('cloneJSONValue: invalid node budget')
+		budget.left = INTRINSICS.min(budget.left, CLONE_NODE_LIMIT)
+		const root = this.#capture(this.#source, budget)
+		this.#drain(budget)
 		return root
 	}
 
-	#drain(): void {
+	#drain(budget: { left: number }): void {
 		while (this.#pending.length > 0) {
 			const frame = this.#pending[this.#pending.length - 1]
 			if (frame === undefined) continue
@@ -173,7 +171,7 @@ export class JSONCloner implements JSONClonerInterface {
 			}
 			frame.index += 1
 
-			const clone = this.#capture(entry[1])
+			const clone = this.#capture(entry[1], budget)
 			INTRINSICS.define(frame.clone, entry[0], {
 				value: clone,
 				enumerable: true,
@@ -183,13 +181,16 @@ export class JSONCloner implements JSONClonerInterface {
 		}
 	}
 
-	#capture(value: unknown): JSONValue {
+	#capture(value: unknown, budget: { left: number }): JSONValue {
 		// Counted before the value is classified, so a leaf costs a tick too: the
 		// blowup is in how many nodes the OUTPUT holds, and every produced node is
 		// one unit of work and one unit of retained memory.
-		this.#produced += 1
-		if (this.#produced > CLONE_NODE_LIMIT) {
-			this.#refuse('cloneJSONValue: snapshot exceeds the node limit')
+		budget.left -= 1
+		if (budget.left < 0) {
+			this.#refuse(
+				`cloneJSONValue: snapshot exceeds the node limit ${CLONE_NODE_LIMIT}`,
+				CLONE_NODE_LIMIT,
+			)
 		}
 		if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
 		if (typeof value === 'number') {
@@ -313,10 +314,10 @@ export class JSONCloner implements JSONClonerInterface {
 		)
 	}
 
-	#create(message: string): ContractError {
+	#create(message: string, limit?: number): ContractError {
 		const error = new ContractError(message, {
 			code: 'clone',
-			context: { shape: 'json' },
+			context: { shape: 'json', ...(limit === undefined ? {} : { limit }) },
 		})
 		admitVisited(this.#owned, error)
 		return error
@@ -326,10 +327,10 @@ export class JSONCloner implements JSONClonerInterface {
 		return isObject(error) && matchesVisited(this.#owned, error)
 	}
 
-	#refuse(message: string): never {
+	#refuse(message: string, limit?: number): never {
 		const terminal = this.#terminal
 		if (terminal !== undefined && isFailure(terminal)) throw terminal.error
-		throw this.#create(message)
+		throw this.#create(message, limit)
 	}
 
 	static {

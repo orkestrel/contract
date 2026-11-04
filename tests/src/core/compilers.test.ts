@@ -5,6 +5,10 @@ import {
 	arrayShape,
 	attempt,
 	booleanShape,
+	buildStringFaults,
+	buildNumberFaults,
+	buildArrayFaults,
+	shapeToKind,
 	cloneShape,
 	cloneSchema,
 	COMPILE_DEPTH_LIMIT,
@@ -39,6 +43,7 @@ import {
 	recordShape,
 	seededRandom,
 	schemaToShape,
+	schemaToObject,
 	shapeShape,
 	SHAPE_FIELDS,
 	ShapeValidator,
@@ -57,6 +62,8 @@ import {
 	acceptRecognition,
 	injectMarker,
 	ObservationCounter,
+	pollutePrototypeData,
+	pollutePrototype,
 	throwSentinel,
 	buildDeepShape,
 	buildHandNest,
@@ -100,6 +107,142 @@ import * as core from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 
 describe('shape-valued contracts', () => {
+	it('ignores inherited schema keywords at conversion boundaries', () => {
+		const rows: ReadonlyArray<{
+			readonly key: string
+			readonly value: unknown
+			readonly schema: JSONSchema
+		}> = [
+			{ key: 'type', value: 'object', schema: {} },
+			{ key: 'enum', value: ['x'], schema: {} },
+			{ key: 'oneOf', value: [{ type: 'string' }], schema: {} },
+			{ key: 'anyOf', value: [{ type: 'string' }], schema: {} },
+			{ key: 'nullable', value: true, schema: { type: 'string' } },
+			{ key: 'minimum', value: 7, schema: { type: 'number' } },
+			{ key: 'maximum', value: 7, schema: { type: 'number' } },
+			{ key: 'minLength', value: 7, schema: { type: 'string' } },
+			{ key: 'maxLength', value: 7, schema: { type: 'string' } },
+			{ key: 'minItems', value: 7, schema: { type: 'array', items: {} } },
+			{ key: 'maxItems', value: 7, schema: { type: 'array', items: {} } },
+			{
+				key: 'required',
+				value: ['a'],
+				schema: {
+					type: 'object',
+					properties: { a: { type: 'string' } },
+					additionalProperties: false,
+				},
+			},
+			{ key: 'title', value: 42, schema: { type: 'string' } },
+			{ key: 'deprecated', value: 'bad', schema: { type: 'string' } },
+			{ key: 'examples', value: 42, schema: { type: 'string' } },
+		]
+		for (const row of rows) {
+			for (const strict of [false, true]) {
+				const expected = attempt(() => schemaToShape(row.schema, { strict }))
+				const actual = pollutePrototypeData(row.key, row.value, () =>
+					attempt(() => schemaToShape(row.schema, { strict })),
+				)
+				expect({ key: row.key, strict, actual }).toEqual({ key: row.key, strict, actual: expected })
+			}
+		}
+		const schema = {}
+		const expected = schemaToObject(schema)
+		expect(pollutePrototypeData('type', 'object', () => schemaToObject(schema))).toEqual(expected)
+		expect(
+			pollutePrototype(Object.prototype, 'type', throwSentinel('inherited type'), () =>
+				schemaToShape(schema),
+			),
+		).toEqual(schemaToShape(schema))
+	})
+	it('reads only own bounds in declaration fault helpers', () => {
+		for (const key of ['min', 'max', 'integer', 'pattern']) {
+			const actual = pollutePrototypeData(
+				key,
+				key === 'integer' ? true : key === 'pattern' ? /^z$/ : 3,
+				() => [
+					buildStringFaults({ category: 'string' }, 'a', []),
+					buildNumberFaults({ category: 'number' }, 1.5, []),
+					buildArrayFaults({ category: 'array', items: { category: 'number' } }, 1, []),
+					shapeToKind({ category: 'number' }),
+				],
+			)
+			expect(actual).toEqual([[], [], [], 'number'])
+		}
+	})
+	it('prefixes schema clone failures at raw roots and nested raw nodes', () => {
+		for (const nested of [false, true]) {
+			const reads = new ObservationCounter()
+			const sentinel = new Error('second type read')
+			const leaf = Object.defineProperty({}, 'type', {
+				enumerable: true,
+				get: () => {
+					reads.increment()
+					if (reads.value === 2) throw sentinel
+					return 'string'
+				},
+			})
+			const raw: ContractShape = { category: 'raw', schema: { properties: { a: leaf } } }
+			const shape: ContractShape = nested ? { category: 'array', items: raw } : raw
+			const error = captureContractError(() => cloneShape(shape))
+			expect(error.context?.path).toEqual([
+				...(nested ? ['items'] : []),
+				'schema',
+				'properties',
+				'a',
+				'type',
+			])
+			expect(error.cause).toBe(sentinel)
+			expect(error.message).toBe('cloneSchema: property access failed')
+			expect(error.context?.shape).toBe('schema')
+		}
+	})
+	it('preserves the observable identity of ordinary oneOf data', () => {
+		const contract = createContract(
+			oneOfShape(objectShape({ a: numberShape(), b: numberShape() }), booleanShape()),
+		)
+		const symbol = Symbol('retained')
+		const input = Object.assign(Object.create(null), { b: 2, a: 1, [symbol]: 'symbol' })
+		Object.defineProperty(input, 'hidden', { value: 'hidden' })
+		const output = contract.parse(input)
+		expect(output).toBe(input)
+		expect(Object.keys(output ?? {})).toEqual(['b', 'a'])
+		expect(Object.getPrototypeOf(output)).toBeNull()
+		expect(Object.getOwnPropertyDescriptor(output, 'hidden')?.value).toBe('hidden')
+		expect(Object.getOwnPropertyDescriptor(output, symbol)?.value).toBe('symbol')
+		if (isRecord(output)) Reflect.set(output, 'a', 3)
+		expect(input.a).toBe(3)
+		const frozen = Object.freeze({ a: 1, b: 2 })
+		expect(contract.parse(frozen)).toBe(frozen)
+		expect(Object.isFrozen(contract.parse(frozen))).toBe(true)
+		expect(contract.parse(true)).toBe(true)
+		expect(contract.parse(42)).toBeUndefined()
+		expect(createContract(oneOfShape(numberShape(), numberShape())).parse(1)).toBeUndefined()
+		const json = { a: [1] }
+		expect(createContract(oneOfShape(jsonShape())).parse(json)).toBe(json)
+		expect(() =>
+			oneOfShape(objectShape({ a: optionalShape(numberShape(), { default: 1 }) })),
+		).toThrow(/default may not sit under a union/)
+	})
+	it('returns only the input or undefined for the changing oneOf accessor', () => {
+		const sibling = objectShape({ category: stringShape() })
+		for (const declaration of [
+			oneOfShape(shapeShape(), sibling),
+			oneOfShape(sibling, shapeShape()),
+		]) {
+			const reads = new ObservationCounter()
+			const value = Object.defineProperty({}, 'category', {
+				enumerable: true,
+				get: () => {
+					reads.increment()
+					return reads.value === 2 ? 42 : 'number'
+				},
+			})
+			const contract = createContract(declaration)
+			const parsed = contract.parse(value)
+			expect(parsed === undefined || parsed === value).toBe(true)
+		}
+	})
 	it('keeps the enclosing raw path at every declaration door', () => {
 		const refused: JSONSchema = { type: 'string' }
 		Reflect.set(refused, 'type', 'nonsense')
@@ -179,24 +322,51 @@ describe('shape-valued contracts', () => {
 			const parsed = contract.parse(value)
 			expect(parsed).toBeDefined()
 			expect(contract.is(parsed)).toBe(true)
+			const leafOutput = Array.isArray(parsed)
+				? parsed[0]
+				: isRecord(parsed) && Object.hasOwn(parsed, 'value')
+					? parsed.value
+					: parsed
+			const leafInput = Array.isArray(value)
+				? value[0]
+				: isRecord(value) && Object.hasOwn(value, 'value')
+					? value.value
+					: value
+			expect(leafOutput).toBe(leafInput)
 			for (const input of [42, null, {}, value]) {
 				const output = contract.parse(input)
 				expect(!contract.is(input) || output !== undefined).toBe(true)
 				expect(output === undefined || contract.is(output)).toBe(true)
 			}
 		}
+		const nullable = createContract(nullableShape(leaf))
+		const expected = [{ reason: 'type', path: [], expected: 'shape', received: '42' }]
+		expect(nullable.audit(42)).toEqual(expected)
+		expect(nullable.explain(42)).toEqual(expected)
 	})
 	it('limits the schema promise to declarations as JSON carries them', () => {
-		const value = Object.defineProperty({}, 'category', { value: 'number' })
+		const cyclic: Record<string, unknown> = { category: 'number' }
+		cyclic.extra = cyclic
+		const rows = [
+			{ value: Object.defineProperty({}, 'category', { value: 'number' }), serialized: '{}' },
+			{ value: Object.assign({ category: 'number' }, { toJSON: () => 42 }), serialized: '42' },
+			{ value: Object.assign({ category: 'number' }, { toJSON: () => ({}) }), serialized: '{}' },
+			{ value: new Proxy({ category: 'number' }, { ownKeys: () => [] }), serialized: '{}' },
+			{ value: { category: 'number', extra: 1n }, serialized: undefined },
+			{ value: cyclic, serialized: undefined },
+		]
 		const contract = createContract(shapeShape())
-		expect(contract.is(value)).toBe(true)
-		expect(() => validateShape(value)).not.toThrow()
-		expect(JSON.parse(JSON.stringify(value))).toEqual({})
-		expect(
-			createContract(schemaToShape(contract.schema)).is(JSON.parse(JSON.stringify(value))),
-		).toBe(false)
+		const schema = createContract(schemaToShape(contract.schema))
+		for (const row of rows) {
+			expect(contract.is(row.value)).toBe(true)
+			expect(() => validateShape(row.value)).not.toThrow()
+			const projection = attempt(() => JSON.stringify(row.value))
+			expect(projection.success).toBe(row.serialized !== undefined)
+			expect(projection.success ? projection.value : undefined).toBe(row.serialized)
+			expect(schema.is(projection.success ? JSON.parse(projection.value) : undefined)).toBe(false)
+		}
 		expect(contract.schema.description).toBe(
-			'Over-approximates the declaration language as JSON carries it; is decides whether the complete shape is valid.',
+			'Over-approximates declarations whose JSON projection preserves their own enumerable data; values without that projection are outside this schema. is decides whether the complete shape is valid.',
 		)
 	})
 	it('preserves oneOf identity for hidden and accessor declarations in either arm order', () => {
@@ -230,7 +400,7 @@ describe('shape-valued contracts', () => {
 		expect(schema).toEqual({
 			type: 'object',
 			description:
-				'Over-approximates the declaration language as JSON carries it; is decides whether the complete shape is valid.',
+				'Over-approximates declarations whose JSON projection preserves their own enumerable data; values without that projection are outside this schema. is decides whether the complete shape is valid.',
 			properties: {
 				category: {
 					enum: [

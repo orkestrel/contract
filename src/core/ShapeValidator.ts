@@ -1,5 +1,5 @@
 import type { ShapeValidatorInterface } from './types.js'
-import { INTRINSICS } from './constants.js'
+import { CLONE_NODE_LIMIT, INTRINSICS } from './constants.js'
 import { pinMembers } from './helpers.js'
 import { ShapePass } from './ShapePass.js'
 
@@ -66,7 +66,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 		INTRINSICS.reflect.apply(INTRINSICS.sweep, this.#passes, [
 			(pass: ShapePass) => pass.interrupt(),
 		])
-		const pass = new ShapePass(this.#source)
+		const pass = new ShapePass(this.#source, { left: CLONE_NODE_LIMIT })
 		INTRINSICS.reflect.apply(INTRINSICS.admit, this.#passes, [pass])
 		this.#expansion = undefined
 		try {

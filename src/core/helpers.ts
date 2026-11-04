@@ -27,6 +27,7 @@ import type {
 	Success,
 } from './types.js'
 import {
+	CLONE_NODE_LIMIT,
 	COMPILE_NODE_LIMIT,
 	CONTRACT_CODES,
 	FORMAT_PATTERNS,
@@ -2033,13 +2034,16 @@ export function matchesJSONDepth(value: unknown): boolean {
  *
  * Beside the ancestor set the walk keeps a walk-local PROVED set, so a node
  * whose whole subtree already matched is not re-walked when a second path
- * reaches it. Removing the recursion alone left the work exponential in shared
+ * reaches it. A supplied capture budget instead charges each occurrence that
+ * ownership would copy, refusing with `clone` before exceeding `CLONE_NODE_LIMIT`.
+ * Removing the recursion alone left the work exponential in shared
  * aliases: thirty aliases — thirty-one ordinary records — cost `2^30` visits
  * through `isJSONValue`, `parseJSONValue`, `canonicalStringify` and every
  * `jsonShape` contract.
  *
  * @param entry - The value to inspect
  * @param ancestors - Objects on the active traversal path
+ * @param budget - Remaining capture nodes; aliases are charged for each copied occurrence when supplied
  * @returns True if the value is a cycle-free JSON value; false otherwise
  *
  * @example
@@ -2048,7 +2052,11 @@ export function matchesJSONDepth(value: unknown): boolean {
  * matchesJSONValue(Number.NaN, new WeakSet())                 // false
  * ```
  */
-export function matchesJSONValue(entry: unknown, ancestors: WeakSet<object>): entry is JSONValue {
+export function matchesJSONValue(
+	entry: unknown,
+	ancestors: WeakSet<object>,
+	budget?: { left: number },
+): entry is JSONValue {
 	return readValue(
 		() => {
 			const stack: Array<
@@ -2072,11 +2080,23 @@ export function matchesJSONValue(entry: unknown, ancestors: WeakSet<object>): en
 					continue
 				}
 
+				if (budget !== undefined) {
+					budget.left -= 1
+					if (budget.left < 0) {
+						throw new ContractError(
+							`validateShape: default exceeds the capture node limit ${CLONE_NODE_LIMIT}`,
+							{
+								code: 'clone',
+								context: { limit: CLONE_NODE_LIMIT },
+							},
+						)
+					}
+				}
 				const node = frame.value
 				if (node === null || isString(node) || isBoolean(node) || isFiniteNumber(node)) continue
 				if (INTRINSICS.array(node)) {
 					if (matchesVisited(ancestors, node)) return false
-					if (matchesVisited(proved, node)) continue
+					if (budget === undefined && matchesVisited(proved, node)) continue
 					const snapshot = readArrayEntries(node)
 					if (isFailure(snapshot)) throw snapshot.error
 					if (!snapshot.value.dense) return false
@@ -2093,7 +2113,7 @@ export function matchesJSONValue(entry: unknown, ancestors: WeakSet<object>): en
 				}
 				if (!isRecord(node)) return false
 				if (matchesVisited(ancestors, node)) return false
-				if (matchesVisited(proved, node)) continue
+				if (budget === undefined && matchesVisited(proved, node)) continue
 				admitVisited(ancestors, node)
 				stack[stack.length] = { operation: 'exit', value: node }
 				const members = INTRINSICS.values(node)
@@ -2212,7 +2232,7 @@ export function schemaToObject(schema: JSONSchema): JSONSchema {
 		return readValue(
 			() => {
 				INTRINSICS.values(schema)
-				if (schema.type === 'object') return schema
+				if (INTRINSICS.own(schema, 'type') && schema.type === 'object') return schema
 				return {
 					type: 'object',
 					properties: { value: schema },
@@ -2745,7 +2765,11 @@ export function buildStringFaults(
 	return readValue(
 		() => {
 			const faults: Fault[] = []
-			if (shape.min !== undefined && !matchesStringLength(value, shape.min, undefined)) {
+			if (
+				INTRINSICS.own(shape, 'min') &&
+				shape.min !== undefined &&
+				!matchesStringLength(value, shape.min, undefined)
+			) {
 				faults[faults.length] = {
 					reason: 'constraint',
 					path,
@@ -2755,7 +2779,11 @@ export function buildStringFaults(
 					received: preview(value),
 				}
 			}
-			if (shape.max !== undefined && !matchesStringLength(value, undefined, shape.max)) {
+			if (
+				INTRINSICS.own(shape, 'max') &&
+				shape.max !== undefined &&
+				!matchesStringLength(value, undefined, shape.max)
+			) {
 				faults[faults.length] = {
 					reason: 'constraint',
 					path,
@@ -2773,7 +2801,10 @@ export function buildStringFaults(
 			// so a rebuild of this shape's own pattern reports exactly what the
 			// shape's own read would: `readPattern` preserves `source` exactly.
 			const stateless =
-				pattern ?? (shape.pattern === undefined ? undefined : readPattern(shape.pattern))
+				pattern ??
+				(!INTRINSICS.own(shape, 'pattern') || shape.pattern === undefined
+					? undefined
+					: readPattern(shape.pattern))
 			if (stateless !== undefined && !matchesPattern(stateless, value)) {
 				const limit = readPatternSource(stateless)
 				faults[faults.length] = {
@@ -2822,9 +2853,14 @@ export function buildNumberFaults(
 ): readonly Fault[] {
 	return readValue(
 		() => {
-			const expected: FaultKind = shape.integer === true ? 'integer' : 'number'
+			const expected: FaultKind =
+				INTRINSICS.own(shape, 'integer') && shape.integer === true ? 'integer' : 'number'
 			const faults: Fault[] = []
-			if (shape.integer === true && !INTRINSICS.integer(value)) {
+			if (
+				INTRINSICS.own(shape, 'integer') &&
+				shape.integer === true &&
+				!INTRINSICS.integer(value)
+			) {
 				faults[faults.length] = {
 					reason: 'constraint',
 					path,
@@ -2833,7 +2869,7 @@ export function buildNumberFaults(
 					received: preview(value),
 				}
 			}
-			if (shape.min !== undefined && value < shape.min) {
+			if (INTRINSICS.own(shape, 'min') && shape.min !== undefined && value < shape.min) {
 				faults[faults.length] = {
 					reason: 'constraint',
 					path,
@@ -2843,7 +2879,7 @@ export function buildNumberFaults(
 					received: preview(value),
 				}
 			}
-			if (shape.max !== undefined && value > shape.max) {
+			if (INTRINSICS.own(shape, 'max') && shape.max !== undefined && value > shape.max) {
 				faults[faults.length] = {
 					reason: 'constraint',
 					path,
@@ -2892,7 +2928,7 @@ export function buildArrayFaults(
 	return readValue(
 		() => {
 			const faults: Fault[] = []
-			if (shape.min !== undefined && length < shape.min) {
+			if (INTRINSICS.own(shape, 'min') && shape.min !== undefined && length < shape.min) {
 				faults[faults.length] = {
 					reason: 'constraint',
 					path,
@@ -2902,7 +2938,7 @@ export function buildArrayFaults(
 					received: INTRINSICS.text(length),
 				}
 			}
-			if (shape.max !== undefined && length > shape.max) {
+			if (INTRINSICS.own(shape, 'max') && shape.max !== undefined && length > shape.max) {
 				faults[faults.length] = {
 					reason: 'constraint',
 					path,
@@ -2998,7 +3034,7 @@ export function shapeToKind(shape: ContractShape): FaultKind {
 				case 'string':
 					return 'string'
 				case 'number':
-					return shape.integer === true ? 'integer' : 'number'
+					return INTRINSICS.own(shape, 'integer') && shape.integer === true ? 'integer' : 'number'
 				case 'boolean':
 					return 'boolean'
 				case 'null':

@@ -1,5 +1,5 @@
 import type { ContractShape } from './types.js'
-import { COMPILE_DEPTH_LIMIT, INTRINSICS, SHAPE_FIELDS } from './constants.js'
+import { CLONE_NODE_LIMIT, COMPILE_DEPTH_LIMIT, INTRINSICS, SHAPE_FIELDS } from './constants.js'
 import { ContractError, isContractError } from './errors.js'
 import {
 	readIndexView,
@@ -13,6 +13,7 @@ import {
 	isFailure,
 	isSuccess,
 	matchesMember,
+	matchesJSONValue,
 	matchesVisited,
 	omitVisited,
 	pathOf,
@@ -66,6 +67,7 @@ export class ShapePass {
 		}
 	>()
 	readonly #source: unknown
+	readonly #budget: { left: number } | undefined
 	#stack: Array<
 		| {
 				readonly operation: 'enter'
@@ -135,8 +137,9 @@ export class ShapePass {
 
 	#poison: ContractError | undefined
 
-	constructor(shape: unknown) {
+	constructor(shape: unknown, budget?: { left: number }) {
 		this.#source = shape
+		this.#budget = budget
 	}
 
 	/**
@@ -351,6 +354,7 @@ export class ShapePass {
 		this.#defaulted = false
 		this.#open = false
 		const outcome = attempt(() => this.#observe(current, frame.depth))
+		this.#spend(0)
 		if (isFailure(outcome) || !outcome.value) {
 			this.#structure ??= new ContractError(
 				'validateShape: every node must be a recognized shape',
@@ -479,7 +483,7 @@ export class ShapePass {
 			return this.#refuse('validateShape: description must be a string', 'description')
 		}
 		if (current.category === 'optional' && INTRINSICS.own(current, 'default')) {
-			if (!isJSONValue(current.default)) {
+			if (!matchesJSONValue(current.default, new ShapePass.#weakSet(), this.#budget)) {
 				return this.#refuse('validateShape: an optional default must be a JSON value', 'default')
 			}
 			this.#defaulted = true
@@ -750,6 +754,7 @@ export class ShapePass {
 	// property of the schema, while whether that height fits is a property of the
 	// node's position, and only the second one varies per occurrence.
 	#inspect(source: unknown): boolean {
+		if (this.#structure !== undefined) return true
 		if (!isRecord(source)) {
 			return this.#refuse('validateShape: raw schema must be a plain record', 'schema')
 		}
@@ -837,7 +842,7 @@ export class ShapePass {
 				}
 			}
 
-			const category = schema.type
+			const category = INTRINSICS.own(schema, 'type') ? schema.type : undefined
 			if (
 				category !== undefined &&
 				category !== 'null' &&
@@ -856,7 +861,11 @@ export class ShapePass {
 					'type',
 				)
 			}
-			if (schema.description !== undefined && typeof schema.description !== 'string') {
+			if (
+				INTRINSICS.own(schema, 'description') &&
+				schema.description !== undefined &&
+				typeof schema.description !== 'string'
+			) {
 				return this.#refuseSchema(
 					'validateShape: raw schema description must be a string',
 					stack,
@@ -874,7 +883,11 @@ export class ShapePass {
 					'default',
 				)
 			}
-			if (schema.format !== undefined && typeof schema.format !== 'string') {
+			if (
+				INTRINSICS.own(schema, 'format') &&
+				schema.format !== undefined &&
+				typeof schema.format !== 'string'
+			) {
 				return this.#refuseSchema(
 					'validateShape: raw schema format must be a string',
 					stack,
@@ -883,7 +896,7 @@ export class ShapePass {
 					'format',
 				)
 			}
-			if (schema.pattern !== undefined) {
+			if (INTRINSICS.own(schema, 'pattern') && schema.pattern !== undefined) {
 				if (typeof schema.pattern !== 'string') {
 					return this.#refuseSchema(
 						'validateShape: raw schema pattern must be a string',
@@ -914,7 +927,7 @@ export class ShapePass {
 			for (const lengthIndex of iterateIndices(() => lengthList.length)) {
 				const key = lengthList[lengthIndex]
 				if (key === undefined) continue
-				const value = schema[key]
+				const value = INTRINSICS.own(schema, key) ? schema[key] : undefined
 				if (value !== undefined && (!INTRINSICS.safe(value) || INTRINSICS.numeric(value) < 0)) {
 					return this.#refuseSchema(
 						'validateShape: raw schema length bounds must be non-negative safe integers',
@@ -929,7 +942,7 @@ export class ShapePass {
 			for (const rangeIndex of iterateIndices(() => rangeList.length)) {
 				const key = rangeList[rangeIndex]
 				if (key === undefined) continue
-				const value = schema[key]
+				const value = INTRINSICS.own(schema, key) ? schema[key] : undefined
 				if (value !== undefined && (typeof value !== 'number' || !INTRINSICS.finite(value))) {
 					return this.#refuseSchema(
 						'validateShape: raw schema numeric bounds must be finite numbers',
@@ -940,7 +953,7 @@ export class ShapePass {
 					)
 				}
 			}
-			const population = schema.enum
+			const population = INTRINSICS.own(schema, 'enum') ? schema.enum : undefined
 			if (population !== undefined) {
 				if (!INTRINSICS.array(population)) {
 					return this.#refuseSchema(
@@ -997,7 +1010,7 @@ export class ShapePass {
 				}
 			}
 
-			const names = schema.required
+			const names = INTRINSICS.own(schema, 'required') ? schema.required : undefined
 			if (names !== undefined) {
 				if (!INTRINSICS.array(names)) {
 					return this.#refuseSchema(
@@ -1047,11 +1060,11 @@ export class ShapePass {
 
 			const nested: unknown[] = []
 			const edges: Array<readonly [string, string?]> = []
-			if (schema.items !== undefined) {
+			if (INTRINSICS.own(schema, 'items') && schema.items !== undefined) {
 				edges[nested.length] = ['items']
 				nested[nested.length] = schema.items
 			}
-			if (schema.properties !== undefined) {
+			if (INTRINSICS.own(schema, 'properties') && schema.properties !== undefined) {
 				if (!isRecord(schema.properties)) {
 					return this.#refuseSchema(
 						'validateShape: raw schema properties must be a plain record',
@@ -1066,10 +1079,13 @@ export class ShapePass {
 					const key = propertyList[propertyIndex]
 					if (key === undefined) continue
 					edges[nested.length] = ['properties', key]
-					nested[nested.length] = schema.properties[key]
+					nested[nested.length] = INTRINSICS.own(schema.properties, key)
+						? schema.properties[key]
+						: undefined
 				}
 			}
 			if (
+				INTRINSICS.own(schema, 'additionalProperties') &&
 				schema.additionalProperties !== undefined &&
 				schema.additionalProperties !== true &&
 				schema.additionalProperties !== false
@@ -1081,7 +1097,7 @@ export class ShapePass {
 			for (const unionIndex of iterateIndices(() => unionList.length)) {
 				const key = unionList[unionIndex]
 				if (key === undefined) continue
-				const variants = schema[key]
+				const variants = INTRINSICS.own(schema, key) ? schema[key] : undefined
 				if (variants === undefined) continue
 				if (!INTRINSICS.array(variants)) {
 					return this.#refuseSchema(
@@ -1129,7 +1145,8 @@ export class ShapePass {
 			for (const offset of iterateIndices(() => nested.length)) {
 				const index = nested.length - 1 - offset
 				const childFirst = edges[index]?.[0]
-				const childSecond = edges[index]?.[1]
+				const edge = edges[index]
+				const childSecond = edge !== undefined && INTRINSICS.own(edge, 1) ? edge[1] : undefined
 				stack[stack.length] = {
 					operation: 'enter',
 					schema: nested[index],
@@ -1161,6 +1178,7 @@ export class ShapePass {
 	#populate(current: Record<string, unknown>): boolean {
 		switch (current.category) {
 			case 'array':
+				this.#spend(1)
 				this.#children[this.#children.length] = {
 					shape: current.items,
 					first: 'items',
@@ -1179,6 +1197,7 @@ export class ShapePass {
 				for (const keyIndex of iterateIndices(() => keys.length)) {
 					const key = keys[keyIndex]
 					if (key === undefined) continue
+					this.#spend(1)
 					const descriptorOutcome = attempt(() => INTRINSICS.describe(properties, key))
 					if (isFailure(descriptorOutcome)) {
 						return this.#refuse(
@@ -1243,6 +1262,7 @@ export class ShapePass {
 				const extra = current.additionalProperties
 				this.#open = extra !== undefined && extra !== false
 				if (extra !== undefined && extra !== true && extra !== false) {
+					this.#spend(1)
 					this.#children[this.#children.length] = {
 						shape: extra,
 						first: 'additionalProperties',
@@ -1275,6 +1295,7 @@ export class ShapePass {
 				}
 				for (const index of iterateIndices(() => length)) {
 					const key = INTRINSICS.text(index)
+					this.#spend(1)
 					const descriptorOutcome = attempt(() => INTRINSICS.describe(current.variants, key))
 					if (isFailure(descriptorOutcome)) {
 						return this.#refuse(
@@ -1420,6 +1441,7 @@ export class ShapePass {
 			}
 			case 'optional':
 			case 'nullable':
+				this.#spend(1)
 				this.#children[this.#children.length] = {
 					shape: current.inner,
 					first: 'inner',
@@ -1436,6 +1458,18 @@ export class ShapePass {
 				break
 		}
 		return true
+	}
+
+	#spend(count: number): void {
+		const budget = this.#budget
+		if (budget === undefined) return
+		budget.left -= count
+		if (budget.left < 0) {
+			throw new ContractError(`validateShape: capture exceeds the node limit ${CLONE_NODE_LIMIT}`, {
+				code: 'clone',
+				context: { path: pathOf(this.#path), limit: CLONE_NODE_LIMIT },
+			})
+		}
 	}
 
 	#schedule(current: object, depth: number, segments: number): number {
@@ -1596,13 +1630,18 @@ export class ShapePass {
 			if (index === undefined) continue
 			const capture = this.#captures[index]
 			if (capture === undefined) continue
-			const enclosed = capture.category === 'union' || this.#within[index] !== undefined
+			const enclosed =
+				capture.category === 'union' ||
+				(INTRINSICS.own(this.#within, index) && this.#within[index] !== undefined)
 			for (const edge of iterateIndices(() => capture.children.length)) {
 				const child = capture.children[edge]
 				if (child === undefined) continue
 				const located = this.#locate(child.shape)
 				if (located === undefined) continue
-				if (enclosed && this.#within[located] === undefined) {
+				if (
+					enclosed &&
+					(!INTRINSICS.own(this.#within, located) || this.#within[located] === undefined)
+				) {
 					this.#within[located] = {
 						parent: index,
 						first: child.first,
@@ -1651,7 +1690,7 @@ export class ShapePass {
 	// The path to a node through the union edge recorded for it, falling back to its
 	// deepest occurrence above the union that encloses it.
 	#route(index: number): readonly string[] {
-		const edge = this.#within[index]
+		const edge = INTRINSICS.own(this.#within, index) ? this.#within[index] : undefined
 		return edge === undefined
 			? this.#ascend(index)
 			: pathOf(
@@ -1667,7 +1706,7 @@ export class ShapePass {
 	// first-discovered path names a slot that, on its own, validates.
 	#ascend(index: number): readonly string[] {
 		if (index === 0) return []
-		const edge = this.#via[index]
+		const edge = INTRINSICS.own(this.#via, index) ? this.#via[index] : undefined
 		return edge === undefined
 			? []
 			: pathOf(

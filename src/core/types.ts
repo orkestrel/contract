@@ -387,10 +387,11 @@ export interface JSONClonerInterface {
 	 * alike. Active reentry permanently settles the instance with one exact cause-free
 	 * `clone` poison shared by the nested call, the outer call, and every later call.
 	 *
+	 * @param budget - Remaining nodes shared with an enclosing ownership operation; omitted for an independent snapshot
 	 * @returns The settled JSON snapshot
 	 * @throws {ContractError} When the source is inexact, cyclic, unreadable, or cloning is reentered
 	 */
-	clone(): JSONValue
+	clone(budget?: { left: number }): JSONValue
 }
 
 /**
@@ -764,7 +765,10 @@ export interface JSONShape {
  * @remarks
  * Acceptance is a successful {@link validateShape}, including its expansion bound.
  * Parsing preserves identity and never compiles the value or fills its defaults.
- * The shallow schema over-approximates the declaration language as JSON carries it.
+ * The shallow schema over-approximates declarations whose JSON projection preserves
+ * their own enumerable data. Values with a different projection or no JSON projection
+ * fall outside this schema, including custom `toJSON`, hidden keys, proxy omissions,
+ * and extra members containing a BigInt or a cycle. Structural acceptance is unchanged.
  * It describes only the category and cannot
  * teach a language model to author a complete nested declaration. The guard decides.
  *

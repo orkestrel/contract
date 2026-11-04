@@ -484,6 +484,19 @@ export function pollutePrototype<T>(
 	}
 }
 
+/** Runs an operation with writable prototype data, restoring it through the pollution fixture. */
+export function pollutePrototypeData<T>(key: string, value: unknown, operation: () => T): T {
+	return pollutePrototype(
+		Object.prototype,
+		key,
+		() => value,
+		() => {
+			captured.define(Object.prototype, key, { configurable: true, writable: true, value })
+			return operation()
+		},
+	)
+}
+
 /**
  * Arms a prototype pollution from inside a caller-supplied source's own
  * reflective trap, after the operation walking it has already begun.

@@ -19,7 +19,7 @@ import type {
 	StringShape,
 	UnionShape,
 } from './types.js'
-import { COMPILE_DEPTH_LIMIT, INTRINSICS } from './constants.js'
+import { CLONE_NODE_LIMIT, COMPILE_DEPTH_LIMIT, INTRINSICS } from './constants.js'
 import { ContractError, isContractError } from './errors.js'
 import {
 	readIndexView,
@@ -41,7 +41,7 @@ import {
 import { isJSONValue, isLiteralValue, isObject, isRecord, isRegExp } from './validators.js'
 import { JSONCloner } from './JSONCloner.js'
 import { SchemaCloner } from './SchemaCloner.js'
-import { ShapeValidator } from './ShapeValidator.js'
+import { ShapePass } from './ShapePass.js'
 
 /**
  * Owns the state of one contract-shape snapshot operation.
@@ -183,6 +183,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 	}
 
 	#execute(): ContractShape {
+		const budget = { left: CLONE_NODE_LIMIT }
 		// Narrowed once at the door, because both dispatches below take their
 		// receiver type from these values. The walk runs before `#settle` drops
 		// them, so it always finds the maps the constructor built; this refusal is
@@ -193,7 +194,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		if (paths === undefined || memo === undefined) throw this.#unavailable()
 		INTRINSICS.reflect.apply(INTRINSICS.store, paths, [this.#source, []])
 		this.#pending[this.#pending.length] = { shape: this.#source, depth: 0 }
-		this.#drain()
+		this.#drain(budget)
 		this.#wireNodes()
 		const root = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [this.#source])
 		if (root === undefined) {
@@ -203,12 +204,15 @@ export class ShapeCloner implements ShapeClonerInterface {
 			})
 		}
 		this.#freezeNodes()
+		// Capture has already charged the retained edges and copied defaults. The
+		// existing validation inspects that bounded owned graph without charging
+		// the same ownership a second time.
 		this.#validateShape(root)
 		if (this.#fidelity !== undefined) throw this.#fidelity
 		return root
 	}
 
-	#drain(): void {
+	#drain(budget: { left: number }): void {
 		// A read cursor, so the walk is breadth-first in DECLARATION order. The
 		// cursor also makes the level a node was reached at meaningful: it is the
 		// SHORTEST path to that node, so this bound never refuses a graph the
@@ -224,23 +228,27 @@ export class ShapeCloner implements ShapeClonerInterface {
 			// 4,000-level chain that is CERTAIN to be refused cost 120 ms against
 			// `validateShape`'s 1 ms for the identical verdict, and the cost is
 			// quadratic because every child registration copies its whole path.
-			if (entry.depth > COMPILE_DEPTH_LIMIT) this.#refuseDepth()
-			this.#captureNode(entry.shape, entry.depth)
+			if (entry.depth > COMPILE_DEPTH_LIMIT) this.#refuseDepth(budget)
+			this.#captureNode(entry.shape, entry.depth, budget)
 		}
 	}
 
 	// The gate that OWNS the depth rule authors the diagnosis, on the same source
 	// `validateShape` would be handed, so `cloneShape` and `validateShape` cannot disagree about
 	// which node exceeded the limit or what the refusal says.
-	#refuseDepth(): never {
-		this.#validateShape(this.#source)
+	#refuseDepth(budget: { left: number }): never {
+		this.#validateShape(this.#source, [], budget)
 		throw this.#create('validateShape: a shape exceeds the compilation depth limit', {
 			code: 'depth',
 			context: { path: [], limit: COMPILE_DEPTH_LIMIT },
 		})
 	}
 
-	#captureShell(source: ContractShape, path: readonly string[]): ContractShape {
+	#captureShell(
+		source: ContractShape,
+		path: readonly string[],
+		budget: { left: number },
+	): ContractShape {
 		if (!matchesRecordBrand(source)) {
 			throw this.#create('validateShape: every structural child must be a shape', {
 				code: 'structure',
@@ -275,21 +283,21 @@ export class ShapeCloner implements ShapeClonerInterface {
 			case 'literal':
 				return this.#captureLiteral(source, path)
 			case 'array':
-				return this.#captureArray(source, path)
+				return this.#captureArray(source, path, budget)
 			case 'object':
-				return this.#captureObject(source, path)
+				return this.#captureObject(source, path, budget)
 			case 'union':
-				return this.#captureUnion(source, path)
+				return this.#captureUnion(source, path, budget)
 			case 'optional':
-				return this.#captureOptional(source, path)
+				return this.#captureOptional(source, path, budget)
 			case 'nullable':
-				return this.#captureNullable(source, path)
+				return this.#captureNullable(source, path, budget)
 			case 'json':
 				return this.#captureSimple(source, path, 'json')
 			case 'shape':
 				return this.#captureSimple(source, path, 'shape')
 			case 'raw':
-				return this.#captureRaw(source, path)
+				return this.#captureRaw(source, path, budget)
 			default:
 				throw this.#create('validateShape: every node must be a recognized shape', {
 					code: 'structure',
@@ -431,12 +439,12 @@ export class ShapeCloner implements ShapeClonerInterface {
 		return { source: sourceText, flags }
 	}
 
-	#captureNode(source: ContractShape, depth: number): void {
+	#captureNode(source: ContractShape, depth: number, budget: { left: number }): void {
 		const paths = this.#paths
 		const memo = this.#memo
 		if (paths === undefined || memo === undefined) throw this.#unavailable()
 		const path = INTRINSICS.reflect.apply(INTRINSICS.fetch, paths, [source]) ?? []
-		const clone = this.#captureShell(source, path)
+		const clone = this.#captureShell(source, path, budget)
 
 		INTRINSICS.reflect.apply(INTRINSICS.store, memo, [source, clone])
 		this.#sources[this.#sources.length] = source
@@ -516,7 +524,8 @@ export class ShapeCloner implements ShapeClonerInterface {
 		}
 	}
 
-	#captureArray(source: ArrayShape, path: readonly string[]): ArrayShape {
+	#captureArray(source: ArrayShape, path: readonly string[], budget: { left: number }): ArrayShape {
+		this.#spend(budget, 1, path)
 		const items = this.#captureField(source, 'items', path)
 		const min = this.#captureField(source, 'min', path)
 		const max = this.#captureField(source, 'max', path)
@@ -540,7 +549,11 @@ export class ShapeCloner implements ShapeClonerInterface {
 		}
 	}
 
-	#captureObject(source: ObjectShape, path: readonly string[]): ObjectShape {
+	#captureObject(
+		source: ObjectShape,
+		path: readonly string[],
+		budget: { left: number },
+	): ObjectShape {
 		const propertySource = this.#captureField(source, 'properties', path)
 		const additional = this.#captureField(source, 'additionalProperties', path)
 		const description = this.#captureField(source, 'description', path)
@@ -550,7 +563,9 @@ export class ShapeCloner implements ShapeClonerInterface {
 				context: { path: pathOf(path, 'properties') },
 			})
 		}
-		this.#captureProperties(source, propertySource, path)
+		this.#captureProperties(source, propertySource, path, budget)
+		if (additional !== undefined && additional !== true && additional !== false)
+			this.#spend(budget, 1, path)
 		const properties: Record<string, ContractShape> = INTRINSICS.create(null)
 		return {
 			category: 'object',
@@ -560,11 +575,11 @@ export class ShapeCloner implements ShapeClonerInterface {
 		}
 	}
 
-	#captureUnion(source: UnionShape, path: readonly string[]): UnionShape {
+	#captureUnion(source: UnionShape, path: readonly string[], budget: { left: number }): UnionShape {
 		const variantSource = this.#captureField(source, 'variants', path)
 		const mode = this.#captureField(source, 'mode', path)
 		const description = this.#captureField(source, 'description', path)
-		this.#captureVariants(source, variantSource, path)
+		this.#captureVariants(source, variantSource, path, budget)
 		return {
 			category: 'union',
 			variants: [],
@@ -573,13 +588,27 @@ export class ShapeCloner implements ShapeClonerInterface {
 		}
 	}
 
-	#captureOptional(source: OptionalShape, path: readonly string[]): OptionalShape {
-		const inner = this.#captureInner(source, path)
+	#captureOptional(
+		source: OptionalShape,
+		path: readonly string[],
+		budget: { left: number },
+	): OptionalShape {
+		const inner = this.#captureInner(source, path, budget)
 		const value = this.#captureField(source, 'default', path)
 		if (!INTRINSICS.own(source, 'default')) return { category: 'optional', inner }
 		// The one domain rule capture must answer itself, because a value that cannot be
 		// copied cannot be carried to the gate; it refuses as that gate does.
-		const owned = isJSONValue(value) ? attempt(() => new JSONCloner(value).clone()) : undefined
+		const owned = isJSONValue(value)
+			? attempt(() => new JSONCloner(value).clone(budget))
+			: undefined
+		if (
+			owned !== undefined &&
+			isFailure(owned) &&
+			budget.left < 0 &&
+			isContractError(owned.error)
+		) {
+			throw this.#prefix(owned.error, pathOf(path, 'default'))
+		}
 		if (owned === undefined || isFailure(owned)) {
 			throw this.#create('validateShape: an optional default must be a JSON value', {
 				code: 'structure',
@@ -589,11 +618,20 @@ export class ShapeCloner implements ShapeClonerInterface {
 		return { category: 'optional', inner, default: owned.value }
 	}
 
-	#captureNullable(source: NullableShape, path: readonly string[]): NullableShape {
-		return { category: 'nullable', inner: this.#captureInner(source, path) }
+	#captureNullable(
+		source: NullableShape,
+		path: readonly string[],
+		budget: { left: number },
+	): NullableShape {
+		return { category: 'nullable', inner: this.#captureInner(source, path, budget) }
 	}
 
-	#captureInner(source: OptionalShape | NullableShape, path: readonly string[]): ContractShape {
+	#captureInner(
+		source: OptionalShape | NullableShape,
+		path: readonly string[],
+		budget: { left: number },
+	): ContractShape {
+		this.#spend(budget, 1, path)
 		const inner = this.#captureField(source, 'inner', path)
 		if (inner === undefined) {
 			throw this.#create('validateShape: every structural child must be a shape', {
@@ -604,7 +642,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		return inner
 	}
 
-	#captureRaw(source: RawShape, path: readonly string[]): RawShape {
+	#captureRaw(source: RawShape, path: readonly string[], budget: { left: number }): RawShape {
 		const schema = this.#captureField(source, 'schema', path)
 		if (!isRecord(schema)) {
 			throw this.#create('validateShape: raw schema must be a plain record', {
@@ -612,11 +650,11 @@ export class ShapeCloner implements ShapeClonerInterface {
 				context: { path: pathOf(path, 'schema') },
 			})
 		}
-		this.#validateShape({ category: 'raw', schema }, path)
+		this.#validateShape({ category: 'raw', schema }, path, budget)
 		const outcome = attempt(() => new SchemaCloner(schema).clone())
 		if (isFailure(outcome)) {
 			if (isContractError(outcome.error)) {
-				admitVisited(this.#owned, outcome.error)
+				throw this.#prefix(outcome.error, pathOf(path, 'schema'))
 			}
 			throw outcome.error
 		}
@@ -697,6 +735,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		source: ObjectShape,
 		properties: Readonly<Record<string, ContractShape>>,
 		path: readonly string[],
+		budget: { left: number },
 	): void {
 		const keys = INTRINSICS.keys(properties)
 		const snapshot: readonly ShapeProperty[] = INTRINSICS.reflect.apply(
@@ -704,6 +743,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 			readIndexView(keys),
 			[
 				(key: string) => {
+					this.#spend(budget, 1, path)
 					const descriptor = INTRINSICS.describe(properties, key)
 					if (descriptor === undefined || !INTRINSICS.own(descriptor, 'value')) {
 						throw this.#create('validateShape: every structural child must be a shape', {
@@ -745,6 +785,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		source: UnionShape,
 		variants: readonly ContractShape[] | undefined,
 		path: readonly string[],
+		budget: { left: number },
 	): void {
 		if (!INTRINSICS.array(variants)) {
 			throw this.#create('validateShape: variants must be a finite array', {
@@ -766,6 +807,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 			})
 		}
 		const entries = snapshot.value.entries
+		this.#spend(budget, entries.length, path)
 		const captured = this.#variants
 		if (captured === undefined) throw this.#unavailable()
 		INTRINSICS.reflect.apply(INTRINSICS.store, captured, [source, entries])
@@ -1007,24 +1049,43 @@ export class ShapeCloner implements ShapeClonerInterface {
 		}
 	}
 
-	#validateShape(shape: ContractShape, path: readonly string[] = []): void {
-		const outcome = attempt(() => new ShapeValidator(shape).validate())
+	#validateShape(
+		shape: ContractShape,
+		path: readonly string[] = [],
+		budget?: { left: number },
+	): void {
+		const outcome = attempt(() => new ShapePass(shape, budget).validate())
 		if (isSuccess(outcome)) return
 		if (isContractError(outcome.error)) {
-			if (path.length > 0) {
-				const tail = outcome.error.context?.path
-				const location: string[] = []
-				appendEntries(location, path)
-				appendEntries(location, typeof tail === 'string' ? [tail] : (tail ?? []))
-				throw this.#create(outcome.error.message, {
-					code: outcome.error.code,
-					context: { ...outcome.error.context, path: location },
-					...(INTRINSICS.own(outcome.error, 'cause') ? { cause: outcome.error.cause } : {}),
-				})
-			}
-			admitVisited(this.#owned, outcome.error)
+			throw this.#prefix(outcome.error, path)
 		}
 		throw outcome.error
+	}
+
+	#spend(budget: { left: number }, count: number, path: readonly string[]): void {
+		budget.left -= count
+		if (budget.left < 0) {
+			throw this.#create(`cloneShape: capture exceeds the node limit ${CLONE_NODE_LIMIT}`, {
+				code: 'clone',
+				context: { path, limit: CLONE_NODE_LIMIT },
+			})
+		}
+	}
+
+	#prefix(error: ContractError, path: readonly string[]): ContractError {
+		if (path.length === 0) {
+			admitVisited(this.#owned, error)
+			return error
+		}
+		const tail = error.context?.path
+		const location: string[] = []
+		appendEntries(location, path)
+		appendEntries(location, typeof tail === 'string' ? [tail] : (tail ?? []))
+		return this.#create(error.message, {
+			code: error.code,
+			context: { ...error.context, path: location },
+			...(INTRINSICS.own(error, 'cause') ? { cause: error.cause } : {}),
+		})
 	}
 
 	// One refusal for every dropped working map, because a settled cloner replays

@@ -2307,7 +2307,7 @@ describe('schemaToObject', () => {
 
 	it('refuses an unreadable schema root with the shared coded read error', () => {
 		const hostile = new Proxy<JSONSchema>(
-			{},
+			{ type: 'string' },
 			{
 				get() {
 					throw new Error('hostile read')

@@ -228,7 +228,8 @@ export class SchemaShaper {
 			const built = this.#build(schema, depth, enclosed)
 			// Read here rather than in `#build`, which a type list re-enters per member. The
 			// OpenAPI keyword stays out of `JSONSchema`, and a strict walk has refused it.
-			const nullable = INTRINSICS.reflect.read(schema, 'nullable') === true
+			const nullable =
+				INTRINSICS.own(schema, 'nullable') && INTRINSICS.reflect.read(schema, 'nullable') === true
 			const shape = nullable ? nullableShape(built) : built
 			retainDepth(memo, schema, depth, shape)
 			return shape
@@ -331,8 +332,18 @@ export class SchemaShaper {
 			['properties', 'required', 'additionalProperties'],
 			this.#names(effective, 'object'),
 		)
-		this.#inspectLength(schema.minLength, schema.maxLength, 'minLength', 'maxLength')
-		this.#inspectLength(schema.minItems, schema.maxItems, 'minItems', 'maxItems')
+		this.#inspectLength(
+			INTRINSICS.own(schema, 'minLength') ? schema.minLength : undefined,
+			INTRINSICS.own(schema, 'maxLength') ? schema.maxLength : undefined,
+			'minLength',
+			'maxLength',
+		)
+		this.#inspectLength(
+			INTRINSICS.own(schema, 'minItems') ? schema.minItems : undefined,
+			INTRINSICS.own(schema, 'maxItems') ? schema.maxItems : undefined,
+			'minItems',
+			'maxItems',
+		)
 		this.#inspectRange(schema, this.#names(effective, 'integer'))
 		this.#inspectObject(schema)
 	}
@@ -342,7 +353,9 @@ export class SchemaShaper {
 		for (const index of iterateIndices(() => texts.length)) {
 			const keyword = texts[index]
 			if (keyword === undefined) continue
-			const value: unknown = INTRINSICS.reflect.read(schema, keyword)
+			const value: unknown = INTRINSICS.own(schema, keyword)
+				? INTRINSICS.reflect.read(schema, keyword)
+				: undefined
 			if (value !== undefined && !isString(value)) {
 				throw this.#refusal(`${keyword} must be a string`, keyword)
 			}
@@ -351,12 +364,16 @@ export class SchemaShaper {
 		for (const index of iterateIndices(() => flags.length)) {
 			const keyword = flags[index]
 			if (keyword === undefined) continue
-			const value: unknown = INTRINSICS.reflect.read(schema, keyword)
+			const value: unknown = INTRINSICS.own(schema, keyword)
+				? INTRINSICS.reflect.read(schema, keyword)
+				: undefined
 			if (value !== undefined && !isBoolean(value)) {
 				throw this.#refusal(`${keyword} must be a boolean`, keyword)
 			}
 		}
-		const examples: unknown = INTRINSICS.reflect.read(schema, 'examples')
+		const examples: unknown = INTRINSICS.own(schema, 'examples')
+			? INTRINSICS.reflect.read(schema, 'examples')
+			: undefined
 		if (examples !== undefined && !isArray(examples)) {
 			throw this.#refusal('examples must be an array', 'examples')
 		}
@@ -364,7 +381,7 @@ export class SchemaShaper {
 
 	// The node's type names, an absent keyword reading as none.
 	#inspectType(schema: JSONSchema): readonly string[] {
-		const declared: unknown = schema.type
+		const declared: unknown = INTRINSICS.own(schema, 'type') ? schema.type : undefined
 		if (declared === undefined) return []
 		const names = isArray(declared) ? this.#entries(declared, 'type') : [declared]
 		const known = names.length > 0 && this.#unique(names)
@@ -443,8 +460,8 @@ export class SchemaShaper {
 	}
 
 	#inspectRange(schema: JSONSchema, integer: boolean): void {
-		const min: unknown = schema.minimum
-		const max: unknown = schema.maximum
+		const min: unknown = INTRINSICS.own(schema, 'minimum') ? schema.minimum : undefined
+		const max: unknown = INTRINSICS.own(schema, 'maximum') ? schema.maximum : undefined
 		if (min !== undefined && !isFiniteNumber(min)) {
 			throw this.#refusal('a range bound must be a finite number', 'minimum')
 		}
@@ -460,11 +477,13 @@ export class SchemaShaper {
 	}
 
 	#inspectObject(schema: JSONSchema): void {
-		const properties: unknown = schema.properties
+		const properties: unknown = INTRINSICS.own(schema, 'properties') ? schema.properties : undefined
 		if (properties !== undefined && !isRecord(properties)) {
 			throw this.#refusal('properties must be a plain record', 'properties')
 		}
-		const extra: unknown = schema.additionalProperties
+		const extra: unknown = INTRINSICS.own(schema, 'additionalProperties')
+			? schema.additionalProperties
+			: undefined
 		if (extra !== undefined && !isBoolean(extra) && !isRecord(extra)) {
 			throw this.#refusal(
 				'additionalProperties must be a boolean or a schema',
@@ -582,13 +601,16 @@ export class SchemaShaper {
 	// produced shape's `description` option.
 	#build(schema: JSONSchema, depth: number, enclosed: boolean): ContractShape {
 		this.#built += 1
-		const description = isString(schema.description) ? schema.description : undefined
+		const description =
+			INTRINSICS.own(schema, 'description') && isString(schema.description)
+				? schema.description
+				: undefined
 
 		if (INTRINSICS.own(schema, '$ref')) {
 			return this.#widen('a reference is not resolved', description, '$ref')
 		}
 
-		if (isArray(schema.enum)) {
+		if (INTRINSICS.own(schema, 'enum') && isArray(schema.enum)) {
 			const observed = INTRINSICS.from(
 				iterateIndices(
 					() =>
@@ -639,17 +661,17 @@ export class SchemaShaper {
 			if (nullable) return nullShape(description === undefined ? undefined : { description })
 		}
 
-		if (isArray(schema.oneOf)) {
+		if (INTRINSICS.own(schema, 'oneOf') && isArray(schema.oneOf)) {
 			const union = this.#buildUnion(schema.oneOf, 'oneOf', depth, description, enclosed)
 			if (union !== undefined) return union
 		}
 
-		if (isArray(schema.anyOf)) {
+		if (INTRINSICS.own(schema, 'anyOf') && isArray(schema.anyOf)) {
 			const union = this.#buildUnion(schema.anyOf, 'anyOf', depth, description, enclosed)
 			if (union !== undefined) return union
 		}
 
-		const category = schema.type
+		const category = INTRINSICS.own(schema, 'type') ? schema.type : undefined
 		if (isArray(category)) {
 			const observed = INTRINSICS.from(parseEnumValues(category, JSON_SCHEMA_TYPES))
 			if (
@@ -695,24 +717,33 @@ export class SchemaShaper {
 			return description === undefined ? union : INTRINSICS.freeze({ ...union, description })
 		}
 
-		const type = isString(category) ? schema.type : undefined
+		const type = isString(category) && INTRINSICS.own(schema, 'type') ? schema.type : undefined
 
 		if (type === 'string') {
-			const bounds = deriveLengthBounds(schema.minLength, schema.maxLength)
+			const bounds = deriveLengthBounds(
+				INTRINSICS.own(schema, 'minLength') ? schema.minLength : undefined,
+				INTRINSICS.own(schema, 'maxLength') ? schema.maxLength : undefined,
+			)
 			return stringShape({
 				...bounds,
 				...(description === undefined ? {} : { description }),
 			})
 		}
 		if (type === 'number') {
-			const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
+			const bounds = deriveRangeBounds(
+				INTRINSICS.own(schema, 'minimum') ? schema.minimum : undefined,
+				INTRINSICS.own(schema, 'maximum') ? schema.maximum : undefined,
+			)
 			return numberShape({
 				...bounds,
 				...(description === undefined ? {} : { description }),
 			})
 		}
 		if (type === 'integer') {
-			const bounds = deriveRangeBounds(schema.minimum, schema.maximum)
+			const bounds = deriveRangeBounds(
+				INTRINSICS.own(schema, 'minimum') ? schema.minimum : undefined,
+				INTRINSICS.own(schema, 'maximum') ? schema.maximum : undefined,
+			)
 			const emptyRange =
 				INTRINSICS.ceil(bounds.min ?? Number.NEGATIVE_INFINITY) >
 				INTRINSICS.floor(bounds.max ?? Number.POSITIVE_INFINITY)
@@ -737,20 +768,29 @@ export class SchemaShaper {
 		if (type === 'array') {
 			const items = INTRINSICS.own(schema, 'prefixItems')
 				? rawShape({})
-				: isRecord(schema.items)
+				: INTRINSICS.own(schema, 'items') && isRecord(schema.items)
 					? this.#descend(schema.items, depth - 1, enclosed, 'items')
 					: this.#widen('an array needs an items schema', undefined, 'items')
-			const bounds = deriveLengthBounds(schema.minItems, schema.maxItems)
+			const bounds = deriveLengthBounds(
+				INTRINSICS.own(schema, 'minItems') ? schema.minItems : undefined,
+				INTRINSICS.own(schema, 'maxItems') ? schema.maxItems : undefined,
+			)
 			return arrayShape(items, {
 				...bounds,
 				...(description === undefined ? {} : { description }),
 			})
 		}
 
-		if (type === 'object' || (this.#strict && type === undefined && isRecord(schema.properties))) {
+		if (
+			type === 'object' ||
+			(this.#strict &&
+				type === undefined &&
+				INTRINSICS.own(schema, 'properties') &&
+				isRecord(schema.properties))
+		) {
 			return this.#buildObject(schema, depth, description, enclosed)
 		}
-		if (type === undefined && isRecord(schema.properties)) {
+		if (type === undefined && INTRINSICS.own(schema, 'properties') && isRecord(schema.properties)) {
 			return this.#describe(
 				unionShape(
 					this.#buildObject(schema, depth, undefined, true),
@@ -794,6 +834,7 @@ export class SchemaShaper {
 			[
 				(entry: JSONSchema | true) =>
 					entry !== true &&
+					INTRINSICS.own(entry, 'type') &&
 					entry.type === 'null' &&
 					!INTRINSICS.own(entry, '$ref') &&
 					!INTRINSICS.own(entry, 'enum') &&
@@ -872,32 +913,41 @@ export class SchemaShaper {
 				'additionalProperties',
 			)
 		}
-		const propertiesSource = isRecord(schema.properties) ? schema.properties : undefined
-		const requiredSource = isArray(schema.required)
-			? INTRINSICS.from(
-					iterateIndices(
-						() =>
-							INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'required'])
-								.length,
-					),
-					(index) =>
-						INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'required'])[
-							index
-						],
-				)
-			: []
+		const propertiesSource =
+			INTRINSICS.own(schema, 'properties') && isRecord(schema.properties)
+				? schema.properties
+				: undefined
+		const requiredSource =
+			INTRINSICS.own(schema, 'required') && isArray(schema.required)
+				? INTRINSICS.from(
+						iterateIndices(
+							() =>
+								INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'required'])
+									.length,
+						),
+						(index) =>
+							INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'required'])[
+								index
+							],
+					)
+				: []
 		const allKeys = propertiesSource === undefined ? [] : INTRINSICS.keys(propertiesSource)
 		const truncated = allKeys.length > INFER_BREADTH_LIMIT
 		if (this.#strict && truncated) {
 			throw this.#refusal('properties exceeds the breadth limit', 'properties')
 		}
 		const keys = limitEntries(allKeys, INFER_BREADTH_LIMIT)
-		const extra = schema.additionalProperties
+		const extra = INTRINSICS.own(schema, 'additionalProperties')
+			? schema.additionalProperties
+			: undefined
 		const unread = truncated || INTRINSICS.own(schema, 'patternProperties')
 		const open = unread || (extra !== false && (!this.#strict || extra !== undefined))
 		const pairs = INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(keys), [
 			(key: string) => {
-				const child = propertiesSource?.[key]
+				const child =
+					propertiesSource !== undefined && INTRINSICS.own(propertiesSource, key)
+						? propertiesSource[key]
+						: undefined
 				const childShape = isRecord(child)
 					? this.#descend(child, depth - 1, enclosed, 'properties', key)
 					: this.#widen(

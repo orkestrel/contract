@@ -9,6 +9,7 @@ import type { TerminalIntrinsic } from '../../setup.js'
 import {
 	attempt,
 	cloneShape,
+	CLONE_NODE_LIMIT,
 	COMPILE_DEPTH_LIMIT,
 	compileGuard,
 	compileSchema,
@@ -51,6 +52,37 @@ import {
 } from '../../setupServer.js'
 
 describe('ShapeCloner', () => {
+	it('shares the capture limit with every owned default', () => {
+		const reads = new ObservationCounter()
+		const source: Record<string, ContractShape> = Object.fromEntries(
+			Array.from({ length: 1024 }, (_, index) => [String(index), { category: 'string' }]),
+		)
+		const properties = new Proxy(source, {
+			get: (target, key, receiver) => {
+				reads.increment()
+				return Reflect.get(target, key, receiver)
+			},
+		})
+		const value = Object.fromEntries(Array.from({ length: 1024 }, (_, index) => [String(index), 1]))
+		for (const defaults of [false, true]) {
+			const before = reads.value
+			const shape: ContractShape = {
+				category: 'object',
+				properties: Object.fromEntries(
+					Array.from({ length: 256 }, (_, index): readonly [string, ContractShape] => [
+						String(index),
+						defaults
+							? { category: 'optional', inner: { category: 'json' }, default: value }
+							: { category: 'object', properties },
+					]),
+				),
+			}
+			const error = captureContractError(() => cloneShape(shape))
+			expect(error.code).toBe('clone')
+			expect(error.context?.limit).toBe(CLONE_NODE_LIMIT)
+			expect(reads.value - before).toBe(defaults ? 0 : 2 * (CLONE_NODE_LIMIT - 256))
+		}
+	})
 	it('keeps HEAD cloned vocabularies under polluted array construction', () => {
 		const shape: ContractShape = {
 			category: 'object',
@@ -1137,26 +1169,35 @@ describe('ShapeCloner — one arbiter, one verdict (H9)', () => {
 		}
 	})
 
-	it('reaches the depth verdict in time proportional to the limit, not to the declaration', () => {
+	it('bounds ownership work before the depth verdict', () => {
 		// Capture materialised the ENTIRE over-limit graph — wiring and freezing a
 		// declaration certain to be refused — before the depth gate ever ran, and
 		// every child registration copies its whole path, so the cost was quadratic:
 		// 4,000 levels took 142 ms against `validateShape`'s 2 ms for the identical
 		// verdict.
+		const reads = new ObservationCounter()
 		const declaration = Array.from({ length: 8_000 }).reduce<ContractShape>(
-			(items) => ({ category: 'array', items }),
+			(items) =>
+				new Proxy(
+					{ category: 'array', items },
+					{
+						getOwnPropertyDescriptor: (target, key) => {
+							if (key === 'category') reads.increment()
+							return Reflect.getOwnPropertyDescriptor(target, key)
+						},
+					},
+				),
 			{ category: 'string' },
 		)
 
 		const reference = captureContractError(() => validateShape(declaration))
-		const started = performance.now()
+		const before = reads.value
 		const observed = captureContractError(() => cloneShape(declaration))
-		const elapsed = performance.now() - started
 
 		expect(observed.code).toBe('depth')
 		expect(observed.message).toBe(reference.message)
 		expect(observed.context?.path).toEqual(reference.context?.path)
-		expect(elapsed).toBeLessThan(500)
+		expect(reads.value - before).toBe(8_000 + COMPILE_DEPTH_LIMIT + 1)
 
 		// Control: the boundary itself is unmoved — the last legal depth still
 		// clones, and the first illegal one still refuses.
