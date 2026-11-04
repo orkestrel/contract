@@ -1,3 +1,17 @@
+import {
+	extractPath,
+	extractForms,
+	extractSchema,
+	renderPath,
+	renderList,
+	renderForm,
+	describeFaultLine,
+	describeFaults,
+	FAULT_LIMIT,
+	FAULT_LIST_LIMIT,
+	FAULT_SCHEMA_LIMIT,
+	FAULT_TEXT_LIMIT,
+} from '@src/core'
 import type {
 	AuditFault,
 	ArrayRead,
@@ -15,6 +29,246 @@ import type {
 	StringShape,
 	Success,
 } from '@src/core'
+import * as door from '@src/core'
+import { createUndefinedContract, recordAdmission } from '../../setup.js'
+
+describe('admitValue', () => {
+	it.each([
+		{ input: 3, success: true, calls: ['is', 'parse'] },
+		{ input: '3', success: true, calls: ['is', 'audit', 'parse'] },
+		{ input: 'bad', success: false, calls: ['is', 'audit', 'parse', 'explain'] },
+	])('schedules artifacts for $input', ({ input, success, calls }) => {
+		const recorded = recordAdmission(door.createContract(door.numberShape()))
+		expect(door.admitValue(recorded.contract, input).success).toBe(success)
+		expect(recorded.calls.calls.map(([name]) => name)).toEqual(calls)
+	})
+
+	it('accepts a valid undefined result on the fast path', () => {
+		const contract = createUndefinedContract()
+		expect(contract.is(undefined)).toBe(true)
+		expect(door.admitValue(contract, undefined)).toEqual({
+			success: true,
+			value: { value: undefined, repairs: [] },
+		})
+	})
+
+	it('refuses a parse failure after a guard passed instead of returning the original input', () => {
+		const values = [3, 'invalid'].values()
+		const value = Object.defineProperty({}, 'amount', {
+			enumerable: true,
+			get: () => values.next().value,
+		})
+		const contract = door.createContract(door.objectShape({ amount: door.numberShape() }))
+		expect(door.admitValue(contract, value)).toEqual({ success: false, error: { faults: [] } })
+	})
+
+	it('omits an own optional undefined without reporting it as a repair', () => {
+		const contract = door.createContract(
+			door.objectShape({ note: door.optionalShape(door.stringShape()) }),
+		)
+		expect(door.admitValue(contract, { note: undefined })).toEqual({
+			success: true,
+			value: { value: {}, repairs: [] },
+		})
+		expect(
+			door.admitValue(door.createContract(door.objectShape({ note: door.stringShape() })), {
+				note: undefined,
+			}).success,
+		).toBe(false)
+	})
+
+	it('distinguishes an unreadable member from an own undefined omission', () => {
+		const cause = new Error('read failed')
+		const value = Object.defineProperty({}, 'note', {
+			enumerable: true,
+			get() {
+				throw cause
+			},
+		})
+		const contract = door.createContract(
+			door.objectShape({ note: door.optionalShape(door.stringShape()) }),
+		)
+		const result = door.admitValue(contract, value)
+		expect(result.success).toBe(false)
+		if (result.success) throw new Error('Expected refusal')
+		expect(result.error.cause).toMatchObject({ cause })
+		const fault: door.AuditFault = {
+			reason: 'type',
+			path: ['note'],
+			expected: 'string',
+			received: '',
+		}
+		expect(() => door.matchesUndefinedOmission(fault, value, {})).toThrow(cause)
+		expect(door.matchesUndefinedOmission(fault, {}, {})).toBe(false)
+	})
+
+	it('preserves parser ownership for objects and oneOf input identity', () => {
+		const value = { amount: 3 }
+		const shape = door.objectShape({ amount: door.numberShape() })
+		const rebuilt = door.admitValue(door.createContract(shape), value)
+		const aliased = door.admitValue(
+			door.createContract(door.oneOfShape(shape, door.stringShape())),
+			value,
+		)
+		if (!rebuilt.success || !aliased.success) throw new Error('Expected admission')
+		expect(rebuilt.value.value).not.toBe(value)
+		expect(aliased.value.value).toBe(value)
+		expect(value).toEqual({ amount: 3 })
+	})
+
+	it('refuses an unresolved union and suppresses arbitrary arm faults', () => {
+		const contract = door.createContract(
+			door.unionShape(
+				door.objectShape({ left: door.numberShape() }),
+				door.objectShape({ right: door.numberShape() }),
+			),
+		)
+		const result = door.admitValue(contract, { right: '3' })
+		expect(result).toEqual({
+			success: false,
+			error: { faults: [{ reason: 'variant', path: [], variants: 2 }] },
+		})
+	})
+
+	it('repairs a named arm and preserves its refused leaf path', () => {
+		const contract = door.createContract(
+			door.unionShape(
+				door.objectShape({ tag: door.literalShape(['amount']), amount: door.numberShape() }),
+				door.objectShape({ tag: door.literalShape(['text']), text: door.stringShape() }),
+			),
+		)
+		expect(door.admitValue(contract, { tag: 'amount', amount: '3' })).toMatchObject({
+			success: true,
+			value: {
+				value: { tag: 'amount', amount: 3 },
+				repairs: [{ path: ['amount'], reason: 'type' }],
+			},
+		})
+		expect(door.admitValue(contract, { tag: 'amount', amount: 'bad' })).toMatchObject({
+			success: false,
+			error: { faults: [{ path: ['amount'], reason: 'type' }] },
+		})
+	})
+
+	it('refuses capped audits even when every visible repair is lossless', () => {
+		const contract = door.createContract(door.arrayShape(door.numberShape()))
+		expect(
+			door.admitValue(
+				contract,
+				Array.from({ length: door.FAULT_LIMIT - 1 }, () => '3'),
+			).success,
+		).toBe(true)
+		const result = door.admitValue(
+			contract,
+			Array.from({ length: door.FAULT_LIMIT + 1 }, () => '3'),
+		)
+		if (result.success) throw new Error('Expected capped refusal')
+		expect(result.error.faults).toHaveLength(door.FAULT_LIMIT)
+	})
+
+	it.each([
+		{ input: '3', shape: door.numberShape(), accepted: true },
+		{ input: ' 3 ', shape: door.integerShape(), accepted: true },
+		...['3.0', '007', '0x10', '1e3', '+5', '.5', '-0', '9007199254740993', '1e-400'].map(
+			(input) => ({ input, shape: door.numberShape(), accepted: false }),
+		),
+		{ input: 'true', shape: door.booleanShape(), accepted: true },
+		{ input: 'false', shape: door.booleanShape(), accepted: true },
+		{ input: 1, shape: door.booleanShape(), accepted: false },
+		{ input: ' fast ', shape: door.literalShape(['fast']), accepted: true },
+		{ input: '3.0', shape: door.literalShape([3]), accepted: false },
+		{ input: 3, shape: door.stringShape(), accepted: true },
+		{ input: Infinity, shape: door.stringShape(), accepted: false },
+	])('applies lossless admission to $input', ({ input, shape, accepted }) => {
+		expect(door.admitValue(door.createContract(shape), input).success).toBe(accepted)
+	})
+
+	it('refuses undeclared keys and failed constraints', () => {
+		const contract = door.createContract(door.objectShape({ amount: door.numberShape({ min: 2 }) }))
+		expect(door.admitValue(contract, { amount: 3, extra: 1 })).toMatchObject({
+			success: false,
+			error: { faults: [{ reason: 'extra', path: ['extra'] }] },
+		})
+		expect(door.admitValue(contract, { amount: '1' })).toMatchObject({
+			success: false,
+			error: {
+				faults: expect.arrayContaining([
+					{
+						reason: 'constraint',
+						path: ['amount'],
+						expected: 'number',
+						constraint: 'min',
+						limit: 2,
+						received: '1',
+					},
+				]),
+			},
+		})
+	})
+})
+
+describe('shared fault text', () => {
+	it('encodes names, foreign text, limits and descriptions and ends with a send summary', () => {
+		const key = 'name\nFORGED'
+		const schema: door.JSONSchema = {
+			type: 'object',
+			properties: { [key]: { type: 'string', description: 'note\nFORGED' } },
+			required: [key],
+		}
+		const fault: door.AuditFault = {
+			reason: 'constraint',
+			path: [key],
+			expected: 'string',
+			constraint: 'pattern',
+			received: 'x\nFORGED',
+			limit: 'y\nFORGED',
+		}
+		const text = door.describeFaults([fault], schema)
+		expect(text).not.toContain('\nFORGED')
+		expect(text).toContain('description "note\\nFORGED"')
+		expect(text).toContain('limit "y\\nFORGED"')
+		expect(text.split('\n').at(-1)).toMatch(/^send /u)
+	})
+
+	it('includes declared keys, literal candidates, and discriminator hints', () => {
+		const shape = door.objectShape({ mode: door.literalShape(['fast', 'slow']) })
+		const contract = door.createContract(shape)
+		const text = door.describeFaults(contract.audit({ mode: 'wrong', typo: 1 }), contract.schema)
+		expect(text).toContain('"fast"')
+		expect(text).toContain('declared key: mode')
+		const union = door.createContract(
+			door.unionShape(
+				door.objectShape({ tag: door.literalShape(['left']), left: door.numberShape() }),
+				door.objectShape({ tag: door.literalShape(['right']), right: door.stringShape() }),
+			),
+		)
+		const report = door.describeFaults(union.audit({ tag: 'wrong' }), union.schema)
+		expect(report).toContain('discriminator "tag" expects "left", "right"')
+		expect(report).toContain('one of:')
+	})
+
+	it.each([0, 1, 2, 40, 160, 512, 2048, 4096])('bounds UTF-16 text at %s', (limit) => {
+		const faults: readonly door.AuditFault[] = Array.from({ length: door.FAULT_LIMIT }, () => ({
+			reason: 'extra',
+			path: ['😀'.repeat(100)],
+		}))
+		const text = door.describeFaults(faults, { type: 'object' }, { limit })
+		expect(text.length).toBeLessThanOrEqual(Math.min(limit, 2048))
+		expect(text.isWellFormed()).toBe(true)
+		expect(limit < 160 || text.includes('more faults')).toBe(true)
+		expect(limit < 160 || text.includes('report stops at 64')).toBe(true)
+		expect(limit < 160 || text.endsWith('send object')).toBe(true)
+	})
+
+	it('renders without a schema and rejects invalid budgets', () => {
+		expect(door.describeFaults([{ reason: 'missing', path: ['age'], expected: 'number' }])).toBe(
+			'age: missing; expected number',
+		)
+		expect(door.truncateFaultText('a😀z', 3)).toBe('a…')
+		for (const limit of [-1, 1.5, Infinity, Number.NaN])
+			expect(() => door.describeFaults([], undefined, { limit })).toThrow(door.ContractError)
+	})
+})
 import {
 	createSubstituteValues,
 	createMarker,
@@ -4489,5 +4743,509 @@ describe('matchesLosslessRepair', () => {
 		expect(matchesLosslessRepair(number, hostile, { a: 30 })).toBe(false)
 		expect(matchesLosslessRepair(number, { a: '30' }, hostile)).toBe(false)
 		expect(matchesLosslessRepair(number, accessor, { a: 30 })).toBe(true)
+	})
+})
+
+describe('extractPath', () => {
+	it('reads an array path as it is and a string path as one segment', () => {
+		expect(extractPath({ reason: 'extra', path: ['a', 'b'] })).toEqual(['a', 'b'])
+		expect(extractPath({ reason: 'extra', path: 'a' })).toEqual(['a'])
+		expect(extractPath({ reason: 'extra', path: [] })).toEqual([])
+	})
+})
+
+describe('extractForms', () => {
+	it('lists a schema, then the arms of its union, and nothing for no schema', () => {
+		const object = { type: 'object' } as const
+		const nullable = { anyOf: [object, { type: 'null' }] } as const
+
+		expect(extractForms(object)).toEqual([object])
+		expect(extractForms(nullable)).toEqual([nullable, object, { type: 'null' }])
+		expect(extractForms(undefined)).toEqual([])
+	})
+})
+
+describe('extractSchema', () => {
+	const leaf = { type: 'number' } as const
+	const closed = { type: 'object', properties: { leaf } } as const
+
+	it('walks properties, items, record values, and the arms of a union', () => {
+		expect(extractSchema(closed, [])).toBe(closed)
+		expect(extractSchema(closed, ['leaf'])).toBe(leaf)
+		expect(extractSchema({ type: 'array', items: closed }, ['3', 'leaf'])).toBe(leaf)
+		expect(extractSchema({ type: 'object', additionalProperties: closed }, ['any', 'leaf'])).toBe(
+			leaf,
+		)
+		expect(extractSchema({ anyOf: [closed, { type: 'null' }] }, ['leaf'])).toBe(leaf)
+	})
+
+	it('returns undefined past what the schema declares, without reading the prototype', () => {
+		expect(extractSchema(closed, ['absent'])).toBeUndefined()
+		expect(extractSchema(closed, ['leaf', 'absent'])).toBeUndefined()
+		expect(extractSchema(closed, ['constructor'])).toBeUndefined()
+		expect(extractSchema(closed, ['__proto__'])).toBeUndefined()
+	})
+
+	it('stops on a union that nests itself, because each step takes a key', () => {
+		const cycle: { anyOf: unknown[] } = { anyOf: [] }
+		cycle.anyOf.push(cycle)
+
+		expect(Reflect.apply(extractSchema, undefined, [cycle, ['a', 'b']])).toBeUndefined()
+	})
+})
+
+describe('renderPath', () => {
+	it('joins plain identifiers and renders a root as empty', () => {
+		expect(renderPath(['profile', 'age', '0'])).toBe('profile.age.0')
+		expect(renderPath([])).toBe('')
+	})
+
+	it('encodes and caps a segment that is not a plain identifier', () => {
+		expect(renderPath(['line\nbreak'])).toBe('"line\\nbreak"')
+		expect(renderPath(['a.b'])).toBe('"a.b"')
+		expect(renderPath([''])).toBe('""')
+		expect(renderPath(['x'.repeat(5000)]).length).toBeLessThan(100)
+	})
+
+	it('elides the middle of a long path and keeps both ends', () => {
+		const path = Array.from({ length: 40 }, (_, index) => `level${String(index)}`)
+
+		expect(renderPath(path)).toBe('level0.….level37.level38.level39')
+	})
+})
+
+describe('renderList', () => {
+	it('joins a short list whole', () => {
+		expect(renderList(['a', 'b'])).toBe('a, b')
+		expect(renderList([])).toBe('')
+	})
+
+	it('bounds a long list and says how many it left out', () => {
+		const names = Array.from({ length: FAULT_LIST_LIMIT + 5 }, (_, index) => `k${String(index)}`)
+
+		const text = renderList(names)
+
+		expect(text.split(', ')).toHaveLength(FAULT_LIST_LIMIT)
+		expect(text.endsWith(' and 5 more')).toBe(true)
+	})
+})
+
+describe('renderForm', () => {
+	it('names a leaf by its type, and a schema that says nothing as any', () => {
+		expect(renderForm({ type: 'string' })).toBe('string')
+		expect(renderForm({ type: 'integer' })).toBe('integer')
+		expect(renderForm({ type: 'null' })).toBe('null')
+		expect(renderForm({})).toBe('any')
+	})
+
+	it('keeps the bounds a caller must meet', () => {
+		expect(renderForm({ type: 'string', minLength: 3, maxLength: 9 })).toBe(
+			'string (minLength 3, maxLength 9)',
+		)
+		expect(renderForm({ type: 'number', minimum: 0, maximum: 1 })).toBe(
+			'number (minimum 0, maximum 1)',
+		)
+		expect(renderForm({ type: 'array', items: { type: 'string' }, minItems: 1 })).toBe(
+			'array of string (minItems 1)',
+		)
+		expect(renderForm({ type: 'string', pattern: '^a' })).toBe('string (pattern "^a")')
+	})
+
+	it('names literals, unions, and arrays', () => {
+		expect(renderForm({ enum: ['a', 'b'] })).toBe('"a" | "b"')
+		expect(renderForm({ anyOf: [{ type: 'integer' }, { type: 'null' }] })).toBe('integer | null')
+		expect(renderForm({ oneOf: [{ type: 'string' }, { type: 'number' }] })).toBe('string | number')
+		expect(renderForm({ type: 'array' })).toBe('array')
+		expect(renderForm({ type: 'array', items: { type: 'number' } })).toBe('array of number')
+	})
+
+	it('lists required keys first and marks the optional ones', () => {
+		expect(
+			renderForm({
+				type: 'object',
+				properties: { note: { type: 'string' }, city: { type: 'string' } },
+				required: ['city'],
+			}),
+		).toBe('{"city": string, "note"?: string}')
+	})
+
+	it('names an object with no keys, and one holding values of one form', () => {
+		expect(renderForm({ type: 'object' })).toBe('object')
+		expect(renderForm({ type: 'object', properties: {} })).toBe('object')
+		expect(renderForm({ type: 'object', additionalProperties: { type: 'number' } })).toBe(
+			'object of number',
+		)
+		expect(renderForm({ type: 'object', additionalProperties: true })).toBe('object')
+	})
+
+	it('nests until its room runs out', () => {
+		const inner = { type: 'object', properties: { deep: { type: 'string' } } } as const
+
+		expect(renderForm({ type: 'object', properties: { page: inner } })).toBe(
+			'{"page"?: {"deep"?: string}}',
+		)
+		expect(renderForm(inner, 8)).toBe('object')
+		expect(renderForm({ type: 'array', items: inner }, 8)).toBe('array')
+		expect(renderForm({ anyOf: [inner] }, 8)).toBe('any')
+	})
+
+	it('encodes a key and caps its length', () => {
+		expect(renderForm({ type: 'object', properties: { 'a b': {} } })).toBe('{"a b"?: any}')
+		expect(
+			renderForm({ type: 'object', properties: { ['k'.repeat(5000)]: {} } }).length,
+		).toBeLessThan(100)
+	})
+
+	it('bounds its text, and names how many keys it left out when they would fit', () => {
+		const properties = Object.fromEntries(
+			Array.from({ length: FAULT_LIST_LIMIT + 3 }, (_, index) => [
+				`key${String(index)}`,
+				{ type: 'string' as const },
+			]),
+		)
+
+		const cut = renderForm({ type: 'object', properties })
+		const whole = renderForm({ type: 'object', properties }, 4096)
+
+		expect(Array.from(cut).length).toBeLessThanOrEqual(FAULT_SCHEMA_LIMIT)
+		expect(cut.endsWith('…')).toBe(true)
+		expect(whole.endsWith(', and 3 more}')).toBe(true)
+	})
+
+	it('stops on a schema that holds itself', () => {
+		const array: { type: string; items?: unknown } = { type: 'array' }
+		array.items = array
+		const union: { anyOf: unknown[] } = { anyOf: [] }
+		union.anyOf.push(union)
+		const object: { type: string; properties: Record<string, unknown> } = {
+			type: 'object',
+			properties: {},
+		}
+		object.properties.self = object
+
+		expect(Reflect.apply(renderForm, undefined, [array])).toContain('array')
+		expect(Reflect.apply(renderForm, undefined, [union])).toBe('any')
+		expect(Reflect.apply(renderForm, undefined, [object])).toContain('"self"?')
+	})
+})
+
+describe('describeFaultLine', () => {
+	it('lists the keys declared where an undeclared key sits', () => {
+		expect(
+			describeFaultLine(
+				{ reason: 'extra', path: ['temprature'] },
+				{
+					type: 'object',
+					properties: { city: { type: 'string' }, temperature: { type: 'number' } },
+				},
+			),
+		).toBe(
+			'temprature: extra; this key is not declared, remove it or use a declared key: city, temperature',
+		)
+	})
+
+	it('reads the declared keys at the parent of a nested key', () => {
+		expect(
+			describeFaultLine(
+				{ reason: 'extra', path: ['rows', '0', 'typo'] },
+				{
+					type: 'object',
+					properties: {
+						rows: {
+							type: 'array',
+							items: { type: 'object', properties: { id: { type: 'number' } } },
+						},
+					},
+				},
+			),
+		).toBe('rows.0.typo: extra; this key is not declared, remove it or use a declared key: id')
+	})
+
+	it('reads the declared keys through a nullable parent', () => {
+		expect(
+			describeFaultLine(
+				{ reason: 'extra', path: ['page', 'limti'] },
+				{
+					type: 'object',
+					properties: {
+						page: {
+							anyOf: [
+								{ type: 'object', properties: { limit: { type: 'integer' } } },
+								{ type: 'null' },
+							],
+						},
+					},
+				},
+			),
+		).toBe('page.limti: extra; this key is not declared, remove it or use a declared key: limit')
+	})
+
+	it('describes an extra key on a closed empty schema without tool policy', () => {
+		expect(
+			describeFaultLine(
+				{ reason: 'extra', path: ['x'] },
+				{ type: 'object', properties: {}, additionalProperties: false },
+			),
+		).toBe('x: extra; this key is not declared, remove it')
+	})
+
+	it('says only to remove a key under a nested object that declares nothing', () => {
+		expect(
+			describeFaultLine(
+				{ reason: 'extra', path: ['page', 'x'] },
+				{
+					type: 'object',
+					properties: { page: { type: 'object', properties: {}, additionalProperties: false } },
+					additionalProperties: false,
+				},
+			),
+		).toBe('page.x: extra; this key is not declared, remove it')
+	})
+
+	it('bounds and encodes the declared keys', () => {
+		const properties = Object.fromEntries(
+			Array.from({ length: 40 }, (_, index) => [`${'k'.repeat(5000)}${String(index)}`, {}]),
+		)
+
+		const line = describeFaultLine({ reason: 'extra', path: ['x'] }, { type: 'object', properties })
+
+		expect(line.length).toBeLessThan(1200)
+		expect(line.endsWith(' and 28 more')).toBe(true)
+	})
+
+	it('names the candidates of a literal, on a type fault and a missing one', () => {
+		const schema = { type: 'object', properties: { unit: { enum: ['c', 'f'] } } } as const
+
+		expect(
+			describeFaultLine(
+				{ reason: 'type', path: ['unit'], expected: 'literal', received: '"k"' },
+				schema,
+			),
+		).toBe('unit: type; expected literal; received "\\\"k\\\""; send one of "c", "f"')
+		expect(
+			describeFaultLine({ reason: 'missing', path: ['unit'], expected: 'literal' }, schema),
+		).toBe('unit: missing; expected literal; send one of "c", "f"')
+	})
+
+	it('names null among the candidates of a nullable literal', () => {
+		expect(
+			describeFaultLine(
+				{ reason: 'type', path: ['unit'], expected: 'literal', received: '"k"' },
+				{
+					type: 'object',
+					properties: { unit: { anyOf: [{ enum: ['c'] }, { type: 'null' }] } },
+				},
+			),
+		).toBe('unit: type; expected literal; received "\\\"k\\\""; send one of "c", null')
+	})
+
+	it('bounds the candidates of a long literal', () => {
+		const values = Array.from({ length: 50 }, (_, index) => `${'v'.repeat(5000)}${String(index)}`)
+
+		const line = describeFaultLine(
+			{ reason: 'type', path: ['unit'], expected: 'literal', received: '"k"' },
+			{ type: 'object', properties: { unit: { enum: values } } },
+		)
+
+		expect(line.length).toBeLessThan(1200)
+		expect(line.endsWith(' and 38 more')).toBe(true)
+	})
+
+	it('says what a variant must be, naming each declared form', () => {
+		expect(
+			describeFaultLine(
+				{ reason: 'variant', path: ['limit'], variants: 2 },
+				{
+					type: 'object',
+					properties: { limit: { anyOf: [{ type: 'integer' }, { type: 'boolean' }] } },
+				},
+			),
+		).toBe(
+			'limit: variant; the value matches none of the 2 declared forms; send it exactly as the schema declares, one of: integer or boolean',
+		)
+	})
+
+	it('keeps the keys and types of each form past the size the whole schema would take', () => {
+		const city = {
+			type: 'object',
+			properties: { city: { type: 'string' }, region: { type: 'string' } },
+			required: ['city'],
+			additionalProperties: false,
+		} as const
+		const zip = {
+			type: 'object',
+			properties: { zip: { type: 'number' }, plus: { type: 'number' } },
+			required: ['zip'],
+			additionalProperties: false,
+		} as const
+		const forms = { anyOf: [city, zip] }
+
+		expect(JSON.stringify(forms).length).toBeGreaterThan(FAULT_SCHEMA_LIMIT)
+		expect(
+			describeFaultLine(
+				{ reason: 'variant', path: ['choice'], variants: 2 },
+				{ type: 'object', properties: { choice: forms } },
+			),
+		).toBe(
+			'choice: variant; the value matches none of the 2 declared forms; send it exactly as the schema declares, one of: {"city": string, "region"?: string} or {"zip": number, "plus"?: number}',
+		)
+	})
+
+	it('bounds the forms it names and says how many it left out', () => {
+		const forms = {
+			anyOf: Array.from({ length: FAULT_LIST_LIMIT + 4 }, (_, index) => ({
+				enum: [`form${String(index)}`],
+			})),
+		}
+
+		const line = describeFaultLine(
+			{ reason: 'variant', path: ['limit'], variants: FAULT_LIST_LIMIT + 4 },
+			{ type: 'object', properties: { limit: forms } },
+		)
+
+		expect(line).toContain('"form0" or "form1"')
+		expect(line).not.toContain(`"form${String(FAULT_LIST_LIMIT)}"`)
+		expect(line.endsWith(' and 4 more')).toBe(true)
+	})
+
+	it('keeps a line within its share of the text however wide each form is', () => {
+		const properties = Object.fromEntries(
+			Array.from({ length: 40 }, (_, index) => [`${'k'.repeat(5000)}${String(index)}`, {}]),
+		)
+		const forms = {
+			anyOf: Array.from({ length: FAULT_LIST_LIMIT }, () => ({
+				type: 'object' as const,
+				properties,
+			})),
+		}
+
+		const line = describeFaultLine(
+			{ reason: 'variant', path: ['wide'], variants: FAULT_LIST_LIMIT },
+			{ type: 'object', properties: { wide: forms } },
+		)
+
+		expect(line.length).toBeLessThan(FAULT_TEXT_LIMIT - 80)
+	})
+
+	it('says what a oneOf must be, whether it matched none or several', () => {
+		const forms = { oneOf: [{ type: 'object' }, { type: 'string' }] } as const
+		const tail = 'send it exactly as the schema declares, one of: object or string'
+
+		expect(describeFaultLine({ reason: 'oneOf', path: [], matched: 0 }, forms)).toBe(
+			`: oneOf; the value matches none of the 2 declared forms; ${tail}`,
+		)
+		expect(describeFaultLine({ reason: 'oneOf', path: [], matched: 2 }, forms)).toBe(
+			`: oneOf; the value matches 2 of the 2 declared forms and must match exactly one; ${tail}`,
+		)
+	})
+
+	it('says what a union must be where the path leaves the schema', () => {
+		expect(describeFaultLine({ reason: 'oneOf', path: ['gone'], matched: 0 }, {})).toBe(
+			'gone: oneOf; the value matches none of the declared forms; send it exactly as the schema declares',
+		)
+		expect(describeFaultLine({ reason: 'variant', path: ['gone'], variants: 2 }, {})).toBe(
+			'gone: variant; the value matches none of the 2 declared forms; send it exactly as the schema declares',
+		)
+	})
+})
+
+describe('describeFaults', () => {
+	it('names one fault on one line, in the shape a reader corrects from', () => {
+		const faults: readonly AuditFault[] = [
+			{ reason: 'type', path: ['profile', 'age'], expected: 'number', received: '"invalid"' },
+			{ reason: 'missing', path: ['name'], expected: 'string' },
+			{
+				reason: 'constraint',
+				path: ['amount'],
+				expected: 'number',
+				constraint: 'min',
+				limit: 1,
+				received: '0',
+			},
+			{ reason: 'variant', path: ['choice'], variants: 2 },
+			{ reason: 'oneOf', path: [], matched: 2 },
+			{ reason: 'extra', path: ['zzz'] },
+		]
+
+		expect(describeFaults(faults, {}).split('\n')).toEqual([
+			'profile.age: type; expected number; received "\\\"invalid\\\""',
+			'name: missing; expected string',
+			'amount: constraint; expected number; received "0"; constraint min; limit 1',
+			'choice: variant; the value matches none of the 2 declared forms; send it exactly as the schema declares',
+			': oneOf; the value matches 2 of the declared forms and must match exactly one; send it exactly as the schema declares',
+			'zzz: extra; this key is not declared, remove it',
+			'send any',
+		])
+	})
+
+	it('encodes a key that is not a plain identifier and caps its length', () => {
+		const long = 'x'.repeat(5000)
+
+		const text = describeFaults(
+			[
+				{ reason: 'extra', path: ['line\nbreak'] },
+				{ reason: 'extra', path: [long] },
+				{ reason: 'extra', path: ['ok_key-1', '0'] },
+			],
+			{},
+		)
+		const lines = text.split('\n')
+
+		expect(lines).toHaveLength(4)
+		expect(lines[0]).toBe('"line\\nbreak": extra; this key is not declared, remove it')
+		expect(lines[1]?.length).toBeLessThan(200)
+		expect(lines[2]).toBe('ok_key-1.0: extra; this key is not declared, remove it')
+	})
+
+	it('says that a full report stops at its limit, when every line fits', () => {
+		const faults = Array.from({ length: FAULT_LIMIT }, (_, index): AuditFault => ({
+			reason: 'missing',
+			path: [`k${String(index)}`],
+			expected: 'string',
+		}))
+
+		const lines = describeFaults(faults, {}).split('\n')
+
+		expect(lines).toHaveLength(FAULT_LIMIT + 2)
+		expect(lines.at(-2)).toBe(`the report stops at ${String(FAULT_LIMIT)}`)
+	})
+
+	it('keeps a report under its limit and ends with how many more faults there are', () => {
+		const faults = Array.from({ length: 40 }, (_, index): AuditFault => ({
+			reason: 'missing',
+			path: [`key${String(index)}`, 'x'.repeat(5000)],
+			expected: 'string',
+		}))
+
+		const lines = describeFaults(faults, {}).split('\n')
+
+		expect(lines.join('\n').length).toBeLessThanOrEqual(FAULT_TEXT_LIMIT)
+		const kept = lines.length - 2
+		expect(kept).toBeGreaterThan(0)
+		expect(lines.at(-2)).toBe(`and ${String(40 - kept)} more faults`)
+	})
+
+	it('adds no closing line to a report that fits below the fault limit', () => {
+		expect(describeFaults([{ reason: 'extra', path: ['a'] }], {})).toBe(
+			'a: extra; this key is not declared, remove it\nsend any',
+		)
+	})
+
+	it('always keeps at least the first fault, at the widest line one fault can render', () => {
+		const properties = Object.fromEntries(
+			Array.from({ length: 40 }, (_, index) => [`${'k'.repeat(5000)}${String(index)}`, {}]),
+		)
+		const path = Array.from({ length: 40 }, (_, index) => `${'p'.repeat(5000)}${String(index)}`)
+
+		const lines = describeFaults(
+			[
+				{ reason: 'extra', path },
+				{ reason: 'extra', path: ['next'] },
+			],
+			{ type: 'object', properties },
+		).split('\n')
+
+		expect(lines[0]?.endsWith('extra; this key is not declared, remove it')).toBe(true)
+		expect(lines.join('\n').length).toBeLessThanOrEqual(FAULT_TEXT_LIMIT)
 	})
 })

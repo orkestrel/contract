@@ -1,6 +1,30 @@
 import type { Fault, AnyConstructor, JSONRecord, JSONValue, LiteralValue } from '@src/core'
+import * as contractExports from '@src/core'
 import type { Equal, Expect } from '../../setup.js'
 import { describe, expect, expectTypeOf, it } from 'vitest'
+
+describe('admission fault domain', () => {
+	it.each([Infinity, -Infinity, Number.NaN])('refuses non-finite fault fields: %s', (value) => {
+		for (const fault of [
+			{
+				reason: 'constraint',
+				path: [],
+				expected: 'number',
+				constraint: 'min',
+				received: '0',
+				limit: value,
+			},
+			{ reason: 'variant', path: [], variants: 2, key: 'tag', expected: [value] },
+			{ reason: 'oneOf', path: [], matched: 0, key: 'tag', expected: [value] },
+			{ reason: 'variant', path: [], variants: value },
+			{ reason: 'oneOf', path: [], matched: value },
+		])
+			expect(contractExports.isAuditFault(fault)).toBe(false)
+	})
+	it.each(['admitValue', 'describeFaults', 'auditFaultShape'])('publishes %s', (name) => {
+		expect(Reflect.get(contractExports, name)).toBeTypeOf('function')
+	})
+})
 import {
 	instanceOf,
 	isArray,

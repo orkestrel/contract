@@ -21,6 +21,53 @@ import type {
 	SampleMemo,
 	StringShape,
 } from '@src/core'
+import { createRecorder } from '@orkestrel/test'
+import { isUndefined } from '@src/core'
+
+/** Implements the undefined-only domain admitted by ContractInterface but not by a root shape. */
+export function createUndefinedContract(): ContractInterface<undefined> {
+	return {
+		schema: {},
+		is: isUndefined,
+		parse: () => undefined,
+		audit: (value) =>
+			isUndefined(value)
+				? []
+				: [{ reason: 'type', path: [], expected: 'json', received: preview(value) }],
+		explain: (value) =>
+			isUndefined(value)
+				? []
+				: [{ reason: 'type', path: [], expected: 'json', received: preview(value) }],
+		generate: () => undefined,
+	}
+}
+
+/** Records artifact invocations while every answer comes from the real compiled contract. */
+export function recordAdmission<T>(contract: ContractInterface<T>) {
+	const calls = createRecorder<[string]>()
+	return {
+		calls,
+		contract: {
+			...contract,
+			is(value: unknown): value is T {
+				calls.handler('is')
+				return contract.is(value)
+			},
+			audit(value: unknown) {
+				calls.handler('audit')
+				return contract.audit(value)
+			},
+			parse(value: unknown) {
+				calls.handler('parse')
+				return contract.parse(value)
+			},
+			explain(value: unknown) {
+				calls.handler('explain')
+				return contract.explain(value)
+			},
+		},
+	}
+}
 import {
 	andOf,
 	arrayOf,
@@ -5859,4 +5906,151 @@ export function buildDiscriminatedCases(seed: number): readonly DiscriminatedCas
 			},
 		}
 	})
+}
+
+/** Draws a bounded contract composition from the law corpus seed. */
+export function drawLawShape(
+	random: RandomFunction,
+	depth: number,
+	category = Math.floor(random() * (depth > 0 ? 18 : 8)),
+): ContractShape {
+	const min = Math.floor(random() * 4)
+	const max = min + Math.floor(random() * 4)
+	const bounds = random() < 0.3 ? { min } : random() < 0.5 ? { max } : { min, max }
+	switch (category) {
+		case 0:
+			return stringShape(bounds)
+		case 1:
+			return numberShape({ min: min - 3.5, max: max + 0.5 })
+		case 2:
+			return integerShape({ min: min - 3, max })
+		case 3:
+			return booleanShape()
+		case 4:
+			return nullShape()
+		case 5:
+			return literalShape(random() < 0.5 ? [0, '0', false] : ['', 'a', -1])
+		case 6:
+			return jsonShape()
+		case 7:
+			return shapeShape()
+		case 8:
+			return arrayShape(drawLawShape(random, depth - 1), bounds)
+		case 9:
+			return objectShape({ a: drawLawShape(random, depth - 1) })
+		case 10:
+			return objectShape({ a: drawLawShape(random, depth - 1) }, { additionalProperties: true })
+		case 11:
+			return recordShape(drawLawShape(random, depth - 1))
+		case 12:
+			return nullableShape(drawLawShape(random, depth - 1))
+		case 13:
+			return unionShape(drawLawShape(random, depth - 1), drawLawShape(random, depth - 1))
+		case 14:
+			return oneOfShape(drawLawShape(random, depth - 1), drawLawShape(random, depth - 1))
+		case 15:
+			return unionShape(
+				objectShape({ tag: literalShape(['a']), a: drawLawShape(random, depth - 1) }),
+				objectShape({ tag: literalShape(['b']), a: drawLawShape(random, depth - 1) }),
+			)
+		case 16:
+			return objectShape({
+				a: optionalShape(drawLawShape(random, depth - 1)),
+				b:
+					depth === 3
+						? optionalShape(integerShape({ min: 0, max: 3 }), { default: min })
+						: optionalShape(integerShape({ min: 0, max: 3 })),
+			})
+		default:
+			return rawShape({ type: 'string', minLength: min, maxLength: max })
+	}
+}
+
+/** Builds stable edge values for artifact agreement. */
+export function buildLawEdges(): readonly unknown[] {
+	const cycle: Record<string, unknown> = {}
+	cycle.a = cycle
+	return [
+		undefined,
+		null,
+		NaN,
+		Infinity,
+		-Infinity,
+		-0,
+		0,
+		-1,
+		1,
+		2,
+		3,
+		4,
+		5,
+		6,
+		7,
+		0.5,
+		'',
+		' ',
+		' a ',
+		'0',
+		'3',
+		'true',
+		true,
+		false,
+		[],
+		[undefined],
+		[0],
+		{},
+		{ a: undefined },
+		{ a: '3' },
+		{ tag: 'a', a: '3' },
+		new Date(0),
+		cycle,
+		{ category: 'number' },
+		Object.defineProperty({ category: 'number' }, 'min', { value: 'low', enumerable: false }),
+	]
+}
+
+/** Perturbs generated values through missing, extra, and wrong-typed fields. */
+export function perturbLawValue(value: unknown): readonly unknown[] {
+	if (typeof value === 'number') return [String(value), value - 1, value + 1, NaN]
+	if (typeof value === 'string') return [` ${value} `, '', `${value}x`]
+	if (Array.isArray(value))
+		return [
+			[],
+			[...value, undefined],
+			value.slice(1),
+			...buildLawEdges()
+				.slice(0, 10)
+				.map((entry) => [entry, ...value.slice(1)]),
+		]
+	if (isRecord(value))
+		return [
+			{ ...value, extra: 0 },
+			...Object.keys(value).flatMap((key) => [
+				Object.fromEntries(Object.entries(value).filter(([name]) => name !== key)),
+				...buildLawEdges().map((entry) => ({ ...value, [key]: entry })),
+			]),
+		]
+	return []
+}
+
+/** Builds the extended union and refinement corpus for one seed. */
+export function buildLawShapes(seed: number): readonly ContractShape[] {
+	const random = seededRandom(seed)
+	const number = numberShape(random() < 0.5 ? { min: -random() } : { max: random() })
+	const text = stringShape({ pattern: random() < 0.5 ? /^a*$/ : /a/, min: 0, max: 3 })
+	return [
+		number,
+		text,
+		oneOfShape(
+			shapeShape(),
+			objectShape({ category: stringShape() }, { additionalProperties: random() < 0.5 }),
+		),
+		oneOfShape(objectShape({ a: optionalShape(numberShape()) }), objectShape({ a: numberShape() })),
+		oneOfShape(
+			objectShape({ tag: literalShape(['a']), a: number }),
+			objectShape({ tag: literalShape(['b']), a: text }),
+		),
+		objectShape({ a: optionalShape(stringShape(), { default: random() < 0.5 ? '' : 'a' }) }),
+		objectShape({ a: number }, { additionalProperties: text }),
+	]
 }

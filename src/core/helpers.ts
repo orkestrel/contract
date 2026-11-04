@@ -5,6 +5,10 @@ import type {
 	BoundsRead,
 	ContainOptions,
 	ContractCode,
+	ContractAdmission,
+	ContractRefusal,
+	ContractInterface,
+	FaultTextOptions,
 	ContractShape,
 	EntryCollectorFunction,
 	Failure,
@@ -31,6 +35,10 @@ import {
 	COMPILE_NODE_LIMIT,
 	CONTRACT_CODES,
 	FORMAT_PATTERNS,
+	FAULT_LIMIT,
+	FAULT_TEXT_LIMIT,
+	FAULT_LIST_LIMIT,
+	FAULT_SCHEMA_LIMIT,
 	GUARD_DEPTH_LIMIT,
 	INFER_DEPTH_LIMIT,
 	INTRINSICS,
@@ -52,6 +60,173 @@ import {
 	isSymbol,
 	isWeakMap,
 } from './validators.js'
+
+/**
+ * Admits a stable readable value with only lossless repairs and returns the parser's value.
+ *
+ * @remarks
+ * Reads must remain stable across artifacts. Guard-valid input skips both reports and parses
+ * once. Repairs use audit, parse once, and explain only on parse failure. Unresolved unions,
+ * extras, lossy repairs, and a capped audit refuse. An own optional undefined omission is benign
+ * and is not a repair. The result preserves parser ownership, including union input identity.
+ * A read failure returns its cause rather than throwing.
+ *
+ * @example
+ * ```ts
+ * admitValue(createContract(numberShape()), '3') // success carrying 3 and its type repair
+ * ```
+ */
+export function admitValue<T>(
+	contract: ContractInterface<T>,
+	value: unknown,
+): Result<ContractAdmission<T>, ContractRefusal> {
+	try {
+		if (contract.is(value)) {
+			const parsed = contract.parse(value)
+			if (parsed === undefined && value !== undefined) return failure({ faults: [] })
+			return success({ value: parsed === undefined ? value : parsed, repairs: [] })
+		}
+		const audited = contract.audit(value)
+		const parsed = contract.parse(value)
+		const explained = parsed === undefined ? contract.explain(value) : []
+		const repairs = audited.filter((fault) => matchesLosslessRepair(fault, value, parsed))
+		const refused = audited.filter(
+			(fault) => !repairs.includes(fault) && !matchesUndefinedOmission(fault, value, parsed),
+		)
+		const merged = [...explained, ...refused]
+		const faults = [
+			...new Map(
+				merged.map((fault) => [JSON.stringify([fault.reason, extractPath(fault)]), fault]),
+			).values(),
+		]
+		const covers = faults
+			.filter((fault) => fault.reason === 'variant' || fault.reason === 'oneOf')
+			.map((fault) => extractPath(fault))
+		const uncovered = faults.filter((fault) => {
+			const path = extractPath(fault)
+			const room = fault.reason === 'variant' || fault.reason === 'oneOf' ? 1 : 0
+			return !covers.some(
+				(cover) =>
+					cover.length + room <= path.length &&
+					cover.every((segment, index) => segment === path[index]),
+			)
+		})
+		if (uncovered.length > 0) return failure({ faults: limitEntries(uncovered, FAULT_LIMIT) })
+		if (audited.length >= FAULT_LIMIT)
+			return failure({ faults: limitEntries(audited, FAULT_LIMIT) })
+		if (parsed === undefined) return failure({ faults: limitEntries(audited, FAULT_LIMIT) })
+		return success({ value: parsed, repairs })
+	} catch (cause) {
+		return failure({ faults: [], cause })
+	}
+}
+
+/**
+ * Checks whether a type fault describes an own undefined field omitted by a successful parse.
+ *
+ * @remarks
+ * Reads own members directly so absence and an unreadable member cannot stand for undefined.
+ * Required reads propagate their cause to the admission boundary.
+ *
+ * @example
+ * ```ts
+ * matchesUndefinedOmission({ reason: 'type', path: ['note'], expected: 'string', received: 'undefined' }, { note: undefined }, {}) // true
+ * ```
+ */
+export function matchesUndefinedOmission(
+	fault: AuditFault,
+	value: unknown,
+	parsed: unknown,
+): boolean {
+	if (fault.reason !== 'type' || parsed === undefined) return false
+	const path = extractPath(fault)
+	const key = path.at(-1)
+	if (key === undefined) return false
+	const parents = path
+		.slice(0, -1)
+		.reduce<readonly [unknown, unknown]>(
+			([raw, result], segment) => [
+				isObject(raw) && INTRINSICS.own(raw, segment)
+					? INTRINSICS.reflect.read(raw, segment)
+					: undefined,
+				isObject(result) && INTRINSICS.own(result, segment)
+					? INTRINSICS.reflect.read(result, segment)
+					: undefined,
+			],
+			[value, parsed],
+		)
+	const [raw, result] = parents
+	return (
+		isObject(raw) &&
+		INTRINSICS.own(raw, key) &&
+		INTRINSICS.reflect.read(raw, key) === undefined &&
+		isObject(result) &&
+		!INTRINSICS.own(result, key)
+	)
+}
+
+/**
+ * Truncates text to a UTF-16 budget without splitting a surrogate pair.
+ *
+ * @example
+ * ```ts
+ * truncateFaultText('abcdef', 4) // 'abc…'
+ * ```
+ */
+export function truncateFaultText(text: string, limit: number): string {
+	if (limit <= 0) return ''
+	if (text.length <= limit) return text
+	return `${text.slice(0, limit - 1).replace(/[\uD800-\uDBFF]$/u, '')}…`
+}
+
+/**
+ * Describes bounded faults with encoded values and a schema-derived correction summary.
+ *
+ * @remarks
+ * Default: 2048 UTF-16 code units. A smaller non-negative integer limit reserves a caller's
+ * heading budget. The report reserves room for omitted-fault and cap notices, and ends with a
+ * send summary when a schema is supplied. Untrusted names, descriptions, and strings use preview.
+ *
+ * @example
+ * ```ts
+ * describeFaults([{ reason: 'missing', path: ['age'], expected: 'number' }])
+ * // 'age: missing; expected number'
+ * ```
+ */
+export function describeFaults(
+	faults: readonly AuditFault[],
+	schema?: JSONSchema,
+	options?: FaultTextOptions,
+): string {
+	const requested = options?.limit ?? FAULT_TEXT_LIMIT
+	if (!isInteger(requested) || requested < 0) {
+		throw new ContractError('Fault text limit must be a non-negative integer', { code: 'range' })
+	}
+	const limit = Math.min(requested, FAULT_TEXT_LIMIT)
+	const send =
+		schema === undefined
+			? ''
+			: `send ${renderForm(schema, Math.min(FAULT_SCHEMA_LIMIT, Math.floor(limit / 3)))}`
+	const lines = limitEntries(faults, FAULT_LIMIT).map((fault) =>
+		describeFaultLine(fault, schema ?? {}),
+	)
+	const room = Math.max(0, limit - send.length - 82)
+	const kept = lines.filter((_, index) => lines.slice(0, index + 1).join('\n').length <= room)
+	const hidden = faults.length - kept.length
+	const note = [
+		...(hidden > 0 ? [`and ${String(hidden)} more faults`] : []),
+		...(faults.length >= FAULT_LIMIT ? [`the report stops at ${String(FAULT_LIMIT)}`] : []),
+	].join(', ')
+	const text = [
+		...kept,
+		...(kept.length === 0 && lines.length > 0 && room > 0
+			? [truncateFaultText(lines[0] ?? '', room)]
+			: []),
+		...(note.length === 0 ? [] : [note]),
+		...(send.length === 0 ? [] : [send]),
+	].join('\n')
+	return truncateFaultText(text, limit)
+}
 
 /**
  * Iterates indices while rereading the upper bound before every step.
@@ -3261,4 +3436,264 @@ for (const generator of [iterateIndices, encodeParts]) {
 	}
 	INTRINSICS.freeze(generator.prototype)
 	INTRINSICS.freeze(generator)
+}
+
+/**
+ * Extracts a fault's path as its segments, reading a string path as one segment.
+ *
+ * @param fault - The fault to read
+ * @returns The path's segments, empty at the root
+ *
+ * @example
+ * ```ts
+ * import { extractPath } from '@orkestrel/contract'
+ *
+ * extractPath({ reason: 'extra', path: ['page', 'typo'] }) // ['page', 'typo']
+ * ```
+ */
+export function extractPath(fault: AuditFault): readonly string[] {
+	return isString(fault.path) ? [fault.path] : fault.path
+}
+
+/**
+ * Extracts a schema's forms: the schema itself, then its union arms, so a read looks
+ * through a nullable the same way everywhere.
+ *
+ * @param schema - The schema to read, or `undefined` where none was found
+ * @returns The forms, empty when there is no schema
+ *
+ * @example
+ * ```ts
+ * import { extractForms } from '@orkestrel/contract'
+ *
+ * const object = { type: 'object' } as const
+ * extractForms({ anyOf: [object] }) // [{ anyOf: [object] }, object]
+ * ```
+ */
+export function extractForms(schema: JSONSchema | undefined): readonly JSONSchema[] {
+	return schema === undefined ? [] : [schema, ...(schema.anyOf ?? schema.oneOf ?? [])]
+}
+
+/**
+ * Extracts the part of a schema a path reaches, through properties, array items, record values,
+ * and the arms of a union.
+ *
+ * @remarks
+ * Each path segment takes one step, so a union that nests itself cannot hold the walk. Only a
+ * schema's own `properties` keys match, so `constructor` reaches nothing.
+ *
+ * @param schema - The schema to walk
+ * @param path - The segments to follow
+ * @returns The schema at that path, or `undefined` where the schema declares nothing there
+ *
+ * @example
+ * ```ts
+ * import { extractSchema } from '@orkestrel/contract'
+ *
+ * const schema = { type: 'object', properties: { limit: { type: 'number' } } } as const
+ * extractSchema(schema, ['limit']) // { type: 'number' }
+ * ```
+ */
+export function extractSchema(schema: JSONSchema, path: readonly string[]): JSONSchema | undefined {
+	return path.reduce<JSONSchema | undefined>(
+		(node, key) =>
+			extractForms(node)
+				.map((form) =>
+					form.properties !== undefined && Object.hasOwn(form.properties, key)
+						? form.properties[key]
+						: isRecord(form.additionalProperties)
+							? form.additionalProperties
+							: form.items,
+				)
+				.find((child) => child !== undefined),
+		schema,
+	)
+}
+
+/**
+ * Renders a path as text, encoding what a caller could have sent and eliding the middle of a long
+ * one.
+ *
+ * @remarks
+ * A segment that is not a plain identifier is JSON-encoded and length-capped, because a key the
+ * caller sent is untrusted text. A path of more than four segments past 120 characters keeps its
+ * first segment and its last three.
+ *
+ * @param path - The segments to render
+ * @returns The segments joined with `.`, empty at the root
+ *
+ * @example
+ * ```ts
+ * import { renderPath } from '@orkestrel/contract'
+ *
+ * renderPath(['rows', '0', 'a b']) // 'rows.0."a b"'
+ * ```
+ */
+export function renderPath(path: readonly string[]): string {
+	const segments = path.map((segment) =>
+		/^[\w$-]{1,64}$/u.test(segment) ? segment : preview(segment),
+	)
+	const text = segments.join('.')
+	return segments.length <= 4 || text.length <= 120
+		? text
+		: [...segments.slice(0, 1), '…', ...segments.slice(-3)].join('.')
+}
+
+/**
+ * Renders a list as text, naming at most `FAULT_LIST_LIMIT` of its entries and counting the rest.
+ *
+ * @param entries - The rendered entries
+ * @returns The entries joined with `, `
+ *
+ * @example
+ * ```ts
+ * import { renderList } from '@orkestrel/contract'
+ *
+ * renderList(['city', 'units']) // 'city, units'
+ * ```
+ */
+export function renderList(entries: readonly string[]): string {
+	const listed = entries.slice(0, FAULT_LIST_LIMIT).join(', ')
+	return entries.length > FAULT_LIST_LIMIT
+		? `${listed} and ${String(entries.length - FAULT_LIST_LIMIT)} more`
+		: listed
+}
+
+/**
+ * Renders a schema as a short summary of what to send, such as `{"city": string, "note"?: string}`.
+ *
+ * @remarks
+ * An object lists its required keys first and marks the rest with `?`, at most `FAULT_LIST_LIMIT`
+ * of them. A leaf or array keeps its numeric bounds and pattern, a union joins its forms with ` | `,
+ * and a schema that says nothing reads `any`. Each nested form takes half the room of its parent, and
+ * below 16 characters a form stops at its type, so a schema that holds itself still ends. Text past
+ * `room` is cut and closes with `…`.
+ *
+ * @param schema - The schema to summarize
+ * @param room - The characters the summary can take. Default: `FAULT_SCHEMA_LIMIT`
+ * @returns The summary
+ *
+ * @example
+ * ```ts
+ * import { renderForm } from '@orkestrel/contract'
+ *
+ * renderForm({ type: 'object', properties: { zip: { type: 'number' } }, required: ['zip'] }) // '{"zip": number}'
+ * ```
+ */
+export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT): string {
+	const deep = room >= 16
+	const inner = Math.floor(room / 2)
+	const forms = schema.anyOf ?? schema.oneOf
+	const required = schema.required ?? []
+	const entries = Object.entries(schema.properties ?? {})
+	const listed = (deep ? entries : [])
+		.toSorted(
+			([left], [right]) => Number(required.includes(right)) - Number(required.includes(left)),
+		)
+		.slice(0, FAULT_LIST_LIMIT)
+		.map(
+			([key, child]) =>
+				`${preview(key)}${required.includes(key) ? '' : '?'}: ${renderForm(child, inner)}`,
+		)
+	const left = entries.length - listed.length
+	const child =
+		schema.type === 'array'
+			? schema.items
+			: isRecord(schema.additionalProperties)
+				? schema.additionalProperties
+				: undefined
+	const bounds = Object.entries(schema)
+		.filter(([key]) =>
+			['minLength', 'maxLength', 'minimum', 'maximum', 'minItems', 'maxItems', 'pattern'].includes(
+				key,
+			),
+		)
+		.map(([key, value]) => `${key} ${preview(value)}`)
+	const text =
+		forms !== undefined
+			? deep
+				? forms.map((form) => renderForm(form, inner)).join(' | ')
+				: 'any'
+			: schema.enum !== undefined
+				? schema.enum.map((value) => preview(value)).join(' | ')
+				: listed.length > 0
+					? `{${[...listed, ...(left > 0 ? [`and ${String(left)} more`] : [])].join(', ')}}`
+					: [
+							schema.type ?? (entries.length > 0 ? 'object' : 'any'),
+							...(deep && child !== undefined ? [` of ${renderForm(child, inner)}`] : []),
+							...(bounds.length > 0 ? [` (${bounds.join(', ')})`] : []),
+						].join('')
+	return truncateFaultText(text, room)
+}
+
+/**
+ * Describes one fault as the line a caller corrects from, naming what to send where the schema
+ * says.
+ *
+ * @remarks
+ * Each line opens with the fault's path and reason. An `extra` fault lists the keys declared at
+ * its parent. A fault on a literal names its candidates, and each list is bounded. A `variant` or
+ * `oneOf` fault says that the value matches none of the declared forms, or several where one must
+ * match, and summarizes each form through `renderForm`. It names no fault of any one form, because
+ * none of them holds for the others. Those summaries share half of `FAULT_TEXT_LIMIT`.
+ *
+ * @param fault - The fault to describe
+ * @param schema - The compiled schema the fault's path reads
+ * @returns The line, with no line break
+ *
+ * @example
+ * ```ts
+ * import { describeFaultLine } from '@orkestrel/contract'
+ *
+ * describeFaultLine({ reason: 'missing', path: ['left'], expected: 'number' }, {}) // 'left: missing; expected number'
+ * ```
+ */
+export function describeFaultLine(fault: AuditFault, schema: JSONSchema): string {
+	const path = extractPath(fault)
+	const head = `${renderPath(path)}: ${fault.reason}`
+	if (fault.reason === 'extra') {
+		const keys = extractForms(extractSchema(schema, path.slice(0, -1))).flatMap((form) =>
+			Object.keys(form.properties ?? {}),
+		)
+		return keys.length === 0
+			? `${head}; this key is not declared, remove it`
+			: `${head}; this key is not declared, remove it or use a declared key: ${renderList(keys.map((key) => renderPath([key])))}`
+	}
+	const node = extractSchema(schema, path)
+	if (fault.reason === 'variant' || fault.reason === 'oneOf') {
+		const count = fault.reason === 'variant' ? fault.variants : node?.oneOf?.length
+		const forms = count === undefined ? 'the declared forms' : `the ${String(count)} declared forms`
+		const claim =
+			fault.reason === 'oneOf' && fault.matched > 0
+				? `the value matches ${String(fault.matched)} of ${forms} and must match exactly one`
+				: `the value matches none of ${forms}`
+		const declared = node?.anyOf ?? node?.oneOf ?? []
+		const shown = declared.slice(0, FAULT_LIST_LIMIT)
+		const room = Math.min(
+			FAULT_SCHEMA_LIMIT,
+			Math.floor(FAULT_TEXT_LIMIT / 2 / Math.max(shown.length, 1)),
+		)
+		const more = declared.length - shown.length
+		const summary =
+			shown.length === 0
+				? ''
+				: `, one of: ${shown.map((form) => renderForm(form, room)).join(' or ')}${more > 0 ? ` and ${String(more)} more` : ''}`
+		return `${head}; ${claim}${fault.key === undefined ? '' : `; discriminator ${preview(fault.key)} expects ${renderList((fault.expected ?? []).map((value) => preview(value)))}`}; send it exactly as the schema declares${summary}`
+	}
+	const candidates =
+		fault.expected === 'literal'
+			? extractForms(node).flatMap((form) => [
+					...(form.enum ?? []).map((value) => preview(value)),
+					...(form.type === 'null' ? [preview(null)] : []),
+				])
+			: []
+	return [
+		head,
+		`expected ${fault.expected}`,
+		...('received' in fault ? [`received ${preview(fault.received)}`] : []),
+		...('constraint' in fault ? [`constraint ${fault.constraint}`] : []),
+		...('limit' in fault && fault.limit !== undefined ? [`limit ${preview(fault.limit)}`] : []),
+		...(node?.description === undefined ? [] : [`description ${preview(node.description)}`]),
+		...(candidates.length > 0 ? [`send one of ${renderList(candidates)}`] : []),
+	].join('; ')
 }

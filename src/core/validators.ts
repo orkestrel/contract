@@ -709,7 +709,7 @@ export function isFault(value: unknown): value is Fault {
 				!isFailure(list) &&
 				list.value.dense &&
 				!INTRINSICS.reflect.apply(INTRINSICS.some, list.value.entries, [
-					(entry: unknown) => !isLiteralValue(entry),
+					(entry: unknown) => !isLiteralValue(entry) || (isNumber(entry) && !isFiniteNumber(entry)),
 				]))
 		switch (value.reason) {
 			case 'type':
@@ -727,7 +727,9 @@ export function isFault(value: unknown): value is Fault {
 					INTRINSICS.reflect.apply(INTRINSICS.some, FAULT_CONSTRAINTS, [
 						(entry: string) => entry === value.constraint,
 					]) &&
-					(!INTRINSICS.own(value, 'limit') || isNumber(value.limit) || isString(value.limit)) &&
+					(!INTRINSICS.own(value, 'limit') ||
+						isFiniteNumber(value.limit) ||
+						isString(value.limit)) &&
 					matchesExactKeys(
 						value,
 						['reason', 'path', 'expected', 'constraint', 'received'],

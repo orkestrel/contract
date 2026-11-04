@@ -766,3 +766,12 @@ export const TEXT_LIMIT = 1_048_576
  * ```
  */
 export const NODE_LIMIT = 16_384
+
+/** Caps a fault message at 2048 UTF-16 code units. */
+export const FAULT_TEXT_LIMIT = 2048
+
+/** Caps the keys or literal candidates named in a fault line. */
+export const FAULT_LIST_LIMIT = 12
+
+/** Caps a schema summary's UTF-16 code units. */
+export const FAULT_SCHEMA_LIMIT = 160

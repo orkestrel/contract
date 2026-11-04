@@ -8,6 +8,70 @@
 // Shared setup helpers exercise lockstep and JSON roundtrips while each case
 // retains its own public cross-module composition boundary.
 import { describe, expect, it } from 'vitest'
+import { buildLawEdges, buildLawShapes, drawLawShape, perturbLawValue } from '../../setup.js'
+
+describe('generated artifact laws', () => {
+	it('agrees on stable generated, perturbed, and edge values', () => {
+		const ordinary = Array.from({ length: 72 }, (_, seed) => {
+			const shape = drawLawShape(seededRandom(seed), 3, seed % 18)
+			const contract = createContract(shape)
+			const generated = Array.from({ length: 4 }, (_entry, index) =>
+				attempt(() => contract.generate(seededRandom(seed * 31 + index))),
+			)
+			for (const result of generated) {
+				expect(
+					result.success
+						? contract.is(result.value)
+						: isContractError(result.error) && result.error.code === 'generate',
+				).toBe(true)
+			}
+			return {
+				contract,
+				values: [
+					...buildLawEdges(),
+					...generated.flatMap((result) =>
+						result.success ? [result.value, ...perturbLawValue(result.value)] : [],
+					),
+				],
+			}
+		})
+		const extended = Array.from({ length: 16 }, (_, seed) =>
+			buildLawShapes(seed).map((shape) => {
+				const contract = createContract(shape)
+				const generated = attempt(() => contract.generate(seededRandom(seed)))
+				expect(
+					generated.success
+						? contract.is(generated.value)
+						: isContractError(generated.error) && generated.error.code === 'generate',
+				).toBe(true)
+				return {
+					contract,
+					values: [
+						...buildLawEdges(),
+						'\uD800',
+						'😀',
+						'aaa',
+						'aaaa',
+						{ a: ' a ' },
+						...(generated.success ? [generated.value, ...perturbLawValue(generated.value)] : []),
+					],
+				}
+			}),
+		).flat()
+		for (const { contract, values } of [...ordinary, ...extended]) {
+			for (const value of values) {
+				const parsed = contract.parse(value)
+				expect(contract.audit(value).length === 0).toBe(contract.is(value))
+				expect(contract.explain(value).length === 0).toBe(parsed !== undefined)
+				expect(parsed === undefined || contract.is(parsed)).toBe(true)
+			}
+		}
+		expect(ordinary.length + extended.length).toBe(184)
+		expect([...ordinary, ...extended].reduce((total, row) => total + row.values.length, 0)).toBe(
+			17013,
+		)
+	})
+})
 import type { Guard } from '@src/core'
 import type { Tree } from '../../setup.js'
 import {

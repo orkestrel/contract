@@ -1,5 +1,6 @@
 import type {
 	ArrayShape,
+	AuditFaultShape,
 	ArrayShapeOptions,
 	BooleanShape,
 	BooleanShapeOptions,
@@ -32,6 +33,7 @@ import { cloneJSONValue, cloneSchema, cloneShape } from './cloners.js'
 import { SchemaShaper } from './SchemaShaper.js'
 import { ShapePass } from './ShapePass.js'
 import { ShapeValidator } from './ShapeValidator.js'
+import { FaultShaper } from './FaultShaper.js'
 import { INTRINSICS } from './constants.js'
 import {
 	readIndexView,
@@ -51,6 +53,22 @@ import {
 } from './helpers.js'
 import { isJSONValue, isLiteralValue, isObject, isRegExp } from './validators.js'
 import { ContractError, isContractError } from './errors.js'
+
+/**
+ * Returns the shared closed audit-fault shape, building it on the first call.
+ *
+ * @remarks
+ * Numeric bounds, counts, and discriminator literals must be finite. Discriminator hints
+ * carry both key and expected together. The inferred union is assignable to AuditFault.
+ *
+ * @example
+ * ```ts
+ * createContract(auditFaultShape()).is({ reason: 'extra', path: ['typo'] }) // true
+ * ```
+ */
+export function auditFaultShape(): AuditFaultShape {
+	return contain(() => FaultShaper.shape, 'auditFaultShape')
+}
 
 // The builders return the parameterized types.ts interfaces (for example `ArrayShape<S>`,
 // `ObjectShape<P>`), never inline object literals — the generic parameter keeps

@@ -1,3 +1,8 @@
+import type { FaultShaper } from './FaultShaper.js'
+
+/** Describes the closed shape built for audit faults, including paired discriminator hints. */
+export type AuditFaultShape = ReturnType<FaultShaper['build']>
+
 // === Result
 
 /**
@@ -31,6 +36,50 @@ export interface Failure<E> {
  * domain error name that error type explicitly.
  */
 export type Result<T, E = unknown> = Success<T> | Failure<E>
+
+/**
+ * Carries an admitted value and the lossless repairs made while parsing it.
+ *
+ * @remarks
+ * The value keeps the parser's ownership: a union may return the caller's input by identity.
+ *
+ * @example
+ * ```ts
+ * const admitted: ContractAdmission<number> = { value: 3, repairs: [] }
+ * ```
+ */
+export interface ContractAdmission<T> {
+	readonly value: T
+	readonly repairs: readonly AuditFault[]
+}
+
+/**
+ * Carries bounded admission faults and the cause of an unreadable value when present.
+ *
+ * @example
+ * ```ts
+ * const refused: ContractRefusal = { faults: [{ reason: 'extra', path: ['typo'] }] }
+ * ```
+ */
+export interface ContractRefusal {
+	readonly faults: readonly AuditFault[]
+	readonly cause?: unknown
+}
+
+/**
+ * Reserves a caller's text budget for a bounded fault report.
+ *
+ * @remarks
+ * The limit is a non-negative integer of UTF-16 code units, at most 2048. Default: 2048.
+ *
+ * @example
+ * ```ts
+ * const options: FaultTextOptions = { limit: 1024 }
+ * ```
+ */
+export interface FaultTextOptions {
+	readonly limit?: number
+}
 
 // === Record access
 
