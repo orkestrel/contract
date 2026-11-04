@@ -492,8 +492,10 @@ export class SchemaShaper {
 	//    of them `{ type: 'null' }`, read as a nullable of the other, which stays
 	//    outside a union, except under a strict `oneOf`. A description carries.
 	// 4. Array-valued `type` — distinct recognized names become an inclusive
-	//    union, or a single shape for one name. An empty list or any unrecognized
-	//    member widens the whole node; dropping a member would narrow it.
+	//    union, or a single shape for one name. Two names, one of them `null`, read
+	//    as a nullable of the other, in both modes: the list means what the `anyOf`
+	//    spelling means, and it has no exactly-one to keep. An empty list or any
+	//    unrecognized member widens the whole node; dropping a member would narrow it.
 	// 5. `type: 'string'` / `'number'` / `'integer'` / `'boolean'` / `'null'` —
 	//    the matching primitive shape, with length/range bounds derived through
 	//    `deriveLengthBounds` / `deriveRangeBounds`. An integer node additionally
@@ -607,6 +609,15 @@ export class SchemaShaper {
 			)
 			if (members.length === 0 || members.length > INFER_BREADTH_LIMIT) {
 				return this.#widen('type must name the supported types', description, 'type')
+			}
+			const others: readonly JSONSchemaType[] = INTRINSICS.reflect.apply(
+				INTRINSICS.select,
+				readIndexView(members),
+				[(member: JSONSchemaType) => member !== 'null'],
+			)
+			const other = others[0]
+			if (members.length === 2 && others.length === 1 && other !== undefined) {
+				return nullableShape(this.#build({ ...schema, type: other }, depth, enclosed))
 			}
 			const variants: readonly ContractShape[] = INTRINSICS.reflect.apply(
 				INTRINSICS.project,

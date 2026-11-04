@@ -713,9 +713,9 @@ describe('SchemaShaper — lenient default', () => {
 		['oneOf', { oneOf: [closedOf({ type: 'number', default: 3 })] }],
 		['anyOf', { anyOf: [closedOf({ type: 'number', default: 3 })] }],
 		[
-			'a type list',
+			'a type list of three',
 			{
-				type: ['object', 'null'],
+				type: ['object', 'string', 'null'],
 				properties: { a: { type: 'number', default: 3 } },
 				additionalProperties: false,
 			},
@@ -1270,6 +1270,98 @@ describe('SchemaShaper — a two-arm union with null', () => {
 
 		expect(error.code).toBe('structure')
 		expect(error.context?.path).toEqual(['anyOf', '1', 'bogus'])
+	})
+})
+
+describe('SchemaShaper — a two-member type list with null', () => {
+	const closed: Readonly<Record<string, unknown>> = {
+		type: ['object', 'null'],
+		properties: { a: { type: 'number', default: 1 } },
+		additionalProperties: false,
+	}
+
+	it.each<readonly [string, boolean]>([
+		['lenient', false],
+		['strict', true],
+	])('reads as a nullable in a %s conversion', (_label, strict) => {
+		const listed: Readonly<Record<string, unknown>> = { type: ['integer', 'null'] }
+		const reversed: Readonly<Record<string, unknown>> = { type: ['null', 'integer'] }
+		const shapes = [schemaToShape(listed, { strict }), schemaToShape(reversed, { strict })]
+
+		expect(shapes.map((shape) => shape.category)).toEqual(['nullable', 'nullable'])
+		expect(
+			shapes.map((shape) => (shape.category === 'nullable' ? shape.inner.category : undefined)),
+		).toEqual(['number', 'number'])
+	})
+
+	it.each<readonly [string, boolean]>([
+		['lenient', false],
+		['strict', true],
+	])('answers as the anyOf spelling does in a %s conversion', (_label, strict) => {
+		const listed: Readonly<Record<string, unknown>> = { type: ['integer', 'null'] }
+		const spelled: Readonly<Record<string, unknown>> = {
+			anyOf: [{ type: 'integer' }, { type: 'null' }],
+		}
+		const lists = createContract(schemaToShape(listed, { strict }))
+		const arms = createContract(schemaToShape(spelled, { strict }))
+		const values: readonly unknown[] = ['5', 5, null, 'x', 1.5, {}]
+
+		expect(values.map((value) => lists.parse(value))).toEqual(
+			values.map((value) => arms.parse(value)),
+		)
+		expect(values.map((value) => lists.audit(value))).toEqual(
+			values.map((value) => arms.audit(value)),
+		)
+		expect(lists.parse('5')).toBe(5)
+		expect(lists.audit('5').map((fault) => fault.reason)).toEqual(['type'])
+		expect(lists.schema).toEqual(arms.schema)
+	})
+
+	it('fills a default under it in both modes', () => {
+		const lenient = createContract(schemaToShape(closed))
+		const strict = createContract(schemaToShape(closed, { strict: true }))
+
+		expect(lenient.parse({})).toEqual({ a: 1 })
+		expect(strict.parse({})).toEqual({ a: 1 })
+		expect(lenient.parse(null)).toBeNull()
+		expect(strict.parse(null)).toBeNull()
+	})
+
+	it('keeps the keywords of the member beside the null', () => {
+		const schema: Readonly<Record<string, unknown>> = {
+			type: ['string', 'null'],
+			minLength: 2,
+			description: 'd',
+		}
+		const shape = schemaToShape(schema)
+		const guard = compileGuard(shape)
+
+		expect(guard(null)).toBe(true)
+		expect(guard('xy')).toBe(true)
+		expect(guard('x')).toBe(false)
+		expect(shape.category === 'nullable' ? shape.inner : undefined).toMatchObject({
+			category: 'string',
+			description: 'd',
+		})
+	})
+
+	it.each<readonly [string, Readonly<Record<string, unknown>>]>([
+		['three members', { type: ['string', 'number', 'null'] }],
+		['two members with no null', { type: ['string', 'number'] }],
+	])('leaves %s a union', (_label, schema) => {
+		expect(schemaToShape(schema).category).toBe('union')
+	})
+
+	it('reads a duplicate list by its distinct names in a lenient conversion', () => {
+		const schema: Readonly<Record<string, unknown>> = { type: ['string', 'string', 'null'] }
+
+		expect(schemaToShape(schema).category).toBe('nullable')
+	})
+
+	it('reads a lone null as null', () => {
+		const schema: Readonly<Record<string, unknown>> = { type: ['null'] }
+
+		expect(schemaToShape(schema).category).toBe('null')
 	})
 })
 
