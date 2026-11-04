@@ -4775,6 +4775,22 @@ export const STRICT_SCHEMA_REFUSALS: ReadonlyArray<
 	['an empty schema', {}, []],
 	['a schema with only a description', { description: 'text' }, []],
 	['an unsupported keyword', { type: 'string', const: 'x' }, ['const']],
+	['nullable', { type: 'string', nullable: true }, ['nullable']],
+	['patternProperties', { type: 'object', patternProperties: {} }, ['patternProperties']],
+	['propertyNames', { type: 'object', propertyNames: {} }, ['propertyNames']],
+	[
+		'prefixItems',
+		{ type: 'array', prefixItems: [{ type: 'string' }], items: { type: 'number' } },
+		['prefixItems'],
+	],
+	['a true variant', { anyOf: [true, { type: 'string' }] }, ['anyOf', '0']],
+	['a false variant', { oneOf: [{ type: 'string' }, false] }, ['oneOf', '1']],
+	['a true property schema', typedObject({ a: true }), ['properties', 'a']],
+	['a false property schema', typedObject({ a: false }), ['properties', 'a']],
+	['a false item schema', { type: 'array', items: false }, ['items']],
+	['an enum holding an object', { enum: [{ a: 1 }, 'x'] }, ['enum']],
+	['an enum holding an array', { enum: [[1], 'x'] }, ['enum']],
+	['an enum of null alone', { enum: [null] }, ['enum']],
 	['a reference', { $ref: '#/definitions/x' }, ['$ref']],
 	['a composition keyword', { type: 'object', allOf: [] }, ['allOf']],
 	['a malformed description', { type: 'string', description: 3 }, ['description']],
@@ -4905,3 +4921,357 @@ export const LENIENT_DEFAULT_DROPS: ReadonlyArray<
 		},
 	],
 ])
+
+// === Foreign schemas
+//
+// The law the lenient conversion serves: a value a JSON Schema accepts is never refused by the
+// shape converted from it, and that shape widens where it cannot express a keyword.
+
+/**
+ * Lists a foreign schema with one value, and whether the lenient shape admits that value.
+ *
+ * @remarks
+ * Each row names a form a real schema generator or a hand-written tool emits. A row whose value
+ * the schema itself refuses says so in a comment: the lenient shape may widen past such a value,
+ * and it may never narrow past one the schema accepts.
+ */
+export const FOREIGN_SCHEMA_ROWS: ReadonlyArray<
+	readonly [string, Readonly<Record<string, unknown>>, unknown, boolean]
+> = Object.freeze([
+	['anyOf one variant', { anyOf: [{ type: 'string' }] }, 'x', true],
+	['anyOf two', { anyOf: [{ type: 'string' }, { type: 'number' }] }, 5, true],
+	['anyOf with true', { anyOf: [true, { type: 'string' }] }, 5, true],
+	['oneOf one variant', { oneOf: [{ type: 'string' }] }, 'x', true],
+	['oneOf with true', { oneOf: [true, { type: 'string' }] }, 5, true],
+	[
+		'oneOf two pattern strings',
+		{
+			oneOf: [
+				{ type: 'string', pattern: '^a' },
+				{ type: 'string', pattern: '^b' },
+			],
+		},
+		'abc',
+		true,
+	],
+	[
+		'oneOf two formats',
+		{
+			oneOf: [
+				{ type: 'string', format: 'date' },
+				{ type: 'string', format: 'uuid' },
+			],
+		},
+		'2026-11-03',
+		true,
+	],
+	[
+		'oneOf const discriminator',
+		{
+			oneOf: [
+				{ type: 'object', properties: { kind: { const: 'a' } }, required: ['kind'] },
+				{ type: 'object', properties: { kind: { const: 'b' } }, required: ['kind'] },
+			],
+		},
+		{ kind: 'a' },
+		true,
+	],
+	[
+		'oneOf const discriminator with payload',
+		{
+			oneOf: [
+				{
+					type: 'object',
+					properties: { kind: { const: 'a' }, x: { type: 'string' } },
+					required: ['kind'],
+				},
+				{
+					type: 'object',
+					properties: { kind: { const: 'b' }, y: { type: 'string' } },
+					required: ['kind'],
+				},
+			],
+		},
+		{ kind: 'a', x: 's' },
+		true,
+	],
+	[
+		'oneOf integers split by multipleOf',
+		{
+			oneOf: [
+				{ type: 'integer', multipleOf: 3 },
+				{ type: 'integer', multipleOf: 5 },
+			],
+		},
+		9,
+		true,
+	],
+	[
+		'oneOf closed objects by enum',
+		{
+			oneOf: [
+				{
+					type: 'object',
+					properties: { kind: { enum: ['a'] } },
+					required: ['kind'],
+					additionalProperties: false,
+				},
+				{
+					type: 'object',
+					properties: { kind: { enum: ['b'] } },
+					required: ['kind'],
+					additionalProperties: false,
+				},
+			],
+		},
+		{ kind: 'a' },
+		true,
+	],
+	[
+		'allOf at the root',
+		{
+			allOf: [
+				{ type: 'object', properties: { a: { type: 'string' } } },
+				{ type: 'object', properties: { b: { type: 'string' } } },
+			],
+		},
+		{ a: 'x', b: 'y' },
+		true,
+	],
+	[
+		'allOf beside properties',
+		{ type: 'object', properties: { a: { type: 'string' } }, allOf: [{ required: ['a'] }] },
+		{ a: 'x' },
+		true,
+	],
+	[
+		'a reference on a property',
+		{
+			type: 'object',
+			properties: { a: { $ref: '#/$defs/x' } },
+			required: ['a'],
+			$defs: { x: { type: 'string' } },
+		},
+		{ a: 'x' },
+		true,
+	],
+	[
+		'a reference at the root',
+		{ $ref: '#/$defs/x', $defs: { x: { type: 'object', properties: { a: { type: 'string' } } } } },
+		{ a: 'x' },
+		true,
+	],
+	['enum of strings', { type: 'string', enum: ['a', 'b'] }, 'a', true],
+	['enum holding null', { enum: ['a', null] }, null, true],
+	[
+		'nullable enum under a type list',
+		{ type: ['string', 'null'], enum: ['a', 'b', null] },
+		null,
+		true,
+	],
+	['enum holding an object', { enum: [{ a: 1 }, 'x'] }, { a: 1 }, true],
+	['enum holding an array', { enum: [[1, 2], 'x'] }, [1, 2], true],
+	['enum of null alone', { enum: [null] }, null, true],
+	['const string', { const: 'x' }, 'x', true],
+	['const null', { const: null }, null, true],
+	['const beside a type', { type: 'string', const: 'x' }, 'x', true],
+	['nullable keyword', { type: 'string', nullable: true }, null, true],
+	['type list of string and null', { type: ['string', 'null'] }, null, true],
+	[
+		'type list of object and null',
+		{ type: ['object', 'null'], properties: { a: { type: 'string' } } },
+		null,
+		true,
+	],
+	['type list of number and string', { type: ['number', 'string'] }, 'x', true],
+	[
+		'a tuple under items',
+		{ type: 'array', items: [{ type: 'string' }, { type: 'number' }] },
+		['a', 1],
+		true,
+	],
+	[
+		'prefixItems beside items',
+		{ type: 'array', prefixItems: [{ type: 'string' }], items: { type: 'number' } },
+		['a', 1],
+		true,
+	],
+	[
+		'additionalItems',
+		{ type: 'array', items: [{ type: 'string' }], additionalItems: { type: 'number' } },
+		['a', 1],
+		true,
+	],
+	[
+		'additionalProperties as a schema',
+		{
+			type: 'object',
+			properties: { a: { type: 'string' } },
+			additionalProperties: { type: 'number' },
+		},
+		{ a: 'x', b: 1 },
+		true,
+	],
+	[
+		'patternProperties on a closed object',
+		{
+			type: 'object',
+			patternProperties: { '^x-': { type: 'string' } },
+			additionalProperties: false,
+		},
+		{ 'x-a': 'b' },
+		true,
+	],
+	[
+		'patternProperties beside properties on a closed object',
+		{
+			type: 'object',
+			properties: { a: { type: 'string' } },
+			patternProperties: { '^x-': { type: 'string' } },
+			additionalProperties: false,
+		},
+		{ a: 'q', 'x-a': 'b' },
+		true,
+	],
+	[
+		'propertyNames on a closed object',
+		{ type: 'object', propertyNames: { maxLength: 3 }, additionalProperties: false },
+		{ abc: 1 },
+		true,
+	],
+	[
+		'allOf properties on a closed object',
+		{
+			type: 'object',
+			properties: { a: { type: 'string' }, b: {} },
+			additionalProperties: false,
+			allOf: [{ properties: { b: { type: 'string' } } }],
+		},
+		{ a: 'q', b: 'r' },
+		true,
+	],
+	[
+		'unevaluatedProperties',
+		{
+			type: 'object',
+			allOf: [{ properties: { a: { type: 'string' } } }],
+			unevaluatedProperties: false,
+		},
+		{ a: 'q' },
+		true,
+	],
+	['$defs alone', { type: 'object', $defs: { x: { type: 'string' } } }, {}, true],
+	[
+		'maxLength over astral characters',
+		{ type: 'string', maxLength: 2 },
+		'\u{1F600}\u{1F600}',
+		true,
+	],
+	['minLength at its edge', { type: 'string', minLength: 2 }, 'ab', true],
+	['integer written with a point', { type: 'integer' }, 1.0, true],
+	['integer past the safe range', { type: 'integer' }, 1e21, true],
+	['integer past two to the fifty-third', { type: 'integer' }, 2 ** 60, true],
+	['exclusiveMinimum', { type: 'number', exclusiveMinimum: 0 }, 1, true],
+	// The schema refuses this value; dropping a contradictory pair widens past it.
+	['a contradictory range', { type: 'integer', minimum: 5, maximum: 1 }, 3, true],
+	['a fractional minLength', { type: 'string', minLength: 1.5 }, 'ab', true],
+	[
+		'a malformed required',
+		{ type: 'object', properties: { a: {} }, required: 'a' },
+		{ a: 1 },
+		true,
+	],
+	[
+		'if and then',
+		{ type: 'object', if: { properties: { a: { const: 1 } } }, then: { required: ['b'] } },
+		{ a: 2 },
+		true,
+	],
+	['a true property schema', { type: 'object', properties: { a: true } }, { a: 1 }, true],
+	// The schema refuses this value; a boolean property schema widens past it.
+	['a false property schema', { type: 'object', properties: { a: false } }, { a: 1 }, true],
+	['the empty schema', {}, { a: 1 }, true],
+	['a number property', { type: 'object', properties: { n: { type: 'number' } } }, { n: 5 }, true],
+	[
+		'extras on an open object',
+		{ type: 'object', properties: { a: { type: 'string' } } },
+		{ a: 'x', b: 1 },
+		true,
+	],
+	[
+		'anyOf of a closed object and an open one',
+		{
+			anyOf: [
+				{ type: 'object', properties: { a: { type: 'string' } }, additionalProperties: false },
+				{ type: 'object', properties: { a: { type: 'string' } } },
+			],
+		},
+		{ a: 'x', z: 1 },
+		true,
+	],
+	[
+		'a nested anyOf of a closed object and an open one',
+		{
+			type: 'object',
+			properties: {
+				f: {
+					anyOf: [
+						{
+							type: 'object',
+							properties: { p: { type: 'string' } },
+							required: ['p'],
+							additionalProperties: false,
+						},
+						{ type: 'object', properties: { q: { type: 'string' } }, required: ['q'] },
+					],
+				},
+			},
+		},
+		{ f: { q: 'x', z: 1 } },
+		true,
+	],
+	[
+		'an optional nullable from zod',
+		{
+			type: 'object',
+			properties: { f: { anyOf: [{ type: 'string' }, { type: 'null' }] } },
+			additionalProperties: false,
+		},
+		{ f: null },
+		true,
+	],
+	// These three the schema refuses, and the shape refuses them too, so a row can fail.
+	[
+		'null on a string property',
+		{ type: 'object', properties: { a: { type: 'string' } }, additionalProperties: false },
+		{ a: null },
+		false,
+	],
+	['an object for a string', { type: 'string' }, {}, false],
+	[
+		'a missing required key',
+		{ type: 'object', properties: { a: { type: 'string' } }, required: ['a'] },
+		{},
+		false,
+	],
+])
+
+// === Code points
+
+/** Spells one astral character, which is one code point and two UTF-16 code units. */
+export const ASTRAL = '\u{1F600}'
+
+/**
+ * Draws a seeded string over ASCII, astral characters, and both lone surrogates.
+ *
+ * @param seed - The seed for the deterministic source
+ * @returns The drawn string
+ */
+export function buildSurrogateText(seed: number): string {
+	const random = seededRandom(seed)
+	const alphabet: readonly string[] = ['a', ASTRAL, '\uD83D', '\uDE00']
+	const length = Math.floor(random() * 9)
+	return Array.from({ length }, () => alphabet[Math.floor(random() * alphabet.length)] ?? 'a').join(
+		'',
+	)
+}

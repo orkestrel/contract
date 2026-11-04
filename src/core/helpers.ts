@@ -707,6 +707,63 @@ export function matchesPattern(pattern: RegExp, value: string): boolean {
 }
 
 /**
+ * Checks whether a string's length in code points falls within optional bounds.
+ *
+ * @remarks
+ * Counts what JSON Schema's `minLength` and `maxLength` count: a surrogate pair is
+ * one, and a lone surrogate is one. A string holds at most `.length` code points and
+ * at least half that, so `.length` decides every bound it can with no count. The
+ * count runs only where a bound sits between those two figures, which limits its
+ * work to about twice the bound rather than to the size of the string.
+ *
+ * @param value - The string to measure
+ * @param min - The inclusive lower bound, when there is one
+ * @param max - The inclusive upper bound, when there is one
+ * @returns True if the code-point count is within every present bound; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesStringLength('😀😀', undefined, 2) // true
+ * matchesStringLength('😀', 2, undefined) // false
+ * ```
+ */
+export function matchesStringLength(
+	value: string,
+	min: number | undefined,
+	max: number | undefined,
+): boolean {
+	const length = value.length
+	if (min !== undefined && length < min) return false
+	if (max !== undefined && length > 2 * max) return false
+	if ((min === undefined || length >= 2 * min - 1) && (max === undefined || length <= max)) {
+		return true
+	}
+	// Indexed reads on a string primitive dispatch through nothing, so no replaced
+	// string member decides this count.
+	const pairs: number = INTRINSICS.reflect.apply(
+		INTRINSICS.reduce,
+		iterateIndices(() => length - 1),
+		[
+			(total: number, index: number) => {
+				const high = value[index]
+				const low = value[index + 1]
+				return high !== undefined &&
+					low !== undefined &&
+					high >= '\ud800' &&
+					high <= '\udbff' &&
+					low >= '\udc00' &&
+					low <= '\udfff'
+					? total + 1
+					: total
+			},
+			0,
+		],
+	)
+	const points = length - pairs
+	return (min === undefined || points >= min) && (max === undefined || points <= max)
+}
+
+/**
  * Escapes every regular-expression metacharacter in a text, so the text
  * matches literally inside a larger `RegExp` source.
  *
@@ -2539,7 +2596,7 @@ export function buildStringFaults(
 	return readValue(
 		() => {
 			const faults: Fault[] = []
-			if (shape.min !== undefined && value.length < shape.min) {
+			if (shape.min !== undefined && !matchesStringLength(value, shape.min, undefined)) {
 				faults[faults.length] = {
 					reason: 'constraint',
 					path,
@@ -2549,7 +2606,7 @@ export function buildStringFaults(
 					received: preview(value),
 				}
 			}
-			if (shape.max !== undefined && value.length > shape.max) {
+			if (shape.max !== undefined && !matchesStringLength(value, undefined, shape.max)) {
 				faults[faults.length] = {
 					reason: 'constraint',
 					path,

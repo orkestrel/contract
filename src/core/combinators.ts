@@ -37,6 +37,7 @@ import {
 	iterateIndices,
 	matchesMember,
 	matchesPattern,
+	matchesStringLength,
 	ownPattern,
 	readArrayEntries,
 	readGuardShape,
@@ -1113,8 +1114,9 @@ export function matchOf(pattern: RegExp): Guard<string> {
  * refinements — `min` / `max` length and a `pattern`.
  *
  * @remarks
- * Composes {@link isString} with {@link boundsOf} on the string's `.length` and
- * an owned stateless pattern (the same refinement {@link matchOf} performs).
+ * Composes {@link isString} with {@link matchesStringLength}, which counts code
+ * points as the `minLength` and `maxLength` a string shape emits do, and an owned
+ * stateless pattern (the same refinement {@link matchOf} performs).
  * When `min`, `max`, and `pattern` are all absent it returns the bare {@link isString} guard
  * (the unconstrained fast path), so an unrefined string leaf pays no wrapping
  * cost. The single source of the string refinement shared by the compiled guard
@@ -1147,11 +1149,11 @@ export function stringOf(options?: StringGuardOptions): Guard<string> {
 		if (min === undefined && max === undefined && pattern === undefined) {
 			return isString
 		}
-		const withinLength = boundsOf(min, max)
 		return whereOf(
 			isString,
 			(value) =>
-				withinLength(value.length) && (pattern === undefined || matchesPattern(pattern, value)),
+				matchesStringLength(value, min, max) &&
+				(pattern === undefined || matchesPattern(pattern, value)),
 		)
 	}, 'stringOf')
 }

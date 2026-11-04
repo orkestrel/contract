@@ -48,6 +48,7 @@ import {
 	booleanShape,
 	integerShape,
 	literalShape,
+	nullableShape,
 	nullShape,
 	numberShape,
 	oneOfShape,
@@ -171,7 +172,11 @@ export class SchemaShaper {
 		admitVisited(this.#visited, schema)
 		try {
 			if (this.#strict) this.#inspect(schema)
-			const shape = this.#build(schema, depth, enclosed)
+			const built = this.#build(schema, depth, enclosed)
+			// Read here rather than in `#build`, which a type list re-enters per member. The
+			// OpenAPI keyword stays out of `JSONSchema`, and a strict walk has refused it.
+			const nullable = INTRINSICS.reflect.read(schema, 'nullable') === true
+			const shape = nullable ? nullableShape(built) : built
 			retainDepth(memo, schema, depth, shape)
 			return shape
 		} finally {
@@ -429,17 +434,22 @@ export class SchemaShaper {
 	// keyword falls through to the next rule instead of throwing. Precedence,
 	// top-down:
 	//
-	// 1. `enum` — an array with at least one string/number/boolean entry (finite
-	//    numbers only) becomes a literal shape over the filtered entries.
-	//    Non-primitive / non-finite entries are dropped; an empty result falls
-	//    through.
-	// 2. `oneOf` — an array with at least one record entry becomes a one-of shape
-	//    over the recursively-built variants, provided the record-entry count is
-	//    at or under `INFER_BREADTH_LIMIT`; OVER the limit, building a subset
-	//    union would be strictly narrower than the schema's full union (a value
-	//    matching only a dropped variant would be wrongly rejected), so the whole
-	//    node widens to `rawShape` instead of sampling a subset.
-	// 3. `anyOf` — identically, through `unionShape`.
+	// 1. `enum` — finite string/number/boolean entries become a literal shape, a
+	//    `null` entry wraps it in a nullable, and `null` alone becomes a null shape.
+	//    Any other entry widens the node, because dropping it would narrow. An empty
+	//    list falls through.
+	// 2. `oneOf` — an array with at least one arm becomes a union over the
+	//    recursively-built arms, provided the arm count is at or under
+	//    `INFER_BREADTH_LIMIT`; OVER the limit, building a subset union would be
+	//    strictly narrower than the schema's full union (a value matching only a
+	//    dropped variant would be wrongly rejected), so the whole node widens to
+	//    `rawShape` instead of sampling a subset. The union is inclusive, because a
+	//    keyword this walk does not read can make two arms overlap that the schema
+	//    keeps apart, and exactly-one over those arms refuses a value the schema
+	//    accepts. A strict walk reads every keyword, so it keeps exactly-one.
+	// 3. `anyOf` — identically. In both, a `true` arm admits anything and a `false`
+	//    arm admits nothing, so `true` is a raw variant in declaration order and
+	//    `false` is dropped; a list its `false` arms leave empty widens.
 	// 4. Array-valued `type` — distinct recognized names become an inclusive
 	//    union, or a single shape for one name. An empty list or any unrecognized
 	//    member widens the whole node; dropping a member would narrow it.
@@ -451,7 +461,8 @@ export class SchemaShaper {
 	//    rejects — so the result is always a valid shape.
 	// 6. `type: 'array'` — an array shape whose element shape recurses into a
 	//    record-valued `items`, widening to `rawShape` otherwise, with bounds from
-	//    `minItems` / `maxItems`.
+	//    `minItems` / `maxItems`. A present `prefixItems` widens the elements too,
+	//    because `items` then applies only past the prefix.
 	// 7. `type: 'object'`, OR no `type` / `enum` / `oneOf` / `anyOf` but a
 	//    record-valued `properties` — delegates to the object branch.
 	// 8. Everything else — an empty schema, an unrecognized/absent `type`, or
@@ -477,14 +488,18 @@ export class SchemaShaper {
 				(index) =>
 					INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'enum'])[index],
 			)
+			const widened = INTRINSICS.reflect.apply(INTRINSICS.some, observed, [
+				(entry: unknown) =>
+					entry !== null &&
+					(!isLiteralValue(entry) || (typeof entry === 'number' && !isFiniteNumber(entry))),
+			])
+			if (widened) return this.#widen('an enum entry has no literal form', description, 'enum')
 			const valid: readonly LiteralValue[] = INTRINSICS.reflect.apply(
 				INTRINSICS.select,
 				readIndexView(observed),
-				[
-					(entry: unknown) =>
-						isLiteralValue(entry) && (typeof entry !== 'number' || isFiniteNumber(entry)),
-				],
+				[(entry: unknown) => entry !== null],
 			)
+			const nullable = valid.length < observed.length
 			const pairs = INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(valid), [
 				(entry: LiteralValue, index: number) => [
 					`${typeof entry}:${INTRINSICS.text(entry)}`,
@@ -506,68 +521,23 @@ export class SchemaShaper {
 				],
 			)
 			if (literals.length > 0) {
-				return literalShape(literals, description === undefined ? undefined : { description })
+				const literal = literalShape(
+					literals,
+					description === undefined ? undefined : { description },
+				)
+				return nullable ? nullableShape(literal) : literal
 			}
+			if (nullable) return nullShape(description === undefined ? undefined : { description })
 		}
 
 		if (isArray(schema.oneOf)) {
-			const observed = INTRINSICS.from(
-				iterateIndices(
-					() =>
-						INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'oneOf']).length,
-				),
-				(index) =>
-					INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'oneOf'])[index],
-			)
-			const records: readonly JSONSchema[] = INTRINSICS.reflect.apply(
-				INTRINSICS.select,
-				readIndexView(observed),
-				[isRecord],
-			)
-			if (records.length > INFER_BREADTH_LIMIT) {
-				return this.#widen('oneOf exceeds the breadth limit', description, 'oneOf')
-			}
-			const variants: readonly ContractShape[] = INTRINSICS.reflect.apply(
-				INTRINSICS.project,
-				readIndexView(records),
-				[
-					(entry: JSONSchema, index: number) =>
-						this.#descend(entry, depth - 1, true, 'oneOf', INTRINSICS.text(index)),
-				],
-			)
-
-			// `Reflect.apply` reads its argument list by index, where a spread call
-			// would dispatch through the caller-writable array iterator.
-			if (variants.length > 0) return INTRINSICS.reflect.apply(oneOfShape, undefined, variants)
+			const union = this.#buildUnion(schema.oneOf, 'oneOf', depth, description)
+			if (union !== undefined) return union
 		}
 
 		if (isArray(schema.anyOf)) {
-			const observed = INTRINSICS.from(
-				iterateIndices(
-					() =>
-						INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'anyOf']).length,
-				),
-				(index) =>
-					INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'anyOf'])[index],
-			)
-			const records: readonly JSONSchema[] = INTRINSICS.reflect.apply(
-				INTRINSICS.select,
-				readIndexView(observed),
-				[isRecord],
-			)
-			if (records.length > INFER_BREADTH_LIMIT) {
-				return this.#widen('anyOf exceeds the breadth limit', description, 'anyOf')
-			}
-			const variants: readonly ContractShape[] = INTRINSICS.reflect.apply(
-				INTRINSICS.project,
-				readIndexView(records),
-				[
-					(entry: JSONSchema, index: number) =>
-						this.#descend(entry, depth - 1, true, 'anyOf', INTRINSICS.text(index)),
-				],
-			)
-
-			if (variants.length > 0) return INTRINSICS.reflect.apply(unionShape, undefined, variants)
+			const union = this.#buildUnion(schema.anyOf, 'anyOf', depth, description)
+			if (union !== undefined) return union
 		}
 
 		const category = schema.type
@@ -647,9 +617,11 @@ export class SchemaShaper {
 		}
 
 		if (type === 'array') {
-			const items = isRecord(schema.items)
-				? this.#descend(schema.items, depth - 1, enclosed, 'items')
-				: this.#widen('an array needs an items schema', undefined, 'items')
+			const items = INTRINSICS.own(schema, 'prefixItems')
+				? rawShape({})
+				: isRecord(schema.items)
+					? this.#descend(schema.items, depth - 1, enclosed, 'items')
+					: this.#widen('an array needs an items schema', undefined, 'items')
 			const bounds = deriveLengthBounds(schema.minItems, schema.maxItems)
 			return arrayShape(items, {
 				...bounds,
@@ -662,6 +634,48 @@ export class SchemaShaper {
 		}
 
 		return this.#widen('a schema must name a type, an enum, or a union', description)
+	}
+
+	// One union keyword's arms, in declaration order. Answers `undefined` for a list
+	// with no arm and no `false` entry, so a malformed keyword falls through.
+	#buildUnion(
+		list: readonly unknown[],
+		keyword: 'oneOf' | 'anyOf',
+		depth: number,
+		description: string | undefined,
+	): ContractShape | undefined {
+		const observed = INTRINSICS.from(
+			iterateIndices(() => list.length),
+			(index) => list[index],
+		)
+		const arms: ReadonlyArray<JSONSchema | true> = INTRINSICS.reflect.apply(
+			INTRINSICS.select,
+			readIndexView(observed),
+			[(entry: unknown) => entry === true || isRecord(entry)],
+		)
+		if (arms.length > INFER_BREADTH_LIMIT) {
+			return this.#widen(`${keyword} exceeds the breadth limit`, description, keyword)
+		}
+		const variants: readonly ContractShape[] = INTRINSICS.reflect.apply(
+			INTRINSICS.project,
+			readIndexView(arms),
+			[
+				(entry: JSONSchema | true, index: number) =>
+					entry === true
+						? rawShape({})
+						: this.#descend(entry, depth - 1, true, keyword, INTRINSICS.text(index)),
+			],
+		)
+		// `Reflect.apply` reads its argument list by index, where a spread call
+		// would dispatch through the caller-writable array iterator.
+		if (variants.length > 0) {
+			const build = this.#strict && keyword === 'oneOf' ? oneOfShape : unionShape
+			return INTRINSICS.reflect.apply(build, undefined, variants)
+		}
+		const dropped = INTRINSICS.reflect.apply(INTRINSICS.some, observed, [
+			(entry: unknown) => entry === false,
+		])
+		return dropped ? this.#widen(`${keyword} admits nothing`, description, keyword) : undefined
 	}
 
 	// The object-specialized branch. `properties` (when a record) contributes one
@@ -679,7 +693,9 @@ export class SchemaShaper {
 	// fail a `false` or record-valued rest shape it was never checked against —
 	// mirroring the record inference's partial-key handling. The accumulator uses
 	// a null-prototype record so a property literally named `__proto__` becomes an
-	// own data key rather than mutating the prototype. A strict conversion refuses
+	// own data key rather than mutating the prototype. A present `patternProperties`
+	// or `propertyNames` opens the object whatever its own `additionalProperties` says,
+	// because a key that keyword admits is unread here. A strict conversion refuses
 	// the truncation and closes an object whose schema is silent.
 	#buildObject(
 		schema: JSONSchema,
@@ -708,7 +724,11 @@ export class SchemaShaper {
 		}
 		const keys = limitEntries(allKeys, INFER_BREADTH_LIMIT)
 		const extra = schema.additionalProperties
-		const open = truncated || (extra !== false && (!this.#strict || extra !== undefined))
+		const unread =
+			truncated ||
+			INTRINSICS.own(schema, 'patternProperties') ||
+			INTRINSICS.own(schema, 'propertyNames')
+		const open = unread || (extra !== false && (!this.#strict || extra !== undefined))
 		const pairs = INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(keys), [
 			(key: string) => {
 				const child = propertiesSource?.[key]
@@ -741,7 +761,7 @@ export class SchemaShaper {
 			}),
 			null,
 		)
-		const additionalProperties: boolean | ContractShape = truncated
+		const additionalProperties: boolean | ContractShape = unread
 			? true
 			: isRecord(extra)
 				? this.#descend(extra, depth - 1, enclosed, 'additionalProperties')

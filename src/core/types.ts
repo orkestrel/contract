@@ -624,7 +624,13 @@ export type ContractShape =
 	| JSONShape
 	| RawShape
 
-/** Describes a string with optional length and pattern constraints. */
+/**
+ * Describes a string with optional length and pattern constraints.
+ *
+ * @remarks
+ * `min` and `max` count code points, as the `minLength` and `maxLength` the shape
+ * emits do, so one astral character has a length of one.
+ */
 export interface StringShape {
 	readonly category: 'string'
 	readonly min?: number

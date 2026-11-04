@@ -822,6 +822,13 @@ export function rawShape(schema: JSONSchema): RawShape {
  * when the conversion widened anywhere — `schema` / `is` / `parse` / `explain`
  * stay total.
  *
+ * LENIENT LAW: a value a JSON Schema accepts is never refused by the shape a
+ * lenient conversion builds from it, because the walk widens what it cannot read.
+ * So `oneOf` builds an inclusive union, a `true` arm is a raw variant and a `false`
+ * arm is dropped, an `enum` holding `null` admits it, `nullable: true` wraps the
+ * node, a present `patternProperties` or `propertyNames` opens the object, and a
+ * present `prefixItems` widens the elements.
+ *
  * DEFAULTS: a lenient conversion carries a property's `default` when the key is
  * not `required`, its object is closed with no union ancestor, and the value is
  * one the property's primitive or literal guard accepts. It drops every other
@@ -829,11 +836,14 @@ export function rawShape(schema: JSONSchema): RawShape {
  *
  * STRICT: `{ strict: true }` is the door for a foreign schema. It refuses, with
  * code `structure`, every node the lenient walk would widen, every keyword it
- * would ignore (`pattern`, `format`, and anything outside the {@link JSONSchema}
- * vocabulary included), a malformed keyword, a contradictory bound, a `required`
- * name not in `properties`, breadth past {@link INFER_BREADTH_LIMIT}, and a
- * `default` with no optional property to fill. An object with no
- * `additionalProperties` closes rather than opens.
+ * would ignore (`pattern`, `format`, `nullable`, `patternProperties`,
+ * `propertyNames`, `prefixItems`, and anything outside the {@link JSONSchema}
+ * vocabulary included), a malformed keyword, a boolean schema, an `enum` entry
+ * that is not a finite primitive, a contradictory bound, a `required` name not in
+ * `properties`, breadth past {@link INFER_BREADTH_LIMIT}, and a `default` with no
+ * optional property to fill. An object with no `additionalProperties` closes
+ * rather than opens, and `oneOf` keeps exactly-one, because a strict walk reads
+ * every keyword that could keep two arms apart.
  *
  * @param schema - The JSON Schema value to convert
  * @param options - Optional `strict`, default `false`

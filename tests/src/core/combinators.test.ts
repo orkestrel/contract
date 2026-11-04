@@ -39,6 +39,7 @@ import {
 	whereOf,
 } from '@src/core'
 import {
+	ASTRAL,
 	readCategory,
 	excludeNull,
 	throwMembership,
@@ -960,12 +961,20 @@ describe('stringOf', () => {
 		expect(error.message).toBe('stringOf: options could not be read')
 	})
 
-	it('enforces length bounds via boundsOf on .length', () => {
+	it('enforces length bounds at both edges', () => {
 		const guard = stringOf({ min: 2, max: 4 })
 		expect(guard('ab')).toBe(true) // lower edge
 		expect(guard('abcd')).toBe(true) // upper edge
 		expect(guard('a')).toBe(false) // below min
 		expect(guard('abcde')).toBe(false) // above max
+	})
+
+	it('counts length in code points, as minLength and maxLength do', () => {
+		expect(stringOf({ max: 2 })(`${ASTRAL}${ASTRAL}`)).toBe(true)
+		expect(stringOf({ max: 1 })(`${ASTRAL}${ASTRAL}`)).toBe(false)
+		expect(stringOf({ min: 2 })(ASTRAL)).toBe(false)
+		expect(stringOf({ min: 2 })(`${ASTRAL}${ASTRAL}`)).toBe(true)
+		expect(stringOf({ min: 3, max: 3 })(`${ASTRAL}a${ASTRAL}`)).toBe(true)
 	})
 
 	it('enforces a pattern', () => {

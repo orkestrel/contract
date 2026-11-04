@@ -43,6 +43,8 @@ import {
 } from '@src/core'
 import {
 	acceptValue,
+	ASTRAL,
+	buildSurrogateText,
 	denyValue,
 	createMarker,
 	createEmptyFaults,
@@ -5552,5 +5554,61 @@ describe('compiled object presence decides the same keys at every plan width', (
 		expect(compileParser(shape)(aliased)).toBeUndefined()
 		expect(compileAuditor(shape, aliased)).toEqual([absence])
 		expect(compileReporter(shape, aliased)).toEqual([absence])
+	})
+})
+
+describe('string bounds in code points', () => {
+	it('accepts two astral characters under max: 2 at every door', () => {
+		const contract = createContract(stringShape({ max: 2 }))
+		const value = `${ASTRAL}${ASTRAL}`
+
+		expect(contract.is(value)).toBe(true)
+		expect(contract.parse(value)).toBe(value)
+		expect(contract.audit(value)).toEqual([])
+		expect(contract.explain(value)).toEqual([])
+		expect(contract.schema.maxLength).toBe(2)
+	})
+
+	it('refuses three code points under max: 2 at every door', () => {
+		const contract = createContract(stringShape({ max: 2 }))
+		const value = `${ASTRAL}a${ASTRAL}`
+
+		expect(contract.is(value)).toBe(false)
+		expect(contract.parse(value)).toBeUndefined()
+		expect(contract.audit(value).map((fault) => fault.reason)).toEqual(['constraint'])
+		expect(contract.explain(value).map((fault) => fault.reason)).toEqual(['constraint'])
+	})
+
+	it('refuses one astral character under min: 2 at every door', () => {
+		const contract = createContract(stringShape({ min: 2 }))
+
+		expect(contract.is(ASTRAL)).toBe(false)
+		expect(contract.parse(ASTRAL)).toBeUndefined()
+		expect(contract.audit(ASTRAL).map((fault) => fault.reason)).toEqual(['constraint'])
+		expect(contract.explain(ASTRAL).map((fault) => fault.reason)).toEqual(['constraint'])
+		expect(contract.schema.minLength).toBe(2)
+	})
+
+	it('keeps the laws over surrogate text and bounded shapes', () => {
+		const samples = Array.from({ length: 64 }, (_entry, seed) => buildSurrogateText(seed))
+		const shapes = [
+			stringShape({ min: 1 }),
+			stringShape({ max: 2 }),
+			stringShape({ min: 2, max: 3 }),
+			stringShape({ min: 3, pattern: /a/ }),
+		]
+
+		expect(shapes.flatMap((shape) => findAgreementViolations(shape, undefined, samples))).toEqual(
+			[],
+		)
+	})
+
+	it('generates only values its guard accepts', () => {
+		const contract = createContract(stringShape({ min: 2, max: 3 }))
+		const drawn = Array.from({ length: 16 }, (_entry, seed) =>
+			contract.generate(seededRandom(seed)),
+		)
+
+		expect(drawn.filter((value) => !contract.is(value))).toEqual([])
 	})
 })

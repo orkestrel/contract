@@ -1510,10 +1510,11 @@ describe('schemaToShape — keyword semantics', () => {
 		expect(guard(true)).toBe(false)
 	})
 
-	it('oneOf compiles to a union rejecting a value matching two-or-more variants', () => {
+	it('oneOf compiles to a union accepting a value matching two-or-more variants', () => {
 		const guard = compileGuard(schemaToShape({ oneOf: [{ type: 'number' }, { type: 'integer' }] }))
 		expect(guard(3.5)).toBe(true) // matches number only
-		expect(guard(3)).toBe(false) // matches both number and integer
+		expect(guard(3)).toBe(true) // matches both, and a lenient conversion never narrows
+		expect(guard('x')).toBe(false) // matches neither
 	})
 
 	it('required keys are mandatory; unlisted keys become optional', () => {

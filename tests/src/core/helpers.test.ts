@@ -47,6 +47,8 @@ import {
 	replaceStringIterator,
 	replaceStringSlice,
 	StrippedBrandDeclaration,
+	ASTRAL,
+	buildSurrogateText,
 	StringDeclaration,
 	throwSentinel,
 } from '../../setup.js'
@@ -123,6 +125,7 @@ import {
 	matchesJSONDepth,
 	matchesJSONValue,
 	matchesRecordBrand,
+	matchesStringLength,
 	objectShape,
 	nullableShape,
 	optionalShape,
@@ -4160,5 +4163,79 @@ describe('indexed derivation helpers', () => {
 		expect(positions).toEqual({ id: 2, ['__proto__']: 1 })
 		expect(readPresence(['id', '__proto__', 'missing'], positions)).toBe(6)
 		expect(readPresence(['inherited'], Object.create({ inherited: 0 }))).toBe(0)
+	})
+})
+
+describe('matchesStringLength', () => {
+	it.each<readonly [string, string, number | undefined, number | undefined, boolean]>([
+		['no bound on the empty string', '', undefined, undefined, true],
+		['min above the empty string', '', 1, undefined, false],
+		['min 1 on one unit', 'a', 1, undefined, true],
+		['min 1 on one astral character', ASTRAL, 1, undefined, true],
+		['min 2 on one astral character', ASTRAL, 2, undefined, false],
+		['min 2 on two astral characters', `${ASTRAL}${ASTRAL}`, 2, undefined, true],
+		['min 2 on an astral character and a unit', `${ASTRAL}b`, 2, undefined, true],
+		['min 3 on two astral characters', `${ASTRAL}${ASTRAL}`, 3, undefined, false],
+		['min 3 on three code points in five units', `${ASTRAL}${ASTRAL}b`, 3, undefined, true],
+		['max 2 on two astral characters', `${ASTRAL}${ASTRAL}`, undefined, 2, true],
+		['max 2 on three code points in five units', `${ASTRAL}${ASTRAL}b`, undefined, 2, false],
+		['max 1 on an astral character and a unit', `${ASTRAL}b`, undefined, 1, false],
+		['max 1 on one astral character', ASTRAL, undefined, 1, true],
+		['max 1 on two units', 'ab', undefined, 1, false],
+		['max 2 on two units', 'ab', undefined, 2, true],
+		['max 0 on the empty string', '', undefined, 0, true],
+		['max 0 on one astral character', ASTRAL, undefined, 0, false],
+		['a lone high surrogate', '\uD83D', 1, 1, true],
+		['two lone high surrogates', '\uD83D\uD83D', 2, 2, true],
+		['a low surrogate before a high one', '\uDE00\uD83D', 2, 2, true],
+		['a pair then a lone low surrogate', '😀\uDE00', 2, 2, true],
+		['both bounds on two astral characters', `${ASTRAL}${ASTRAL}`, 2, 2, true],
+		['both bounds past the upper one', `${ASTRAL}${ASTRAL}`, 1, 1, false],
+	])('answers for %s', (_label, value, min, max, expected) => {
+		expect(matchesStringLength(value, min, max)).toBe(expected)
+	})
+
+	it('agrees with the count a string iterator reports', () => {
+		const samples = Array.from({ length: 256 }, (_entry, seed) => buildSurrogateText(seed))
+		const disagreements = samples.flatMap((text) => {
+			const points = Array.from(text).length
+			return [0, 1, 2, 3, 4, 5, 6, 8, 16].flatMap((bound) => [
+				...(matchesStringLength(text, bound, undefined) === points >= bound
+					? []
+					: [`min ${String(bound)}`]),
+				...(matchesStringLength(text, undefined, bound) === points <= bound
+					? []
+					: [`max ${String(bound)}`]),
+				...(matchesStringLength(text, bound, bound) === (points === bound)
+					? []
+					: [`both ${String(bound)}`]),
+			])
+		})
+
+		expect(disagreements).toEqual([])
+	})
+
+	it('reads no string member a caller can replace', () => {
+		const answer = replaceIntrinsic(String.prototype, 'charCodeAt', throwReplacement, () =>
+			replaceIntrinsic(String.prototype, 'codePointAt', throwReplacement, () =>
+				replaceStringIterator(throwReplacement, () =>
+					matchesStringLength(`${ASTRAL}${ASTRAL}`, undefined, 2),
+				),
+			),
+		)
+
+		expect(answer).toBe(true)
+	})
+
+	it('reports code points through the string fault builder', () => {
+		const shape: StringShape = { category: 'string', min: 2, max: 2 }
+
+		expect(buildStringFaults(shape, `${ASTRAL}${ASTRAL}`, [])).toEqual([])
+		expect(buildStringFaults(shape, ASTRAL, []).map((fault) => fault.reason)).toEqual([
+			'constraint',
+		])
+		expect(
+			buildStringFaults(shape, `${ASTRAL}a${ASTRAL}`, []).map((fault) => fault.reason),
+		).toEqual(['constraint'])
 	})
 })

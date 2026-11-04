@@ -29,6 +29,8 @@ import {
 	buildCycle,
 	closedOf,
 	closedWhenObject,
+	findAgreementViolations,
+	FOREIGN_SCHEMA_ROWS,
 	LENIENT_DEFAULT_DROPS,
 	polluteArrayConstruction,
 	pollutePrototype,
@@ -52,7 +54,7 @@ describe('SchemaShaper — type arrays', () => {
 		// HEAD SchemaShaper.ts:157 and :324 retain enum/type alternatives and declared properties.
 		expect(actual).toEqual([
 			{ enum: ['x', 1] },
-			{ oneOf: [{ type: 'string' }, { type: 'integer' }] },
+			{ anyOf: [{ type: 'string' }, { type: 'integer' }] },
 			{ anyOf: [{ type: 'string' }, { type: 'integer' }] },
 			{ anyOf: [{ type: 'string' }, { type: 'null' }] },
 			{
@@ -301,6 +303,313 @@ describe('SchemaShaper — an unreadable keyword', () => {
 	})
 })
 
+describe('SchemaShaper — a value its schema accepts', () => {
+	it.each(FOREIGN_SCHEMA_ROWS)('answers for %s', (_name, schema, value, admits) => {
+		const contract = createContract(schemaToShape(schema))
+
+		expect(contract.is(value)).toBe(admits)
+		expect(contract.audit(value).length === 0).toBe(admits)
+		expect(contract.explain(value).length === 0).toBe(admits)
+		expect(contract.parse(value)).toEqual(admits ? value : undefined)
+	})
+
+	it.each(FOREIGN_SCHEMA_ROWS)('keeps the laws for %s', (_name, schema, value) => {
+		expect(findAgreementViolations(schemaToShape(schema), undefined, [value])).toEqual([])
+	})
+
+	it('names every row it expects a shape to refuse', () => {
+		const refused = FOREIGN_SCHEMA_ROWS.filter(([, , , admits]) => !admits).map(([name]) => name)
+
+		expect(refused).toEqual([
+			'null on a string property',
+			'an object for a string',
+			'a missing required key',
+		])
+	})
+})
+
+describe('SchemaShaper — lenient oneOf', () => {
+	const discriminated: Readonly<Record<string, unknown>> = {
+		oneOf: [
+			{ type: 'object', properties: { kind: { const: 'a' } }, required: ['kind'] },
+			{ type: 'object', properties: { kind: { const: 'b' } }, required: ['kind'] },
+		],
+	}
+
+	it('builds an inclusive union, so arms it widened cannot overlap into a refusal', () => {
+		const shape = schemaToShape(discriminated)
+		const contract = createContract(shape)
+
+		expect(shape.category === 'union' ? shape.mode : 'not a union').toBeUndefined()
+		expect(contract.is({ kind: 'a' })).toBe(true)
+		expect(contract.parse({ kind: 'a' })).toEqual({ kind: 'a' })
+		expect(contract.explain({ kind: 'a' })).toEqual([])
+		expect(contract.is({})).toBe(false)
+	})
+
+	it('accepts a value two widened arms both match', () => {
+		const schema: Readonly<Record<string, unknown>> = {
+			oneOf: [{ type: 'number' }, { type: 'integer' }],
+		}
+		const guard = compileGuard(schemaToShape(schema))
+
+		expect(guard(3)).toBe(true)
+		expect(guard(3.5)).toBe(true)
+		expect(guard('x')).toBe(false)
+	})
+
+	it('keeps exactly-one in a strict conversion', () => {
+		const schema: Readonly<Record<string, unknown>> = {
+			oneOf: [{ type: 'number' }, { type: 'integer' }],
+		}
+		const shape = schemaToShape(schema, { strict: true })
+		const guard = compileGuard(shape)
+
+		expect(shape.category === 'union' ? shape.mode : 'not a union').toBe('oneOf')
+		expect(guard(3.5)).toBe(true)
+		expect(guard(3)).toBe(false)
+	})
+
+	it('compiles a strict oneOf of closed objects', () => {
+		const contract = createContract(
+			schemaToShape(
+				{
+					oneOf: [
+						{
+							type: 'object',
+							properties: { kind: { enum: ['a'] } },
+							required: ['kind'],
+							additionalProperties: false,
+						},
+						{
+							type: 'object',
+							properties: { kind: { enum: ['b'] } },
+							required: ['kind'],
+							additionalProperties: false,
+						},
+					],
+				},
+				{ strict: true },
+			),
+		)
+
+		expect(contract.is({ kind: 'a' })).toBe(true)
+		expect(contract.is({ kind: 'c' })).toBe(false)
+	})
+})
+
+describe('SchemaShaper — boolean arms', () => {
+	it.each<readonly [string, Readonly<Record<string, unknown>>]>([
+		['anyOf', { anyOf: [true, { type: 'string' }] }],
+		['oneOf', { oneOf: [true, { type: 'string' }] }],
+	])('reads a true arm of %s as accepting anything', (_label, schema) => {
+		const contract = createContract(schemaToShape(schema))
+
+		expect(contract.is(5)).toBe(true)
+		expect(contract.parse(5)).toBe(5)
+	})
+
+	it('keeps a true arm in declaration order', () => {
+		const anyOf: Readonly<Record<string, unknown>> = { anyOf: [{ type: 'string' }, true] }
+
+		expect(compileSchema(schemaToShape(anyOf))).toEqual({ anyOf: [{ type: 'string' }, {}] })
+	})
+
+	it.each<readonly [string, Readonly<Record<string, unknown>>]>([
+		['anyOf', { anyOf: [false, { type: 'string' }] }],
+		['oneOf', { oneOf: [false, { type: 'string' }] }],
+	])('drops a false arm of %s, which admits nothing', (_label, schema) => {
+		const guard = compileGuard(schemaToShape(schema))
+
+		expect(guard('x')).toBe(true)
+		expect(guard(5)).toBe(false)
+	})
+
+	it.each<readonly [string, Readonly<Record<string, unknown>>]>([
+		['anyOf', { anyOf: [false] }],
+		['oneOf', { oneOf: [false, false] }],
+	])('widens %s when its false arms leave the list empty', (_label, schema) => {
+		expect(schemaToShape(schema).category).toBe('raw')
+	})
+
+	it('leaves an empty list and a beside type as they were', () => {
+		const empty: Readonly<Record<string, unknown>> = { type: 'string', anyOf: [] }
+
+		expect(schemaToShape(empty).category).toBe('string')
+	})
+})
+
+describe('SchemaShaper — enum partition', () => {
+	it('wraps literals in a nullable when the list holds null', () => {
+		const schema: Readonly<Record<string, unknown>> = {
+			type: ['string', 'null'],
+			enum: ['c', 'f', null],
+		}
+		const guard = compileGuard(schemaToShape(schema))
+
+		expect(guard(null)).toBe(true)
+		expect(guard('c')).toBe(true)
+		expect(guard('x')).toBe(false)
+	})
+
+	it('builds a null shape from null alone', () => {
+		const schema: Readonly<Record<string, unknown>> = { enum: [null] }
+		const shape = schemaToShape(schema)
+
+		expect(shape.category).toBe('null')
+		expect(compileGuard(shape)(null)).toBe(true)
+		expect(compileGuard(shape)('x')).toBe(false)
+	})
+
+	it.each<readonly [string, readonly unknown[]]>([
+		['an object', [{ a: 1 }, 'x']],
+		['an array', [[1], 'x']],
+		['a non-finite number', [Number.POSITIVE_INFINITY, 'x']],
+	])('widens the node when the list holds %s', (_label, members) => {
+		const schema: Readonly<Record<string, unknown>> = { enum: members }
+
+		expect(schemaToShape(schema).category).toBe('raw')
+	})
+
+	it('accepts an object entry the list names', () => {
+		const schema: Readonly<Record<string, unknown>> = { enum: [{ a: 1 }, 'x'] }
+
+		expect(compileGuard(schemaToShape(schema))({ a: 1 })).toBe(true)
+	})
+
+	it('keeps literals alone exactly as they converted', () => {
+		const schema: Readonly<Record<string, unknown>> = { enum: ['a', 'a', 1] }
+
+		expect(compileSchema(schemaToShape(schema))).toEqual({ enum: ['a', 1] })
+	})
+
+	it('falls through an empty list to the next keyword', () => {
+		const schema: Readonly<Record<string, unknown>> = { enum: [], type: 'string' }
+
+		expect(schemaToShape(schema).category).toBe('string')
+	})
+})
+
+describe('SchemaShaper — nullable keyword', () => {
+	it('wraps the converted node when the keyword is true', () => {
+		const schema: Readonly<Record<string, unknown>> = { type: 'string', nullable: true }
+		const guard = compileGuard(schemaToShape(schema))
+
+		expect(guard(null)).toBe(true)
+		expect(guard('x')).toBe(true)
+		expect(guard(5)).toBe(false)
+	})
+
+	it('ignores any other value', () => {
+		const values: readonly unknown[] = [false, 'true', 1, null]
+		const shapes = values.map((nullable) => {
+			const schema: Readonly<Record<string, unknown>> = { type: 'string', nullable }
+			return schemaToShape(schema).category
+		})
+
+		expect(shapes).toEqual(values.map(() => 'string'))
+	})
+
+	it('wraps a type list once', () => {
+		const schema: Readonly<Record<string, unknown>> = {
+			type: ['string', 'number'],
+			nullable: true,
+		}
+		const shape = schemaToShape(schema)
+
+		expect(shape.category).toBe('nullable')
+		expect(shape.category === 'nullable' ? shape.inner.category : undefined).toBe('union')
+	})
+
+	it('wraps an object and keeps its fields', () => {
+		const schema: Readonly<Record<string, unknown>> = {
+			type: 'object',
+			nullable: true,
+			properties: { a: { type: 'string' } },
+			required: ['a'],
+		}
+		const guard = compileGuard(schemaToShape(schema))
+
+		expect(guard(null)).toBe(true)
+		expect(guard({ a: 'x' })).toBe(true)
+		expect(guard({})).toBe(false)
+	})
+})
+
+describe('SchemaShaper — patternProperties and propertyNames', () => {
+	it.each<readonly [string, Readonly<Record<string, unknown>>]>([
+		[
+			'patternProperties beside a closed object',
+			{ patternProperties: {}, additionalProperties: false },
+		],
+		['propertyNames beside a closed object', { propertyNames: {}, additionalProperties: false }],
+		[
+			'patternProperties beside a tail',
+			{ patternProperties: {}, additionalProperties: { type: 'number' } },
+		],
+		['patternProperties with no additionalProperties', { patternProperties: {} }],
+	])('reads the object open under %s', (_label, keywords) => {
+		const schema: Readonly<Record<string, unknown>> = { type: 'object', ...keywords }
+		const shape = schemaToShape(schema)
+
+		expect(shape.category === 'object' ? shape.additionalProperties : 'not an object').toBe(true)
+		expect(compileGuard(shape)({ 'x-a': 'b' })).toBe(true)
+	})
+
+	it('leaves the declared properties constrained', () => {
+		const schema: Readonly<Record<string, unknown>> = {
+			type: 'object',
+			properties: { a: { type: 'string' } },
+			patternProperties: { '^x-': {} },
+			additionalProperties: false,
+		}
+		const guard = compileGuard(schemaToShape(schema))
+
+		expect(guard({ a: 'x', 'x-b': 1 })).toBe(true)
+		expect(guard({ a: 5 })).toBe(false)
+	})
+
+	it('drops a default beside them, on the object they open', () => {
+		const schema: Readonly<Record<string, unknown>> = {
+			type: 'object',
+			properties: { a: { type: 'number', default: 3 } },
+			patternProperties: { '^x-': {} },
+			additionalProperties: false,
+		}
+
+		expect(compileParser(schemaToShape(schema))({})).toEqual({})
+	})
+})
+
+describe('SchemaShaper — prefixItems', () => {
+	it('reads every element as unconstrained', () => {
+		const schema: Readonly<Record<string, unknown>> = {
+			type: 'array',
+			prefixItems: [{ type: 'string' }],
+			items: { type: 'number' },
+		}
+		const shape = schemaToShape(schema)
+
+		expect(shape.category === 'array' ? shape.items.category : 'not an array').toBe('raw')
+		expect(compileGuard(shape)(['a', 1])).toBe(true)
+		expect(compileGuard(shape)('a')).toBe(false)
+	})
+
+	it('keeps the length bounds', () => {
+		const schema: Readonly<Record<string, unknown>> = {
+			type: 'array',
+			prefixItems: [{ type: 'string' }],
+			minItems: 1,
+			maxItems: 2,
+		}
+		const guard = compileGuard(schemaToShape(schema))
+
+		expect(guard([])).toBe(false)
+		expect(guard(['a', 1])).toBe(true)
+		expect(guard(['a', 1, 2])).toBe(false)
+	})
+})
+
 describe('SchemaShaper — lenient default', () => {
 	const carried: ReadonlyArray<readonly [string, Readonly<Record<string, unknown>>, unknown]> = [
 		['a number', { type: 'number', default: 3 }, 3],
@@ -488,7 +797,6 @@ describe('SchemaShaper — strict', () => {
 			{ enum: ['a', 'b'], description: 'text' },
 			{ type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 2 },
 			{ type: 'object' },
-			{ oneOf: [{ type: 'string' }, { type: 'number' }] },
 			{ anyOf: [{ type: 'string' }, { type: 'number' }] },
 		]
 
