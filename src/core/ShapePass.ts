@@ -185,26 +185,37 @@ export class ShapePass {
 	 *
 	 * @remarks
 	 * A field a node may leave out reads through to `Object.prototype`, which is a
-	 * verdict about the declaration. The rest are what a walk runs on and a survey does
-	 * not, so each one breaks a walk into a refusal a seal would otherwise skip: an index
-	 * on either prototype, reached by a walk's array writes, a replaced `pop` or array
-	 * iterator `next`, and a flag getter a pattern's `flags` reads. An array's `length`
-	 * always passes its highest index, and own keys list an index first, so one read
-	 * answers for every index, and a name that merely opens with a digit only costs a walk.
+	 * verdict about the declaration, and a {@link tampered} host breaks a walk into a
+	 * refusal a seal would otherwise skip.
 	 *
 	 * @returns True when a walk has to answer rather than a seal
 	 */
 	static polluted(): boolean {
+		if (ShapePass.tampered()) return true
+		return INTRINSICS.reflect.apply(INTRINSICS.some, ShapePass.#fields, [
+			(field: string) => INTRINSICS.own(INTRINSICS.base, field),
+		])
+	}
+
+	/**
+	 * Reports whether a member a walk or a compile runs on has been replaced.
+	 *
+	 * @remarks
+	 * An index on either prototype, reached by array writes, a replaced `pop` or array
+	 * iterator `next`, and a flag getter a pattern's `flags` reads. An array's `length`
+	 * always passes its highest index, and own keys list an index first, so one read
+	 * answers for every index, and a name that merely opens with a digit only costs a walk.
+	 *
+	 * @returns True when the host is not the one this package loaded on
+	 */
+	static tampered(): boolean {
 		if (ShapePass.#arrays.length !== 0) return true
 		const first = INTRINSICS.reflect.members(INTRINSICS.base)[0]
 		if (typeof first === 'string' && first >= '0' && first < ':') return true
 		if (INTRINSICS.describe(ShapePass.#arrays, 'pop')?.value !== ShapePass.#pop) return true
 		const next = INTRINSICS.describe(ShapePass.#iterators, 'next')?.value
 		if (next !== INTRINSICS.advance) return true
-		if (!holds(() => readPatternFlags(ShapePass.#blank) === '')) return true
-		return INTRINSICS.reflect.apply(INTRINSICS.some, ShapePass.#fields, [
-			(field: string) => INTRINSICS.own(INTRINSICS.base, field),
-		])
+		return !holds(() => readPatternFlags(ShapePass.#blank) === '')
 	}
 
 	/** Poisons this pass and throws the same refusal on every reentry. */

@@ -1139,9 +1139,11 @@ export function matchOf(pattern: RegExp): Guard<string> {
 export function stringOf(options?: StringGuardOptions): Guard<string> {
 	return contain(() => {
 		const safe = readOptions(options, ['min', 'max', 'pattern'], 'stringOf', 'string')
-		const min = safe?.min
-		const max = safe?.max
-		const source = safe?.pattern
+		// Own reads, because the snapshot's prototype is `Object.prototype`, and a field
+		// these options leave out must not answer from there.
+		const min = safe !== undefined && INTRINSICS.own(safe, 'min') ? safe.min : undefined
+		const max = safe !== undefined && INTRINSICS.own(safe, 'max') ? safe.max : undefined
+		const source = safe !== undefined && INTRINSICS.own(safe, 'pattern') ? safe.pattern : undefined
 		if (source !== undefined && !isRegExp(source)) {
 			throw new ContractError('stringOf: pattern must be a RegExp', { code: 'pattern' })
 		}

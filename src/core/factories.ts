@@ -1,6 +1,8 @@
 import type { ContractInterface, ContractShape, Infer } from './types.js'
 import { contain } from './helpers.js'
 import { ContractCompiler } from './ContractCompiler.js'
+import { LazyContract } from './LazyContract.js'
+import { ShapePass } from './ShapePass.js'
 
 // The entity door over the compiler engine. Every other door in `compilers.ts`
 // requests one artifact root and returns that artifact; this one returns the
@@ -23,23 +25,28 @@ import { ContractCompiler } from './ContractCompiler.js'
  * live source only added a population that could disagree with the one the
  * artifacts actually use. A declaration made entirely by this package's builders
  * is frozen and validated all the way down already, so it is that owned graph.
- * Every artifact is precompiled, so `audit`, `explain` and `generate` re-walk
- * and re-gate nothing on a later call; `contract.audit` and `compileAuditor` are
- * the same compiled function reached by different names.
- * The bundle is eager by intent. Its members are plain data properties holding
- * the compiled artifacts, so `const { is, parse } = createContract(shape)`
- * destructures those exact values and a spread of the result copies them; a
- * lazily compiled member would compile on either, which spends the laziness
- * rather than saving it. A malformed declaration refuses at this call rather
- * than at the first read of whichever member a caller happens to touch, so the
- * failure arrives at the call the caller made — carrying the authoring door's
- * own diagnosis, which this door adopts rather than rewraps. Every member is
- * self-contained, and the compiler this call builds releases its working set
- * before the call returns. The contract keeps part of the declaration even so:
- * the auditor and reporter plans close over the owned leaf and array nodes they
- * read their bounds from, so a kept contract retains those nodes and, through
- * an array node's `items` field, the subgraph beneath them. Nothing the caller
- * keeps reaches back into the compiler.
+ * Every artifact compiles once, so `audit`, `explain` and `generate` re-walk and
+ * re-gate nothing on a later call; `contract.audit` and `compileAuditor` run the
+ * same compiled plan reached by different names.
+ * A declaration made entirely by builders compiles its schema at this call and
+ * its function members together on the first call to any of them, so a module
+ * can declare contracts as data and pay only for the ones it uses. Any other
+ * declaration, and a bare leaf, compiles every member at this call. Either way
+ * the members are plain data properties, so `const { is, parse } =
+ * createContract(shape)` destructures those exact values, a spread of the result
+ * copies them, and neither compiles anything. A malformed declaration refuses at
+ * this call rather than at the first read of whichever member a caller happens
+ * to touch, so the failure arrives at the call the caller made — carrying the
+ * authoring door's own diagnosis, which this door adopts rather than rewraps.
+ * Every compiled member is self-contained, and the compiler this call builds
+ * releases its working set once every member has compiled. The contract keeps
+ * part of the declaration even so: the auditor and reporter plans close over the
+ * leaf and array nodes they read their bounds from, and a contract with deferred
+ * members retains its declaration. Nothing the caller keeps reaches back into the
+ * compiler. A deferred member compiled on a host whose members were replaced after
+ * this call would outlive the replacement, so it refuses to compile until they are
+ * restored: until then its guard answers `false`, its parser `undefined`, and its
+ * diagnostics and generator refuse.
  *
  * @param shape - The shape to compile
  * @returns A contract bundling `schema` / `is` / `parse` / `audit` / `explain` / `generate`
@@ -67,5 +74,10 @@ import { ContractCompiler } from './ContractCompiler.js'
 export function createContract<S extends ContractShape>(shape: S): ContractInterface<Infer<S>>
 export function createContract(shape: ContractShape): ContractInterface<unknown>
 export function createContract(shape: ContractShape): ContractInterface<unknown> {
-	return contain(() => new ContractCompiler(shape).contract, 'createContract')
+	return contain(() => {
+		const compiler = new ContractCompiler(shape)
+		const expansion = ShapePass.expansionOf(shape)
+		if (expansion === undefined || expansion === 1) return compiler.contract
+		return new LazyContract(shape, compiler).publish(compiler.schema)
+	}, 'createContract')
 }

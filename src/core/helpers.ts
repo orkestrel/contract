@@ -1189,7 +1189,10 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 		// and the copy this replaced had already lost `expansion`, so a door asking
 		// for that code published `structure` instead.
 		const code: ContractCode =
-			requested !== undefined && matchesMember(collectMembers(CONTRACT_CODES), requested)
+			requested !== undefined &&
+			INTRINSICS.reflect.apply(INTRINSICS.some, CONTRACT_CODES, [
+				(known: ContractCode) => known === requested,
+			])
 				? requested
 				: 'structure'
 		return {

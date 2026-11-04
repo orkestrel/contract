@@ -1,18 +1,37 @@
-import type { ContractInterface, ContractShape } from '@src/core'
+import type { AuditorFunction, ContractInterface, ContractShape, ReporterFunction } from '@src/core'
 import {
 	arrayShape,
 	attempt,
 	booleanShape,
+	compileAuditor,
+	compileGenerator,
 	compileGuard,
+	compileReporter,
 	createContract,
 	integerShape,
+	isString,
+	jsonShape,
+	nullShape,
+	numberShape,
 	objectShape,
 	optionalShape,
+	parseString,
+	recordShape,
+	seededRandom,
 	stringShape,
 	unionShape,
 	validateShape,
 } from '@src/core'
-import { captureContractError } from '../../setup.js'
+import {
+	callAtStackLimit,
+	captureContractError,
+	measureWalks,
+	pollutePrototype,
+	readVerdict,
+	replaceAccessor,
+	replaceIntrinsic,
+	throwReplacement,
+} from '../../setup.js'
 import { describe, expect, it } from 'vitest'
 
 const ROOTS = ['schema', 'is', 'parse', 'audit', 'explain', 'generate'] as const
@@ -133,5 +152,169 @@ describe('createContract — door and getter agreement', () => {
 		expect(doorReadings).toEqual(getterReadings)
 		// The corpus exercises each answer, so agreement is not agreement on one verdict.
 		expect(new Set(doorReadings)).toEqual(new Set([true, false]))
+	})
+})
+
+describe('createContract — members compile on first use', () => {
+	const shape = objectShape({
+		text: stringShape(),
+		count: numberShape(),
+		either: unionShape(booleanShape(), nullShape()),
+		list: arrayShape(stringShape()),
+		map: recordShape(numberShape()),
+		maybe: optionalShape(jsonShape()),
+	})
+	const valid = { text: 'a', count: 1, either: true, list: ['b'], map: { c: 2 } }
+
+	it('compiles no function member of a built declaration until one is called', async () => {
+		const { contractBuilt, contractHand, firstCall, firstCallHand } = await measureWalks()
+
+		expect(contractBuilt).toBe(0)
+		expect(firstCall).toBeGreaterThan(0)
+		expect(contractHand).toBeGreaterThan(0)
+		expect(firstCallHand).toBe(0)
+	})
+
+	it('keeps one identity for a member across its first call', () => {
+		const contract = createContract(shape)
+		const { is, parse, audit, explain, generate } = contract
+
+		expect(is(valid)).toBe(true)
+		expect([contract.is, contract.parse, contract.audit]).toEqual([is, parse, audit])
+		expect([contract.explain, contract.generate]).toEqual([explain, generate])
+		expect(is(valid)).toBe(true)
+	})
+
+	it('keeps a leaf contract on the package guard and parser', () => {
+		const contract = createContract(stringShape())
+
+		expect(contract.is).toBe(isString)
+		expect(contract.parse).toBe(parseString)
+	})
+
+	it('hands a member the path it was given', () => {
+		const contract = createContract(shape)
+		const audit: AuditorFunction = contract.audit
+		const explain: ReporterFunction = contract.explain
+		const value = { ...valid, count: 'not a number' }
+		const faults = explain(value, ['root'])
+
+		expect(audit(value, ['root'])).toEqual(compileAuditor(shape, value, ['root']))
+		expect(faults).toEqual(compileReporter(shape, value, ['root']))
+		expect(faults[0]?.path[0]).toBe('root')
+	})
+
+	it('draws from the random source it was given', () => {
+		const contract = createContract(shape)
+
+		expect(contract.generate(seededRandom(7))).toEqual(compileGenerator(shape, seededRandom(7)))
+		expect(contract.is(contract.generate())).toBe(true)
+	})
+
+	it('lets a read a parser refuses throw on the first call as on any other', () => {
+		const hostile = new Proxy(
+			{},
+			{
+				ownKeys() {
+					throw new Error('hostile')
+				},
+			},
+		)
+		const compiled = createContract(shape)
+		compiled.is(valid)
+
+		expect(readVerdict(() => createContract(shape).parse(hostile))).toBe(
+			readVerdict(() => compiled.parse(hostile)),
+		)
+	})
+
+	it.each([
+		'min',
+		'max',
+		'pattern',
+		'description',
+		'integer',
+		'additionalProperties',
+		'mode',
+		'default',
+	])('answers a first call under an inherited %s as a compiled contract does', (field) => {
+		const compiled = createContract(shape)
+		compiled.is(valid)
+		const first = createContract(shape)
+		const values = [valid, {}, { ...valid, text: 1 }, { ...valid, list: [] }, null]
+		const answers = pollutePrototype(
+			Object.prototype,
+			field,
+			// A maximum no text meets, and a minimum no number or text below it meets.
+			() => (field === 'max' ? 0 : 3),
+			() =>
+				values.map((value) => ({
+					is: [first.is(value), compiled.is(value)],
+					parse: [first.parse(value), compiled.parse(value)],
+					auditClean: first.audit(value).length === 0,
+					explainClean: first.explain(value).length === 0,
+				})),
+		)
+
+		expect(answers.map(({ is }) => is[0])).toEqual(answers.map(({ is }) => is[1]))
+		expect(answers.map(({ parse }) => parse[0])).toEqual(answers.map(({ parse }) => parse[1]))
+		expect(answers.map(({ auditClean }) => auditClean)).toEqual(answers.map(({ is }) => is[0]))
+		expect(answers.map(({ explainClean }) => explainClean)).toEqual(
+			answers.map(({ parse }) => parse[0] !== undefined),
+		)
+		expect(first.is(valid)).toBe(true)
+		expect(first.audit(valid)).toEqual([])
+	})
+
+	it('recovers from a first call near the stack limit', () => {
+		const contract = createContract(shape)
+
+		// Retried in every frame on the way up until it answers, so some attempts run out
+		// of stack part way through a compile.
+		const answered = callAtStackLimit(() => {
+			if (!contract.is(valid)) throw new Error('not yet')
+			return true
+		})
+
+		expect(answered).toBe(true)
+		expect(contract.is(valid)).toBe(true)
+		expect(contract.parse(valid)).toBeDefined()
+		expect(contract.audit(valid)).toEqual([])
+	})
+
+	it('compiles nothing on a host replaced after it was created, then recovers', () => {
+		const contract = createContract(shape)
+		const answers = replaceIntrinsic(Array.prototype, 'pop', throwReplacement, () => ({
+			is: contract.is(valid),
+			parse: contract.parse(valid),
+			audit: readVerdict(() => contract.audit(valid)),
+			explain: readVerdict(() => contract.explain(valid)),
+			generate: readVerdict(() => contract.generate()),
+		}))
+
+		expect(answers.is).toBe(false)
+		expect(answers.parse).toBeUndefined()
+		expect(answers.audit).toContain('compileAuditor: a host member')
+		expect(answers.explain).toContain('compileReporter: a host member')
+		expect(answers.generate).toContain('compileGenerator: a host member')
+		expect(contract.is(valid)).toBe(true)
+		expect(contract.parse(valid)).toBeDefined()
+		expect(contract.audit(valid)).toEqual([])
+	})
+
+	it('keeps no plan compiled while a flag getter lies', () => {
+		const patterned = objectShape({ text: stringShape({ pattern: /^a/ }) })
+		const contract = createContract(patterned)
+		const during = replaceAccessor(
+			RegExp.prototype,
+			'global',
+			() => true,
+			() => contract.is({ text: 'a' }),
+		)
+
+		expect(during).toBe(false)
+		expect(contract.is({ text: 'a' })).toBe(true)
+		expect(contract.is({ text: 'a' })).toBe(true)
+		expect(contract.is({ text: 'b' })).toBe(false)
 	})
 })

@@ -421,7 +421,7 @@ export class ContractCompiler<
 		const sealed = ShapePass.expansionOf(source)
 		if (sealed !== undefined) {
 			refuseExpansion(sealed)
-			this.#discover(source)
+			this.#discover(source, true)
 			this.#source = undefined
 			return
 		}
@@ -435,11 +435,11 @@ export class ContractCompiler<
 		const validator = new ShapeValidator(owned)
 		validator.validate()
 		refuseExpansion(validator.expansion)
-		this.#discover(owned)
+		this.#discover(owned, false)
 		this.#source = undefined
 	}
 
-	#discover(root: ContractShape): void {
+	#discover(root: ContractShape, sealed: boolean): void {
 		// Narrowed once at the door, because both dispatches below take their
 		// receiver type from this value. `#prepare` is the only caller and it
 		// refuses while the declaration is gone, so the walk always finds the map
@@ -474,7 +474,11 @@ export class ContractCompiler<
 			// what makes one entry per unique node correct rather than merely cheap.
 			if (INTRINSICS.reflect.apply(INTRINSICS.recall, known, [shape]) !== undefined) continue
 			const index = this.#nodes.length
-			this.#nodes[index] = shape
+			// A family may build long after this call, when `Object.prototype` may hold a
+			// field a sealed node leaves out, so it reads an own copy that cannot inherit.
+			const node: ContractShape = sealed ? INTRINSICS.rebase({ ...shape }, null) : shape
+			this.#nodes[index] = node
+			INTRINSICS.reflect.apply(INTRINSICS.retain, known, [node, index])
 			INTRINSICS.reflect.apply(INTRINSICS.retain, known, [shape, index])
 			this.#stack[this.#stack.length] = { operation: 'exit', index }
 			this.#schedule(shape)
@@ -879,17 +883,28 @@ export class ContractCompiler<
 		return compiled
 	}
 
+	// `stringOf` returns bare `isString` when unrefined, else composes the length-bounds
+	// + pattern refinement — the same guard the parser re-applies. It reads its options
+	// through the prototype chain and a family may build after `Object.prototype` gained
+	// a field these leave out, so they carry no prototype.
+	#stringGuard(owned: StringShape): Guard<string> {
+		return stringOf(
+			INTRINSICS.rebase(
+				{
+					...(owned.min === undefined ? {} : { min: owned.min }),
+					...(owned.max === undefined ? {} : { max: owned.max }),
+					...(owned.pattern === undefined ? {} : { pattern: owned.pattern }),
+				},
+				null,
+			),
+		)
+	}
+
 	#guardOf(index: number): Guard<unknown> {
 		const owned = this.#node(index)
 		switch (owned.category) {
 			case 'string':
-				// `stringOf` returns bare `isString` when unrefined, else composes the
-				// length-bounds + pattern refinement — the same guard the parser re-applies.
-				return stringOf({
-					...(owned.min === undefined ? {} : { min: owned.min }),
-					...(owned.max === undefined ? {} : { max: owned.max }),
-					...(owned.pattern === undefined ? {} : { pattern: owned.pattern }),
-				})
+				return this.#stringGuard(owned)
 			case 'number': {
 				const base = owned.integer === true ? isInteger : isFiniteNumber
 				if (owned.min === undefined && owned.max === undefined) return base
@@ -1095,11 +1110,7 @@ export class ContractCompiler<
 				// Coerce by type, then re-apply the SAME refinement the guard enforces (the
 				// identical `stringOf`) — a value that parses but violates a bound or the
 				// pattern fails the parse (returns `undefined`).
-				const guard = stringOf({
-					...(owned.min === undefined ? {} : { min: owned.min }),
-					...(owned.max === undefined ? {} : { max: owned.max }),
-					...(owned.pattern === undefined ? {} : { pattern: owned.pattern }),
-				})
+				const guard = this.#stringGuard(owned)
 				return (value) => {
 					const parsed = parseString(value)
 					return parsed !== undefined && guard(parsed) ? parsed : undefined
@@ -1202,7 +1213,7 @@ export class ContractCompiler<
 								key,
 								parse: this.#parserAt(inner),
 								optional,
-								fill: optional ? child.default : undefined,
+								fill: optional && INTRINSICS.own(child, 'default') ? child.default : undefined,
 							},
 						]
 					},

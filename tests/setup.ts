@@ -3954,6 +3954,29 @@ export async function measureAllocations() {
 }
 
 /**
+ * Runs an operation as near the stack limit as it can run and still answer.
+ *
+ * @remarks
+ * Recurses until the stack is exhausted, then retries the operation in each frame on
+ * the way back up, so its earlier attempts fail for lack of stack.
+ *
+ * @param operation - The operation to run
+ * @returns The first answer it managed
+ *
+ * @example
+ * ```ts
+ * callAtStackLimit(() => contract.is(value))
+ * ```
+ */
+export function callAtStackLimit<T>(operation: () => T): T {
+	try {
+		return callAtStackLimit(operation)
+	} catch {
+		return operation()
+	}
+}
+
+/**
  * Counts what one operation adds to a counter.
  *
  * @param counter - The counter the operation increments
@@ -4033,7 +4056,14 @@ export async function measureWalks() {
 		})
 		const hand: ContractShape = { category: 'literal', values: ['a', 'b'] }
 		const handGraph: ContractShape = { category: 'array', items: hand }
+		const listed = loaded.objectShape({ pick })
+		const first = loaded.createContract(listed)
+		const firstHand = loaded.createContract(handGraph)
 		return {
+			contractBuilt: countDuring(opened, () => loaded.createContract(listed)),
+			contractHand: countDuring(opened, () => loaded.createContract(handGraph)),
+			firstCall: countDuring(opened, () => first.is({ pick: 'a' })),
+			firstCallHand: countDuring(opened, () => firstHand.is(['a'])),
 			// The builder's own pass opens one `WeakSet`, so a walk shows above that floor.
 			floor: countDuring(opened, () => loaded.arrayShape(loaded.stringShape())) / 2,
 			wrapBuilt: countDuring(opened, () => loaded.arrayShape(built)),
