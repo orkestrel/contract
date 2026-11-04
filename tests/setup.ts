@@ -4575,7 +4575,7 @@ export function createUndefinedOptional(inner: ContractShape): ContractShape {
  *
  * @returns The labeled shapes, each holding at least one default
  */
-export function defaultedShapeVariations(): ReadonlyArray<readonly [string, ContractShape]> {
+export function buildDefaultedVariations(): ReadonlyArray<readonly [string, ContractShape]> {
 	return [
 		['a number', objectShape({ a: optionalShape(numberShape(), { default: 3 }) })],
 		['zero', objectShape({ a: optionalShape(numberShape(), { default: 0 }) })],
@@ -4735,7 +4735,7 @@ export function buildDefaultCases(shape: ContractShape): readonly unknown[] {
  * @param properties - The `properties` keyword
  * @returns The schema, with no `additionalProperties`
  */
-export function typedObject(
+export function buildObjectSchema(
 	properties: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
 	return { type: 'object', properties }
@@ -4759,7 +4759,7 @@ export function closedOf(
  * @param schema - The schema a strict conversion accepted
  * @returns `additionalProperties: false` for an object node, otherwise nothing
  */
-export function closedWhenObject(schema: JSONSchema): JSONSchema {
+export function buildClosedKeyword(schema: JSONSchema): JSONSchema {
 	return schema.type === 'object' ? { additionalProperties: false } : {}
 }
 
@@ -4769,7 +4769,11 @@ export const STRICT_SCHEMA_REFUSALS: ReadonlyArray<
 > = Object.freeze([
 	['a root type typo', { type: 'strng' }, ['type']],
 	['a nested type typo', { type: 'array', items: { type: 'strng' } }, ['items', 'type']],
-	['a property type typo', typedObject({ a: { type: 'strng' } }), ['properties', 'a', 'type']],
+	[
+		'a property type typo',
+		buildObjectSchema({ a: { type: 'strng' } }),
+		['properties', 'a', 'type'],
+	],
 	['pattern', { type: 'string', pattern: '^a' }, ['pattern']],
 	['format', { type: 'string', format: 'email' }, ['format']],
 	['an empty schema', {}, []],
@@ -4785,8 +4789,8 @@ export const STRICT_SCHEMA_REFUSALS: ReadonlyArray<
 	],
 	['a true variant', { anyOf: [true, { type: 'string' }] }, ['anyOf', '0']],
 	['a false variant', { oneOf: [{ type: 'string' }, false] }, ['oneOf', '1']],
-	['a true property schema', typedObject({ a: true }), ['properties', 'a']],
-	['a false property schema', typedObject({ a: false }), ['properties', 'a']],
+	['a true property schema', buildObjectSchema({ a: true }), ['properties', 'a']],
+	['a false property schema', buildObjectSchema({ a: false }), ['properties', 'a']],
 	['a false item schema', { type: 'array', items: false }, ['items']],
 	['an enum holding an object', { enum: [{ a: 1 }, 'x'] }, ['enum']],
 	['an enum holding an array', { enum: [[1], 'x'] }, ['enum']],
@@ -4859,19 +4863,19 @@ export const STRICT_SCHEMA_REFUSALS: ReadonlyArray<
 	['a bound with no type', { minimum: 0 }, ['minimum']],
 	[
 		'a required name not in properties',
-		{ ...typedObject({ a: { type: 'string' } }), required: ['b'] },
+		{ ...buildObjectSchema({ a: { type: 'string' } }), required: ['b'] },
 		['required'],
 	],
 	['required with no properties', { type: 'object', required: ['a'] }, ['required']],
 	['a malformed required', { type: 'object', properties: {}, required: 'a' }, ['required']],
-	['a required entry that is not text', { ...typedObject({}), required: [1] }, ['required']],
+	['a required entry that is not text', { ...buildObjectSchema({}), required: [1] }, ['required']],
 	[
 		'a duplicate required name',
-		{ ...typedObject({ a: { type: 'string' } }), required: ['a', 'a'] },
+		{ ...buildObjectSchema({ a: { type: 'string' } }), required: ['a', 'a'] },
 		['required'],
 	],
 	['malformed properties', { type: 'object', properties: [] }, ['properties']],
-	['a property that is not a record', typedObject({ a: 1 }), ['properties', 'a']],
+	['a property that is not a record', buildObjectSchema({ a: 1 }), ['properties', 'a']],
 	[
 		'a malformed additionalProperties',
 		{ type: 'object', additionalProperties: 'no' },
@@ -4880,10 +4884,10 @@ export const STRICT_SCHEMA_REFUSALS: ReadonlyArray<
 	['an array with no items', { type: 'array' }, ['items']],
 	['items that are not a record', { type: 'array', items: true }, ['items']],
 	['an empty item schema', { type: 'array', items: {} }, ['items']],
-	['an empty property schema', typedObject({ a: {} }), ['properties', 'a']],
+	['an empty property schema', buildObjectSchema({ a: {} }), ['properties', 'a']],
 	[
 		'a nested empty property schema',
-		typedObject({ a: typedObject({ b: {} }) }),
+		buildObjectSchema({ a: buildObjectSchema({ b: {} }) }),
 		['properties', 'a', 'properties', 'b'],
 	],
 	['an empty tail schema', { type: 'object', additionalProperties: {} }, ['additionalProperties']],
@@ -4896,17 +4900,17 @@ export const STRICT_SCHEMA_REFUSALS: ReadonlyArray<
 	],
 	[
 		'a default on a required key',
-		{ ...typedObject({ a: { type: 'number', default: 3 } }), required: ['a'] },
+		{ ...buildObjectSchema({ a: { type: 'number', default: 3 } }), required: ['a'] },
 		['properties', 'a', 'default'],
 	],
 	[
 		'a default that is not JSON',
-		typedObject({ a: { type: 'number', default: Number.NaN } }),
+		buildObjectSchema({ a: { type: 'number', default: Number.NaN } }),
 		['properties', 'a', 'default'],
 	],
 	[
 		'a default its leaf refuses',
-		typedObject({ a: { type: 'number', minimum: 0, default: -5 } }),
+		buildObjectSchema({ a: { type: 'number', minimum: 0, default: -5 } }),
 		['properties', 'a', 'default'],
 	],
 ])
@@ -4930,15 +4934,15 @@ export const LENIENT_DEFAULT_DROPS: ReadonlyArray<
 	['a default on a union', closedOf({ type: ['number', 'null'], default: 3 })],
 	['a non-finite default', closedOf({ type: 'number', default: Number.NaN })],
 	['a required key', { ...closedOf({ type: 'number', default: 3 }), required: ['a'] }],
-	['an open object', typedObject({ a: { type: 'number', default: 3 } })],
+	['an open object', buildObjectSchema({ a: { type: 'number', default: 3 } })],
 	[
 		'an explicitly open object',
-		{ ...typedObject({ a: { type: 'number', default: 3 } }), additionalProperties: true },
+		{ ...buildObjectSchema({ a: { type: 'number', default: 3 } }), additionalProperties: true },
 	],
 	[
 		'an object with a tail',
 		{
-			...typedObject({ a: { type: 'number', default: 3 } }),
+			...buildObjectSchema({ a: { type: 'number', default: 3 } }),
 			additionalProperties: { type: 'string' },
 		},
 	],

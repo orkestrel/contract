@@ -29,7 +29,7 @@ import { describe, expect, it } from 'vitest'
 import {
 	buildCycle,
 	closedOf,
-	closedWhenObject,
+	buildClosedKeyword,
 	buildSharedSchema,
 	buildWideSchema,
 	findAgreementViolations,
@@ -846,7 +846,7 @@ describe('SchemaShaper — strict', () => {
 			),
 		).toEqual(
 			accepted.map((schema) =>
-				JSON.stringify(compileSchema(schemaToShape({ ...schema, ...closedWhenObject(schema) }))),
+				JSON.stringify(compileSchema(schemaToShape({ ...schema, ...buildClosedKeyword(schema) }))),
 			),
 		)
 	})

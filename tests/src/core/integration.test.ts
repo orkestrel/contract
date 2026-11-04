@@ -80,7 +80,7 @@ import {
 	buildDefaultedShape,
 	buildJSONRoundtrip,
 	buildLockstep,
-	defaultedShapeVariations,
+	buildDefaultedVariations,
 	denyValue,
 	findAgreementViolations,
 	findInstallationControls,
@@ -1032,7 +1032,7 @@ describe('no caller-reachable member decides a membership answer', () => {
 })
 
 describe('the contract laws over shapes that carry a default', () => {
-	for (const [label, shape] of defaultedShapeVariations()) {
+	for (const [label, shape] of buildDefaultedVariations()) {
 		it(`hold for ${label}`, () => {
 			expect(findAgreementViolations(shape, undefined, buildDefaultCases(shape))).toEqual([])
 		})
@@ -1080,7 +1080,7 @@ describe('the contract laws over shapes that carry a default', () => {
 
 	it('generate only values the guard accepts', () => {
 		const shapes = [
-			...defaultedShapeVariations()
+			...buildDefaultedVariations()
 				.filter(([label]) => label !== 'a raw value')
 				.map(([, shape]) => shape),
 			...Array.from({ length: 64 }, (_entry, seed) => buildDefaultedShape(seededRandom(seed))),
