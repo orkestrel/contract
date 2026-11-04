@@ -2035,7 +2035,7 @@ export function matchesJSONDepth(value: unknown): boolean {
  * Beside the ancestor set the walk keeps a walk-local PROVED set, so a node
  * whose whole subtree already matched is not re-walked when a second path
  * reaches it. A supplied capture budget instead charges each occurrence that
- * ownership would copy, refusing with `clone` before exceeding `CLONE_NODE_LIMIT`.
+ * ownership would copy; exhaustion throws `structure` with a `clone` cause.
  * Removing the recursion alone left the work exponential in shared
  * aliases: thirty aliases — thirty-one ordinary records — cost `2^30` visits
  * through `isJSONValue`, `parseJSONValue`, `canonicalStringify` and every
@@ -2059,6 +2059,12 @@ export function matchesJSONValue(
 ): entry is JSONValue {
 	return readValue(
 		() => {
+			if (budget !== undefined) {
+				if (!INTRINSICS.safe(budget.left)) {
+					throw new ContractError('matchesJSONValue: invalid node budget', { code: 'clone' })
+				}
+				budget.left = INTRINSICS.min(budget.left, CLONE_NODE_LIMIT)
+			}
 			const stack: Array<
 				| { readonly operation: 'enter'; readonly value: unknown }
 				| { readonly operation: 'exit'; readonly value: object }

@@ -1878,6 +1878,30 @@ describe('resolveField', () => {
 })
 
 describe('matchesJSONValue', () => {
+	it('refuses invalid capture budgets before reading the value', () => {
+		for (const left of [Number.NaN, Infinity, -1, 1.5]) {
+			const reads = new ObservationCounter()
+			const value = new Proxy(
+				{ a: 1 },
+				{
+					ownKeys: (target) => {
+						reads.increment()
+						return Reflect.ownKeys(target)
+					},
+				},
+			)
+			const error = captureContractError(() => matchesJSONValue(value, new WeakSet(), { left }))
+			expect(error.code).toBe('structure')
+			expect(reads.value).toBe(0)
+		}
+	})
+	it('retains the clone cause when a capture budget is exhausted', () => {
+		const error = captureContractError(() =>
+			matchesJSONValue({ a: 1, b: 2 }, new WeakSet(), { left: 1 }),
+		)
+		expect(error.code).toBe('structure')
+		expect(error.cause).toMatchObject({ code: 'clone', context: { limit: 262144 } })
+	})
 	it('refuses a failed direct traversal through the shared coded boundary', () => {
 		const hostile = createThrowingGetter()
 		const error = captureContractError(() => matchesJSONValue(hostile, new WeakSet()))

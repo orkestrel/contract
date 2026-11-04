@@ -12,6 +12,7 @@ import type {
 	Guard,
 	GuardsShape,
 	JSONSchema,
+	JSONValue,
 	JSONSchemaType,
 	OptionalShape,
 	OptionalShapeOptions,
@@ -3824,6 +3825,155 @@ export class SmuggledMember {
 /** Returns an unconditional positive recognition answer for a boundary stub. */
 export function acceptRecognition(): boolean {
 	return true
+}
+
+/** Builds refusal paths that cross optional edge segments and nested unions. */
+export function buildPollutedEdges(): readonly ContractShape[] {
+	const schema = Array.from({ length: 511 }).reduce<JSONSchema>((items) => ({ items }), {})
+	const raw: ContractShape = { category: 'raw', schema }
+	const union: ContractShape = {
+		category: 'union',
+		variants: [
+			{
+				category: 'array',
+				items: {
+					category: 'object',
+					properties: { a: { category: 'optional', inner: { category: 'json' }, default: 1 } },
+				},
+			},
+		],
+	}
+	return [
+		{ category: 'object', properties: { a: raw, b: { category: 'array', items: raw } } },
+		union,
+		{ category: 'object', properties: { u: union } },
+		{
+			category: 'array',
+			items: {
+				category: 'object',
+				additionalProperties: true,
+				properties: { a: { category: 'optional', inner: { category: 'json' }, default: 1 } },
+			},
+		},
+		Array.from({ length: 520 }).reduce<ContractShape>((items) => ({ category: 'array', items }), {
+			category: 'string',
+		}),
+	]
+}
+
+/** Builds an alias tower with observable container visits in its default. */
+export function buildAliasDefault(
+	depth: number,
+	array = false,
+): { readonly shape: ContractShape; readonly reads: ObservationCounter } {
+	const reads = new ObservationCounter()
+	const value = Array.from({ length: depth }).reduce<JSONValue>(
+		(node) =>
+			new Proxy(array ? [node, node] : { left: node, right: node }, {
+				ownKeys: (target) => {
+					reads.increment()
+					return Reflect.ownKeys(target)
+				},
+			}),
+		{ leaf: 1 },
+	)
+	return {
+		reads,
+		shape: {
+			category: 'object',
+			properties: { a: { category: 'optional', inner: { category: 'json' }, default: value } },
+		},
+	}
+}
+
+/** Lists the public operations that traverse a supplied contract declaration. */
+export function buildCaptureDoors(
+	shape: ContractShape,
+	compiled: ContractShape = shape,
+): ReadonlyArray<readonly [string, () => unknown]> {
+	return [
+		['arrayShape', () => arrayShape(shape)],
+		['objectShape', () => objectShape({ value: shape })],
+		['recordShape', () => recordShape(shape)],
+		['optionalShape', () => optionalShape(shape)],
+		['nullableShape', () => nullableShape(shape)],
+		['unionShape', () => unionShape(shape, booleanShape())],
+		['oneOfShape', () => oneOfShape(shape, booleanShape())],
+		['cloneShape', () => cloneShape(shape)],
+		['ownShape', () => ownShape(shape)],
+		['ShapeCloner.clone', () => new ShapeCloner(shape).clone()],
+		['ShapeValidator.validate', () => new ShapeValidator(shape).validate()],
+		['validateShape', () => validateShape(shape)],
+		['createContract', () => createContract(compiled)],
+		['compileSchema', () => compileSchema(compiled)],
+		['compileGuard', () => compileGuard(compiled)],
+		['compileParser', () => compileParser(compiled)],
+		['compileGenerator', () => compileGenerator(compiled)],
+		['compileReporter', () => compileReporter(compiled, undefined)],
+		['compileAuditor', () => compileAuditor(compiled, undefined)],
+		['ContractCompiler.schema', () => new ContractCompiler(compiled).schema],
+		['ContractCompiler.guard', () => new ContractCompiler(compiled).guard],
+		['ContractCompiler.parser', () => new ContractCompiler(compiled).parser],
+		['ContractCompiler.generator', () => new ContractCompiler(compiled).generator()],
+		['ContractCompiler.reporter', () => new ContractCompiler(compiled).reporter(undefined)],
+		['ContractCompiler.auditor', () => new ContractCompiler(compiled).auditor(undefined)],
+		['ContractCompiler.contract', () => new ContractCompiler(compiled).contract],
+		['is', () => createContract(shapeShape()).is(compiled)],
+	]
+}
+
+/** Shares a container between owners while counting its entry reads. */
+export function buildCaptureFixture(
+	fixture: 'properties' | 'variants' | 'default',
+	width = 1024,
+	owners = 256,
+): { readonly shape: ContractShape; readonly reads: ObservationCounter } {
+	const reads = new ObservationCounter()
+	const properties: Record<string, ContractShape> = new Proxy(
+		Object.fromEntries(
+			Array.from({ length: width }, (_, index) => [String(index), { category: 'string' }]),
+		),
+		{
+			get: (target, key, receiver) => {
+				reads.increment()
+				return Reflect.get(target, key, receiver)
+			},
+		},
+	)
+	const variants: ContractShape[] = new Proxy(
+		Array.from({ length: width }, () => ({ category: 'string' })),
+		{
+			get: (target, key, receiver) => {
+				if (typeof key === 'string' && /^\d+$/.test(key)) reads.increment()
+				return Reflect.get(target, key, receiver)
+			},
+		},
+	)
+	const value = new Proxy(
+		Object.fromEntries(Array.from({ length: width }, (_, index) => [String(index), 1])),
+		{
+			get: (target, key, receiver) => {
+				reads.increment()
+				return Reflect.get(target, key, receiver)
+			},
+		},
+	)
+	return {
+		reads,
+		shape: {
+			category: 'object',
+			properties: Object.fromEntries(
+				Array.from({ length: owners }, (_, index): readonly [string, ContractShape] => [
+					String(index),
+					fixture === 'properties'
+						? { category: 'object', properties }
+						: fixture === 'variants'
+							? { category: 'union', variants }
+							: { category: 'optional', inner: { category: 'json' }, default: value },
+				]),
+			),
+		},
+	}
 }
 
 /**

@@ -233,9 +233,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		}
 	}
 
-	// The gate that OWNS the depth rule authors the diagnosis, on the same source
-	// `validateShape` would be handed, so `cloneShape` and `validateShape` cannot disagree about
-	// which node exceeded the limit or what the refusal says.
+	// Acceptance agrees with validation; refusal diagnoses agree only below the capture limit.
 	#refuseDepth(budget: { left: number }): never {
 		this.#validateShape(this.#source, [], budget)
 		throw this.#create('validateShape: a shape exceeds the compilation depth limit', {

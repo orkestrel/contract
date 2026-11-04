@@ -160,7 +160,9 @@ export class ShapePass {
 	 */
 	static seal<S extends ContractShape>(shape: S, check: ContractShape = shape): Readonly<S> {
 		const frozen = INTRINSICS.freeze(shape)
-		if (!new ShapePass(shape).#survey(check === shape ? 0 : 1)) new ShapePass(check).validate()
+		if (!new ShapePass(shape).#survey(check === shape ? 0 : 1)) {
+			new ShapePass(check, { left: CLONE_NODE_LIMIT }).validate()
+		}
 		return frozen
 	}
 
@@ -483,7 +485,7 @@ export class ShapePass {
 			return this.#refuse('validateShape: description must be a string', 'description')
 		}
 		if (current.category === 'optional' && INTRINSICS.own(current, 'default')) {
-			if (!matchesJSONValue(current.default, new ShapePass.#weakSet(), this.#budget)) {
+			if (!holds(() => matchesJSONValue(current.default, new ShapePass.#weakSet(), this.#budget))) {
 				return this.#refuse('validateShape: an optional default must be a JSON value', 'default')
 			}
 			this.#defaulted = true
@@ -1651,6 +1653,7 @@ export class ShapePass {
 					}
 				}
 				if (this.#captures[located]?.defaulted !== true) continue
+				// Keep own guards consistent; valid optional-property edges always own their second segment.
 				if (enclosed) {
 					this.#domain ??= new ContractError(
 						'validateShape: a default may not sit under a union, whose parser can return a valid value without filling it; move the default outside the union or remove it',

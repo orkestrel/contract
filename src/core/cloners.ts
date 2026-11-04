@@ -1,5 +1,5 @@
 import type { ContractShape, JSONRecord, JSONSchema, JSONValue, StringShape } from './types.js'
-import { INTRINSICS } from './constants.js'
+import { CLONE_NODE_LIMIT, INTRINSICS } from './constants.js'
 import { ContractError, isContractError } from './errors.js'
 import { attempt, contain, holds, isFailure, isSuccess } from './helpers.js'
 import { isRecord } from './validators.js'
@@ -183,7 +183,10 @@ export function ownShape(shape: ContractShape): ContractShape {
 		const frozen = holds(() => INTRINSICS.frozen(shape))
 		const fidelity = attempt(() => cloneShape(shape))
 		if (isSuccess(fidelity)) return fidelity.value
-		if (isContractError(fidelity.error) && fidelity.error.code !== 'clone') {
+		if (
+			isContractError(fidelity.error) &&
+			(fidelity.error.code !== 'clone' || fidelity.error.context?.limit === CLONE_NODE_LIMIT)
+		) {
 			throw fidelity.error
 		}
 		if (!frozen) throw fidelity.error

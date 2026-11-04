@@ -11,6 +11,7 @@ import {
 	COMPILE_DEPTH_LIMIT,
 	compileSchema,
 	optionalShape,
+	objectShape,
 	stringShape,
 	ContractError,
 	createContract,
@@ -26,6 +27,10 @@ import {
 import type { TerminalIntrinsic } from '../../setup.js'
 import {
 	buildNonJSONValues,
+	buildCaptureDoors,
+	buildCaptureFixture,
+	buildPollutedEdges,
+	buildAliasDefault,
 	polluteArrayConstruction,
 	validateSource,
 	createPatternStub,
@@ -53,6 +58,88 @@ import {
 import { describe, expect, it } from 'vitest'
 
 describe('raw schema refusal paths', () => {
+	it('keeps nested union and depth routes under edge pollution', () => {
+		const shapes = buildPollutedEdges()
+		const expected = shapes.map((shape) => readVerdict(() => validateShape(shape)))
+		for (const key of ['second', '0', '1', '2', '3', '4', '5']) {
+			const actual = pollutePrototypeData(key, 'polluted', () =>
+				shapes.map((shape) => readVerdict(() => validateShape(shape))),
+			)
+			expect({ key, actual }).toEqual({ key, actual: expected })
+		}
+	})
+	it('charges every occurrence in a thirty-level alias default', () => {
+		for (const array of [false, true]) {
+			const { shape, reads } = buildAliasDefault(30, array)
+			const error = captureContractError(() => validateShape(shape))
+			expect(error.code).toBe('clone')
+			expect(reads.value).toBeGreaterThan(30)
+			expect(reads.value).toBeLessThanOrEqual(CLONE_NODE_LIMIT)
+		}
+	})
+	it('stops a twenty-two-level default before retaining the unbounded expansion', () => {
+		const { shape, reads } = buildAliasDefault(22)
+		const error = captureContractError(() => validateShape(shape))
+		expect(error.code).toBe('clone')
+		expect(reads.value).toBeLessThanOrEqual(CLONE_NODE_LIMIT)
+	}, 30000)
+	it('keeps unreadable default refusals at the default field', () => {
+		const value = Object.defineProperty({}, 'x', {
+			enumerable: true,
+			get: () => {
+				throw new Error('unreadable default')
+			},
+		})
+		const properties: Record<string, ContractShape> = {
+			x: { category: 'optional', inner: { category: 'json' }, default: value },
+		}
+		for (const builder of [false, true]) {
+			const error = captureContractError(() =>
+				builder ? objectShape(properties) : validateShape({ category: 'object', properties }),
+			)
+			expect(error.message).toBe('validateShape: an optional default must be a JSON value')
+			expect(error.context?.path).toEqual(['properties', 'x', 'default'])
+		}
+	})
+	it('bounds every declaration door over shared containers and defaults', () => {
+		const compact = buildCaptureFixture('properties', 8, 8)
+		const expanded = Array.from({ length: 3 }).reduce<ContractShape>(
+			(node) => ({
+				category: 'object',
+				properties: Object.fromEntries(
+					Array.from({ length: 8 }, (_, index) => [String(index), node]),
+				),
+			}),
+			compact.shape,
+		)
+		for (const fixture of ['properties', 'variants', 'default'] as const) {
+			const { shape, reads } = buildCaptureFixture(fixture)
+			const doors = buildCaptureDoors(shape, fixture === 'properties' ? expanded : shape)
+			for (const [door, open] of doors.filter(
+				([name]) =>
+					fixture === 'properties' ||
+					['arrayShape', 'ShapeValidator.validate', 'ShapeCloner.clone'].includes(name),
+			)) {
+				reads.clear()
+				compact.reads.clear()
+				const result = attempt(open)
+				expect(
+					result.success
+						? result.value === false
+						: isContractError(result.error) && ['clone', 'expansion'].includes(result.error.code),
+					`${fixture}/${door}`,
+				).toBe(true)
+				expect(reads.value, `${fixture}/${door} retained work`).toBeLessThanOrEqual(
+					2 * CLONE_NODE_LIMIT,
+				)
+				expect(compact.reads.value, `${fixture}/${door} compact work`).toBeLessThanOrEqual(128)
+				expect(
+					reads.value + compact.reads.value,
+					`${fixture}/${door} reached fixture`,
+				).toBeGreaterThan(0)
+			}
+		}
+	}, 45000)
 	it('keeps declaration corpus answers and paths under vocabulary pollution', () => {
 		const leaf = {
 			category: 'number',
@@ -152,10 +239,12 @@ describe('raw schema refusal paths', () => {
 			]),
 		]
 		for (const key of vocabulary) {
-			const actual = pollutePrototypeData(key, 'polluted', () => {
-				return corpus.map((shape) => readVerdict(() => validateShape(shape)))
-			})
-			expect({ key, actual }).toEqual({ key, actual: expected })
+			for (const value of ['polluted', 42]) {
+				const actual = pollutePrototypeData(key, value, () => {
+					return corpus.map((shape) => readVerdict(() => validateShape(shape)))
+				})
+				expect({ key, value, actual }).toEqual({ key, value, actual: expected })
+			}
 		}
 	})
 	it('bounds retained capture edges before observing the next shared property', () => {

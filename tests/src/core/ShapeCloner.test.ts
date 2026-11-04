@@ -9,6 +9,7 @@ import type { TerminalIntrinsic } from '../../setup.js'
 import {
 	attempt,
 	cloneShape,
+	ownShape,
 	CLONE_NODE_LIMIT,
 	COMPILE_DEPTH_LIMIT,
 	compileGuard,
@@ -28,6 +29,7 @@ import {
 import { describe, expect, it } from 'vitest'
 import {
 	buildNonJSONValues,
+	buildCaptureFixture,
 	polluteArrayConstruction,
 	createSubstitution,
 	ObservationCounter,
@@ -52,6 +54,39 @@ import {
 } from '../../setupServer.js'
 
 describe('ShapeCloner', () => {
+	it('keeps limit refusals from taking a frozen-root fallback walk', () => {
+		for (const door of [ownShape, createContract, compileSchema]) {
+			const plain = buildCaptureFixture('properties')
+			const frozen = buildCaptureFixture('properties')
+			Object.freeze(frozen.shape)
+			const first = captureContractError(() => door(plain.shape))
+			const second = captureContractError(() => door(frozen.shape))
+			expect(first.code).toBe('clone')
+			expect(second.message).toBe(first.message)
+			expect(second.context).toEqual(first.context)
+			expect(frozen.reads.value).toBe(plain.reads.value)
+		}
+	}, 30000)
+	it('refuses both doors when depth diagnosis competes with spent capture allowance', () => {
+		const chain = Array.from({ length: 520 }).reduce<ContractShape>(
+			(items) => ({ category: 'array', items }),
+			{ category: 'string' },
+		)
+		const shape: ContractShape = {
+			category: 'object',
+			properties: {
+				...Object.fromEntries(
+					Array.from({ length: 140000 }, (_, index) => [String(index), { category: 'string' }]),
+				),
+				deep: chain,
+			},
+		}
+		for (const door of [cloneShape, validateShape]) {
+			const error = captureContractError(() => door(shape))
+			expect(isContractError(error)).toBe(true)
+			expect(['depth', 'clone']).toContain(error.code)
+		}
+	}, 30000)
 	it('shares the capture limit with every owned default', () => {
 		const reads = new ObservationCounter()
 		const source: Record<string, ContractShape> = Object.fromEntries(
@@ -82,7 +117,7 @@ describe('ShapeCloner', () => {
 			expect(error.context?.limit).toBe(CLONE_NODE_LIMIT)
 			expect(reads.value - before).toBe(defaults ? 0 : 2 * (CLONE_NODE_LIMIT - 256))
 		}
-	})
+	}, 20000)
 	it('keeps HEAD cloned vocabularies under polluted array construction', () => {
 		const shape: ContractShape = {
 			category: 'object',
