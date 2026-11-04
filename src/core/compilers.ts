@@ -72,7 +72,7 @@ import { ShapeValidator } from './ShapeValidator.js'
  * validateShape(stringShape({ min: 1 })) // returns; the declaration is compilable
  * ```
  */
-export function validateShape(shape: ContractShape): void {
+export function validateShape(shape: unknown): void {
 	return contain(() => {
 		const validator = new ShapeValidator(shape)
 		validator.validate()

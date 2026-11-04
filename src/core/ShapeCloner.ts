@@ -15,6 +15,7 @@ import type {
 	Result,
 	ShapeClonerInterface,
 	ShapeProperty,
+	ShapeShape,
 	StringShape,
 	UnionShape,
 } from './types.js'
@@ -284,6 +285,8 @@ export class ShapeCloner implements ShapeClonerInterface {
 				return this.#captureNullable(source, path)
 			case 'json':
 				return this.#captureSimple(source, path, 'json')
+			case 'shape':
+				return this.#captureSimple(source, path, 'shape')
 			case 'raw':
 				return this.#captureRaw(source, path)
 			default:
@@ -484,16 +487,19 @@ export class ShapeCloner implements ShapeClonerInterface {
 	}
 
 	#captureSimple(
-		source: BooleanShape | NullShape | JSONShape,
+		source: BooleanShape | NullShape | JSONShape | ShapeShape,
 		path: readonly string[],
-		category: 'boolean' | 'null' | 'json',
-	): BooleanShape | NullShape | JSONShape {
+		category: 'boolean' | 'null' | 'json' | 'shape',
+	): BooleanShape | NullShape | JSONShape | ShapeShape {
 		const description = this.#captureField(source, 'description', path)
 		if (category === 'boolean') {
 			return { category: 'boolean', ...(description === undefined ? {} : { description }) }
 		}
 		if (category === 'null') {
 			return { category: 'null', ...(description === undefined ? {} : { description }) }
+		}
+		if (category === 'shape') {
+			return { category: 'shape', ...(description === undefined ? {} : { description }) }
 		}
 		return { category: 'json', ...(description === undefined ? {} : { description }) }
 	}

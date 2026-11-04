@@ -27,6 +27,7 @@ import {
 	GENERATION_ATTEMPT_LIMIT,
 	INTRINSICS,
 	PRESENCE_MASK_LIMIT,
+	SHAPE_FIELDS,
 } from './constants.js'
 import { ContractError, isContractError } from './errors.js'
 import {
@@ -794,6 +795,18 @@ export class ContractCompiler<
 	#schemaOf(index: number): JSONSchema {
 		const owned = this.#node(index)
 		switch (owned.category) {
+			case 'shape':
+				return INTRINSICS.freeze({
+					type: 'object',
+					description:
+						owned.description ??
+						'Over-approximates a contract declaration; is decides whether the complete shape is valid.',
+					properties: INTRINSICS.freeze({
+						category: INTRINSICS.freeze({ enum: INTRINSICS.freeze(INTRINSICS.keys(SHAPE_FIELDS)) }),
+					}),
+					required: INTRINSICS.freeze(['category']),
+					additionalProperties: true,
+				})
 			case 'string': {
 				// The pattern text is read through the CAPTURED `source` getter. It is an
 				// accessor on a shared prototype, so a replaced getter chose the
@@ -997,6 +1010,16 @@ export class ContractCompiler<
 		)
 	}
 
+	static #acceptShape(value: unknown): boolean {
+		return isSuccess(
+			attempt(() => {
+				const validator = new ShapeValidator(value)
+				validator.validate()
+				refuseExpansion(validator.expansion)
+			}),
+		)
+	}
+
 	#guardOf(index: number): Guard<unknown> {
 		const owned = this.#node(index)
 		switch (owned.category) {
@@ -1017,6 +1040,8 @@ export class ContractCompiler<
 				return isNull
 			case 'json':
 				return isJSONValue
+			case 'shape':
+				return (value): value is ContractShape => ContractCompiler.#acceptShape(value)
 			case 'literal':
 				// `literalOf` IS the package's literal match (SameValueZero over an owned
 				// `Set`); the array form takes a machine-generated vocabulary no spread
@@ -1230,6 +1255,8 @@ export class ContractCompiler<
 				return (value) => (value === null ? null : undefined)
 			case 'json':
 				return parseJSONValue
+			case 'shape':
+				return (value) => (ContractCompiler.#acceptShape(value) ? value : undefined)
 			// The literal parser trims a matching string but never numeric-coerces —
 			// `'42'` never parses to the literal `42`; only an exact (post-trim) match
 			// of one of the shape's `values` succeeds. This is an intended leniency,
@@ -1603,6 +1630,11 @@ export class ContractCompiler<
 					isJSONValue(value)
 						? []
 						: [{ reason: 'type', path, expected: 'json', received: preview(value) }]
+			case 'shape':
+				return (value, path) =>
+					ContractCompiler.#acceptShape(value)
+						? []
+						: [{ reason: 'type', path, expected: 'shape', received: preview(value) }]
 			case 'literal': {
 				const allowed = literalOf(owned.values)
 				return (value, path) =>
@@ -1925,6 +1957,11 @@ export class ContractCompiler<
 						? []
 						: [{ reason: 'type', path, expected: 'literal', received: preview(value) }]
 			}
+			case 'shape':
+				return (value, path) =>
+					ContractCompiler.#acceptShape(value)
+						? []
+						: [{ reason: 'type', path, expected: 'shape', received: preview(value) }]
 			case 'array': {
 				const node: ArrayShape = owned
 				const item = this.#reportAt(owned.items)
@@ -2258,6 +2295,8 @@ export class ContractCompiler<
 				return (random) => drawRandom(random, 'boolean') >= 0.5
 			case 'null':
 				return () => null
+			case 'shape':
+				return () => ({ category: 'object', properties: {}, additionalProperties: false })
 			case 'json':
 				return (random) => {
 					const pick = INTRINSICS.floor(drawRandom(random, 'json') * 5)

@@ -46,6 +46,42 @@ import {
 } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
 
+describe('raw schema refusal paths', () => {
+	it.each([
+		[{ unsupported: true }, ['unsupported']],
+		[{ description: 42 }, ['description']],
+		[{ default: undefined }, ['default']],
+		[{ format: 42 }, ['format']],
+		[{ pattern: 42 }, ['pattern']],
+		[{ pattern: '[' }, ['pattern']],
+		[{ minItems: -1 }, ['minItems']],
+		[{ enum: [] }, ['enum']],
+		[{ enum: [1, 1] }, ['enum', '1']],
+		[{ required: [1] }, ['required', '0']],
+		[{ properties: 42 }, ['properties']],
+		[{ additionalProperties: 42 }, ['additionalProperties']],
+		[{ oneOf: [] }, ['oneOf']],
+	])('keeps keyword and member paths beneath a property %#', (schema, tail) => {
+		const root = { properties: { valid: {}, refused: schema, queued: {} } }
+		const error = captureContractError(() => Reflect.apply(rawShape, undefined, [root]))
+		expect(error.context?.path).toEqual(['schema', 'properties', 'refused', ...tail])
+	})
+	it.each([
+		[{ type: 'nonsense' }, ['schema', 'type']],
+		[
+			{ properties: { a: { properties: { b: { type: 'nonsense' } } } } },
+			['schema', 'properties', 'a', 'properties', 'b', 'type'],
+		],
+		[{ anyOf: [{ type: 'string' }, { type: 'nonsense' }] }, ['schema', 'anyOf', '1', 'type']],
+		[{ items: { minimum: 'low' } }, ['schema', 'items', 'minimum']],
+		[42, ['schema']],
+	])('names the refused schema location %#', (schema, path) => {
+		const error = captureContractError(() => Reflect.apply(rawShape, undefined, [schema]))
+		expect(error.code).toBe('structure')
+		expect(error.context?.path).toEqual(path)
+	})
+})
+
 describe('ShapeValidator', () => {
 	it('keeps HEAD validation expansion under polluted array construction', () => {
 		const shape: ContractShape = {
@@ -369,7 +405,7 @@ describe('ShapeValidator', () => {
 		)
 		expect(pattern.message).toBe('validateShape: raw schema pattern must be valid')
 		expect(pattern.code).toBe('structure')
-		expect(pattern.context).toEqual({ path: ['schema'] })
+		expect(pattern.context).toEqual({ path: ['schema', 'pattern'] })
 		expect(Object.hasOwn(pattern, 'cause')).toBe(false)
 	})
 
@@ -415,7 +451,7 @@ describe('ShapeValidator', () => {
 
 			expect(error.message).toBe(entry.message)
 			expect(error.code).toBe('structure')
-			expect(error.context?.path).toEqual(['schema'])
+			expect(error.context?.path).toEqual(['schema', entry.keyword])
 			expect(reads.value).toBe(0)
 		}
 
@@ -481,7 +517,7 @@ describe('ShapeValidator', () => {
 
 			expect(error.code).toBe('structure')
 			expect(error.message).toBe(entry.message)
-			expect(error.context?.path).toEqual(['schema'])
+			expect(error.context?.path).toEqual(['schema', entry.keyword])
 			expect(fixture.probes).toEqual([])
 		}
 	})
@@ -506,7 +542,7 @@ describe('ShapeValidator', () => {
 		)
 		expect(rawError.code).toBe('structure')
 		expect(rawError.message).toBe('validateShape: a raw schema may not contain a cycle')
-		expect(rawError.context?.path).toEqual(['schema'])
+		expect(rawError.context?.path).toEqual(['schema', 'items'])
 	})
 
 	it.each([
@@ -558,14 +594,14 @@ describe('ShapeValidator', () => {
 		const nullOneOf: JSONSchema[] = []
 		Reflect.set(nullOneOf, '0', null)
 
-		for (const schema of [
-			{ properties: propertyMembers },
-			{ anyOf },
-			{ oneOf },
-			{ properties: nullProperties },
-			{ anyOf: nullAnyOf },
-			{ oneOf: nullOneOf },
-		] satisfies readonly JSONSchema[]) {
+		for (const [schema, path] of [
+			[{ properties: propertyMembers }, ['schema', 'properties', 'value']],
+			[{ anyOf }, ['schema', 'anyOf', '0']],
+			[{ oneOf }, ['schema', 'oneOf', '0']],
+			[{ properties: nullProperties }, ['schema', 'properties', 'value']],
+			[{ anyOf: nullAnyOf }, ['schema', 'anyOf', '0']],
+			[{ oneOf: nullOneOf }, ['schema', 'oneOf', '0']],
+		] satisfies ReadonlyArray<readonly [JSONSchema, readonly string[]]>) {
 			const shape = { category: 'raw', schema } satisfies ContractShape
 			const errors = [
 				captureContractError(() => new ShapeValidator(shape).validate()),
@@ -574,7 +610,7 @@ describe('ShapeValidator', () => {
 			for (const error of errors) {
 				expect(error.message).toBe('validateShape: every raw schema child must be a plain record')
 				expect(error.code).toBe('structure')
-				expect(error.context).toEqual({ path: ['schema'] })
+				expect(error.context).toEqual({ path })
 				expect(Object.hasOwn(error, 'cause')).toBe(false)
 			}
 		}
@@ -602,7 +638,7 @@ describe('ShapeValidator', () => {
 			)
 			expect(error.message).toBe('validateShape: raw schema unions must be dense arrays')
 			expect(error.code).toBe('structure')
-			expect(error.context).toEqual({ path: ['schema'] })
+			expect(error.context).toEqual({ path: ['schema', keyword] })
 		}
 	})
 
@@ -1304,7 +1340,7 @@ describe('raw schema records are inspected once per call (R6-A)', () => {
 			}),
 		)
 		expect(error.code).toBe('structure')
-		expect(error.context?.path).toEqual(['properties', 'a', 'schema'])
+		expect(error.context?.path).toEqual(['properties', 'a', 'schema', 'minLength'])
 	})
 
 	it('refuses a raw node whose schema nesting overshoots from its own position', () => {
@@ -1672,6 +1708,6 @@ describe('ShapeValidator — optional defaults', () => {
 			return [error.code, error.context?.path]
 		})
 
-		expect(refusals).toEqual(malformed.map(() => ['structure', ['schema']]))
+		expect(refusals).toEqual(malformed.map(() => ['structure', ['schema', 'default']]))
 	})
 })

@@ -6,6 +6,7 @@ import {
 	attempt,
 	booleanShape,
 	cloneShape,
+	cloneSchema,
 	COMPILE_DEPTH_LIMIT,
 	COMPILE_NODE_LIMIT,
 	compileAuditor,
@@ -20,6 +21,7 @@ import {
 	FAULT_LIMIT,
 	integerShape,
 	isContractError,
+	isFault,
 	isRecord,
 	isRegExp,
 	jsonShape,
@@ -36,6 +38,8 @@ import {
 	rawShape,
 	recordShape,
 	seededRandom,
+	schemaToShape,
+	shapeShape,
 	ShapeValidator,
 	stringShape,
 	unionShape,
@@ -54,6 +58,7 @@ import {
 	ObservationCounter,
 	throwSentinel,
 	buildDeepShape,
+	buildHandNest,
 	buildSharedDagShape,
 	buildWideVocabulary,
 	captureContractError,
@@ -92,6 +97,134 @@ import {
 } from '../../setupServer.js'
 import * as core from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
+
+describe('shape-valued contracts', () => {
+	it('reports a shape type fault at the containing field', () => {
+		const contract = createContract(objectShape({ shape: shapeShape() }))
+		const expected = [{ reason: 'type', path: ['shape'], expected: 'shape', received: '42' }]
+		expect(contract.audit({ shape: 42 })).toEqual(expected)
+		expect(contract.explain({ shape: 42 })).toEqual(expected)
+		expect(expected.every(isFault)).toBe(true)
+	})
+	it('emits the shallow shape schema and preserves caller descriptions', () => {
+		const schema = createContract(shapeShape()).schema
+		expect(schema).toEqual({
+			type: 'object',
+			description:
+				'Over-approximates a contract declaration; is decides whether the complete shape is valid.',
+			properties: {
+				category: {
+					enum: [
+						'string',
+						'number',
+						'boolean',
+						'null',
+						'literal',
+						'array',
+						'object',
+						'union',
+						'optional',
+						'nullable',
+						'json',
+						'raw',
+						'shape',
+					],
+				},
+			},
+			required: ['category'],
+			additionalProperties: true,
+		})
+		expect(
+			createContract(shapeShape({ description: 'A declared question' })).schema.description,
+		).toBe('A declared question')
+		expect(cloneSchema(schema)).toEqual(schema)
+		expect(rawShape(schema).schema).toEqual(schema)
+	})
+
+	it.each([false, true])(
+		'keeps shallow schema semantics through strict=%s conversion',
+		(strict) => {
+			const contract = createContract(shapeShape())
+			const converted = createContract(schemaToShape(contract.schema, { strict }))
+			expect(converted.is({ category: 'number', min: 1 })).toBe(true)
+			expect(converted.is(42)).toBe(false)
+			expect(converted.is({})).toBe(false)
+			const incoherent = { category: 'number', min: 5, max: 1 }
+			expect(converted.is(incoherent)).toBe(true)
+			expect(contract.is(incoherent)).toBe(false)
+		},
+	)
+	it.each([
+		['number', 42, false],
+		['null', null, false],
+		['empty record', {}, false],
+		['schema typo', { type: 'nonsense' }, false],
+		['object declaration', objectShape({ age: numberShape() }), true],
+		['optional default', objectShape({ age: optionalShape(numberShape(), { default: 3 }) }), true],
+		['pattern', stringShape({ pattern: /age/ }), true],
+		[
+			'structural default',
+			{
+				category: 'object',
+				properties: {
+					n: { category: 'optional', inner: { category: 'number', min: 0 }, default: -1 },
+				},
+			},
+			true,
+		],
+		['depth 512', buildHandNest(512), true],
+		['depth 513', buildHandNest(513), false],
+		['expansion 16383', buildSharedDagShape(13), true],
+		['expansion 32767', buildSharedDagShape(14), false],
+		['throwing category', createThrowingGetter('category'), false],
+		['revoked proxy', createRevokedProxy(), false],
+	])('agrees with validation for %s', (_name, value, accepted) => {
+		const contract = createContract(shapeShape())
+		const definition = createContract(objectShape({ shape: shapeShape() }))
+		expect(contract.is(value)).toBe(accepted)
+		expect(contract.parse(value)).toBe(accepted ? value : undefined)
+		expect(contract.audit(value).length === 0).toBe(accepted)
+		expect(contract.explain(value).length === 0).toBe(accepted)
+		expect(definition.is({ shape: value })).toBe(accepted)
+		expect(attempt(() => validateShape(value)).success).toBe(accepted)
+	})
+
+	it('refuses a structural cycle through every artifact', () => {
+		const cycle = Object.assign({}, { category: 'array' })
+		Object.defineProperty(cycle, 'items', { value: cycle, enumerable: true })
+		const contract = createContract(shapeShape())
+		expect(contract.is(cycle)).toBe(false)
+		expect(contract.parse(cycle)).toBeUndefined()
+		expect(contract.audit(cycle)).not.toHaveLength(0)
+		expect(contract.explain(cycle)).not.toHaveLength(0)
+		expect(createContract(objectShape({ shape: shapeShape() })).is({ shape: cycle })).toBe(false)
+		expect(attempt(() => validateShape(cycle)).success).toBe(false)
+	})
+
+	it('reads a mutable declaration again on every call', () => {
+		const declaration = { category: 'number', min: 0 }
+		const contract = createContract(shapeShape())
+		expect(contract.is(declaration)).toBe(true)
+		Object.assign(declaration, { min: 'low' })
+		expect(contract.is(declaration)).toBe(false)
+		expect(contract.parse(declaration)).toBeUndefined()
+		Object.assign(declaration, { min: 0 })
+		expect(contract.parse(declaration)).toBe(declaration)
+	})
+
+	it('generates fresh valid declarations and keeps the definition shape key', () => {
+		const contract = createContract(shapeShape())
+		const definition = createContract(objectShape({ shape: shapeShape() }))
+		for (const seed of iterateIndices(() => 40)) {
+			const value = contract.generate(seededRandom(seed))
+			expect(() => validateShape(value)).not.toThrow()
+			expect(value).not.toBe(contract.generate(seededRandom(seed)))
+			const generated = definition.generate(seededRandom(seed))
+			expect(Object.hasOwn(generated, 'shape')).toBe(true)
+			expect(() => validateShape(generated.shape)).not.toThrow()
+		}
+	})
+})
 
 type ShapeByType<T extends ContractShape['category']> = Extract<
 	ContractShape,
@@ -156,6 +289,7 @@ const COMPLETE_SHAPES = {
 	optional: { category: 'optional', inner: { category: 'string' }, default: 'complete' },
 	nullable: { category: 'nullable', inner: { category: 'string' } },
 	json: { category: 'json', description: 'complete' },
+	shape: { category: 'shape', description: 'complete' },
 	raw: { category: 'raw', schema: COMPLETE_RAW_SCHEMA },
 } satisfies { readonly [T in ContractShape['category']]: CompleteShape<T> }
 
@@ -313,7 +447,7 @@ describe('validateShape', () => {
 			['createContract', (shape: ContractShape) => createContract(shape), true],
 		]),
 	)(
-		'%s applies descriptor-first accessor policy across all 39 node fields',
+		'%s applies descriptor-first accessor policy across all 41 node fields',
 		(_name, entry, ownership) => {
 			const cases = Object.values(COMPLETE_SHAPES).flatMap((source) =>
 				Object.keys(source).map((field) => ({ source, field })),
@@ -359,7 +493,7 @@ describe('validateShape', () => {
 					expect(outcome.error.context?.path, `${category}.${field}`).toEqual(path)
 				}
 			}
-			expect(cases.length).toBe(39)
+			expect(cases.length).toBe(41)
 		},
 	)
 
@@ -554,6 +688,8 @@ describe('validateShape', () => {
 			['nullable.inner', { category: 'number' }],
 			['json.category', 'boolean'],
 			['json.description', 'alternate'],
+			['shape.category', 'boolean'],
+			['shape.description', 'alternate'],
 			['raw.category', 'boolean'],
 			['raw.schema', { type: 'number' }],
 		])
@@ -754,7 +890,7 @@ describe('validateShape', () => {
 			}
 		}
 
-		expect(members).toHaveLength(39)
+		expect(members).toHaveLength(41)
 		expect([...alternates.keys()].sort()).toEqual([...members].sort())
 		const incomplete = new Set(members)
 		const omitted = incomplete.values().next().value
@@ -781,21 +917,21 @@ describe('validateShape', () => {
 				shape: { category: 'raw', schema: { properties } },
 				message: 'validateShape: every raw schema child must be a plain record',
 				code: 'structure',
-				context: { path: ['schema'] },
+				context: { path: ['schema', 'properties', 'value'] },
 			},
 			{
 				name: 'raw anyOf undefined',
 				shape: { category: 'raw', schema: { anyOf } },
 				message: 'validateShape: every raw schema child must be a plain record',
 				code: 'structure',
-				context: { path: ['schema'] },
+				context: { path: ['schema', 'anyOf', '0'] },
 			},
 			{
 				name: 'raw oneOf undefined',
 				shape: { category: 'raw', schema: { oneOf } },
 				message: 'validateShape: every raw schema child must be a plain record',
 				code: 'structure',
-				context: { path: ['schema'] },
+				context: { path: ['schema', 'oneOf', '0'] },
 			},
 			{
 				name: 'flagged string',
@@ -4859,13 +4995,13 @@ describe('shape separation registry', () => {
 		})
 		const refusals = observed.filter((outcome) => outcome.refusal).length
 		const uncoded = observed.filter((outcome) => outcome.uncoded).length
-		expect(separations.length).toBe(3)
+		expect(separations.length).toBe(4)
 		expect(uncoded).toBe(0)
 		expect(refusals).toBeGreaterThan(0)
 	})
 
-	it('validates and compiles representatives for all twelve shape kinds', () => {
-		expect(Object.keys(SHAPE_SEPARATIONS)).toHaveLength(12)
+	it('validates and compiles representatives for all thirteen shape kinds', () => {
+		expect(Object.keys(SHAPE_SEPARATIONS)).toHaveLength(13)
 		for (const separation of Object.values(SHAPE_SEPARATIONS)) {
 			expect(() => validateShape(separation.shape)).not.toThrow()
 			expect(() => validateShape(separation.shape)).not.toThrow()

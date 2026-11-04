@@ -32,6 +32,7 @@ import {
 	isContractError,
 	isRegExp,
 	jsonShape,
+	shapeShape,
 	literalShape,
 	nullableShape,
 	nullShape,
@@ -249,9 +250,22 @@ const BUILDER_CASES: readonly BuilderCase[] = [
 		positions: { 0: 'schema' },
 		run: (args) => Reflect.apply(rawShape, undefined, [...args]),
 	},
+	{
+		name: 'shapeShape',
+		valid: [[], [{ description: 'value' }]],
+		positions: { 0: 'options' },
+		options: { 0: ['description'] },
+		run: (args) => Reflect.apply(shapeShape, undefined, [...args]),
+	},
 ]
 
 describe('shape builders', () => {
+	it('infers a contract declaration from a shape-valued builder', () => {
+		const shape = shapeShape()
+		expectTypeOf<Infer<typeof shape>>().toEqualTypeOf<ContractShape>()
+		expect(shape).toEqual({ category: 'shape' })
+		expect(Object.isFrozen(shape)).toBe(true)
+	})
 	it('keeps HEAD literal and object declarations under polluted array construction', () => {
 		const actual = polluteArrayConstruction(() => {
 			return objectShape({ choice: literalShape(['x', 1]) })
@@ -590,16 +604,16 @@ describe('shape builders', () => {
 		const nullProperties: Record<string, JSONSchema> = {}
 		Reflect.set(nullProperties, 'value', null)
 
-		for (const schema of [
-			{ properties },
-			{ anyOf },
-			{ oneOf },
-			{ properties: nullProperties },
-		] satisfies readonly JSONSchema[]) {
+		for (const [schema, path] of [
+			[{ properties }, ['schema', 'properties', 'value']],
+			[{ anyOf }, ['schema', 'anyOf', '0']],
+			[{ oneOf }, ['schema', 'oneOf', '0']],
+			[{ properties: nullProperties }, ['schema', 'properties', 'value']],
+		] satisfies ReadonlyArray<readonly [JSONSchema, readonly string[]]>) {
 			const error = captureContractError(() => rawShape(schema))
 			expect(error.message).toBe('validateShape: every raw schema child must be a plain record')
 			expect(error.code).toBe('structure')
-			expect(error.context).toEqual({ path: ['schema'] })
+			expect(error.context).toEqual({ path })
 			expect(Object.hasOwn(error, 'cause')).toBe(false)
 		}
 
@@ -978,7 +992,7 @@ describe('shape builders', () => {
 		expect(error.message).toBe(
 			'validateShape: raw schema length bounds must be non-negative safe integers',
 		)
-		expect(error.context?.path).toEqual(['schema'])
+		expect(error.context?.path).toEqual(['schema', 'minLength'])
 	})
 
 	it('returns the one valid captured raw population and preserves earlier diagnostics', () => {

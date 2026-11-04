@@ -73,6 +73,7 @@ import {
 	isRegExp,
 	isString,
 	jsonShape,
+	shapeShape,
 	JSONCloner,
 	keyOf,
 	lazyOf,
@@ -3153,6 +3154,7 @@ export const SOUNDNESS_SAMPLE: readonly unknown[] = Object.freeze([
 			nullable: null,
 			rec: { x: 1 },
 			json: null,
+			shape: { category: 'number' },
 		}
 		return { nested: leaf, list: [leaf], dict: { a: leaf } }
 	})(),
@@ -3271,6 +3273,7 @@ export const SHAPE_SEPARATIONS: Readonly<Record<ContractShape['category'], Shape
 		nullable: Object.freeze({ shape: nullableShape(integerShape()), witness: '42' }),
 		// Both artifacts delegate to isJSONValue; the corpus supplements rather than proves coincidence.
 		json: Object.freeze({ shape: jsonShape() }),
+		shape: Object.freeze({ shape: shapeShape() }),
 		// Both artifacts accept any defined value; the corpus supplements rather than proves coincidence.
 		raw: Object.freeze({ shape: rawShape({}) }),
 	})
@@ -3340,6 +3343,8 @@ export function leafShapeVariations(): ReadonlyArray<readonly [string, ContractS
 		...nullShapeVariations(),
 		...literalShapeVariations(),
 		...jsonShapeVariations(),
+		['shape:plain', shapeShape()],
+		['shape:described', shapeShape({ description: 'A declaration' })],
 	]
 }
 
@@ -3371,6 +3376,7 @@ export function compositeShape(depth = 2): ContractShape {
 		nullable: nullableShape(integerShape()),
 		rec: recordShape(numberShape()),
 		json: jsonShape(),
+		shape: shapeShape(),
 	})
 	return Array.from(iterateIndices(() => depth - 1)).reduce<ContractShape>(
 		(current) =>
@@ -3408,6 +3414,8 @@ export function validSamplesFor(shape: ContractShape): readonly unknown[] {
 			return [...shape.values]
 		case 'json':
 			return [null, 42, 'x', true, { a: [1, 'x', null] }]
+		case 'shape':
+			return [{ category: 'number' }, { category: 'object', properties: {} }]
 		default:
 			return []
 	}
@@ -3433,6 +3441,8 @@ export function invalidSamplesFor(shape: ContractShape): readonly unknown[] {
 			return ['not-a-value', Symbol('x'), {}]
 		case 'json':
 			return [() => 1, Number.NaN, Number.POSITIVE_INFINITY, new Date()]
+		case 'shape':
+			return [42, null, {}, { category: 'nonsense' }]
 		default:
 			return []
 	}

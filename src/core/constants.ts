@@ -1,4 +1,34 @@
-import type { ContractCode, FaultConstraint, FaultKind, JSONSchemaType } from './types.js'
+import type {
+	ContractCode,
+	ContractShape,
+	FaultConstraint,
+	FaultKind,
+	JSONSchemaType,
+} from './types.js'
+
+/**
+ * Lists the fields recognized for every contract declaration category, frozen.
+ *
+ * @example
+ * ```ts
+ * SHAPE_FIELDS.shape // ['description']
+ * ```
+ */
+export const SHAPE_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+	string: Object.freeze(['min', 'max', 'pattern', 'description']),
+	number: Object.freeze(['integer', 'min', 'max', 'description']),
+	boolean: Object.freeze(['description']),
+	null: Object.freeze(['description']),
+	literal: Object.freeze(['values', 'description']),
+	array: Object.freeze(['items', 'min', 'max', 'description']),
+	object: Object.freeze(['properties', 'additionalProperties', 'description']),
+	union: Object.freeze(['variants', 'mode', 'description']),
+	optional: Object.freeze(['inner', 'default']),
+	nullable: Object.freeze(['inner']),
+	json: Object.freeze(['description']),
+	raw: Object.freeze(['schema']),
+	shape: Object.freeze(['description']),
+} satisfies Record<ContractShape['category'], readonly string[]>)
 
 /**
  * Holds the registry-global key used to recognize {@link ContractError} values
@@ -404,6 +434,7 @@ export const FAULT_KINDS: readonly FaultKind[] = Object.freeze([
 	'object',
 	'union',
 	'json',
+	'shape',
 ])
 
 /**

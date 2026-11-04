@@ -3013,6 +3013,8 @@ export function shapeToKind(shape: ContractShape): FaultKind {
 					return 'union'
 				case 'json':
 					return 'json'
+				case 'shape':
+					return 'shape'
 				case 'optional':
 					return shapeToKind(shape.inner)
 				case 'nullable':

@@ -1,10 +1,11 @@
-import type { ContractShape, StringShape } from './types.js'
-import { COMPILE_DEPTH_LIMIT, INTRINSICS } from './constants.js'
+import type { ContractShape } from './types.js'
+import { COMPILE_DEPTH_LIMIT, INTRINSICS, SHAPE_FIELDS } from './constants.js'
 import { ContractError, isContractError } from './errors.js'
 import {
 	readIndexView,
 	admitMember,
 	admitVisited,
+	appendEntries,
 	attempt,
 	iterateIndices,
 	collectMembers,
@@ -64,11 +65,11 @@ export class ShapePass {
 			readonly held: boolean
 		}
 	>()
-	readonly #source: ContractShape
+	readonly #source: unknown
 	#stack: Array<
 		| {
 				readonly operation: 'enter'
-				readonly shape: ContractShape | undefined
+				readonly shape: unknown
 				readonly depth: number
 				readonly optional: boolean
 				readonly first?: string
@@ -77,7 +78,7 @@ export class ShapePass {
 		| { readonly operation: 'exit'; readonly index: number; readonly segments: number }
 	> = []
 	#path: string[] = []
-	#active = new ShapePass.#weakSet<ContractShape>()
+	#active = new ShapePass.#weakSet<object>()
 	// The capture. Discovery observes each unique node ONCE — descriptors, two
 	// stable reads, scalar evidence and ordered outgoing edges — and every later
 	// incoming edge is answered from here instead of from the caller's source.
@@ -86,12 +87,12 @@ export class ShapePass {
 	// levels read that leaf sixteen times, and the subtree under it was re-walked
 	// with it. `raw` is the height of a raw node's embedded schema, `0` for every
 	// other node.
-	#index = new ShapePass.#weakMap<ContractShape, number>()
+	#index = new ShapePass.#weakMap<object, number>()
 	#captures: Array<{
-		readonly shape: ContractShape
-		readonly category: ContractShape['category'] | undefined
+		readonly shape: object
+		readonly category: unknown
 		readonly children: ReadonlyArray<{
-			readonly shape: ContractShape | undefined
+			readonly shape: unknown
 			readonly optional: boolean
 			readonly first: string
 			readonly second?: string
@@ -119,12 +120,12 @@ export class ShapePass {
 	#counts: number[] = []
 	#schemas = new ShapePass.#weakMap<object, number>()
 	#children: Array<{
-		readonly shape: ContractShape | undefined
+		readonly shape: unknown
 		readonly optional: boolean
 		readonly first: string
 		readonly second?: string
 	}> = []
-	#category: ContractShape['category'] | undefined
+	#category: unknown
 	#raw = 0
 	#defaulted = false
 	#open = false
@@ -137,7 +138,7 @@ export class ShapePass {
 	readonly #trail: string[] = []
 	#poison: ContractError | undefined
 
-	constructor(shape: ContractShape) {
+	constructor(shape: unknown) {
 		this.#source = shape
 	}
 
@@ -249,6 +250,7 @@ export class ShapePass {
 	#survey(lift: number): boolean {
 		if (ShapePass.polluted()) return false
 		const shape = this.#source
+		if (!isRecord(shape)) return false
 		const outcome = attempt(() => this.#observe(shape, 0))
 		if (isFailure(outcome) || !outcome.value || this.#domain !== undefined) return false
 		const seal = {
@@ -369,7 +371,7 @@ export class ShapePass {
 		this.#place(this.#schedule(current, frame.depth, segments), frame.optional)
 	}
 
-	#observe(current: ContractShape, depth: number): boolean {
+	#observe(current: Record<string, unknown>, depth: number): boolean {
 		const descriptor = INTRINSICS.describe(current, 'category')
 		if (descriptor === undefined || !INTRINSICS.own(descriptor, 'value')) {
 			return this.#refuse('validateShape: every node must be a recognized shape')
@@ -378,7 +380,10 @@ export class ShapePass {
 		if (current.category !== category || descriptor.value !== category) {
 			return this.#refuse('validateShape: every node must be a recognized shape')
 		}
-		const fields = this.#recognize(category)
+		const fields =
+			typeof category === 'string' && INTRINSICS.own(SHAPE_FIELDS, category)
+				? SHAPE_FIELDS[category]
+				: undefined
 		if (fields === undefined) {
 			return this.#refuse('validateShape: every node must be a recognized shape')
 		}
@@ -427,34 +432,7 @@ export class ShapePass {
 		return this.#populate(current)
 	}
 
-	#recognize(category: ContractShape['category']): readonly string[] | undefined {
-		switch (category) {
-			case 'string':
-				return ['min', 'max', 'pattern', 'description']
-			case 'number':
-				return ['integer', 'min', 'max', 'description']
-			case 'boolean':
-			case 'null':
-			case 'json':
-				return ['description']
-			case 'literal':
-				return ['values', 'description']
-			case 'array':
-				return ['items', 'min', 'max', 'description']
-			case 'object':
-				return ['properties', 'additionalProperties', 'description']
-			case 'union':
-				return ['variants', 'mode', 'description']
-			case 'optional':
-				return ['inner', 'default']
-			case 'nullable':
-				return ['inner']
-			case 'raw':
-				return ['schema']
-		}
-	}
-
-	#scan(current: ContractShape, fields: readonly string[]): boolean {
+	#scan(current: Record<string, unknown>, fields: readonly string[]): boolean {
 		for (const fieldIndex of iterateIndices(() => fields.length)) {
 			const field = fields[fieldIndex]
 			if (field === undefined) continue
@@ -491,7 +469,7 @@ export class ShapePass {
 		return true
 	}
 
-	#constrain(current: ContractShape): boolean {
+	#constrain(current: Record<string, unknown>): boolean {
 		if (
 			current.category !== 'optional' &&
 			current.category !== 'nullable' &&
@@ -583,6 +561,8 @@ export class ShapePass {
 				this.#domain === undefined &&
 				current.min !== undefined &&
 				current.max !== undefined &&
+				typeof current.min === 'number' &&
+				typeof current.max === 'number' &&
 				current.min > current.max
 			) {
 				this.#domain = new ContractError('validateShape: a number shape has min greater than max', {
@@ -622,7 +602,7 @@ export class ShapePass {
 			current.category === 'array' &&
 			this.#domain === undefined &&
 			current.min !== undefined &&
-			(!INTRINSICS.safe(current.min) || current.min < 0)
+			(typeof current.min !== 'number' || !INTRINSICS.safe(current.min) || current.min < 0)
 		) {
 			this.#domain = new ContractError(
 				'validateShape: an array shape min must be a non-negative safe integer',
@@ -641,7 +621,7 @@ export class ShapePass {
 			current.category === 'array' &&
 			this.#domain === undefined &&
 			current.max !== undefined &&
-			(!INTRINSICS.safe(current.max) || current.max < 0)
+			(typeof current.max !== 'number' || !INTRINSICS.safe(current.max) || current.max < 0)
 		) {
 			this.#domain = new ContractError(
 				'validateShape: an array shape max must be a non-negative safe integer',
@@ -661,6 +641,8 @@ export class ShapePass {
 			this.#domain === undefined &&
 			current.min !== undefined &&
 			current.max !== undefined &&
+			typeof current.min === 'number' &&
+			typeof current.max === 'number' &&
 			current.min > current.max
 		) {
 			this.#domain = new ContractError('validateShape: an array shape has min greater than max', {
@@ -696,11 +678,11 @@ export class ShapePass {
 		)
 	}
 
-	#restrict(current: StringShape, source = '', flags = ''): void {
+	#restrict(current: Record<string, unknown>, source = '', flags = ''): void {
 		if (
 			this.#domain === undefined &&
 			current.min !== undefined &&
-			(!INTRINSICS.safe(current.min) || current.min < 0)
+			(typeof current.min !== 'number' || !INTRINSICS.safe(current.min) || current.min < 0)
 		) {
 			this.#domain = new ContractError(
 				'validateShape: a string shape min must be a non-negative safe integer',
@@ -718,7 +700,7 @@ export class ShapePass {
 		if (
 			this.#domain === undefined &&
 			current.max !== undefined &&
-			(!INTRINSICS.safe(current.max) || current.max < 0)
+			(typeof current.max !== 'number' || !INTRINSICS.safe(current.max) || current.max < 0)
 		) {
 			this.#domain = new ContractError(
 				'validateShape: a string shape max must be a non-negative safe integer',
@@ -750,6 +732,8 @@ export class ShapePass {
 			this.#domain === undefined &&
 			current.min !== undefined &&
 			current.max !== undefined &&
+			typeof current.min === 'number' &&
+			typeof current.max === 'number' &&
 			current.min > current.max
 		) {
 			this.#domain = new ContractError('validateShape: a string shape has min greater than max', {
@@ -772,8 +756,19 @@ export class ShapePass {
 		}
 		const active = new ShapePass.#weakSet<object>()
 		const stack: Array<
-			| { readonly operation: 'enter'; readonly schema: unknown }
-			| { readonly operation: 'exit'; readonly schema: object; readonly nested: readonly unknown[] }
+			| {
+					readonly operation: 'enter'
+					readonly schema: unknown
+					readonly first?: string
+					readonly second?: string
+			  }
+			| {
+					readonly operation: 'exit'
+					readonly schema: object
+					readonly nested: readonly unknown[]
+					readonly first?: string
+					readonly second?: string
+			  }
 		> = [{ operation: 'enter', schema: source }]
 
 		while (stack.length > 0) {
@@ -786,13 +781,22 @@ export class ShapePass {
 			}
 			const schema = frame.schema
 			if (!isRecord(schema)) {
-				return this.#refuse(
+				return this.#refuseSchema(
 					'validateShape: every raw schema child must be a plain record',
-					'schema',
+					stack,
+					frame.first,
+					frame.second,
+					undefined,
 				)
 			}
 			if (matchesVisited(active, schema)) {
-				return this.#refuse('validateShape: a raw schema may not contain a cycle', 'schema')
+				return this.#refuseSchema(
+					'validateShape: a raw schema may not contain a cycle',
+					stack,
+					frame.first,
+					frame.second,
+					undefined,
+				)
 			}
 			if (INTRINSICS.reflect.apply(INTRINSICS.recall, this.#schemas, [schema]) !== undefined)
 				continue
@@ -822,7 +826,13 @@ export class ShapePass {
 					key !== 'anyOf' &&
 					key !== 'oneOf'
 				) {
-					return this.#refuse('validateShape: raw schema contains an unsupported keyword', 'schema')
+					return this.#refuseSchema(
+						'validateShape: raw schema contains an unsupported keyword',
+						stack,
+						frame.first,
+						frame.second,
+						key,
+					)
 				}
 			}
 
@@ -837,23 +847,50 @@ export class ShapePass {
 				category !== 'integer' &&
 				category !== 'string'
 			) {
-				return this.#refuse(
+				return this.#refuseSchema(
 					'validateShape: raw schema type is outside the supported vocabulary',
-					'schema',
+					stack,
+					frame.first,
+					frame.second,
+					'type',
 				)
 			}
 			if (schema.description !== undefined && typeof schema.description !== 'string') {
-				return this.#refuse('validateShape: raw schema description must be a string', 'schema')
+				return this.#refuseSchema(
+					'validateShape: raw schema description must be a string',
+					stack,
+					frame.first,
+					frame.second,
+					'description',
+				)
 			}
 			if (INTRINSICS.own(schema, 'default') && !isJSONValue(schema.default)) {
-				return this.#refuse('validateShape: raw schema default must be a JSON value', 'schema')
+				return this.#refuseSchema(
+					'validateShape: raw schema default must be a JSON value',
+					stack,
+					frame.first,
+					frame.second,
+					'default',
+				)
 			}
 			if (schema.format !== undefined && typeof schema.format !== 'string') {
-				return this.#refuse('validateShape: raw schema format must be a string', 'schema')
+				return this.#refuseSchema(
+					'validateShape: raw schema format must be a string',
+					stack,
+					frame.first,
+					frame.second,
+					'format',
+				)
 			}
 			if (schema.pattern !== undefined) {
 				if (typeof schema.pattern !== 'string') {
-					return this.#refuse('validateShape: raw schema pattern must be a string', 'schema')
+					return this.#refuseSchema(
+						'validateShape: raw schema pattern must be a string',
+						stack,
+						frame.first,
+						frame.second,
+						'pattern',
+					)
 				}
 				// The CAPTURED `RegExp`, not the live global: the result of this read is
 				// the refusal `rawShape` documents, and a caller who installed a
@@ -862,7 +899,13 @@ export class ShapePass {
 					INTRINSICS.reflect.apply(INTRINSICS.pattern, undefined, [schema.pattern]),
 				)
 				if (isFailure(pattern)) {
-					return this.#refuse('validateShape: raw schema pattern must be valid', 'schema')
+					return this.#refuseSchema(
+						'validateShape: raw schema pattern must be valid',
+						stack,
+						frame.first,
+						frame.second,
+						'pattern',
+					)
 				}
 			}
 
@@ -872,9 +915,12 @@ export class ShapePass {
 				if (key === undefined) continue
 				const value = schema[key]
 				if (value !== undefined && (!INTRINSICS.safe(value) || INTRINSICS.numeric(value) < 0)) {
-					return this.#refuse(
+					return this.#refuseSchema(
 						'validateShape: raw schema length bounds must be non-negative safe integers',
-						'schema',
+						stack,
+						frame.first,
+						frame.second,
+						key,
 					)
 				}
 			}
@@ -884,23 +930,44 @@ export class ShapePass {
 				if (key === undefined) continue
 				const value = schema[key]
 				if (value !== undefined && (typeof value !== 'number' || !INTRINSICS.finite(value))) {
-					return this.#refuse(
+					return this.#refuseSchema(
 						'validateShape: raw schema numeric bounds must be finite numbers',
-						'schema',
+						stack,
+						frame.first,
+						frame.second,
+						key,
 					)
 				}
 			}
 			const population = schema.enum
 			if (population !== undefined) {
 				if (!INTRINSICS.array(population)) {
-					return this.#refuse('validateShape: raw schema enum must be a non-empty array', 'schema')
+					return this.#refuseSchema(
+						'validateShape: raw schema enum must be a non-empty array',
+						stack,
+						frame.first,
+						frame.second,
+						'enum',
+					)
 				}
 				const snapshot = readArrayEntries(population)
 				if (isFailure(snapshot) || snapshot.value.entries.length === 0) {
-					return this.#refuse('validateShape: raw schema enum must be a non-empty array', 'schema')
+					return this.#refuseSchema(
+						'validateShape: raw schema enum must be a non-empty array',
+						stack,
+						frame.first,
+						frame.second,
+						'enum',
+					)
 				}
 				if (!snapshot.value.dense) {
-					return this.#refuse('validateShape: raw schema enum must be dense', 'schema')
+					return this.#refuseSchema(
+						'validateShape: raw schema enum must be dense',
+						stack,
+						frame.first,
+						frame.second,
+						'enum',
+					)
 				}
 				// A module-scope membership question, not `set.has(value)`: this
 				// uniqueness test decides whether the door accepts or refuses, so
@@ -916,9 +983,13 @@ export class ShapePass {
 						(typeof value === 'number' && !INTRINSICS.finite(value)) ||
 						matchesMember(values, value)
 					) {
-						return this.#refuse(
+						return this.#refuseSchema(
 							'validateShape: raw schema enum values must be finite unique primitives',
-							'schema',
+							stack,
+							frame.first,
+							frame.second,
+							'enum',
+							INTRINSICS.text(valueIndex),
 						)
 					}
 					admitMember(values, value)
@@ -928,23 +999,45 @@ export class ShapePass {
 			const names = schema.required
 			if (names !== undefined) {
 				if (!INTRINSICS.array(names)) {
-					return this.#refuse('validateShape: raw schema required must be an array', 'schema')
+					return this.#refuseSchema(
+						'validateShape: raw schema required must be an array',
+						stack,
+						frame.first,
+						frame.second,
+						'required',
+					)
 				}
 				const snapshot = readArrayEntries(names)
 				if (isFailure(snapshot)) {
-					return this.#refuse('validateShape: raw schema required must be an array', 'schema')
+					return this.#refuseSchema(
+						'validateShape: raw schema required must be an array',
+						stack,
+						frame.first,
+						frame.second,
+						'required',
+					)
 				}
 				if (!snapshot.value.dense) {
-					return this.#refuse('validateShape: raw schema required must be dense', 'schema')
+					return this.#refuseSchema(
+						'validateShape: raw schema required must be dense',
+						stack,
+						frame.first,
+						frame.second,
+						'required',
+					)
 				}
 				const required = collectMembers([])
 				for (const valueIndex of iterateIndices(() => snapshot.value.entries.length)) {
 					const value = snapshot.value.entries[valueIndex]
 					if (value === undefined) continue
 					if (typeof value !== 'string' || matchesMember(required, value)) {
-						return this.#refuse(
+						return this.#refuseSchema(
 							'validateShape: raw schema required values must be unique strings',
-							'schema',
+							stack,
+							frame.first,
+							frame.second,
+							'required',
+							INTRINSICS.text(valueIndex),
 						)
 					}
 					admitMember(required, value)
@@ -952,18 +1045,26 @@ export class ShapePass {
 			}
 
 			const nested: unknown[] = []
-			if (schema.items !== undefined) nested[nested.length] = schema.items
+			const edges: Array<readonly [string, string?]> = []
+			if (schema.items !== undefined) {
+				edges[nested.length] = ['items']
+				nested[nested.length] = schema.items
+			}
 			if (schema.properties !== undefined) {
 				if (!isRecord(schema.properties)) {
-					return this.#refuse(
+					return this.#refuseSchema(
 						'validateShape: raw schema properties must be a plain record',
-						'schema',
+						stack,
+						frame.first,
+						frame.second,
+						'properties',
 					)
 				}
 				const propertyList = INTRINSICS.keys(schema.properties)
 				for (const propertyIndex of iterateIndices(() => propertyList.length)) {
 					const key = propertyList[propertyIndex]
 					if (key === undefined) continue
+					edges[nested.length] = ['properties', key]
 					nested[nested.length] = schema.properties[key]
 				}
 			}
@@ -972,6 +1073,7 @@ export class ShapePass {
 				schema.additionalProperties !== true &&
 				schema.additionalProperties !== false
 			) {
+				edges[nested.length] = ['additionalProperties']
 				nested[nested.length] = schema.additionalProperties
 			}
 			const unionList = ['anyOf', 'oneOf']
@@ -981,26 +1083,58 @@ export class ShapePass {
 				const variants = schema[key]
 				if (variants === undefined) continue
 				if (!INTRINSICS.array(variants)) {
-					return this.#refuse('validateShape: raw schema unions must be non-empty arrays', 'schema')
+					return this.#refuseSchema(
+						'validateShape: raw schema unions must be non-empty arrays',
+						stack,
+						frame.first,
+						frame.second,
+						key,
+					)
 				}
 				const snapshot = readArrayEntries(variants)
 				if (isFailure(snapshot) || snapshot.value.entries.length === 0) {
-					return this.#refuse('validateShape: raw schema unions must be non-empty arrays', 'schema')
+					return this.#refuseSchema(
+						'validateShape: raw schema unions must be non-empty arrays',
+						stack,
+						frame.first,
+						frame.second,
+						key,
+					)
 				}
 				if (!snapshot.value.dense) {
-					return this.#refuse('validateShape: raw schema unions must be dense arrays', 'schema')
+					return this.#refuseSchema(
+						'validateShape: raw schema unions must be dense arrays',
+						stack,
+						frame.first,
+						frame.second,
+						key,
+					)
 				}
 				for (const variantIndex of iterateIndices(() => snapshot.value.entries.length)) {
 					// A present member whose captured value is `undefined` is still a
 					// present member, so it is scheduled and refused as a nonrecord
 					// rather than skipped.
+					edges[nested.length] = [key, INTRINSICS.text(variantIndex)]
 					nested[nested.length] = snapshot.value.entries[variantIndex]
 				}
 			}
-			stack[stack.length] = { operation: 'exit', schema, nested }
+			stack[stack.length] = {
+				operation: 'exit',
+				schema,
+				nested,
+				...(frame.first === undefined ? {} : { first: frame.first }),
+				...(frame.second === undefined ? {} : { second: frame.second }),
+			}
 			for (const offset of iterateIndices(() => nested.length)) {
 				const index = nested.length - 1 - offset
-				stack[stack.length] = { operation: 'enter', schema: nested[index] }
+				const first = edges[index]?.[0]
+				const second = edges[index]?.[1]
+				stack[stack.length] = {
+					operation: 'enter',
+					schema: nested[index],
+					...(first === undefined ? {} : { first }),
+					...(second === undefined ? {} : { second }),
+				}
 			}
 		}
 		this.#raw = INTRINSICS.reflect.apply(INTRINSICS.recall, this.#schemas, [source]) ?? 0
@@ -1023,7 +1157,7 @@ export class ShapePass {
 		INTRINSICS.reflect.apply(INTRINSICS.retain, this.#schemas, [schema, height])
 	}
 
-	#populate(current: ContractShape): boolean {
+	#populate(current: Record<string, unknown>): boolean {
 		switch (current.category) {
 			case 'array':
 				this.#children[this.#children.length] = {
@@ -1062,7 +1196,10 @@ export class ShapePass {
 						}
 						continue
 					}
-					const childOutcome = attempt(() => current.properties[key])
+					const childOutcome = attempt(() => {
+						const population = current.properties
+						return isRecord(population) ? population[key] : undefined
+					})
 					if (isFailure(childOutcome)) {
 						return this.#refuse(
 							'validateShape: every node must be a recognized shape',
@@ -1071,11 +1208,14 @@ export class ShapePass {
 						)
 					}
 					const child = childOutcome.value
-					const stable = attempt(
-						() =>
-							INTRINSICS.same(current.properties[key], child) &&
-							INTRINSICS.same(descriptor.value, child),
-					)
+					const stable = attempt(() => {
+						const population = current.properties
+						return (
+							isRecord(population) &&
+							INTRINSICS.same(population[key], child) &&
+							INTRINSICS.same(descriptor.value, child)
+						)
+					})
 					if (isFailure(stable)) {
 						return this.#refuse(
 							'validateShape: every node must be a recognized shape',
@@ -1153,11 +1293,14 @@ export class ShapePass {
 						continue
 					}
 					const variant = variants[index]
-					const stable = attempt(
-						() =>
-							INTRINSICS.same(current.variants[index], variant) &&
-							INTRINSICS.same(descriptor.value, variant),
-					)
+					const stable = attempt(() => {
+						const population = current.variants
+						return (
+							INTRINSICS.array(population) &&
+							INTRINSICS.same(population[index], variant) &&
+							INTRINSICS.same(descriptor.value, variant)
+						)
+					})
 					if (isFailure(stable)) {
 						return this.#refuse(
 							'validateShape: every node must be a recognized shape',
@@ -1225,11 +1368,14 @@ export class ShapePass {
 						return this.#refuse('validateShape: values must be a dense data array', 'values', key)
 					}
 					const value = literals[index]
-					const stable = attempt(
-						() =>
-							INTRINSICS.same(current.values[index], value) &&
-							INTRINSICS.same(descriptor.value, value),
-					)
+					const stable = attempt(() => {
+						const population = current.values
+						return (
+							INTRINSICS.array(population) &&
+							INTRINSICS.same(population[index], value) &&
+							INTRINSICS.same(descriptor.value, value)
+						)
+					})
 					if (isFailure(stable)) {
 						return this.#refuse(
 							'validateShape: every node must be a recognized shape',
@@ -1284,16 +1430,17 @@ export class ShapePass {
 			case 'boolean':
 			case 'null':
 			case 'json':
+			case 'shape':
 			case 'raw':
 				break
 		}
 		return true
 	}
 
-	#schedule(current: ContractShape, depth: number, segments: number): number {
+	#schedule(current: object, depth: number, segments: number): number {
 		admitVisited(this.#active, current)
 		const children: ReadonlyArray<{
-			readonly shape: ContractShape | undefined
+			readonly shape: unknown
 			readonly optional: boolean
 			readonly first: string
 			readonly second?: string
@@ -1319,9 +1466,9 @@ export class ShapePass {
 	}
 
 	#capture(
-		shape: ContractShape,
+		shape: object,
 		children: ReadonlyArray<{
-			readonly shape: ContractShape | undefined
+			readonly shape: unknown
 			readonly optional: boolean
 			readonly first: string
 			readonly second?: string
@@ -1340,8 +1487,8 @@ export class ShapePass {
 		return index
 	}
 
-	#locate(shape: ContractShape | undefined): number | undefined {
-		if (shape === undefined) return undefined
+	#locate(shape: unknown): number | undefined {
+		if (typeof shape !== 'object' || shape === null) return undefined
 		return INTRINSICS.reflect.apply(INTRINSICS.recall, this.#index, [shape])
 	}
 
@@ -1561,7 +1708,7 @@ export class ShapePass {
 	#trace(): void {
 		const settled: number[] = []
 		const order: number[] = []
-		const active = new ShapePass.#weakSet<ContractShape>()
+		const active = new ShapePass.#weakSet<object>()
 		const stack: Array<
 			| {
 					readonly operation: 'enter'
@@ -1657,9 +1804,46 @@ export class ShapePass {
 		if (this.#domain !== undefined) throw this.#domain
 	}
 
-	#refuse(message: string, first?: string, second?: string): false {
+	#refuseSchema(
+		message: string,
+		stack: ReadonlyArray<{
+			readonly operation: 'enter' | 'exit'
+			readonly first?: string
+			readonly second?: string
+		}>,
+		first?: string,
+		second?: string,
+		keyword?: string,
+		member?: string,
+	): false {
+		if (this.#structure !== undefined) return false
+		const ancestors: readonly string[] = INTRINSICS.reflect.apply(
+			INTRINSICS.expand,
+			readIndexView(stack),
+			[
+				(frame: {
+					readonly operation: 'enter' | 'exit'
+					readonly first?: string
+					readonly second?: string
+				}) => (frame.operation === 'exit' ? pathOf([], frame.first, frame.second) : []),
+			],
+		)
+		const prefix: string[] = []
+		appendEntries(prefix, this.#path)
+		prefix[prefix.length] = 'schema'
+		appendEntries(prefix, ancestors)
+		const path = pathOf(prefix, first, second)
+		return this.#refuse(message, keyword, member, path)
+	}
+
+	#refuse(
+		message: string,
+		first?: string,
+		second?: string,
+		prefix: readonly string[] = this.#path,
+	): false {
 		if (this.#structure === undefined) {
-			const path = pathOf(this.#path, first, second)
+			const path = pathOf(prefix, first, second)
 			this.#structure = new ContractError(message, {
 				code: 'structure',
 				context: { path },

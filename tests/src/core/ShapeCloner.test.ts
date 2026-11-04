@@ -390,6 +390,10 @@ describe('ShapeCloner', () => {
 				fields: ['category', 'schema'],
 			},
 			{
+				source: { category: 'shape', description: 'shape' },
+				fields: ['category', 'description'],
+			},
+			{
 				source: { category: 'string' },
 				fields: ['category'],
 				absent: ['min', 'max', 'pattern', 'description'],
@@ -409,6 +413,7 @@ describe('ShapeCloner', () => {
 			'nullable',
 			'json',
 			'raw',
+			'shape',
 			'string',
 		])
 		for (const row of rows) {

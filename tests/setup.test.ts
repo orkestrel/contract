@@ -991,6 +991,7 @@ describe('shape factories', () => {
 			'nullable',
 			'rec',
 			'json',
+			'shape',
 		])
 		expect(Object.values(flat.properties).map((child) => child.category)).toEqual([
 			'string',
@@ -1006,6 +1007,7 @@ describe('shape factories', () => {
 			'nullable',
 			'object',
 			'json',
+			'shape',
 		])
 
 		const deep = compositeShape(3)
@@ -1059,7 +1061,7 @@ describe('shape factories', () => {
 				.filter(([, row]) => row.witness === undefined)
 				.map(([kind]) => kind)
 				.sort(),
-		).toEqual(['json', 'null', 'raw'])
+		).toEqual(['json', 'null', 'raw', 'shape'])
 	})
 })
 

@@ -22,6 +22,8 @@ import type {
 	RawShape,
 	RecordShapeOptions,
 	SchemaToShapeOptions,
+	ShapeShape,
+	ShapeShapeOptions,
 	StringShape,
 	StringShapeOptions,
 	UnionShape,
@@ -706,12 +708,36 @@ export function jsonShape(options?: JSONShapeOptions): JSONShape {
 }
 
 /**
+ * Builds a {@link ShapeShape}.
+ *
+ * @param options - Optional description
+ * @returns A shape-valued declaration
+ *
+ * @example
+ * ```ts
+ * const definition = objectShape({ shape: shapeShape() })
+ * ```
+ */
+export function shapeShape(options?: ShapeShapeOptions): ShapeShape {
+	return contain(() => {
+		const safe = readOptions(options, ['description'], 'shapeShape', 'shape')
+		const shape: ShapeShape = {
+			category: 'shape',
+			...(safe?.description === undefined ? {} : { description: safe.description }),
+		}
+		return ShapePass.seal(shape)
+	}, 'shapeShape')
+}
+
+/**
  * Builds a {@link RawShape} from a supported JSON Schema fragment.
  *
  * @remarks
  * For values the shape DSL can't express. The fragment is recursively checked
  * against the lean {@link JSONSchema} vocabulary before ownership is taken;
  * malformed or unsupported keywords throw a coded {@link ContractError}. The
+ * refusal path starts at `schema` and names the nested keyword or member.
+ * A non-record root is refused at `schema` itself. The
  * compiled guard accepts every
  * DEFINED value — `undefined` alone fails, because it is the parser's failure
  * sentinel; wrap the shape in {@link optionalShape} to admit absence. The

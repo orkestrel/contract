@@ -1,4 +1,4 @@
-import type { ContractShape, ShapeValidatorInterface } from './types.js'
+import type { ShapeValidatorInterface } from './types.js'
 import { INTRINSICS } from './constants.js'
 import { pinMembers } from './helpers.js'
 import { ShapePass } from './ShapePass.js'
@@ -19,7 +19,7 @@ import { ShapePass } from './ShapePass.js'
  * ```
  */
 export class ShapeValidator implements ShapeValidatorInterface {
-	readonly #source: ContractShape
+	readonly #source: unknown
 	readonly #passes = new INTRINSICS.set<ShapePass>()
 	#expansion: number | undefined
 
@@ -28,7 +28,7 @@ export class ShapeValidator implements ShapeValidatorInterface {
 	 *
 	 * @param shape - The live shape source validated by each call
 	 */
-	constructor(shape: ContractShape) {
+	constructor(shape: unknown) {
 		this.#source = shape
 	}
 

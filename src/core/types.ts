@@ -622,6 +622,7 @@ export type ContractShape =
 	| OptionalShape
 	| NullableShape
 	| JSONShape
+	| ShapeShape
 	| RawShape
 
 /**
@@ -758,6 +759,39 @@ export interface JSONShape {
 }
 
 /**
+ * Describes a value that is a structurally valid contract declaration.
+ *
+ * @remarks
+ * Acceptance is a successful {@link validateShape}, including its expansion bound.
+ * Parsing preserves identity and never compiles the value or fills its defaults.
+ * The shallow schema over-approximates: it describes only the category and cannot
+ * teach a language model to author a complete nested declaration. The guard decides.
+ *
+ * @example
+ * ```ts
+ * const declaration: ShapeShape = { category: 'shape' }
+ * createContract(declaration).is(numberShape()) // true
+ * ```
+ */
+export interface ShapeShape {
+	readonly category: 'shape'
+	readonly description?: string
+}
+
+/**
+ * Configures the description of a shape-valued declaration.
+ *
+ * @example
+ * ```ts
+ * const options: ShapeShapeOptions = { description: 'A question declaration' }
+ * shapeShape(options).description // 'A question declaration'
+ * ```
+ */
+export interface ShapeShapeOptions {
+	readonly description?: string
+}
+
+/**
  * Describes a validated raw JSON Schema passthrough — embeds a supported schema fragment directly.
  *
  * @remarks
@@ -805,43 +839,45 @@ export interface RawShape {
  */
 export type Infer<S extends ContractShape> = [ContractShape] extends [S]
 	? unknown
-	: S extends StringShape
-		? string
-		: S extends NumberShape
-			? number
-			: S extends BooleanShape
-				? boolean
-				: S extends NullShape
-					? null
-					: S extends { readonly category: 'literal'; readonly values: infer V }
-						? V extends ReadonlyArray<infer L>
-							? L
-							: never
-						: S extends { readonly category: 'array'; readonly items: infer I }
-							? I extends ContractShape
-								? ReadonlyArray<Infer<I>>
+	: S extends ShapeShape
+		? ContractShape
+		: S extends StringShape
+			? string
+			: S extends NumberShape
+				? number
+				: S extends BooleanShape
+					? boolean
+					: S extends NullShape
+						? null
+						: S extends { readonly category: 'literal'; readonly values: infer V }
+							? V extends ReadonlyArray<infer L>
+								? L
 								: never
-							: S extends ObjectShape<infer P, infer A>
-								? P extends Readonly<Record<string, ContractShape>>
-									? [A] extends [boolean | ContractShape]
-										? InferObject<P, A>
-										: never
+							: S extends { readonly category: 'array'; readonly items: infer I }
+								? I extends ContractShape
+									? ReadonlyArray<Infer<I>>
 									: never
-								: S extends { readonly category: 'union'; readonly variants: infer V }
-									? V extends readonly ContractShape[]
-										? InferUnion<V>
-										: never
-									: S extends { readonly category: 'optional'; readonly inner: infer I }
-										? I extends ContractShape
-											? Infer<I> | undefined
+								: S extends ObjectShape<infer P, infer A>
+									? P extends Readonly<Record<string, ContractShape>>
+										? [A] extends [boolean | ContractShape]
+											? InferObject<P, A>
 											: never
-										: S extends { readonly category: 'nullable'; readonly inner: infer I }
+										: never
+									: S extends { readonly category: 'union'; readonly variants: infer V }
+										? V extends readonly ContractShape[]
+											? InferUnion<V>
+											: never
+										: S extends { readonly category: 'optional'; readonly inner: infer I }
 											? I extends ContractShape
-												? Infer<I> | null
+												? Infer<I> | undefined
 												: never
-											: S extends JSONShape
-												? JSONValue
-												: unknown
+											: S extends { readonly category: 'nullable'; readonly inner: infer I }
+												? I extends ContractShape
+													? Infer<I> | null
+													: never
+												: S extends JSONShape
+													? JSONValue
+													: unknown
 
 /**
  * Resolves {@link Infer} of an object shape's `properties` — the required keys, plus the
@@ -1047,7 +1083,7 @@ export interface SchemaToShapeOptions {
  *
  * @remarks
  * The vocabulary is `'string'`, `'number'`, `'integer'`, `'boolean'`, `'null'`,
- * `'literal'`, `'array'`, `'object'`, `'union'`, and `'json'`.
+ * `'literal'`, `'array'`, `'object'`, `'union'`, `'json'`, and `'shape'`.
  */
 export type FaultKind =
 	| 'string'
@@ -1060,6 +1096,7 @@ export type FaultKind =
 	| 'object'
 	| 'union'
 	| 'json'
+	| 'shape'
 
 /**
  * Names the refinement a {@link Fault} of reason `'constraint'` violates.
