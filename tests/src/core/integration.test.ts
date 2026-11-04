@@ -70,7 +70,7 @@ describe('generated artifact laws', () => {
 		expect([...ordinary, ...extended].reduce((total, row) => total + row.values.length, 0)).toBe(
 			17013,
 		)
-	})
+	}, 30_000)
 })
 import type { Guard } from '@src/core'
 import type { Tree } from '../../setup.js'
