@@ -42,6 +42,8 @@ import {
 	listCompilerDoors,
 	ObservedShape,
 	ReentrantShape,
+	buildDiscriminatedCases,
+	findAgreementViolations,
 } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
 
@@ -882,5 +884,262 @@ describe('ContractCompiler — a prototype changed after compiling', () => {
 		)
 
 		expect(answers).toEqual({ is: true, audit: [], explain: [] })
+	})
+})
+
+describe('ContractCompiler — a discriminated union', () => {
+	const find = objectShape({ operation: literalShape(['find']), limit: integerShape() })
+	const read = objectShape({ operation: literalShape(['read']), id: stringShape({ min: 1 }) })
+	const write = objectShape({
+		operation: literalShape(['write']),
+		id: stringShape({ min: 1 }),
+		text: stringShape(),
+	})
+	const tools = unionShape(find, read, write)
+	const allowed = ['find', 'read', 'write']
+
+	it('reports the named arm with its real paths, in place of a variant', () => {
+		const contract = createContract(tools)
+		const value = { operation: 'find', limit: 'many' }
+
+		expect(contract.explain(value)).toEqual([
+			{ reason: 'type', path: ['limit'], expected: 'integer', received: '"many"' },
+		])
+		expect(contract.audit(value)).toEqual([
+			{ reason: 'type', path: ['limit'], expected: 'integer', received: '"many"' },
+		])
+	})
+
+	it('reports a missing key and an undeclared key of the named arm', () => {
+		const contract = createContract(tools)
+
+		expect(contract.audit({ operation: 'read' })).toEqual([
+			{ reason: 'missing', path: ['id'], expected: 'string' },
+		])
+		expect(contract.audit({ operation: 'read', id: 'a', extra: 1 })).toEqual([
+			{ reason: 'extra', path: ['extra'] },
+		])
+	})
+
+	it('carries the path of the slot the union sits in', () => {
+		const contract = createContract(objectShape({ tool: tools }))
+		const faults = contract.audit({ tool: { operation: 'find', limit: 'many' } })
+
+		expect(faults.map(({ path }) => path)).toEqual([['tool', 'limit']])
+	})
+
+	it('repairs through the named arm', () => {
+		const contract = createContract(tools)
+
+		expect(contract.parse({ operation: 'find', limit: '5' })).toEqual({
+			operation: 'find',
+			limit: 5,
+		})
+		expect(contract.explain({ operation: 'find', limit: '5' })).toEqual([])
+		expect(contract.parse({ operation: 'find', limit: 'many' })).toBeUndefined()
+	})
+
+	it('returns a value its arm accepts by identity', () => {
+		const value = { operation: 'read', id: 'a' }
+
+		expect(createContract(tools).parse(value)).toBe(value)
+	})
+
+	it('repairs through no other arm when the named arm refuses', () => {
+		const first = objectShape({ kind: literalShape(['1']), size: numberShape() })
+		const second = objectShape({ kind: literalShape([1]), size: stringShape() })
+		const contract = createContract(unionShape(first, second))
+
+		expect(contract.parse({ kind: '1', size: 'x' })).toBeUndefined()
+		expect(contract.explain({ kind: '1', size: 'x' })[0]?.path).toEqual(['size'])
+	})
+
+	it.each<readonly [string, unknown]>([
+		['an unknown literal', { operation: 'nope' }],
+		['an absent discriminator', { limit: 5 }],
+		['a literal of another type', { operation: 1 }],
+		['a value that is no object', 5],
+		['an array', []],
+		['null', null],
+	])('keeps a variant fault for %s, naming what would select', (_label, value) => {
+		const contract = createContract(tools)
+
+		expect(contract.audit(value)[0]).toEqual({
+			reason: 'variant',
+			path: [],
+			variants: 3,
+			key: 'operation',
+			expected: allowed,
+		})
+		expect(contract.explain(value)[0]).toEqual({
+			reason: 'variant',
+			path: [],
+			variants: 3,
+			key: 'operation',
+			expected: allowed,
+		})
+		expect(contract.parse(value)).toBeUndefined()
+	})
+
+	it('selects on a literal one arm alone holds, and on no literal two arms share', () => {
+		const left = objectShape({ kind: literalShape(['x', 'y']), a: numberShape() })
+		const right = objectShape({ kind: literalShape(['y', 'z']), b: numberShape() })
+		const contract = createContract(unionShape(left, right))
+
+		expect(contract.audit({ kind: 'x', a: 'no' })[0]?.path).toEqual(['a'])
+		expect(contract.audit({ kind: 'z', b: 'no' })[0]?.path).toEqual(['b'])
+		expect(contract.audit({ kind: 'y', a: 'no' })[0]).toEqual({
+			reason: 'variant',
+			path: [],
+			variants: 2,
+			key: 'kind',
+			expected: ['x', 'y', 'z'],
+		})
+		expect(contract.is({ kind: 'y', a: 1 })).toBe(true)
+		expect(contract.is({ kind: 'y', b: 1 })).toBe(true)
+	})
+
+	it('reads the next shared literal when the first cannot tell the arms apart', () => {
+		const left = objectShape({ version: literalShape([1]), kind: literalShape(['a']) })
+		const right = objectShape({
+			version: literalShape([1]),
+			kind: literalShape(['b']),
+			n: numberShape(),
+		})
+		const contract = createContract(unionShape(left, right))
+
+		expect(contract.audit({ version: 1, kind: 'b', n: 'no' })[0]?.path).toEqual(['n'])
+	})
+
+	it.each<readonly [string, ContractShape]>([
+		[
+			'one arm that is no object',
+			unionShape(objectShape({ kind: literalShape(['a']), n: numberShape() }), stringShape()),
+		],
+		[
+			'a nullable arm',
+			unionShape(
+				objectShape({ kind: literalShape(['a']), n: numberShape() }),
+				nullableShape(objectShape({ kind: literalShape(['b']) })),
+			),
+		],
+		[
+			'a discriminator inside a nullable',
+			unionShape(
+				objectShape({ kind: nullableShape(literalShape(['a'])), n: numberShape() }),
+				objectShape({ kind: literalShape(['b']) }),
+			),
+		],
+		[
+			'an optional discriminator',
+			unionShape(
+				objectShape({ kind: optionalShape(literalShape(['a'])), n: numberShape() }),
+				objectShape({ kind: literalShape(['b']) }),
+			),
+		],
+		[
+			'a nested union',
+			unionShape(
+				objectShape({ kind: literalShape(['a']), n: numberShape() }),
+				unionShape(
+					objectShape({ kind: literalShape(['b']) }),
+					objectShape({ kind: literalShape(['c']) }),
+				),
+			),
+		],
+		[
+			'a property only some arms declare',
+			unionShape(
+				objectShape({ kind: literalShape(['a']), n: numberShape() }),
+				objectShape({ other: literalShape(['b']) }),
+			),
+		],
+	])('leaves %s as it was', (_label, shape) => {
+		const faults = createContract(shape).audit({ kind: 'a', n: 'no' })
+
+		expect(faults[0]?.reason).toBe('variant')
+		expect(Object.keys(faults[0] ?? {})).toEqual(['reason', 'path', 'variants'])
+	})
+
+	it('selects within a union nested below the outer one', () => {
+		const inner = unionShape(
+			objectShape({ kind: literalShape(['b']), n: numberShape() }),
+			objectShape({ kind: literalShape(['c']) }),
+		)
+		const contract = createContract(objectShape({ slot: inner }))
+
+		expect(contract.audit({ slot: { kind: 'b', n: 'no' } })[0]?.path).toEqual(['slot', 'n'])
+	})
+
+	it('reads an inherited or accessor discriminator as absent', () => {
+		const contract = createContract(tools)
+		const inherited = Object.create({ operation: 'find', limit: 1 })
+		const accessor = Object.defineProperty({ limit: 1 }, 'operation', {
+			get: () => 'find',
+			enumerable: true,
+		})
+
+		expect(contract.audit(inherited)[0]?.reason).toBe('variant')
+		expect(contract.audit(accessor)).toEqual([])
+		expect(contract.is(accessor)).toBe(true)
+	})
+
+	it('survives a discriminator read that throws', () => {
+		const hostile = new Proxy(
+			{},
+			{
+				getOwnPropertyDescriptor() {
+					throw new Error('hostile')
+				},
+			},
+		)
+
+		expect(createContract(tools).is(hostile)).toBe(false)
+	})
+
+	it('treats a oneOf the same way, since one named arm leaves nothing ambiguous', () => {
+		const contract = createContract(oneOfShape(find, read))
+		const value = { operation: 'find', limit: '5' }
+
+		expect(contract.parse(value)).toEqual({ operation: 'find', limit: 5 })
+		expect(contract.explain(value)).toEqual([])
+		expect(contract.audit(value)[0]?.path).toEqual(['limit'])
+		expect(contract.is(contract.parse(value))).toBe(true)
+		expect(contract.audit({ operation: 'nope' })[0]).toEqual({
+			reason: 'oneOf',
+			path: [],
+			matched: 0,
+			key: 'operation',
+			expected: ['find', 'read'],
+		})
+	})
+
+	it('keeps a oneOf with no discriminator judged on the raw value', () => {
+		const contract = createContract(oneOfShape(numberShape(), integerShape()))
+
+		expect(contract.parse(3)).toBeUndefined()
+		expect(contract.parse(3.5)).toBe(3.5)
+	})
+
+	it('keeps the three laws over generated unions', () => {
+		const violations = buildDiscriminatedCases(11).flatMap(({ label, shape, values }) =>
+			findAgreementViolations(shape, undefined, values).map((violation) => [label, violation]),
+		)
+
+		expect(violations).toEqual([])
+	})
+
+	it('selects exactly when one arm alone holds the literal, over generated unions', () => {
+		const wrong = buildDiscriminatedCases(23).flatMap(({ label, shape, discriminated, values }) => {
+			const { audit, is } = createContract(shape)
+			return values.flatMap((value) => {
+				const first = audit(value)[0]
+				const variant = first?.reason === 'variant' || first?.reason === 'oneOf'
+				// A selected arm answers for itself, so a fault below it is never a variant.
+				return discriminated(value) && variant ? [[label, value, is(value)]] : []
+			})
+		})
+
+		expect(wrong).toEqual([])
 	})
 })

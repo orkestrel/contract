@@ -526,6 +526,13 @@ export function recordShape<S extends ContractShape>(
 /**
  * Builds a {@link UnionShape} from a list of variant shapes (`anyOf` in JSON Schema).
  *
+ * @remarks
+ * When every arm is an object declaring one required literal property, and a value's
+ * own property exactly equals a literal only one arm holds, that arm answers: `explain`
+ * and `audit` report its faults at their real paths, and `parse` repairs through it
+ * alone. Any other value reports `variant`, with `key` and `expected` saying what would
+ * have named an arm. `is` does not change.
+ *
  * @param variants - The candidate shapes; the first match wins at runtime
  * @returns A union shape whose `Infer` is the union of the variants
  *
@@ -558,7 +565,9 @@ export function unionShape<V extends readonly ContractShape[]>(
  *   coercion fallback for an ambiguous input. When exactly one variant's
  *   guard accepts the raw value, that variant's parser runs. Zero matches or
  *   two-or-more matches both parse to `undefined` — a value ambiguous
- *   between variants has no well-defined coercion target.
+ *   between variants has no well-defined coercion target. A value that names one
+ *   arm through a required literal is not ambiguous, so as in {@link unionShape}
+ *   that arm answers alone, and its parser may coerce.
  *
  * Prefer {@link unionShape} when a value may legitimately satisfy more than
  * one variant (for example overlapping shapes) and any match is acceptable. Prefer

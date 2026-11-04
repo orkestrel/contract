@@ -2,6 +2,7 @@
 // Vitest project (`setupFiles[0]`). Keep this file free of `node:*` and of
 // `document` / `window` / Vue: DOM/Vue helpers live in `setupBrowser.ts`.
 import type {
+	LiteralValue,
 	AuditFault,
 	ContractInterface,
 	ContractShape,
@@ -5567,4 +5568,122 @@ export function buildSurrogateText(seed: number): string {
 	return Array.from({ length }, () => alphabet[Math.floor(random() * alphabet.length)] ?? 'a').join(
 		'',
 	)
+}
+
+/**
+ * Reads one index below a limit from a random source.
+ *
+ * @param random - The source
+ * @param limit - The exclusive bound
+ * @returns The index
+ *
+ * @example
+ * ```ts
+ * readPick(seededRandom(1), 4)
+ * ```
+ */
+export function readPick(random: RandomFunction, limit: number): number {
+	return Math.floor(random() * limit)
+}
+
+/** Represents one generated union, the values it is asked about, and when an arm answers. */
+export interface DiscriminatedCaseInterface {
+	/** What the union was generated with. */
+	readonly label: string
+	/** The union, possibly below a wrapper. */
+	readonly shape: ContractShape
+	/** The values to ask about. */
+	readonly values: readonly unknown[]
+	/** Whether exactly one arm holds this value's literal, so that arm answers. */
+	readonly discriminated: (value: unknown) => boolean
+}
+
+/**
+ * Generates unions over object arms, with overlapping literals, non-object arms, and nesting.
+ *
+ * @remarks
+ * Each arm's literals come from a small pool, so some arms overlap, and each union is
+ * asked about the valid, repairable, and wrong values of every arm, plus values with no
+ * discriminator. `discriminated` is computed from the arm literals, by a second route
+ * from the one the compiler takes.
+ *
+ * @param seed - The generator's seed
+ * @returns The generated cases
+ *
+ * @example
+ * ```ts
+ * const cases = buildDiscriminatedCases(11)
+ * ```
+ */
+export function buildDiscriminatedCases(seed: number): readonly DiscriminatedCaseInterface[] {
+	const random = seededRandom(seed)
+	const pool: readonly LiteralValue[] = ['a', 'b', 'c', 'd', 1, 2, true]
+	return Array.from({ length: 60 }, (_row, row) => {
+		const count = 2 + readPick(random, 7)
+		const lists = Array.from({ length: count }, () =>
+			Array.from(
+				new Set(
+					Array.from(
+						{ length: 1 + readPick(random, 2) },
+						() => pool[readPick(random, pool.length)] ?? 'a',
+					),
+				),
+			),
+		)
+		const arms: ContractShape[] = lists.map((literals, arm) =>
+			objectShape({
+				kind: literalShape(literals),
+				...(arm % 2 === 0 ? { n: numberShape({ min: 0 }) } : { s: stringShape({ min: 1 }) }),
+				...(arm % 3 === 0 ? { maybe: optionalShape(booleanShape()) } : {}),
+			}),
+		)
+		const mixed = readPick(random, 5) === 0
+		const nested = readPick(random, 5) === 0
+		const members: readonly ContractShape[] = mixed
+			? [...arms, stringShape()]
+			: nested
+				? [...arms.slice(1), unionShape(arms[0] ?? nullShape(), nullShape())]
+				: arms
+		const exclusive = !mixed && !nested && readPick(random, 3) === 0
+		const union = exclusive ? oneOfShape(...members) : unionShape(...members)
+		const shape = readPick(random, 4) === 0 ? objectShape({ slot: union }) : union
+		const inSlot = shape.category === 'object'
+		const values = lists.flatMap((literals, arm) =>
+			literals.flatMap((literal) => [
+				{ kind: literal, n: 1 },
+				{ kind: literal, n: '1' },
+				{ kind: literal, n: 'no' },
+				{ kind: literal, n: -1 },
+				{ kind: literal, s: 'x' },
+				{ kind: literal, s: 5 },
+				{ kind: literal, s: '' },
+				{ kind: literal, n: 1, maybe: 'yes' },
+				{ kind: literal, n: 1, s: 'x', extra: arm },
+			]),
+		)
+		const asked: readonly unknown[] = [
+			...values,
+			{ kind: 'absent from every arm' },
+			{ n: 1 },
+			{ s: 'x' },
+			{},
+			null,
+			5,
+			'text',
+			[],
+		]
+		return {
+			label: `row ${String(row)}: ${String(count)} arms${mixed ? ', mixed' : ''}${nested ? ', nested' : ''}${exclusive ? ', oneOf' : ''}`,
+			shape,
+			values: inSlot ? asked.map((value) => ({ slot: value })) : asked,
+			discriminated: (value: unknown): boolean => {
+				if (mixed || nested || !isRecord(value)) return false
+				const held = inSlot ? value.slot : value
+				if (!isRecord(held) || !Object.hasOwn(held, 'kind')) return false
+				return (
+					lists.filter((literals) => literals.some((entry) => entry === held.kind)).length === 1
+				)
+			},
+		}
+	})
 }

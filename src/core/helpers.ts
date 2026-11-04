@@ -1835,6 +1835,95 @@ export function resolveField(record: Readonly<Record<string, unknown>>, path: Fi
 }
 
 /**
+ * Determines whether an object holds exactly the named own keys.
+ *
+ * @remarks
+ * Every required key must be own, and every own key, symbols and non-enumerable ones
+ * included, must be named, so an inherited field and a stray one both answer `false`.
+ *
+ * @param value - The object to inspect
+ * @param required - The keys it must own
+ * @param optional - The keys it may own
+ * @returns True if its own keys are exactly those; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesExactKeys({ a: 1 }, ['a'])          // true
+ * matchesExactKeys({ a: 1, b: 2 }, ['a'])    // false
+ * matchesExactKeys({ a: 1, b: 2 }, ['a'], ['b']) // true
+ * ```
+ */
+export function matchesExactKeys(
+	value: object,
+	required: readonly string[],
+	optional: readonly string[] = [],
+): boolean {
+	const absent = INTRINSICS.reflect.apply(INTRINSICS.some, required, [
+		(key: string) => !INTRINSICS.own(value, key),
+	])
+	if (absent) return false
+	return !INTRINSICS.reflect.apply(INTRINSICS.some, INTRINSICS.reflect.members(value), [
+		(key: string | symbol) =>
+			!INTRINSICS.reflect.apply(INTRINSICS.some, required, [(name: string) => name === key]) &&
+			!INTRINSICS.reflect.apply(INTRINSICS.some, optional, [(name: string) => name === key]),
+	])
+}
+
+/**
+ * Determines whether a repair `parse` made kept everything the value said.
+ *
+ * @remarks
+ * `parse`'s coercions are published and form input relies on them, but some change what
+ * a value means: `1` to `true`, `'9007199254740993'` to `...992`, `'1e-400'` to `0`,
+ * `'0x10'` to `16`. A door that must not guess asks this about each fault `audit` reported,
+ * since `audit` already names every nested repair with its path and the kind it wanted.
+ *
+ * Only a `type` fault is a repair. A number needs a string whose trim is the number's own
+ * text, so `'30'` and `' 30 '` pass while `'30.0'`, `'007'`, `'0x10'`, `'1e3'`, `'+5'`,
+ * `'.5'`, `'-0'`, and `'9007199254740993'` do not. A boolean needs `'true'` or `'false'`,
+ * a literal its trimmed text, and a string a finite number. Anything else refuses.
+ *
+ * @param fault - A fault `audit` reported
+ * @param input - The value as it arrived
+ * @param parsed - What `parse` made of it
+ * @returns True if the repair loses nothing; false otherwise
+ *
+ * @example
+ * ```ts
+ * const fault = { reason: 'type', path: ['a'], expected: 'number', received: '' } as const
+ * matchesLosslessRepair(fault, { a: ' 30 ' }, { a: 30 }) // true
+ * matchesLosslessRepair(fault, { a: '30.0' }, { a: 30 }) // false
+ * ```
+ */
+export function matchesLosslessRepair(fault: AuditFault, input: unknown, parsed: unknown): boolean {
+	if (fault.reason !== 'type') return false
+	const keys = isString(fault.path) ? [fault.path] : fault.path
+	const route = INTRINSICS.from(
+		iterateIndices(() => keys.length + 1),
+		(index) => (index === 0 ? 'root' : (keys[index - 1] ?? '')),
+	)
+	const raw = resolveField({ root: input }, route)
+	const value = resolveField({ root: parsed }, route)
+	switch (fault.expected) {
+		case 'number':
+		case 'integer':
+			return isString(raw) && isNumber(value) && raw.trim() === INTRINSICS.text(value)
+		case 'literal':
+			return (
+				isString(raw) &&
+				(isString(value) || isNumber(value) || isBoolean(value)) &&
+				raw.trim() === INTRINSICS.text(value)
+			)
+		case 'boolean':
+			return raw === 'true' || raw === 'false'
+		case 'string':
+			return isFiniteNumber(raw)
+		default:
+			return false
+	}
+}
+
+/**
  * Determines whether a readable value stays within the fixed JSON container-depth limit.
  *
  * @remarks

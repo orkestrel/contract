@@ -1084,6 +1084,10 @@ export type FaultConstraint = 'min' | 'max' | 'pattern' | 'integer'
  *   variant count, followed (in the report) by the closest variant's own faults.
  * - `'oneOf'` — a `oneOf`-mode union matched zero or two-or-more variants;
  *   `matched` is the raw match count.
+ *
+ * A union whose arms a required literal property can tell apart reports the named
+ * arm's own faults in place of either, and when the value names no one arm, `key`
+ * and `expected` on these two say which property would and what it may hold.
  */
 export type Fault =
 	| {
@@ -1101,8 +1105,20 @@ export type Fault =
 			readonly limit?: number | string
 			readonly received: string
 	  }
-	| { readonly reason: 'variant'; readonly path: FieldPath; readonly variants: number }
-	| { readonly reason: 'oneOf'; readonly path: FieldPath; readonly matched: number }
+	| {
+			readonly reason: 'variant'
+			readonly path: FieldPath
+			readonly variants: number
+			readonly key?: string
+			readonly expected?: readonly LiteralValue[]
+	  }
+	| {
+			readonly reason: 'oneOf'
+			readonly path: FieldPath
+			readonly matched: number
+			readonly key?: string
+			readonly expected?: readonly LiteralValue[]
+	  }
 
 /**
  * Represents a key present on a value that its closed object shape does not declare.

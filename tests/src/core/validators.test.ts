@@ -1,4 +1,4 @@
-import type { AnyConstructor, JSONRecord, JSONValue, LiteralValue } from '@src/core'
+import type { Fault, AnyConstructor, JSONRecord, JSONValue, LiteralValue } from '@src/core'
 import type { Equal, Expect } from '../../setup.js'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
@@ -76,6 +76,19 @@ import {
 	isZeroArgGenerator,
 	recordOf,
 	GUARD_DEPTH_LIMIT,
+	isFault,
+	isAuditFault,
+	createContract,
+	objectShape,
+	stringShape,
+	integerShape,
+	literalShape,
+	arrayShape,
+	numberShape,
+	unionShape,
+	booleanShape,
+	oneOfShape,
+	nullShape,
 } from '@src/core'
 import {
 	JSONExample,
@@ -1280,5 +1293,176 @@ describe('isJSONPrimitive', () => {
 		expect(isJSONPrimitive(10n)).toBe(false)
 		expect(isJSONPrimitive(() => 1)).toBe(false)
 		expect(isJSONPrimitive(new Date())).toBe(false)
+	})
+})
+
+describe('isFault and isAuditFault', () => {
+	const faults: ReadonlyArray<readonly [string, Fault]> = [
+		['a type fault', { reason: 'type', path: ['a'], expected: 'number', received: '"x"' }],
+		['a string path', { reason: 'type', path: 'a', expected: 'json', received: 'x' }],
+		['an empty path', { reason: 'missing', path: [], expected: 'object' }],
+		['a missing fault', { reason: 'missing', path: ['a', 'b'], expected: 'string' }],
+		[
+			'a constraint fault',
+			{ reason: 'constraint', path: [], expected: 'string', constraint: 'min', received: '""' },
+		],
+		[
+			'a constraint with a number limit',
+			{
+				reason: 'constraint',
+				path: [],
+				expected: 'array',
+				constraint: 'max',
+				limit: 2,
+				received: '3',
+			},
+		],
+		[
+			'a constraint with a text limit',
+			{
+				reason: 'constraint',
+				path: [],
+				expected: 'string',
+				constraint: 'pattern',
+				limit: '^a',
+				received: 'b',
+			},
+		],
+		['a variant fault', { reason: 'variant', path: [], variants: 2 }],
+		[
+			'a variant fault naming its discriminator',
+			{ reason: 'variant', path: [], variants: 2, key: 'kind', expected: ['a', 1, true] },
+		],
+		['a oneOf fault', { reason: 'oneOf', path: [], matched: 0 }],
+		[
+			'a oneOf fault naming its discriminator',
+			{ reason: 'oneOf', path: [], matched: 2, key: 'kind', expected: ['a'] },
+		],
+	]
+
+	it.each(faults)('accepts %s at both', (_label, fault) => {
+		expect(isFault(fault)).toBe(true)
+		expect(isAuditFault(fault)).toBe(true)
+	})
+
+	it.each<readonly [string, unknown]>([
+		['no path', { reason: 'extra' }],
+		['a numeric path', { reason: 'extra', path: 5 }],
+		['a stray field', { reason: 'extra', path: [], note: 'x' }],
+	])('refuses an undeclared-key fault with %s', (_label, value) => {
+		expect(isAuditFault(value)).toBe(false)
+	})
+
+	it('accepts an undeclared key at the audit guard alone', () => {
+		const extra = { reason: 'extra', path: ['a'] }
+
+		expect(isAuditFault(extra)).toBe(true)
+		expect(isFault(extra)).toBe(false)
+	})
+
+	it.each<readonly [string, unknown]>([
+		['an empty record', {}],
+		['null', null],
+		['a string', 'type'],
+		['an array', []],
+		['an unknown reason', { reason: 'nope', path: [] }],
+		['no reason', { path: [], expected: 'string' }],
+		['no path', { reason: 'missing', expected: 'string' }],
+		['a numeric path', { reason: 'missing', path: 5, expected: 'string' }],
+		['a path of numbers', { reason: 'missing', path: [1], expected: 'string' }],
+		['a sparse path', { reason: 'missing', path: new Array(1), expected: 'string' }],
+		['an unknown kind', { reason: 'missing', path: [], expected: 'nope' }],
+		['a type fault with no received', { reason: 'type', path: [], expected: 'string' }],
+		['a numeric received', { reason: 'type', path: [], expected: 'string', received: 1 }],
+		[
+			'an unknown constraint',
+			{ reason: 'constraint', path: [], expected: 'string', constraint: 'nope', received: '' },
+		],
+		[
+			'an object limit',
+			{
+				reason: 'constraint',
+				path: [],
+				expected: 'string',
+				constraint: 'min',
+				limit: {},
+				received: '',
+			},
+		],
+		['a fractional variant count', { reason: 'variant', path: [], variants: 1.5 }],
+		['a negative match count', { reason: 'oneOf', path: [], matched: -1 }],
+		['a key with no list', { reason: 'variant', path: [], variants: 1, key: 'kind' }],
+		['a list with no key', { reason: 'variant', path: [], variants: 1, expected: ['a'] }],
+		[
+			'a list of objects',
+			{ reason: 'variant', path: [], variants: 1, key: 'kind', expected: [{}] },
+		],
+		['an undeclared field', { reason: 'missing', path: [], expected: 'string', note: 'x' }],
+		['a field of another reason', { reason: 'missing', path: [], expected: 'string', variants: 1 }],
+		['a symbol key', { reason: 'missing', path: [], expected: 'string', [Symbol.iterator]: 1 }],
+		['an inherited reason', Object.create({ reason: 'missing', path: [], expected: 'string' })],
+	])('refuses %s at both', (_label, value) => {
+		expect(isFault(value)).toBe(false)
+		expect(isAuditFault(value)).toBe(false)
+	})
+
+	it('answers false rather than throwing on a hostile value', () => {
+		const hostile = new Proxy(
+			{},
+			{
+				ownKeys() {
+					throw new Error('hostile')
+				},
+				get() {
+					throw new Error('hostile')
+				},
+			},
+		)
+
+		expect(isFault(hostile)).toBe(false)
+		expect(isAuditFault(hostile)).toBe(false)
+	})
+
+	it('accepts every fault a compiled contract reports', () => {
+		const contract = createContract(
+			objectShape({
+				text: stringShape({ min: 2, pattern: /^a/ }),
+				count: integerShape({ min: 0 }),
+				pick: literalShape(['a']),
+				list: arrayShape(numberShape(), { max: 1 }),
+				either: unionShape(numberShape(), booleanShape()),
+				tagged: unionShape(
+					objectShape({ kind: literalShape(['a']) }),
+					objectShape({ kind: literalShape(['b']) }),
+				),
+				one: oneOfShape(numberShape(), integerShape()),
+				none: nullShape(),
+			}),
+		)
+		const value = {
+			text: 'b',
+			count: 1.5,
+			pick: 'z',
+			list: [1, 2, 'x'],
+			either: 'x',
+			tagged: { kind: 'z' },
+			one: 3,
+			none: 1,
+			extra: true,
+		}
+		const audited = contract.audit(value)
+		const explained = contract.explain(value)
+
+		expect(audited.filter((fault) => !isAuditFault(fault))).toEqual([])
+		expect(explained.filter((fault) => !isFault(fault))).toEqual([])
+		expect(new Set(audited.map(({ reason }) => reason))).toEqual(
+			new Set(['type', 'constraint', 'variant', 'oneOf', 'extra']),
+		)
+		expect(audited.some(({ reason }) => reason === 'extra')).toBe(true)
+		expect(
+			createContract(objectShape({ a: stringShape() }))
+				.audit({})
+				.every(isFault),
+		).toBe(true)
 	})
 })

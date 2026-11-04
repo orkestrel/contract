@@ -2,6 +2,9 @@ import type {
 	AnyAsyncFunction,
 	AnyConstructor,
 	AnyFunction,
+	AuditFault,
+	Fault,
+	FieldPath,
 	JSONPrimitive,
 	JSONRecord,
 	JSONValue,
@@ -9,12 +12,15 @@ import type {
 	ZeroArgAsyncFunction,
 	ZeroArgFunction,
 } from './types.js'
-import { INTRINSICS } from './constants.js'
+import { FAULT_CONSTRAINTS, FAULT_KINDS, INTRINSICS } from './constants.js'
 import {
 	holds,
+	isFailure,
+	matchesExactKeys,
 	matchesJSONDepth,
 	matchesJSONValue,
 	matchesRecordBrand,
+	readArrayEntries,
 	readPatternSource,
 } from './helpers.js'
 
@@ -646,6 +652,130 @@ export function isObject(value: unknown): value is object {
  */
 export function isRecord(value: unknown): value is Record<string, unknown> {
 	return holds(() => matchesRecordBrand(value))
+}
+
+/**
+ * Determines whether a value is the {@link FieldPath} a fault carries: a key, or a dense list of keys.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a string or a dense array of strings; false otherwise
+ *
+ * @example
+ * ```ts
+ * isFaultPath(['user', 'name']) // true
+ * isFaultPath([1])              // false
+ * ```
+ */
+export function isFaultPath(value: unknown): value is FieldPath {
+	if (isString(value)) return true
+	return holds(() => {
+		if (!isArray(value)) return false
+		const snapshot = readArrayEntries(value)
+		if (isFailure(snapshot) || !snapshot.value.dense) return false
+		return !INTRINSICS.reflect.apply(INTRINSICS.some, snapshot.value.entries, [
+			(entry: unknown) => !isString(entry),
+		])
+	})
+}
+
+/**
+ * Determines whether a value is exactly one {@link Fault}.
+ *
+ * @remarks
+ * A closed reading of the union: each reason's required fields, each with its own
+ * vocabulary, and no other key, so `{}` and a fault carrying a stray field both answer
+ * `false`. An undeclared-key fault is an {@link AuditFault} and answers `false` here.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a well-formed fault; false otherwise
+ *
+ * @example
+ * ```ts
+ * isFault({ reason: 'missing', path: ['a'], expected: 'string' }) // true
+ * isFault({})                                                     // false
+ * ```
+ */
+export function isFault(value: unknown): value is Fault {
+	return holds(() => {
+		if (!isRecord(value) || !isFaultPath(value.path)) return false
+		const kind = INTRINSICS.reflect.apply(INTRINSICS.some, FAULT_KINDS, [
+			(entry: string) => entry === value.expected,
+		])
+		const named = INTRINSICS.own(value, 'key') || INTRINSICS.own(value, 'expected')
+		const list = readArrayEntries(isArray(value.expected) ? value.expected : [undefined])
+		const hinted =
+			!named ||
+			(isString(value.key) &&
+				!isFailure(list) &&
+				list.value.dense &&
+				!INTRINSICS.reflect.apply(INTRINSICS.some, list.value.entries, [
+					(entry: unknown) => !isLiteralValue(entry),
+				]))
+		switch (value.reason) {
+			case 'type':
+				return (
+					kind &&
+					isString(value.received) &&
+					matchesExactKeys(value, ['reason', 'path', 'expected', 'received'])
+				)
+			case 'missing':
+				return kind && matchesExactKeys(value, ['reason', 'path', 'expected'])
+			case 'constraint':
+				return (
+					kind &&
+					isString(value.received) &&
+					INTRINSICS.reflect.apply(INTRINSICS.some, FAULT_CONSTRAINTS, [
+						(entry: string) => entry === value.constraint,
+					]) &&
+					(!INTRINSICS.own(value, 'limit') || isNumber(value.limit) || isString(value.limit)) &&
+					matchesExactKeys(
+						value,
+						['reason', 'path', 'expected', 'constraint', 'received'],
+						['limit'],
+					)
+				)
+			case 'variant':
+				return (
+					isNonNegativeInteger(value.variants) &&
+					hinted &&
+					matchesExactKeys(value, ['reason', 'path', 'variants'], named ? ['key', 'expected'] : [])
+				)
+			case 'oneOf':
+				return (
+					isNonNegativeInteger(value.matched) &&
+					hinted &&
+					matchesExactKeys(value, ['reason', 'path', 'matched'], named ? ['key', 'expected'] : [])
+				)
+			default:
+				return false
+		}
+	})
+}
+
+/**
+ * Determines whether a value is exactly one {@link AuditFault}.
+ *
+ * @remarks
+ * Every {@link Fault}, and the undeclared-key fault an audit adds.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a well-formed audit fault; false otherwise
+ *
+ * @example
+ * ```ts
+ * isAuditFault({ reason: 'extra', path: ['a'] }) // true
+ * isAuditFault({})                               // false
+ * ```
+ */
+export function isAuditFault(value: unknown): value is AuditFault {
+	if (isFault(value)) return true
+	return holds(
+		() =>
+			isRecord(value) &&
+			value.reason === 'extra' &&
+			isFaultPath(value.path) &&
+			matchesExactKeys(value, ['reason', 'path']),
+	)
 }
 
 /** Determines whether a value is a `Map`.

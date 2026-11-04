@@ -1,4 +1,4 @@
-import type { ContractCode, JSONSchemaType } from './types.js'
+import type { ContractCode, FaultConstraint, FaultKind, JSONSchemaType } from './types.js'
 
 /**
  * Holds the registry-global key used to recognize {@link ContractError} values
@@ -380,6 +380,48 @@ export const CONTRACT_CODES: readonly ContractCode[] = Object.freeze([
 	'clone',
 	'depth',
 	'expansion',
+])
+
+/**
+ * Lists every {@link FaultKind}, frozen.
+ *
+ * @remarks
+ * The runtime source of truth for the vocabulary, which {@link isFault} reads.
+ *
+ * @example
+ * ```ts
+ * FAULT_KINDS.includes('string') // true
+ * ```
+ */
+export const FAULT_KINDS: readonly FaultKind[] = Object.freeze([
+	'string',
+	'number',
+	'integer',
+	'boolean',
+	'null',
+	'literal',
+	'array',
+	'object',
+	'union',
+	'json',
+])
+
+/**
+ * Lists every {@link FaultConstraint}, frozen.
+ *
+ * @remarks
+ * The runtime source of truth for the vocabulary, which {@link isFault} reads.
+ *
+ * @example
+ * ```ts
+ * FAULT_CONSTRAINTS.includes('min') // true
+ * ```
+ */
+export const FAULT_CONSTRAINTS: readonly FaultConstraint[] = Object.freeze([
+	'min',
+	'max',
+	'pattern',
+	'integer',
 ])
 
 // Reporting-surface bounds (`compileReporter` / `compileAuditor` —

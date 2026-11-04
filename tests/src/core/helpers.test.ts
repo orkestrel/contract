@@ -1,4 +1,5 @@
 import type {
+	AuditFault,
 	ArrayRead,
 	ArrayShape,
 	ContractCode,
@@ -147,6 +148,11 @@ import {
 	stringShape,
 	unionShape,
 	valueToSchema,
+	matchesExactKeys,
+	matchesLosslessRepair,
+	numberShape,
+	booleanShape,
+	literalShape,
 } from '@src/core'
 
 describe('protected array construction', () => {
@@ -4279,5 +4285,184 @@ describe('computeSurrogatePairs', () => {
 
 		expect(computeSurrogatePairs(value, 1)).toBe(1)
 		expect(computeSurrogatePairs(value, 8)).toBe(2)
+	})
+})
+
+describe('matchesExactKeys', () => {
+	it.each<readonly [string, object, readonly string[], readonly string[], boolean]>([
+		['every required key', { a: 1, b: 2 }, ['a', 'b'], [], true],
+		['no keys at all', {}, [], [], true],
+		['an optional key held', { a: 1, b: 2 }, ['a'], ['b'], true],
+		['an optional key left out', { a: 1 }, ['a'], ['b'], true],
+		['a required key absent', { b: 2 }, ['a'], ['b'], false],
+		['a stray key', { a: 1, c: 3 }, ['a'], ['b'], false],
+		['an inherited required key', Object.create({ a: 1 }), ['a'], [], false],
+		['a symbol key', { a: 1, [Symbol.iterator]: 1 }, ['a'], [], false],
+		[
+			'a key that is not enumerable',
+			Object.defineProperty({ a: 1 }, 'hidden', { value: 1 }),
+			['a'],
+			[],
+			false,
+		],
+	])('answers for %s', (_label, value, required, optional, answer) => {
+		expect(matchesExactKeys(value, required, optional)).toBe(answer)
+	})
+})
+
+describe('matchesLosslessRepair', () => {
+	const number = { reason: 'type', path: ['a'], expected: 'number', received: '' } as const
+	const integer = { reason: 'type', path: ['a'], expected: 'integer', received: '' } as const
+	const literal = { reason: 'type', path: ['a'], expected: 'literal', received: '' } as const
+	const boolean = { reason: 'type', path: ['a'], expected: 'boolean', received: '' } as const
+	const string = { reason: 'type', path: ['a'], expected: 'string', received: '' } as const
+
+	it.each<readonly [string, unknown, boolean]>([
+		['30', 30, true],
+		[' 30 ', 30, true],
+		['-1.5', -1.5, true],
+		['30.0', 30, false],
+		['1.500', 1.5, false],
+		['007', 7, false],
+		['0x10', 16, false],
+		['1e3', 1000, false],
+		['+5', 5, false],
+		['.5', 0.5, false],
+		['-0', -0, false],
+		['9007199254740993', 9007199254740992, false],
+		['1e-400', 0, false],
+	])('reads the number from %j as %j: %j', (input, parsed, lossless) => {
+		expect(matchesLosslessRepair(number, { a: input }, { a: parsed })).toBe(lossless)
+		expect(matchesLosslessRepair(integer, { a: input }, { a: parsed })).toBe(lossless)
+	})
+
+	it.each<readonly [unknown, boolean, boolean]>([
+		['true', true, true],
+		['false', false, true],
+		['1', true, false],
+		['0', false, false],
+		[1, true, false],
+		[0, false, false],
+		[' true ', true, false],
+	])('reads the boolean from %j: %j, %j', (input, parsed, lossless) => {
+		expect(matchesLosslessRepair(boolean, { a: input }, { a: parsed })).toBe(lossless)
+	})
+
+	it.each<readonly [unknown, unknown, boolean]>([
+		[' CA ', 'CA', true],
+		['CA', 'CA', true],
+		['5', 5, true],
+		[' true ', true, true],
+		['5.0', 5, false],
+		[5, 5, false],
+		[5, '5', false],
+	])('reads the literal from %j as %j: %j', (input, parsed, lossless) => {
+		expect(matchesLosslessRepair(literal, { a: input }, { a: parsed })).toBe(lossless)
+	})
+
+	it.each<readonly [unknown, boolean]>([
+		[5, true],
+		[1.5, true],
+		[true, false],
+		[null, false],
+		[Number.NaN, false],
+		[Number.POSITIVE_INFINITY, false],
+	])('reads the string from %j: %j', (input, lossless) => {
+		expect(matchesLosslessRepair(string, { a: input }, { a: String(input) })).toBe(lossless)
+	})
+
+	it.each<readonly [string, AuditFault]>([
+		['an undeclared key', { reason: 'extra', path: 'a' }],
+		['a missing key', { reason: 'missing', path: 'a', expected: 'number' }],
+		[
+			'a bound',
+			{ reason: 'constraint', path: 'a', expected: 'number', constraint: 'min', received: '' },
+		],
+		['a union', { reason: 'variant', path: 'a', variants: 2 }],
+		['a oneOf', { reason: 'oneOf', path: 'a', matched: 0 }],
+		['a json kind', { reason: 'type', path: 'a', expected: 'json', received: '' }],
+		['an object kind', { reason: 'type', path: 'a', expected: 'object', received: '' }],
+		['an array kind', { reason: 'type', path: 'a', expected: 'array', received: '' }],
+		['a null kind', { reason: 'type', path: 'a', expected: 'null', received: '' }],
+	])('refuses %s, which is no repair', (_label, fault) => {
+		expect(matchesLosslessRepair(fault, { a: '1' }, { a: 1 })).toBe(false)
+	})
+
+	it('refuses a repair parse did not make, and a parsed value with no literal form', () => {
+		expect(matchesLosslessRepair(number, { a: '30' }, {})).toBe(false)
+		expect(matchesLosslessRepair(number, { a: 30 }, { a: 30 })).toBe(false)
+		expect(matchesLosslessRepair(literal, { a: '[object Object]' }, { a: {} })).toBe(false)
+		expect(matchesLosslessRepair(number, 5, 5)).toBe(false)
+	})
+
+	it('reads a nested, an array, and a root path, from one audit', () => {
+		const shape = objectShape({
+			flat: numberShape(),
+			nested: objectShape({ deep: integerShape() }),
+			list: arrayShape(booleanShape()),
+		})
+		const contract = createContract(shape)
+		const input = { flat: ' 1 ', nested: { deep: '2.0' }, list: ['true', '1'] }
+		const parsed = contract.parse(input)
+		const repairs = contract.audit(input).map((fault) => ({
+			path: fault.path,
+			lossless: matchesLosslessRepair(fault, input, parsed),
+		}))
+
+		expect(repairs).toEqual([
+			{ path: ['flat'], lossless: true },
+			{ path: ['nested', 'deep'], lossless: false },
+			{ path: ['list', '0'], lossless: true },
+			{ path: ['list', '1'], lossless: false },
+		])
+		const root = createContract(numberShape())
+
+		expect(root.audit('30').map((fault) => matchesLosslessRepair(fault, '30', 30))).toEqual([true])
+		expect(root.audit('30.0').map((fault) => matchesLosslessRepair(fault, '30.0', 30))).toEqual([
+			false,
+		])
+		const list = createContract(arrayShape(numberShape()))
+
+		expect(list.audit(['7']).map((fault) => matchesLosslessRepair(fault, ['7'], [7]))).toEqual([
+			true,
+		])
+	})
+
+	it('reads a repair inside the arm a union named', () => {
+		const contract = createContract(
+			unionShape(
+				objectShape({ operation: literalShape(['find']), limit: integerShape() }),
+				objectShape({ operation: literalShape(['read']), id: stringShape() }),
+			),
+		)
+		const clean = { operation: 'find', limit: '5' }
+		const lossy = { operation: 'find', limit: '5.0' }
+
+		expect(
+			contract
+				.audit(clean)
+				.map((fault) => matchesLosslessRepair(fault, clean, contract.parse(clean))),
+		).toEqual([true])
+		expect(
+			contract
+				.audit(lossy)
+				.map((fault) => matchesLosslessRepair(fault, lossy, contract.parse(lossy))),
+		).toEqual([false])
+	})
+
+	it('reads an own accessor as a value, and survives a hostile read', () => {
+		const accessor = Object.defineProperty({}, 'a', { get: () => '30', enumerable: true })
+		const hostile = new Proxy(
+			{},
+			{
+				getOwnPropertyDescriptor() {
+					throw new Error('hostile')
+				},
+			},
+		)
+
+		expect(matchesLosslessRepair(number, hostile, { a: 30 })).toBe(false)
+		expect(matchesLosslessRepair(number, { a: '30' }, hostile)).toBe(false)
+		expect(matchesLosslessRepair(number, accessor, { a: 30 })).toBe(true)
 	})
 })

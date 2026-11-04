@@ -13,12 +13,14 @@ import type {
 	JSONValue,
 	LiteralValue,
 	NumberShape,
+	ObjectShape,
 	Parser,
 	RandomFunction,
 	ReporterFunction,
 	Result,
 	SeederFunction,
 	StringShape,
+	UnionShape,
 } from './types.js'
 import {
 	FAULT_LIMIT,
@@ -665,6 +667,100 @@ export class ContractCompiler<
 		plan: (value: unknown, path: readonly string[]) => readonly T[],
 	): (value: unknown, path: readonly string[]) => readonly T[] {
 		return (value, path) => EvaluationScope.run(plan, value, path, true)
+	}
+
+	// What tells a union's arms apart, when anything does: a property every arm is an
+	// object declaring as a required literal. A value names an arm when its own data
+	// property exactly equals a literal only that arm holds, which is the membership the
+	// literal guard asks, so no other arm's guard could accept that value and the named
+	// arm answers for the whole union. A key whose literal two arms share names nothing,
+	// so the next such key is asked. The answer closes over no part of this compiler.
+	#discriminate(owned: UnionShape):
+		| {
+				readonly select: (value: unknown) => number | undefined
+				readonly hint: { readonly key: string; readonly expected: readonly LiteralValue[] }
+		  }
+		| undefined {
+		const arms: readonly ObjectShape[] = INTRINSICS.reflect.apply(
+			INTRINSICS.select,
+			readIndexView(owned.variants),
+			[(variant: ContractShape | undefined) => variant?.category === 'object'],
+		)
+		const first = arms[0]
+		if (first === undefined || arms.length !== owned.variants.length) return undefined
+		const keys: readonly string[] = INTRINSICS.reflect.apply(
+			INTRINSICS.select,
+			readIndexView(INTRINSICS.keys(first.properties)),
+			[
+				(key: string) =>
+					!INTRINSICS.reflect.apply(INTRINSICS.some, arms, [
+						(arm: ObjectShape) =>
+							!INTRINSICS.own(arm.properties, key) || arm.properties[key]?.category !== 'literal',
+					]),
+			],
+		)
+		const tables: ReadonlyArray<{
+			readonly key: string
+			readonly members: Map<unknown, number>
+			readonly expected: readonly LiteralValue[]
+		}> = INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(keys), [
+			(key: string) => ContractCompiler.#tableOf(key, arms),
+		])
+		const named = tables[0]
+		if (named === undefined) return undefined
+		return {
+			hint: INTRINSICS.freeze({ key: named.key, expected: named.expected }),
+			select: (value: unknown): number | undefined => {
+				if (!isObject(value)) return undefined
+				for (const index of iterateIndices(() => tables.length)) {
+					const table = tables[index]
+					if (table === undefined) continue
+					const held = attempt(() => INTRINSICS.describe(value, table.key))
+					if (isFailure(held) || held.value === undefined) continue
+					if (!INTRINSICS.own(held.value, 'value')) continue
+					const arm = INTRINSICS.reflect.apply(INTRINSICS.fetch, table.members, [held.value.value])
+					if (arm !== undefined && arm >= 0) return arm
+				}
+				return undefined
+			},
+		}
+	}
+
+	// One key's literals, each with the arm that alone holds it, or -1 when two arms do.
+	static #tableOf(
+		key: string,
+		arms: readonly ObjectShape[],
+	): {
+		readonly key: string
+		readonly members: Map<unknown, number>
+		readonly expected: readonly LiteralValue[]
+	} {
+		const members = new INTRINSICS.map<unknown, number>()
+		const expected: LiteralValue[] = []
+		for (const armIndex of iterateIndices(() => arms.length)) {
+			const node = arms[armIndex]?.properties[key]
+			if (node?.category !== 'literal') continue
+			for (const valueIndex of iterateIndices(() => node.values.length)) {
+				const literal = node.values[valueIndex]
+				if (literal === undefined) continue
+				const known = INTRINSICS.reflect.apply(INTRINSICS.fetch, members, [literal])
+				if (known === undefined) expected[expected.length] = literal
+				const arm = known === undefined || known === armIndex ? armIndex : -1
+				INTRINSICS.reflect.apply(INTRINSICS.store, members, [literal, arm])
+			}
+		}
+		return { key, members, expected: INTRINSICS.freeze(expected) }
+	}
+
+	// The union parser's own two steps, over the named arm alone. A value that arm accepts
+	// returns by identity, and a coercion must satisfy the arm's guard.
+	static #parseArm(
+		arm: { readonly parse: Parser<unknown>; readonly guard: Guard<unknown> },
+		value: unknown,
+	): unknown {
+		if (arm.guard(value)) return value
+		const parsed = arm.parse(value)
+		return parsed !== undefined && arm.guard(parsed) ? parsed : undefined
 	}
 
 	// === Schema family
@@ -1346,6 +1442,7 @@ export class ContractCompiler<
 									},
 								],
 				])
+				const discriminated = this.#discriminate(owned)
 				// `oneOf` exactly-one semantics (documented on `oneOfShape`): judged on
 				// the RAW input's guard matches only — no coercion fallback. Exactly one
 				// variant's guard must accept the raw value; that variant's parser then
@@ -1356,6 +1453,9 @@ export class ContractCompiler<
 				// resolution for ambiguous input.
 				if (owned.mode === 'oneOf') {
 					return (value) => {
+						const selected = discriminated?.select(value)
+						const arm = selected === undefined ? undefined : variants[selected]
+						if (arm !== undefined) return ContractCompiler.#parseArm(arm, value)
 						// Indexed, not `filter`: an array prototype method decides how many
 						// variants matched, and a substitute answering a rigged list decides
 						// what this parser publishes.
@@ -1368,6 +1468,9 @@ export class ContractCompiler<
 					}
 				}
 				return (value) => {
+					const selected = discriminated?.select(value)
+					const arm = selected === undefined ? undefined : variants[selected]
+					if (arm !== undefined) return ContractCompiler.#parseArm(arm, value)
 					// Identity pass first, so guard-valid input is never rejected by its
 					// parser (`.claude/rules/patterns.md` § Validation and contracts): a
 					// value already valid against ANY variant's guard is returned
@@ -1675,7 +1778,11 @@ export class ContractCompiler<
 					])
 				const exclusive = owned.mode === 'oneOf'
 				const count = owned.variants.length
+				const discriminated = this.#discriminate(owned)
 				return (value, path) => {
+					const selected = discriminated?.select(value)
+					const arm = selected === undefined ? undefined : plans[selected]
+					if (arm !== undefined) return arm(value, path)
 					const perVariant: Array<readonly AuditFault[]> = []
 					for (const index2 of iterateIndices(() => plans.length)) {
 						const plan = plans[index2]
@@ -1699,13 +1806,13 @@ export class ContractCompiler<
 					])
 					if (exclusive) {
 						if (matched === 1) return []
-						if (matched > 1) return [{ reason: 'oneOf', path, matched }]
+						if (matched > 1) return [{ reason: 'oneOf', path, matched, ...discriminated?.hint }]
 					}
 					const closest = selectClosestFaults(perVariant)
 					const report: AuditFault[] = [
 						exclusive
-							? { reason: 'oneOf', path, matched: 0 }
-							: { reason: 'variant', path, variants: count },
+							? { reason: 'oneOf', path, matched: 0, ...discriminated?.hint }
+							: { reason: 'variant', path, variants: count, ...discriminated?.hint },
 					]
 					appendEntries(report, closest)
 					return limitEntries(report, FAULT_LIMIT)
@@ -2002,7 +2109,11 @@ export class ContractCompiler<
 				)
 				const exclusive = owned.mode === 'oneOf'
 				const count = owned.variants.length
+				const discriminated = this.#discriminate(owned)
 				return (value, path) => {
+					const selected = discriminated?.select(value)
+					const arm = selected === undefined ? undefined : plans[selected]
+					if (arm !== undefined) return arm(value, path)
 					const perVariant: Array<readonly Fault[]> = []
 					for (const index2 of iterateIndices(() => plans.length)) {
 						const plan = plans[index2]
@@ -2024,13 +2135,17 @@ export class ContractCompiler<
 						])
 						if (matched === 1) return []
 						if (matched === 0) {
-							const report: Fault[] = [{ reason: 'oneOf', path, matched: 0 }]
+							const report: Fault[] = [
+								{ reason: 'oneOf', path, matched: 0, ...discriminated?.hint },
+							]
 							appendEntries(report, closest)
 							return limitEntries(report, FAULT_LIMIT)
 						}
-						return [{ reason: 'oneOf', path, matched }]
+						return [{ reason: 'oneOf', path, matched, ...discriminated?.hint }]
 					}
-					const report: Fault[] = [{ reason: 'variant', path, variants: count }]
+					const report: Fault[] = [
+						{ reason: 'variant', path, variants: count, ...discriminated?.hint },
+					]
 					appendEntries(report, closest)
 					return limitEntries(report, FAULT_LIMIT)
 				}
