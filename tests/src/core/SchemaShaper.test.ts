@@ -3,6 +3,7 @@
 // `schemaToShape` is the only door that constructs it, and that door stamps its own
 // name onto every refusal, so the walk's raw readings are reachable from here alone.
 import type { ContractShape, JSONSchema } from '@src/core'
+import { SCHEMA_REFUSAL_KEYS } from '../../setup.js'
 import {
 	arrayShape,
 	attempt,
@@ -44,6 +45,24 @@ import {
 import { SchemaShaper } from '../../../src/core/SchemaShaper.js'
 
 describe('SchemaShaper — type arrays', () => {
+	it('names a bounded keyword path in the refusal message', () => {
+		const unsupported = { type: 'integer', exclusiveMinimum: 0 } as const
+		const root = captureContractError(() => schemaToShape(unsupported, { strict: true }))
+		expect(root.message).toBe(
+			'schemaToShape: a strict conversion refuses a keyword it cannot honour at exclusiveMinimum',
+		)
+		for (const key of SCHEMA_REFUSAL_KEYS) {
+			const error = captureContractError(() =>
+				schemaToShape({ type: 'object', properties: { [key]: unsupported } }, { strict: true }),
+			)
+			expect(error.message).toContain(' at properties.')
+			expect(error.message).toContain('.exclusiveMinimum')
+			expect(error.message).not.toContain('\n')
+			expect(error.message.length).toBeLessThan(300)
+			expect(error.context?.path).toEqual(['properties', key, 'exclusiveMinimum'])
+		}
+	})
+
 	it('keeps HEAD schema alternatives under polluted array construction', () => {
 		const schemas: ReadonlyArray<Readonly<Record<string, unknown>>> = [
 			{ enum: ['x', 'x', 1] },

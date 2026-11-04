@@ -54,6 +54,14 @@ Fault guards refuse non-finite limits, counts, and numeric discriminator hints.
 
 Fault text is bounded in UTF-16 code units, with room for omitted-fault and cap notices and a final
 send summary when a schema is supplied. Pass a smaller limit to reserve a heading's budget.
+Across union arms, a fault line names literal candidates only when the declarations at that path
+agree, and lists declared keys only when the declaring arms have the same keys. Lists are deduplicated;
+the final send summary still shows the arms. The root subject reads `value`. A `received` preview
+of at most `PREVIEW_LIMIT` characters without controls or line separators stays as written;
+other received text and foreign type words pass through `preview`. Received, constraint, and limit
+details use own fields.
+Schema conversion refusal messages append a rendered path bounded by `FAULT_SCHEMA_LIMIT`, while
+their structured context retains the complete path.
 The generated-law regression covers stable values; it does not prove accessor read discipline,
 reentrancy, refusal identity or paths, or capture limits.
 

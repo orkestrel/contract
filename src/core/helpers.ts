@@ -42,6 +42,7 @@ import {
 	GUARD_DEPTH_LIMIT,
 	INFER_DEPTH_LIMIT,
 	INTRINSICS,
+	JSON_SCHEMA_TYPES,
 	PREVIEW_LIMIT,
 } from './constants.js'
 import { ContractError, isContractError } from './errors.js'
@@ -3482,11 +3483,13 @@ export function extractForms(schema: JSONSchema | undefined): readonly JSONSchem
  *
  * @remarks
  * Each path segment takes one step, so a union that nests itself cannot hold the walk. Only a
- * schema's own `properties` keys match, so `constructor` reaches nothing.
+ * schema's own `properties` keys match, so `constructor` reaches nothing. The walk keeps every
+ * matching union declaration until the end; differing declarations yield no schema. Independently
+ * built declarations agree when their canonical JSON encodings agree.
  *
  * @param schema - The schema to walk
  * @param path - The segments to follow
- * @returns The schema at that path, or `undefined` where the schema declares nothing there
+ * @returns The schema at that path, or `undefined` where no declaration or no agreement exists
  *
  * @example
  * ```ts
@@ -3497,25 +3500,36 @@ export function extractForms(schema: JSONSchema | undefined): readonly JSONSchem
  * ```
  */
 export function extractSchema(schema: JSONSchema, path: readonly string[]): JSONSchema | undefined {
-	return path.reduce<JSONSchema | undefined>(
-		(node, key) =>
-			extractForms(node)
-				.map((form) => {
-					const properties = INTRINSICS.own(form, 'properties') ? form.properties : undefined
-					const additional = INTRINSICS.own(form, 'additionalProperties')
-						? form.additionalProperties
-						: undefined
-					return properties !== undefined && INTRINSICS.own(properties, key)
-						? properties[key]
-						: isRecord(additional)
-							? additional
-							: INTRINSICS.own(form, 'items')
-								? form.items
+	const nodes = path.reduce<readonly JSONSchema[]>(
+		(parents, key) =>
+			Array.from(
+				new Set(
+					parents
+						.flatMap((node) => extractForms(node))
+						.map((form) => {
+							const properties = INTRINSICS.own(form, 'properties') ? form.properties : undefined
+							const additional = INTRINSICS.own(form, 'additionalProperties')
+								? form.additionalProperties
 								: undefined
-				})
-				.find((child) => child !== undefined),
-		schema,
+							return properties !== undefined && INTRINSICS.own(properties, key)
+								? properties[key]
+								: isRecord(additional)
+									? additional
+									: INTRINSICS.own(form, 'items')
+										? form.items
+										: undefined
+						})
+						.filter((child) => child !== undefined),
+				),
+			),
+		[schema],
 	)
+	const first = nodes[0]
+	if (nodes.length < 2) return first
+	const encoded = canonicalStringify(first)
+	return encoded !== undefined && nodes.every((node) => canonicalStringify(node) === encoded)
+		? first
+		: undefined
 }
 
 /**
@@ -3575,7 +3589,7 @@ export function renderList(entries: readonly string[]): string {
  * of them. A leaf or array keeps its numeric bounds and pattern, a union joins its forms with ` | `,
  * and a schema that says nothing reads `any`. Each nested form takes half the room of its parent, and
  * below 16 characters a form stops at its type, so a schema that holds itself still ends. Text past
- * `room` is cut and closes with `…`.
+ * `room` is cut and closes with `…`. A type word outside JSON Schema's vocabulary is encoded.
  *
  * @param schema - The schema to summarize
  * @param room - The characters the summary can take. Default: `FAULT_SCHEMA_LIMIT`
@@ -3638,7 +3652,13 @@ export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT
 				: listed.length > 0
 					? `{${[...listed, ...(left > 0 ? [`and ${String(left)} more`] : [])].join(', ')}}`
 					: [
-							type ?? (entries.length > 0 ? 'object' : 'any'),
+							type === undefined
+								? entries.length > 0
+									? 'object'
+									: 'any'
+								: JSON_SCHEMA_TYPES.some((name) => name === type)
+									? type
+									: preview(type),
 							...(deep && child !== undefined ? [` of ${renderForm(child, inner)}`] : []),
 							...(bounds.length > 0 ? [` (${bounds.join(', ')})`] : []),
 						].join('')
@@ -3650,8 +3670,11 @@ export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT
  * says.
  *
  * @remarks
- * Each line opens with the fault's path and reason. An `extra` fault lists the keys declared at
- * its parent. A fault on a literal names its candidates, and each list is bounded. A `variant` or
+ * Each line opens with the fault's path (or `value` at the root) and reason. An `extra` fault lists
+ * its parent's keys only when the declaring arms agree. A literal names candidates only where
+ * the declarations agree; lists are deduplicated and bounded. A received preview stays as written
+ * within PREVIEW_LIMIT and without control or line-separator characters; otherwise it is encoded
+ * through preview. Received, constraint, and limit details read only own fields. A `variant` or
  * `oneOf` fault says that the value matches none of the declared forms, or several where one must
  * match, and summarizes each form through `renderForm`. It names no fault of any one form, because
  * none of them holds for the others. Those summaries share half of `FAULT_TEXT_LIMIT`.
@@ -3669,11 +3692,18 @@ export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT
  */
 export function describeFaultLine(fault: AuditFault, schema: JSONSchema): string {
 	const path = extractPath(fault)
-	const head = `${renderPath(path)}: ${fault.reason}`
+	const head = `${renderPath(path) || 'value'}: ${fault.reason}`
 	if (fault.reason === 'extra') {
-		const keys = extractForms(extractSchema(schema, path.slice(0, -1))).flatMap((form) =>
-			Object.keys((INTRINSICS.own(form, 'properties') ? form.properties : undefined) ?? {}),
+		const declarations = extractForms(extractSchema(schema, path.slice(0, -1)))
+			.filter((form) => INTRINSICS.own(form, 'properties') && form.properties !== undefined)
+			.map((form) => Object.keys(form.properties ?? {}))
+		const first = declarations[0] ?? []
+		const keys = declarations.every(
+			(declared) =>
+				declared.length === first.length && declared.every((key) => first.includes(key)),
 		)
+			? first
+			: []
 		return keys.length === 0
 			? `${head}; this key is not declared, remove it`
 			: `${head}; this key is not declared, remove it or use a declared key: ${renderList(keys.map((key) => renderPath([key])))}`
@@ -3704,21 +3734,33 @@ export function describeFaultLine(fault: AuditFault, schema: JSONSchema): string
 	const candidates =
 		fault.expected === 'literal'
 			? extractForms(node).flatMap((form) => [
-					...((INTRINSICS.own(form, 'enum') ? form.enum : undefined) ?? []).map((value) =>
-						preview(value),
-					),
-					...(INTRINSICS.own(form, 'type') && form.type === 'null' ? [preview(null)] : []),
+					...((INTRINSICS.own(form, 'enum') ? form.enum : undefined) ?? []),
+					...(INTRINSICS.own(form, 'type') && form.type === 'null' ? [null] : []),
 				])
 			: []
 	const description =
 		node !== undefined && INTRINSICS.own(node, 'description') ? node.description : undefined
+	const received =
+		'received' in fault && INTRINSICS.own(fault, 'received') ? fault.received : undefined
+	const shown =
+		received !== undefined &&
+		received.length <= PREVIEW_LIMIT &&
+		!/[\p{Cc}\p{Zl}\p{Zp}]/u.test(received)
+			? received
+			: preview(received)
 	return [
 		head,
 		`expected ${fault.expected}`,
-		...('received' in fault ? [`received ${preview(fault.received)}`] : []),
-		...('constraint' in fault ? [`constraint ${fault.constraint}`] : []),
-		...('limit' in fault && fault.limit !== undefined ? [`limit ${preview(fault.limit)}`] : []),
+		...(received !== undefined ? [`received ${shown}`] : []),
+		...('constraint' in fault && INTRINSICS.own(fault, 'constraint')
+			? [`constraint ${fault.constraint}`]
+			: []),
+		...('limit' in fault && INTRINSICS.own(fault, 'limit') && fault.limit !== undefined
+			? [`limit ${preview(fault.limit)}`]
+			: []),
 		...(description === undefined ? [] : [`description ${preview(description)}`]),
-		...(candidates.length > 0 ? [`send one of ${renderList(candidates)}`] : []),
+		...(candidates.length > 0
+			? [`send one of ${renderList(Array.from(new Set(candidates), (value) => preview(value)))}`]
+			: []),
 	].join('; ')
 }

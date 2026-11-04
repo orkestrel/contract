@@ -24,6 +24,21 @@ import type {
 import { createRecorder } from '@orkestrel/test'
 import { isUndefined } from '@src/core'
 
+export const FAULT_TEXT_UNION_INPUTS = [
+	{ kind: 'bank', speed: 'fast', iban: 'DE123' },
+	{ kind: 'bank', speed: 'ach', iban: 'DE123', number: '123' },
+] as const
+export const FAULT_TEXT_PREVIEWS = ['90', 'true', '"soon"', 'x'.repeat(64)] as const
+export const FAULT_TEXT_UNSAFE = [
+	'x'.repeat(65),
+	'90\nFAKE: missing',
+	'90\rFAKE: missing',
+	'\u0000\t\u001b\u007f\u0085\u2028\u2029',
+] as const
+export const FAULT_TEXT_FIELDS = ['received', 'constraint', 'limit'] as const
+export const FAULT_TEXT_POLLUTION = ['FORGED', 42] as const
+export const SCHEMA_REFUSAL_KEYS = ['amount', 'line\nFAKE: missing', 'x'.repeat(5000)] as const
+
 /** Implements the undefined-only domain admitted by ContractInterface but not by a root shape. */
 export function createUndefinedContract(): ContractInterface<undefined> {
 	return {

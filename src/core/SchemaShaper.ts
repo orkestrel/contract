@@ -7,6 +7,7 @@ import type {
 } from './types.js'
 import {
 	COMPILE_NODE_LIMIT,
+	FAULT_SCHEMA_LIMIT,
 	INFER_BREADTH_LIMIT,
 	INFER_DEPTH_LIMIT,
 	INTRINSICS,
@@ -29,6 +30,8 @@ import {
 	matchesVisited,
 	omitVisited,
 	pathOf,
+	renderPath,
+	truncateFaultText,
 	readArrayEntries,
 	retainDepth,
 } from './helpers.js'
@@ -304,10 +307,14 @@ export class SchemaShaper {
 	}
 
 	#refusal(message: string, first?: string, second?: string, third?: string): ContractError {
-		return new ContractError(`schemaToShape: ${message}`, {
-			code: 'structure',
-			context: { path: pathOf(this.#path, first, second, third), shape: 'schema' },
-		})
+		const path = pathOf(this.#path, first, second, third)
+		return new ContractError(
+			`schemaToShape: ${message} at ${truncateFaultText(renderPath(path) || 'value', FAULT_SCHEMA_LIMIT)}`,
+			{
+				code: 'structure',
+				context: { path, shape: 'schema' },
+			},
+		)
 	}
 
 	// The per-node keyword check of a strict conversion. It refuses every keyword the

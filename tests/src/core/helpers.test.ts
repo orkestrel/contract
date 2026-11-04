@@ -31,6 +31,13 @@ import type {
 } from '@src/core'
 import * as door from '@src/core'
 import { createUndefinedContract, recordAdmission, pollutePrototypeData } from '../../setup.js'
+import {
+	FAULT_TEXT_UNION_INPUTS,
+	FAULT_TEXT_PREVIEWS,
+	FAULT_TEXT_UNSAFE,
+	FAULT_TEXT_FIELDS,
+	FAULT_TEXT_POLLUTION,
+} from '../../setup.js'
 
 describe('admitValue', () => {
 	it.each([
@@ -5081,6 +5088,107 @@ describe('renderForm', () => {
 })
 
 describe('describeFaultLine', () => {
+	it('withholds conflicting union corrections and leaves a usable send summary', () => {
+		const contract = door.createContract(
+			door.unionShape(
+				door.objectShape({
+					kind: door.literalShape(['card']),
+					speed: door.literalShape(['slow', 'fast']),
+					number: door.stringShape(),
+				}),
+				door.objectShape({
+					kind: door.literalShape(['bank']),
+					speed: door.literalShape(['ach', 'wire']),
+					iban: door.stringShape(),
+				}),
+			),
+		)
+		for (const input of FAULT_TEXT_UNION_INPUTS) {
+			const faults = contract.audit(input)
+			expect(faults).toHaveLength(1)
+			const text = describeFaults(faults, contract.schema)
+			const line = text.split('\n')[0]
+			expect(line).not.toContain('send one of')
+			expect(line).not.toContain('use a declared key')
+			const summary = text.split('\n').at(-1)
+			expect(summary).toContain('"kind": "card"')
+			expect(summary).toContain('"kind": "bank", "speed": "ach" | "wire", "iban": string')
+			const bank = summary?.match(/"kind": "(bank)", "speed": "(ach)" \| "wire", "(iban)": string/u)
+			if (bank?.[3] === undefined) throw new Error('The summary must name a complete bank form')
+			expect(contract.is({ kind: bank[1], speed: bank[2], [bank[3]]: 'DE123' })).toBe(true)
+		}
+	})
+
+	it('names agreeing union corrections once, including a shared nested leaf', () => {
+		const schema: JSONSchema = {
+			anyOf: [
+				{
+					properties: {
+						speed: { enum: ['slow', 'fast', 'fast'] },
+						page: { properties: { unit: { enum: ['c'] }, left: {} } },
+					},
+				},
+				{
+					properties: {
+						page: { properties: { right: {}, unit: { enum: ['c'] } } },
+						speed: { enum: ['slow', 'fast', 'fast'] },
+					},
+				},
+			],
+		}
+		expect(
+			describeFaultLine({ reason: 'missing', path: ['speed'], expected: 'literal' }, schema),
+		).toBe('speed: missing; expected literal; send one of "slow", "fast"')
+		expect(
+			describeFaultLine({ reason: 'missing', path: ['page', 'unit'], expected: 'literal' }, schema),
+		).toBe('page.unit: missing; expected literal; send one of "c"')
+		expect(describeFaultLine({ reason: 'extra', path: ['typo'] }, schema)).toBe(
+			'typo: extra; this key is not declared, remove it or use a declared key: speed, page',
+		)
+		expect(extractSchema(schema, ['page'])).toBeUndefined()
+	})
+
+	it('encodes a foreign type word without forging a fault line', () => {
+		const schema = { type: 'object', properties: { a: { type: 'string\nFAKE: missing' } } }
+		const text = Reflect.apply(describeFaults, undefined, [
+			[{ reason: 'missing', path: ['a'], expected: 'string' }],
+			schema,
+		])
+		expect(text).toBe('a: missing; expected string\nsend {"a"?: "string\\nFAKE: missing"}')
+	})
+
+	it('preserves received previews and names the root value', () => {
+		for (const received of FAULT_TEXT_PREVIEWS) {
+			expect(
+				describeFaultLine({ reason: 'type', path: [], expected: 'number', received }, {}),
+			).toBe(`value: type; expected number; received ${received}`)
+		}
+	})
+
+	it('bounds and encodes unsafe received text', () => {
+		for (const received of FAULT_TEXT_UNSAFE) {
+			const line = describeFaultLine(
+				{ reason: 'type', path: ['a'], expected: 'number', received },
+				{},
+			)
+			expect(line).toBe(`a: type; expected number; received ${door.preview(received)}`)
+			expect(line).not.toMatch(/[\r\n]/u)
+		}
+	})
+
+	it('ignores inherited fault detail fields', () => {
+		const fault: AuditFault = { reason: 'missing', path: ['a'], expected: 'number' }
+		const clean = describeFaultLine(fault, {})
+		for (const key of FAULT_TEXT_FIELDS) {
+			for (const value of FAULT_TEXT_POLLUTION) {
+				const polluted = pollutePrototypeData(key, value, () =>
+					door.attempt(() => describeFaultLine(fault, {})),
+				)
+				expect(polluted).toEqual({ success: true, value: clean })
+			}
+		}
+	})
+
 	it('lists the keys declared where an undeclared key sits', () => {
 		expect(
 			describeFaultLine(
@@ -5172,7 +5280,7 @@ describe('describeFaultLine', () => {
 				{ reason: 'type', path: ['unit'], expected: 'literal', received: '"k"' },
 				schema,
 			),
-		).toBe('unit: type; expected literal; received "\\\"k\\\""; send one of "c", "f"')
+		).toBe('unit: type; expected literal; received "k"; send one of "c", "f"')
 		expect(
 			describeFaultLine({ reason: 'missing', path: ['unit'], expected: 'literal' }, schema),
 		).toBe('unit: missing; expected literal; send one of "c", "f"')
@@ -5187,7 +5295,7 @@ describe('describeFaultLine', () => {
 					properties: { unit: { anyOf: [{ enum: ['c'] }, { type: 'null' }] } },
 				},
 			),
-		).toBe('unit: type; expected literal; received "\\\"k\\\""; send one of "c", null')
+		).toBe('unit: type; expected literal; received "k"; send one of "c", null')
 	})
 
 	it('bounds the candidates of a long literal', () => {
@@ -5283,10 +5391,10 @@ describe('describeFaultLine', () => {
 		const tail = 'send it exactly as the schema declares, one of: object or string'
 
 		expect(describeFaultLine({ reason: 'oneOf', path: [], matched: 0 }, forms)).toBe(
-			`: oneOf; the value matches none of the 2 declared forms; ${tail}`,
+			`value: oneOf; the value matches none of the 2 declared forms; ${tail}`,
 		)
 		expect(describeFaultLine({ reason: 'oneOf', path: [], matched: 2 }, forms)).toBe(
-			`: oneOf; the value matches 2 of the 2 declared forms and must match exactly one; ${tail}`,
+			`value: oneOf; the value matches 2 of the 2 declared forms and must match exactly one; ${tail}`,
 		)
 	})
 
@@ -5319,11 +5427,11 @@ describe('describeFaults', () => {
 		]
 
 		expect(describeFaults(faults, {}).split('\n')).toEqual([
-			'profile.age: type; expected number; received "\\\"invalid\\\""',
+			'profile.age: type; expected number; received "invalid"',
 			'name: missing; expected string',
-			'amount: constraint; expected number; received "0"; constraint min; limit 1',
+			'amount: constraint; expected number; received 0; constraint min; limit 1',
 			'choice: variant; the value matches none of the 2 declared forms; send it exactly as the schema declares',
-			': oneOf; the value matches 2 of the declared forms and must match exactly one; send it exactly as the schema declares',
+			'value: oneOf; the value matches 2 of the declared forms and must match exactly one; send it exactly as the schema declares',
 			'zzz: extra; this key is not declared, remove it',
 			'send any',
 		])
