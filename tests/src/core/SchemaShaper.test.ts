@@ -432,6 +432,16 @@ describe('SchemaShaper — boolean arms', () => {
 		expect(schemaToShape(schema).category).toBe('raw')
 	})
 
+	it.each<readonly [string, Readonly<Record<string, unknown>>]>([
+		['anyOf', { type: 'string', anyOf: [false] }],
+		['oneOf', { type: 'string', oneOf: [false] }],
+	])('widens past a type beside %s when its false arms leave the list empty', (_label, schema) => {
+		const shape = schemaToShape(schema)
+
+		expect(shape.category).toBe('raw')
+		expect(compileGuard(shape)(5)).toBe(true)
+	})
+
 	it('leaves an empty list and a beside type as they were', () => {
 		const empty: Readonly<Record<string, unknown>> = { type: 'string', anyOf: [] }
 
@@ -666,6 +676,32 @@ describe('SchemaShaper — lenient default', () => {
 		expect(parsed).toEqual([
 			{ plain: { a: 3 }, joined: {} },
 			{ plain: { a: 3 }, joined: {} },
+		])
+	})
+
+	it('keeps the two positions apart when both reach a node at one depth', () => {
+		const shared = closedOf({ type: 'number', default: 3 })
+		const plain = { type: 'object', properties: { plain: shared }, additionalProperties: false }
+		const joined = { anyOf: [shared, { type: 'null' }] }
+		const orders: ReadonlyArray<Readonly<Record<string, unknown>>> = [
+			{
+				type: 'object',
+				properties: { wrap: plain, joined },
+				additionalProperties: false,
+			},
+			{
+				type: 'object',
+				properties: { joined, wrap: plain },
+				additionalProperties: false,
+			},
+		]
+		const parsed = orders.map((schema) =>
+			createContract(schemaToShape(schema)).parse({ wrap: { plain: {} }, joined: {} }),
+		)
+
+		expect(parsed).toEqual([
+			{ wrap: { plain: { a: 3 } }, joined: {} },
+			{ wrap: { plain: { a: 3 } }, joined: {} },
 		])
 	})
 
