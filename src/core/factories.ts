@@ -21,7 +21,8 @@ import { ContractCompiler } from './ContractCompiler.js'
  * snapshot — ownership already refuses a malformed structural slot, scalar
  * field, or bound rather than normalizing it, so a second walk of the caller's
  * live source only added a population that could disagree with the one the
- * artifacts actually use.
+ * artifacts actually use. A declaration made entirely by this package's builders
+ * is frozen and validated all the way down already, so it is that owned graph.
  * Every artifact is precompiled, so `audit`, `explain` and `generate` re-walk
  * and re-gate nothing on a later call; `contract.audit` and `compileAuditor` are
  * the same compiled function reached by different names.

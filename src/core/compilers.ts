@@ -124,7 +124,8 @@ export function compileSchema(shape: ContractShape): JSONSchema {
  * § Validation and contracts requires. It requests
  * exactly the `guard` root of a fresh {@link ContractCompiler}, which owns the
  * declaration once through {@link ownShape} and validates that snapshot once,
- * so an unfrozen caller-owned graph compiles from a snapshot and excessive
+ * unless the builders already did, so an unfrozen caller-owned graph compiles
+ * from a snapshot and excessive
  * nesting, cycles, and excessive expansion are rejected before any guard is
  * built.
  *

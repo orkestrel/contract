@@ -8,6 +8,7 @@ import type {
 	LiteralValue,
 	NumberShape,
 	ObjectShape,
+	OptionalShape,
 	OptionalShapeOptions,
 	Result,
 	StringShapeOptions,
@@ -17,6 +18,7 @@ import {
 	arrayShape,
 	attempt,
 	booleanShape,
+	cloneShape,
 	compileGenerator,
 	compileGuard,
 	compileParser,
@@ -35,6 +37,7 @@ import {
 	nullShape,
 	numberShape,
 	objectShape,
+	ownShape,
 	oneOfShape,
 	optionalShape,
 	rawShape,
@@ -44,6 +47,7 @@ import {
 	seededRandom,
 	stringShape,
 	unionShape,
+	validateShape,
 	valueToSchema,
 } from '@src/core'
 import type { Equal, Expect } from '../../setup.js'
@@ -57,6 +61,15 @@ import {
 	buildDeepNest,
 	buildSparseArray,
 	captureContractError,
+	buildDeepShape,
+	buildHandNest,
+	buildSchemaNest,
+	buildSharedDagShape,
+	measureWalks,
+	readVerdict,
+	replaceAccessor,
+	replaceIntrinsic,
+	throwReplacement,
 	createClassInstance,
 	createRevokedArrayProxy,
 	createRevokedProxy,
@@ -2136,5 +2149,375 @@ describe('optionalShape — default', () => {
 
 		expect(error.code).toBe('structure')
 		expect(error.context?.path).toEqual(['default'])
+	})
+})
+
+describe('shape builders — a built child answers as a walked one does', () => {
+	it.each<{
+		readonly label: string
+		readonly built: () => ContractShape
+		readonly hand: () => ContractShape
+		readonly wrap: (child: ContractShape) => unknown
+		readonly path: readonly string[]
+	}>([
+		{
+			label: 'an optional node as array items',
+			built: () => optionalShape(stringShape()),
+			hand: () => ({ category: 'optional', inner: { category: 'string' } }),
+			wrap: (child) => arrayShape(child),
+			path: ['items'],
+		},
+		{
+			label: 'an optional node under a nullable',
+			built: () => optionalShape(stringShape()),
+			hand: () => ({ category: 'optional', inner: { category: 'string' } }),
+			wrap: (child) => nullableShape(child),
+			path: ['inner'],
+		},
+		{
+			label: 'an optional node as a union variant',
+			built: () => optionalShape(stringShape()),
+			hand: () => ({ category: 'optional', inner: { category: 'string' } }),
+			wrap: (child) => unionShape(child),
+			path: ['variants', '0'],
+		},
+		{
+			label: 'an optional node as the additional value',
+			built: () => optionalShape(stringShape()),
+			hand: () => ({ category: 'optional', inner: { category: 'string' } }),
+			wrap: (child) => recordShape(child),
+			path: ['additionalProperties'],
+		},
+		{
+			label: 'an optional node under an optional',
+			built: () => optionalShape(stringShape()),
+			hand: () => ({ category: 'optional', inner: { category: 'string' } }),
+			wrap: (child) => optionalShape(child),
+			path: ['properties', 'value', 'inner'],
+		},
+		{
+			label: 'a default one level below a union',
+			built: () => objectShape({ a: optionalShape(stringShape(), { default: 'x' }) }),
+			hand: () => ({
+				category: 'object',
+				properties: {
+					a: { category: 'optional', inner: { category: 'string' }, default: 'x' },
+				},
+			}),
+			wrap: (child) => unionShape(nullShape(), child),
+			path: ['variants', '1', 'properties', 'a'],
+		},
+		{
+			label: 'a default deep below a union',
+			built: () => arrayShape(objectShape({ a: optionalShape(stringShape(), { default: 'x' }) })),
+			hand: () => ({
+				category: 'array',
+				items: {
+					category: 'object',
+					properties: {
+						a: { category: 'optional', inner: { category: 'string' }, default: 'x' },
+					},
+				},
+			}),
+			wrap: (child) => oneOfShape(child),
+			path: ['variants', '0', 'items', 'properties', 'a'],
+		},
+		{
+			label: 'a default beside additional properties',
+			built: () => optionalShape(stringShape(), { default: 'x' }),
+			hand: () => ({ category: 'optional', inner: { category: 'string' }, default: 'x' }),
+			wrap: (child) => objectShape({ a: child }, { additionalProperties: true }),
+			path: ['properties', 'a'],
+		},
+	])('refuses $label at the same path', ({ built, hand, wrap, path }) => {
+		const refused = captureContractError(() => wrap(built()))
+
+		expect(refused.code).toBe('placement')
+		expect(refused.context?.path).toEqual(path)
+		expect(readVerdict(() => wrap(built()))).toBe(readVerdict(() => wrap(hand())))
+	})
+
+	it('accepts a default a closed object carries below an open one', () => {
+		const inner = objectShape({ a: optionalShape(stringShape(), { default: 'x' }) })
+
+		expect(readVerdict(() => objectShape({ inner }, { additionalProperties: true }))).toBe(
+			'accepted',
+		)
+	})
+
+	it('refuses an optional root at every compiling door', () => {
+		const built = optionalShape(stringShape())
+		const hand: OptionalShape<StringShape> = {
+			category: 'optional',
+			inner: { category: 'string' },
+		}
+		const verdict = readVerdict(() => createContract(built))
+
+		expect(verdict).toContain('placement')
+		expect(verdict).toBe(readVerdict(() => createContract(hand)))
+		expect(readVerdict(() => compileGuard(built))).toBe(verdict)
+	})
+
+	it.each<{
+		readonly label: string
+		readonly wrap: (child: ContractShape) => unknown
+		readonly deepest: number
+	}>([
+		{ label: 'an array', wrap: (child) => arrayShape(child), deepest: 511 },
+		{ label: 'a nullable', wrap: (child) => nullableShape(child), deepest: 511 },
+		{ label: 'a property', wrap: (child) => objectShape({ deep: child }), deepest: 511 },
+		{ label: 'a variant', wrap: (child) => unionShape(child), deepest: 511 },
+		{ label: 'an optional', wrap: (child) => optionalShape(child), deepest: 510 },
+		{
+			label: 'an optional property',
+			wrap: (child) => objectShape({ deep: optionalShape(child) }),
+			deepest: 510,
+		},
+	])('stops $label at the depth limit as a walk does', ({ wrap, deepest }) => {
+		const legal = readVerdict(() => wrap(buildDeepShape(deepest)))
+		const past = readVerdict(() => wrap(buildDeepShape(deepest + 1)))
+
+		expect(legal).toBe('accepted')
+		expect(past).toContain('exceeds the compilation depth limit')
+		expect(legal).toBe(readVerdict(() => wrap(buildHandNest(deepest))))
+		expect(past).toBe(readVerdict(() => wrap(buildHandNest(deepest + 1))))
+	})
+
+	it.each<{
+		readonly label: string
+		readonly wrap: (child: ContractShape) => unknown
+		readonly highest: number
+	}>([
+		{ label: 'an array', wrap: (child) => arrayShape(child), highest: 511 },
+		{ label: 'two arrays', wrap: (child) => arrayShape(arrayShape(child)), highest: 510 },
+		{ label: 'an optional', wrap: (child) => optionalShape(child), highest: 510 },
+	])('counts a raw schema toward the depth limit below $label', ({ wrap, highest }) => {
+		const legal = readVerdict(() => wrap(rawShape(buildSchemaNest(highest))))
+		const past = readVerdict(() => wrap(rawShape(buildSchemaNest(highest + 1))))
+
+		expect(legal).toBe('accepted')
+		expect(past).toContain('raw schema exceeds the compilation depth limit')
+		expect(past).toBe(
+			readVerdict(() => wrap({ category: 'raw', schema: buildSchemaNest(highest + 1) })),
+		)
+	})
+
+	it('measures a built declaration at the node limit as a walk does', () => {
+		const base = buildSharedDagShape(13)
+		const atLimit = objectShape({ base })
+		const past = objectShape({ base, extra: booleanShape() })
+		const refused = readVerdict(() => createContract(past))
+
+		expect(readVerdict(() => createContract(atLimit))).toBe('accepted')
+		expect(refused).toContain('expands past the compilation node limit')
+		expect(refused).toBe(readVerdict(() => createContract(cloneShape(past))))
+	})
+
+	it('walks a hand-written child again, since it can still change', () => {
+		const child: ContractShape = { category: 'string' }
+		const parent = arrayShape(child)
+		Object.defineProperty(child, 'min', { value: 'late', enumerable: true })
+		const refusal = 'structure: validateShape: string min must be a number'
+
+		expect(readVerdict(() => arrayShape(parent))).toContain(refusal)
+		expect(readVerdict(() => createContract(parent))).toContain(refusal)
+		expect(readVerdict(() => createContract(arrayShape(arrayShape(parent))))).toContain(refusal)
+	})
+
+	it('walks a child a caller froze, whose accessor can still answer', () => {
+		const reads = new ObservationCounter()
+		const hand: StringShape = Object.freeze({
+			category: 'string',
+			get pattern() {
+				reads.increment()
+				return Object.freeze(/a/)
+			},
+		})
+		const parent = arrayShape(hand)
+		reads.clear()
+		const again = arrayShape(parent)
+
+		expect(reads.value).toBeGreaterThan(0)
+		reads.clear()
+		createContract(again)
+		expect(reads.value).toBeGreaterThan(0)
+	})
+
+	it.each([
+		'min',
+		'max',
+		'pattern',
+		'description',
+		'integer',
+		'additionalProperties',
+		'mode',
+		'default',
+	])('refuses an inherited %s on a built declaration, then recovers', (field) => {
+		const built = objectShape({
+			text: stringShape(),
+			count: numberShape(),
+			either: unionShape(booleanShape(), nullShape()),
+			maybe: optionalShape(jsonShape()),
+			pick: literalShape(['a']),
+			list: arrayShape(nullableShape(stringShape())),
+			raw: rawShape({ type: 'string' }),
+		})
+		const verdicts = pollutePrototype(
+			Object.prototype,
+			field,
+			() => 'inherited',
+			() => ({
+				wrapped: readVerdict(() => arrayShape(built)),
+				walked: readVerdict(() => validateShape({ category: 'array', items: built })),
+				compiled: readVerdict(() => createContract(built)),
+				cloned: readVerdict(() => cloneShape(built)),
+			}),
+		)
+
+		expect(verdicts.wrapped).toContain('structure')
+		expect(verdicts.wrapped).toBe(verdicts.walked)
+		expect(verdicts.compiled).toContain('structure')
+		expect(verdicts.compiled).toBe(verdicts.cloned)
+		expect(readVerdict(() => arrayShape(built))).toBe('accepted')
+		expect(readVerdict(() => createContract(built))).toBe('accepted')
+	})
+
+	it.each<{
+		readonly label: string
+		readonly arm: (operation: () => readonly string[]) => readonly string[]
+	}>([
+		{
+			label: 'a replaced array pop',
+			arm: (operation) => replaceIntrinsic(Array.prototype, 'pop', throwReplacement, operation),
+		},
+		{
+			label: 'a replaced array iterator next',
+			arm: (operation) =>
+				replaceIntrinsic(
+					Object.getPrototypeOf([][Symbol.iterator]()),
+					'next',
+					throwReplacement,
+					operation,
+				),
+		},
+		{
+			label: 'a throwing flag getter',
+			arm: (operation) => replaceAccessor(RegExp.prototype, 'global', throwReplacement, operation),
+		},
+		{
+			label: 'the first index on Object.prototype',
+			arm: (operation) => pollutePrototype(Object.prototype, '0', () => 1, operation),
+		},
+		{
+			label: 'a later index on Object.prototype',
+			arm: (operation) => pollutePrototype(Object.prototype, '3', () => 1, operation),
+		},
+		{
+			label: 'an index on Array.prototype',
+			arm: (operation) => {
+				try {
+					return pollutePrototype(Array.prototype, '0', () => 1, operation)
+				} finally {
+					// An index raises `length`, and removing it does not lower it.
+					Reflect.set(Array.prototype, 'length', 0)
+				}
+			},
+		},
+	])('takes the walk under $label, whose refusal a seal would skip', ({ arm }) => {
+		const built = objectShape({
+			text: stringShape({ pattern: /^a/ }),
+			list: arrayShape(numberShape()),
+			raw: rawShape({ type: 'string' }),
+		})
+		const [wrapped, walked, leaf, leafWalked, compiled, owned] = arm(() => [
+			readVerdict(() => arrayShape(built)),
+			readVerdict(() => validateShape({ category: 'array', items: built })),
+			readVerdict(() => numberShape()),
+			readVerdict(() => validateShape({ category: 'number' })),
+			readVerdict(() => createContract(built)),
+			readVerdict(() => ownShape(built)),
+		])
+
+		expect(wrapped).toBe(walked)
+		expect(leaf).toBe(leafWalked)
+		expect(compiled).toBe(owned)
+		expect(readVerdict(() => arrayShape(built))).toBe('accepted')
+		expect(readVerdict(() => createContract(built))).toBe('accepted')
+	})
+
+	it.each(['min', 'max', 'pattern', 'description'])(
+		'refuses a string field %s inherited as undefined, which only the snapshot sees',
+		(field) => {
+			const verdict = pollutePrototype(
+				Object.prototype,
+				field,
+				() => undefined,
+				() => readVerdict(() => stringShape()),
+			)
+
+			expect(verdict).toContain('cloneShape: inherited shape fields cannot be owned')
+			expect(readVerdict(() => stringShape())).toBe('accepted')
+		},
+	)
+
+	it('refuses a default its shape refuses when the contract is created', () => {
+		const built = objectShape({
+			retries: optionalShape(integerShape({ min: 0 }), { default: -5 }),
+		})
+		const refused = captureContractError(() => createContract(built))
+
+		expect(refused.code).toBe('structure')
+		expect(refused.context?.path).toEqual(['properties', 'retries', 'default'])
+		expect(readVerdict(() => createContract(built))).toBe(
+			readVerdict(() => createContract(cloneShape(built))),
+		)
+	})
+
+	it('compiles a built declaration to what its unsealed copy compiles to', () => {
+		const built = objectShape({
+			text: stringShape({ min: 1, max: 3, pattern: /^a/ }),
+			count: integerShape({ min: 0 }),
+			either: unionShape(booleanShape(), nullShape()),
+			maybe: optionalShape(stringShape(), { default: 'x' }),
+			pick: literalShape(['a', 'b']),
+			list: arrayShape(nullableShape(numberShape()), { max: 2 }),
+			raw: rawShape({ type: 'string' }),
+		})
+		const sealed = createContract(built)
+		const copied = createContract(cloneShape(built))
+		const values = [
+			undefined,
+			null,
+			{},
+			{ text: 'a', count: 1, either: true, pick: 'a', list: [], raw: 1 },
+			{ text: 'ab', count: '2', either: null, pick: 'b', list: ['3', null], raw: 'r', maybe: 'y' },
+			{ text: 'b', count: -1, either: 'no', pick: 'c', list: [1, 2, 3], raw: undefined },
+		]
+
+		expect(sealed.schema).toEqual(copied.schema)
+		expect(values.map((value) => sealed.is(value))).toEqual(values.map((value) => copied.is(value)))
+		expect(values.map((value) => sealed.parse(value))).toEqual(
+			values.map((value) => copied.parse(value)),
+		)
+		expect(values.map((value) => sealed.audit(value))).toEqual(
+			values.map((value) => copied.audit(value)),
+		)
+		expect(values.map((value) => sealed.explain(value))).toEqual(
+			values.map((value) => copied.explain(value)),
+		)
+		expect(readVerdict(() => sealed.generate(seededRandom(7)))).toBe(
+			readVerdict(() => copied.generate(seededRandom(7))),
+		)
+	})
+
+	it('opens no walk over a built child, and one over a hand-written twin', async () => {
+		const { floor, wrapBuilt, wrapHand, compileBuilt, compileHand } = await measureWalks()
+
+		expect(floor).toBeGreaterThan(0)
+		expect(wrapBuilt).toBe(floor)
+		expect(wrapHand).toBeGreaterThan(wrapBuilt)
+		// The one raw node's schema copy, which every compile emits.
+		expect(compileBuilt).toBe(1)
+		expect(compileHand).toBeGreaterThan(0)
 	})
 })

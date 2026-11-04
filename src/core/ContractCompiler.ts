@@ -82,6 +82,7 @@ import {
 } from './combinators.js'
 import { parseBoolean, parseInteger, parseJSONValue, parseNumber, parseString } from './parsers.js'
 import { cloneJSONValue, cloneSchema, ownShape } from './cloners.js'
+import { ShapePass } from './ShapePass.js'
 import { ShapeValidator } from './ShapeValidator.js'
 import { EvaluationScope } from './EvaluationScope.js'
 import { seededRandom } from './seeders.js'
@@ -96,7 +97,9 @@ import { seededRandom } from './seeders.js'
  * chain pays a hundred clones of shrinking graphs and a hundred validations —
  * quadratic work for a linear declaration. Here ownership runs once, validation runs once over
  * that owned result, and each unique node and structural edge is indexed once
- * into children-before-parent order. Every artifact family is then a single
+ * into children-before-parent order. A declaration a builder sealed is frozen and
+ * validated all the way down already, so it takes neither and is indexed as it
+ * stands. Every artifact family is then a single
  * postorder pass whose entries are keyed by node identity, so a shared child is
  * compiled once however many parents point at it. The same asymmetry exists on
  * the VALUE side and is answered the same way: `guard`, `auditor` and `reporter`
@@ -412,6 +415,15 @@ export class ContractCompiler<
 				code: 'structure',
 				context: { path: [], shape: 'contract' },
 			})
+		}
+		// A node a builder sealed is already frozen and validated all the way down, so
+		// it is owned as it stands and only the emitted-node bound is left to ask.
+		const sealed = ShapePass.expansionOf(source)
+		if (sealed !== undefined) {
+			refuseExpansion(sealed)
+			this.#discover(source)
+			this.#source = undefined
+			return
 		}
 		// ONE ownership population for the whole compiler. `ownShape` runs the
 		// accepted `ShapeCloner`, whose completed-root pass validates what it built;

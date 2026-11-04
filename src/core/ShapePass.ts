@@ -8,6 +8,7 @@ import {
 	attempt,
 	iterateIndices,
 	collectMembers,
+	holds,
 	isFailure,
 	isSuccess,
 	matchesMember,
@@ -24,6 +25,45 @@ import { isJSONValue, isLiteralValue, isRecord, isRegExp } from './validators.js
 export class ShapePass {
 	static readonly #weakSet = WeakSet
 	static readonly #weakMap = WeakMap
+	static readonly #arrays = Array.prototype
+	static readonly #pop = Array.prototype.pop
+	static readonly #iterators = INTRINSICS.prototype(
+		INTRINSICS.reflect.apply(INTRINSICS.indices, [], []),
+	)
+	static readonly #blank = INTRINSICS.freeze(new INTRINSICS.pattern(''))
+	// Every field a node may leave out, so every read an inherited value could answer.
+	// A sealed node's own fields cannot change, but a walk of one still refuses a
+	// polluted `Object.prototype`, because a field the node does not hold reads through
+	// to it. A required field is own on every node that recognizes it.
+	static readonly #fields = [
+		'min',
+		'max',
+		'pattern',
+		'description',
+		'integer',
+		'additionalProperties',
+		'mode',
+		'default',
+	]
+	// What a walk of a builder's node found, kept so a later builder or compiler need
+	// not walk it again. Building a declaration walked every subtree once per ancestor,
+	// which is quadratic in depth, and compiling it cloned the graph and walked it twice
+	// more. Only `#survey` writes here, and only for a frozen node this package made
+	// whose children are all sealed, so a mutable node, a node frozen by a caller, and a
+	// node with an accessor are never recorded and take the whole walk. `reach` is the
+	// deepest level the subtree occupies, a raw node's embedded schema included, `count`
+	// is the expansion, `defaulted` is a default on this node, and `held` is one
+	// anywhere in the subtree.
+	static readonly #seals = new ShapePass.#weakMap<
+		ContractShape,
+		{
+			readonly category: ContractShape['category']
+			readonly reach: number
+			readonly count: number
+			readonly defaulted: boolean
+			readonly held: boolean
+		}
+	>()
 	readonly #source: ContractShape
 	#stack: Array<
 		| {
@@ -101,6 +141,72 @@ export class ShapePass {
 		this.#source = shape
 	}
 
+	/**
+	 * Validates a node fresh from a builder, freezes it, and records what the walk found.
+	 *
+	 * @remarks
+	 * The node's own fields are always observed, and each child is answered from its
+	 * seal rather than walked. Anything short of a clean answer takes the whole walk
+	 * instead, which is what authors every refusal, so a refusal reads the same and
+	 * fires at the same call as it would with no seals at all. That second look is safe
+	 * because the first read nothing a caller wrote: the node is this package's own
+	 * literal, and a child with no seal stops the survey before it is read.
+	 *
+	 * @param shape - The builder's fresh node, which no caller has seen
+	 * @param check - What the whole walk validates, when the node is only legal in a slot
+	 * @returns The frozen node
+	 * @throws {ContractError} When the node is refused
+	 */
+	static seal<S extends ContractShape>(shape: S, check: ContractShape = shape): Readonly<S> {
+		const frozen = INTRINSICS.freeze(shape)
+		if (!new ShapePass(shape).#survey(check === shape ? 0 : 1)) new ShapePass(check).validate()
+		return frozen
+	}
+
+	/**
+	 * Reports the expansion of a sealed node a compiler can take as it stands.
+	 *
+	 * @remarks
+	 * `undefined` sends the caller to its own ownership and validation: the node was
+	 * never sealed, an inherited field would answer a walk of it, or it is an `optional`
+	 * node, which a walk refuses as a root.
+	 *
+	 * @param shape - The declaration to look up
+	 * @returns The expansion a walk would report, or `undefined`
+	 */
+	static expansionOf(shape: ContractShape): number | undefined {
+		if (ShapePass.polluted()) return undefined
+		const seal = INTRINSICS.reflect.apply(INTRINSICS.recall, ShapePass.#seals, [shape])
+		return seal === undefined || seal.category === 'optional' ? undefined : seal.count
+	}
+
+	/**
+	 * Reports whether a walk could answer differently from a seal.
+	 *
+	 * @remarks
+	 * A field a node may leave out reads through to `Object.prototype`, which is a
+	 * verdict about the declaration. The rest are what a walk runs on and a survey does
+	 * not, so each one breaks a walk into a refusal a seal would otherwise skip: an index
+	 * on either prototype, reached by a walk's array writes, a replaced `pop` or array
+	 * iterator `next`, and a flag getter a pattern's `flags` reads. An array's `length`
+	 * always passes its highest index, and own keys list an index first, so one read
+	 * answers for every index, and a name that merely opens with a digit only costs a walk.
+	 *
+	 * @returns True when a walk has to answer rather than a seal
+	 */
+	static polluted(): boolean {
+		if (ShapePass.#arrays.length !== 0) return true
+		const first = INTRINSICS.reflect.members(INTRINSICS.base)[0]
+		if (typeof first === 'string' && first >= '0' && first < ':') return true
+		if (INTRINSICS.describe(ShapePass.#arrays, 'pop')?.value !== ShapePass.#pop) return true
+		const next = INTRINSICS.describe(ShapePass.#iterators, 'next')?.value
+		if (next !== INTRINSICS.advance) return true
+		if (!holds(() => readPatternFlags(ShapePass.#blank) === '')) return true
+		return INTRINSICS.reflect.apply(INTRINSICS.some, ShapePass.#fields, [
+			(field: string) => INTRINSICS.own(INTRINSICS.base, field),
+		])
+	}
+
 	/** Poisons this pass and throws the same refusal on every reentry. */
 	interrupt(): never {
 		this.#poison ??= new ContractError(
@@ -121,6 +227,40 @@ export class ShapePass {
 			context: { path: [] },
 			cause: outcome.error,
 		})
+	}
+
+	// One observation of the node, and its children answered from their seals. Each
+	// rule the walk asks across an edge is asked here too: optional placement in the
+	// slot, a default below a union or beside an open object's extras, and depth. `lift`
+	// is how far below the walk's root this node sits, which is one under the object an
+	// optional node is validated inside. A false answer says nothing about the node
+	// beyond that the walk has to decide.
+	#survey(lift: number): boolean {
+		if (ShapePass.polluted()) return false
+		const shape = this.#source
+		const outcome = attempt(() => this.#observe(shape, 0))
+		if (isFailure(outcome) || !outcome.value || this.#domain !== undefined) return false
+		const seal = {
+			category: shape.category,
+			reach: this.#raw,
+			count: 1,
+			defaulted: this.#defaulted,
+			held: this.#defaulted,
+		}
+		for (const index of iterateIndices(() => this.#children.length)) {
+			const child = this.#children[index]
+			const known = INTRINSICS.reflect.apply(INTRINSICS.recall, ShapePass.#seals, [child?.shape])
+			if (child === undefined || known === undefined) return false
+			if (known.category === 'optional' && !child.optional) return false
+			if (known.held && shape.category === 'union') return false
+			if (known.defaulted && this.#open) return false
+			seal.reach = INTRINSICS.max(seal.reach, known.reach + 1)
+			seal.count += known.count
+			seal.held ||= known.held
+		}
+		if (seal.reach + lift > COMPILE_DEPTH_LIMIT) return false
+		INTRINSICS.reflect.apply(INTRINSICS.retain, ShapePass.#seals, [shape, seal])
+		return true
 	}
 
 	#execute(): void {

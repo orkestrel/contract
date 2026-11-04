@@ -2701,6 +2701,64 @@ export function buildSharedDagShape(levels: number): ContractShape {
 	)
 }
 
+/**
+ * Writes out by hand the array nest {@link buildDeepShape} builds.
+ *
+ * @remarks
+ * No builder made any of these nodes, so every door walks all of them.
+ *
+ * @param depth - The number of array wrappers around the string leaf
+ * @returns The hand-written nest
+ *
+ * @example
+ * ```ts
+ * buildHandNest(1) // { category: 'array', items: { category: 'string' } }
+ * ```
+ */
+export function buildHandNest(depth: number): ContractShape {
+	return Array.from(iterateIndices(() => depth)).reduce<ContractShape>(
+		(shape) => ({ category: 'array', items: shape }),
+		{ category: 'string' },
+	)
+}
+
+/**
+ * Builds a JSON Schema that nests array keywords to an exact height.
+ *
+ * @param height - The number of levels below the root record
+ * @returns The nested schema
+ *
+ * @example
+ * ```ts
+ * buildSchemaNest(1) // { type: 'array', items: { type: 'string' } }
+ * ```
+ */
+export function buildSchemaNest(height: number): JSONSchema {
+	return Array.from(iterateIndices(() => height)).reduce<JSONSchema>(
+		(schema) => ({ type: 'array', items: schema }),
+		{ type: 'string' },
+	)
+}
+
+/**
+ * Reads what a door answers, as text two doors can be compared by.
+ *
+ * @param operation - The door to call
+ * @returns `accepted`, or the refusal's code, message, and context
+ * @throws {unknown} What the door threw, when it was not this package's error
+ *
+ * @example
+ * ```ts
+ * readVerdict(() => stringShape()) // 'accepted'
+ * ```
+ */
+export function readVerdict(operation: () => unknown): string {
+	const outcome = attempt(operation)
+	if (outcome.success) return 'accepted'
+	if (!isContractError(outcome.error)) throw outcome.error
+	return `${outcome.error.code}: ${outcome.error.message} ${JSON.stringify(outcome.error.context)}`
+}
+
 /** Pairs a declaration, a value graph walking it, and the tally of nodes the walk read. */
 export interface CountedGraphInterface {
 	/** The declaration a door compiles. */
@@ -3891,6 +3949,101 @@ export async function measureAllocations() {
 		return { answers: [answeredFew, answeredMany], buildDelta, calledFew, calledMany }
 	} finally {
 		captured.define(globalThis, 'WeakMap', original)
+		vi.resetModules()
+	}
+}
+
+/**
+ * Counts what one operation adds to a counter.
+ *
+ * @param counter - The counter the operation increments
+ * @param operation - The operation to run
+ * @returns The increments the operation made
+ *
+ * @example
+ * ```ts
+ * countDuring(counter, () => counter.increment()) // 1
+ * ```
+ */
+export function countDuring(counter: ObservationCounter, operation: () => unknown): number {
+	counter.clear()
+	operation()
+	return counter.value
+}
+
+/**
+ * Counts the collections a walk opens while a door wraps or compiles a declaration.
+ *
+ * @remarks
+ * A fresh load of the package under counting constructors. A walk of a literal opens
+ * a `Set` and each pass or snapshot opens a `WeakSet`, so a builder that answers from
+ * what it already knows opens only its own pass, a compiler opens no `WeakSet`, and
+ * the hand-written twins are the control. A compiler's `Set`s are its literal guards.
+ *
+ * @returns The counts each door opened
+ *
+ * @example
+ * ```ts
+ * const { wrapBuilt, wrapHand } = await measureWalks()
+ * ```
+ */
+export async function measureWalks() {
+	const originalSet = captured.descriptor(globalThis, 'Set')
+	const originalWeakSet = captured.descriptor(globalThis, 'WeakSet')
+	if (originalSet === undefined) throw new Error('the Set descriptor is absent')
+	if (originalWeakSet === undefined) throw new Error('the WeakSet descriptor is absent')
+	const opened = new ObservationCounter()
+	const passes = new ObservationCounter()
+	class CountingSet<T> extends Set<T> {
+		constructor(entries?: Iterable<T> | null) {
+			super(entries)
+			opened.increment()
+		}
+	}
+	class CountingWeakSet extends WeakSet<object> {
+		constructor(entries?: readonly object[] | null) {
+			super(entries)
+			opened.increment()
+			passes.increment()
+		}
+	}
+	try {
+		captured.define(globalThis, 'Set', { ...originalSet, value: CountingSet })
+		captured.define(globalThis, 'WeakSet', { ...originalWeakSet, value: CountingWeakSet })
+		vi.resetModules()
+		const loaded = await import('../src/core/index.js')
+		const pick = loaded.literalShape(['a', 'b'])
+		const built = loaded.objectShape({
+			pick,
+			list: loaded.arrayShape(pick),
+			text: loaded.stringShape(),
+			pattern: loaded.stringShape({ pattern: /^a/ }),
+			count: loaded.numberShape(),
+			whole: loaded.integerShape(),
+			flag: loaded.booleanShape(),
+			none: loaded.nullShape(),
+			json: loaded.jsonShape(),
+			either: loaded.unionShape(loaded.stringShape(), loaded.nullShape()),
+			one: loaded.oneOfShape(loaded.stringShape(), loaded.nullShape()),
+			maybe: loaded.optionalShape(loaded.stringShape()),
+			filled: loaded.optionalShape(loaded.stringShape(), { default: 'x' }),
+			nullish: loaded.nullableShape(loaded.stringShape()),
+			raw: loaded.rawShape({ type: 'string' }),
+			map: loaded.recordShape(loaded.numberShape()),
+		})
+		const hand: ContractShape = { category: 'literal', values: ['a', 'b'] }
+		const handGraph: ContractShape = { category: 'array', items: hand }
+		return {
+			// The builder's own pass opens one `WeakSet`, so a walk shows above that floor.
+			floor: countDuring(opened, () => loaded.arrayShape(loaded.stringShape())) / 2,
+			wrapBuilt: countDuring(opened, () => loaded.arrayShape(built)),
+			wrapHand: countDuring(opened, () => loaded.arrayShape(hand)),
+			compileBuilt: countDuring(passes, () => new loaded.ContractCompiler(built).schema),
+			compileHand: countDuring(passes, () => new loaded.ContractCompiler(handGraph).schema),
+		}
+	} finally {
+		captured.define(globalThis, 'Set', originalSet)
+		captured.define(globalThis, 'WeakSet', originalWeakSet)
 		vi.resetModules()
 	}
 }

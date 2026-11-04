@@ -28,6 +28,7 @@ import type {
 } from './types.js'
 import { cloneJSONValue, cloneSchema, cloneShape } from './cloners.js'
 import { SchemaShaper } from './SchemaShaper.js'
+import { ShapePass } from './ShapePass.js'
 import { ShapeValidator } from './ShapeValidator.js'
 import { INTRINSICS } from './constants.js'
 import {
@@ -151,8 +152,11 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 				: { pattern: new INTRINSICS.pattern(patternSnapshot.source) }),
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
+		// The snapshot is what refuses a field inherited as `undefined`, which a walk reads
+		// as absent, so only a clean prototype lets a plain node skip it.
+		if (patternSnapshot === undefined && !ShapePass.polluted()) return ShapePass.seal(shape)
 		new ShapeValidator(shape).validate()
-		return cloneShape(shape)
+		return ShapePass.seal(cloneShape(shape))
 	}, 'stringShape')
 }
 
@@ -201,8 +205,7 @@ export function numberShape(options?: NumberShapeOptions): NumberShape {
 			...(safe?.integer === undefined ? {} : { integer: safe.integer }),
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
-		new ShapeValidator(result).validate()
-		return INTRINSICS.freeze(result)
+		return ShapePass.seal(result)
 	}, 'numberShape')
 }
 
@@ -242,8 +245,7 @@ export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
 			category: 'boolean',
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
-		new ShapeValidator(shape).validate()
-		return INTRINSICS.freeze(shape)
+		return ShapePass.seal(shape)
 	}, 'booleanShape')
 }
 
@@ -265,8 +267,7 @@ export function nullShape(options?: NullShapeOptions): NullShape {
 			category: 'null',
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
-		new ShapeValidator(shape).validate()
-		return INTRINSICS.freeze(shape)
+		return ShapePass.seal(shape)
 	}, 'nullShape')
 }
 
@@ -340,8 +341,7 @@ export function literalShape(
 			values: owned,
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
-		new ShapeValidator(shape).validate()
-		return INTRINSICS.freeze(shape)
+		return ShapePass.seal(shape)
 	}, 'literalShape')
 }
 
@@ -393,8 +393,7 @@ export function arrayShape<S extends ContractShape>(
 			...(safe?.max === undefined ? {} : { max: safe.max }),
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
-		new ShapeValidator(shape).validate()
-		return INTRINSICS.freeze(shape)
+		return ShapePass.seal(shape)
 	}, 'arrayShape')
 }
 
@@ -478,8 +477,7 @@ export function objectShape<
 				: { additionalProperties: safe.additionalProperties }),
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
-		new ShapeValidator(shape).validate()
-		return INTRINSICS.freeze(shape)
+		return ShapePass.seal(shape)
 	}, 'objectShape')
 }
 
@@ -519,8 +517,7 @@ export function recordShape<S extends ContractShape>(
 			additionalProperties: values,
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
-		new ShapeValidator(shape).validate()
-		return INTRINSICS.freeze(shape)
+		return ShapePass.seal(shape)
 	}, 'recordShape')
 }
 
@@ -542,9 +539,7 @@ export function unionShape<V extends readonly ContractShape[]>(
 	...variants: V
 ): UnionShape<Readonly<V>> {
 	return contain(() => {
-		const shape: UnionShape<V> = { category: 'union', variants }
-		new ShapeValidator(shape).validate()
-		return INTRINSICS.freeze({ category: 'union', variants: INTRINSICS.freeze(variants) })
+		return ShapePass.seal({ category: 'union', variants: INTRINSICS.freeze(variants) })
 	}, 'unionShape')
 }
 
@@ -584,13 +579,11 @@ export function oneOfShape<V extends readonly ContractShape[]>(
 	...variants: V
 ): UnionShape<Readonly<V>> {
 	return contain(() => {
-		const shape: UnionShape<V> = {
+		return ShapePass.seal({
 			category: 'union',
-			variants,
+			variants: INTRINSICS.freeze(variants),
 			mode: 'oneOf',
-		}
-		new ShapeValidator(shape).validate()
-		return INTRINSICS.freeze({ ...shape, variants: INTRINSICS.freeze(variants) })
+		})
 	}, 'oneOfShape')
 }
 
@@ -645,8 +638,7 @@ export function optionalShape<S extends ContractShape>(
 			inner,
 			...(owned === undefined ? {} : { default: owned.value }),
 		}
-		new ShapeValidator({ category: 'object', properties: { value: shape } }).validate()
-		return INTRINSICS.freeze(shape)
+		return ShapePass.seal(shape, { category: 'object', properties: { value: shape } })
 	}, 'optionalShape')
 }
 
@@ -665,8 +657,7 @@ export function optionalShape<S extends ContractShape>(
 export function nullableShape<S extends ContractShape>(inner: S): NullableShape<S> {
 	return contain(() => {
 		const shape: NullableShape<S> = { category: 'nullable', inner }
-		new ShapeValidator(shape).validate()
-		return INTRINSICS.freeze(shape)
+		return ShapePass.seal(shape)
 	}, 'nullableShape')
 }
 
@@ -701,8 +692,7 @@ export function jsonShape(options?: JSONShapeOptions): JSONShape {
 			category: 'json',
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
-		new ShapeValidator(shape).validate()
-		return INTRINSICS.freeze(shape)
+		return ShapePass.seal(shape)
 	}, 'jsonShape')
 }
 
@@ -737,9 +727,7 @@ export function jsonShape(options?: JSONShapeOptions): JSONShape {
 export function rawShape(schema: JSONSchema): RawShape {
 	return contain(() => {
 		new ShapeValidator({ category: 'raw', schema }).validate()
-		const owned = cloneSchema(schema)
-		new ShapeValidator({ category: 'raw', schema: owned }).validate()
-		return INTRINSICS.freeze({ category: 'raw', schema: owned })
+		return ShapePass.seal({ category: 'raw', schema: cloneSchema(schema) })
 	}, 'rawShape')
 }
 
