@@ -764,7 +764,8 @@ export interface JSONShape {
  * @remarks
  * Acceptance is a successful {@link validateShape}, including its expansion bound.
  * Parsing preserves identity and never compiles the value or fills its defaults.
- * The shallow schema over-approximates: it describes only the category and cannot
+ * The shallow schema over-approximates the declaration language as JSON carries it.
+ * It describes only the category and cannot
  * teach a language model to author a complete nested declaration. The guard decides.
  *
  * @example

@@ -60,8 +60,8 @@ import { ShapeValidator } from './ShapeValidator.js'
  * Active ancestors are tracked so shared children remain legal. Every
  * standalone compiler reaches this same validation once, over its owned
  * snapshot, through {@link ContractCompiler} preparation.
- * Failures have deterministic precedence independent of traversal order: depth,
- * then structure, then cycle, then field and vocabulary policy.
+ * Cyclic graphs refuse before depth measurement, with structure before cycle.
+ * Acyclic graphs report depth before structure, then field and vocabulary policy.
  *
  * @param shape - The shape graph to gate
  * @returns Nothing; successful return means recursive compilation is structurally safe, depth-safe, and bounded in emitted nodes

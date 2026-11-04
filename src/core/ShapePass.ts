@@ -133,9 +133,6 @@ export class ShapePass {
 	#cycle: ContractError | undefined
 	#domain: ContractError | undefined
 
-	#clock = 0
-	#oldest = 0
-	readonly #trail: string[] = []
 	#poison: ContractError | undefined
 
 	constructor(shape: unknown) {
@@ -299,12 +296,14 @@ export class ShapePass {
 			return
 		}
 
-		const segments = (frame.first === undefined ? 0 : 1) + (frame.second === undefined ? 0 : 1)
-		if (frame.first !== undefined) {
-			this.#path[this.#path.length] = frame.first
+		const first = INTRINSICS.own(frame, 'first') ? frame.first : undefined
+		const second = INTRINSICS.own(frame, 'second') ? frame.second : undefined
+		const segments = (first === undefined ? 0 : 1) + (second === undefined ? 0 : 1)
+		if (first !== undefined) {
+			this.#path[this.#path.length] = first
 		}
-		if (frame.second !== undefined) {
-			this.#path[this.#path.length] = frame.second
+		if (second !== undefined) {
+			this.#path[this.#path.length] = second
 		}
 
 		const current = frame.shape
@@ -779,13 +778,15 @@ export class ShapePass {
 				this.#settleSchema(frame.schema, frame.nested)
 				continue
 			}
+			const first = INTRINSICS.own(frame, 'first') ? frame.first : undefined
+			const second = INTRINSICS.own(frame, 'second') ? frame.second : undefined
 			const schema = frame.schema
 			if (!isRecord(schema)) {
 				return this.#refuseSchema(
 					'validateShape: every raw schema child must be a plain record',
 					stack,
-					frame.first,
-					frame.second,
+					first,
+					second,
 					undefined,
 				)
 			}
@@ -793,8 +794,8 @@ export class ShapePass {
 				return this.#refuseSchema(
 					'validateShape: a raw schema may not contain a cycle',
 					stack,
-					frame.first,
-					frame.second,
+					first,
+					second,
 					undefined,
 				)
 			}
@@ -829,8 +830,8 @@ export class ShapePass {
 					return this.#refuseSchema(
 						'validateShape: raw schema contains an unsupported keyword',
 						stack,
-						frame.first,
-						frame.second,
+						first,
+						second,
 						key,
 					)
 				}
@@ -850,8 +851,8 @@ export class ShapePass {
 				return this.#refuseSchema(
 					'validateShape: raw schema type is outside the supported vocabulary',
 					stack,
-					frame.first,
-					frame.second,
+					first,
+					second,
 					'type',
 				)
 			}
@@ -859,8 +860,8 @@ export class ShapePass {
 				return this.#refuseSchema(
 					'validateShape: raw schema description must be a string',
 					stack,
-					frame.first,
-					frame.second,
+					first,
+					second,
 					'description',
 				)
 			}
@@ -868,8 +869,8 @@ export class ShapePass {
 				return this.#refuseSchema(
 					'validateShape: raw schema default must be a JSON value',
 					stack,
-					frame.first,
-					frame.second,
+					first,
+					second,
 					'default',
 				)
 			}
@@ -877,8 +878,8 @@ export class ShapePass {
 				return this.#refuseSchema(
 					'validateShape: raw schema format must be a string',
 					stack,
-					frame.first,
-					frame.second,
+					first,
+					second,
 					'format',
 				)
 			}
@@ -887,8 +888,8 @@ export class ShapePass {
 					return this.#refuseSchema(
 						'validateShape: raw schema pattern must be a string',
 						stack,
-						frame.first,
-						frame.second,
+						first,
+						second,
 						'pattern',
 					)
 				}
@@ -902,8 +903,8 @@ export class ShapePass {
 					return this.#refuseSchema(
 						'validateShape: raw schema pattern must be valid',
 						stack,
-						frame.first,
-						frame.second,
+						first,
+						second,
 						'pattern',
 					)
 				}
@@ -918,8 +919,8 @@ export class ShapePass {
 					return this.#refuseSchema(
 						'validateShape: raw schema length bounds must be non-negative safe integers',
 						stack,
-						frame.first,
-						frame.second,
+						first,
+						second,
 						key,
 					)
 				}
@@ -933,8 +934,8 @@ export class ShapePass {
 					return this.#refuseSchema(
 						'validateShape: raw schema numeric bounds must be finite numbers',
 						stack,
-						frame.first,
-						frame.second,
+						first,
+						second,
 						key,
 					)
 				}
@@ -945,8 +946,8 @@ export class ShapePass {
 					return this.#refuseSchema(
 						'validateShape: raw schema enum must be a non-empty array',
 						stack,
-						frame.first,
-						frame.second,
+						first,
+						second,
 						'enum',
 					)
 				}
@@ -955,8 +956,8 @@ export class ShapePass {
 					return this.#refuseSchema(
 						'validateShape: raw schema enum must be a non-empty array',
 						stack,
-						frame.first,
-						frame.second,
+						first,
+						second,
 						'enum',
 					)
 				}
@@ -964,8 +965,8 @@ export class ShapePass {
 					return this.#refuseSchema(
 						'validateShape: raw schema enum must be dense',
 						stack,
-						frame.first,
-						frame.second,
+						first,
+						second,
 						'enum',
 					)
 				}
@@ -986,8 +987,8 @@ export class ShapePass {
 						return this.#refuseSchema(
 							'validateShape: raw schema enum values must be finite unique primitives',
 							stack,
-							frame.first,
-							frame.second,
+							first,
+							second,
 							'enum',
 							INTRINSICS.text(valueIndex),
 						)
@@ -1002,8 +1003,8 @@ export class ShapePass {
 					return this.#refuseSchema(
 						'validateShape: raw schema required must be an array',
 						stack,
-						frame.first,
-						frame.second,
+						first,
+						second,
 						'required',
 					)
 				}
@@ -1012,8 +1013,8 @@ export class ShapePass {
 					return this.#refuseSchema(
 						'validateShape: raw schema required must be an array',
 						stack,
-						frame.first,
-						frame.second,
+						first,
+						second,
 						'required',
 					)
 				}
@@ -1021,8 +1022,8 @@ export class ShapePass {
 					return this.#refuseSchema(
 						'validateShape: raw schema required must be dense',
 						stack,
-						frame.first,
-						frame.second,
+						first,
+						second,
 						'required',
 					)
 				}
@@ -1034,8 +1035,8 @@ export class ShapePass {
 						return this.#refuseSchema(
 							'validateShape: raw schema required values must be unique strings',
 							stack,
-							frame.first,
-							frame.second,
+							first,
+							second,
 							'required',
 							INTRINSICS.text(valueIndex),
 						)
@@ -1055,8 +1056,8 @@ export class ShapePass {
 					return this.#refuseSchema(
 						'validateShape: raw schema properties must be a plain record',
 						stack,
-						frame.first,
-						frame.second,
+						first,
+						second,
 						'properties',
 					)
 				}
@@ -1086,8 +1087,8 @@ export class ShapePass {
 					return this.#refuseSchema(
 						'validateShape: raw schema unions must be non-empty arrays',
 						stack,
-						frame.first,
-						frame.second,
+						first,
+						second,
 						key,
 					)
 				}
@@ -1096,8 +1097,8 @@ export class ShapePass {
 					return this.#refuseSchema(
 						'validateShape: raw schema unions must be non-empty arrays',
 						stack,
-						frame.first,
-						frame.second,
+						first,
+						second,
 						key,
 					)
 				}
@@ -1105,8 +1106,8 @@ export class ShapePass {
 					return this.#refuseSchema(
 						'validateShape: raw schema unions must be dense arrays',
 						stack,
-						frame.first,
-						frame.second,
+						first,
+						second,
 						key,
 					)
 				}
@@ -1122,18 +1123,18 @@ export class ShapePass {
 				operation: 'exit',
 				schema,
 				nested,
-				...(frame.first === undefined ? {} : { first: frame.first }),
-				...(frame.second === undefined ? {} : { second: frame.second }),
+				...(first === undefined ? {} : { first: first }),
+				...(second === undefined ? {} : { second: second }),
 			}
 			for (const offset of iterateIndices(() => nested.length)) {
 				const index = nested.length - 1 - offset
-				const first = edges[index]?.[0]
-				const second = edges[index]?.[1]
+				const childFirst = edges[index]?.[0]
+				const childSecond = edges[index]?.[1]
 				stack[stack.length] = {
 					operation: 'enter',
 					schema: nested[index],
-					...(first === undefined ? {} : { first }),
-					...(second === undefined ? {} : { second }),
+					...(childFirst === undefined ? {} : { first: childFirst }),
+					...(childSecond === undefined ? {} : { second: childSecond }),
 				}
 			}
 		}
@@ -1459,7 +1460,9 @@ export class ShapePass {
 				depth: depth + 1,
 				optional: child.optional,
 				first: child.first,
-				...(child.second === undefined ? {} : { second: child.second }),
+				...(INTRINSICS.own(child, 'second') && child.second !== undefined
+					? { second: child.second }
+					: {}),
 			}
 		}
 		return captured
@@ -1500,16 +1503,15 @@ export class ShapePass {
 	// edges, which is what makes a shared-child declaration cost its DECLARATION
 	// rather than its paths.
 	#measure(): void {
+		// Capture has already decided cycles in linear time. Only a DAG has a depth.
+		if (this.#cycle !== undefined) {
+			this.#finish()
+			return
+		}
 		for (const index of iterateIndices(() => this.#captures.length)) {
 			this.#height[index] = 0
 			this.#reach[index] = 0
 			this.#counts[index] = 1
-		}
-		// A back edge to a still-open ancestor leaves no order to compute a height
-		// in, so a cyclic capture takes the ordered path walk instead.
-		if (this.#cycle !== undefined) {
-			this.#trace()
-			return
 		}
 		for (const step of iterateIndices(() => this.#post.length)) {
 			const index = this.#post[step]
@@ -1559,7 +1561,9 @@ export class ShapePass {
 				this.#via[located] = {
 					parent: index,
 					first: child.first,
-					...(child.second === undefined ? {} : { second: child.second }),
+					...(INTRINSICS.own(child, 'second') && child.second !== undefined
+						? { second: child.second }
+						: {}),
 				}
 			}
 		}
@@ -1602,7 +1606,9 @@ export class ShapePass {
 					this.#within[located] = {
 						parent: index,
 						first: child.first,
-						...(child.second === undefined ? {} : { second: child.second }),
+						...(INTRINSICS.own(child, 'second') && child.second !== undefined
+							? { second: child.second }
+							: {}),
 					}
 				}
 				if (this.#captures[located]?.defaulted !== true) continue
@@ -1612,7 +1618,11 @@ export class ShapePass {
 						{
 							code: 'placement',
 							context: {
-								path: pathOf(this.#route(index), child.first, child.second),
+								path: pathOf(
+									this.#route(index),
+									child.first,
+									INTRINSICS.own(child, 'second') ? child.second : undefined,
+								),
 								shape: 'optional',
 							},
 						},
@@ -1624,7 +1634,11 @@ export class ShapePass {
 						{
 							code: 'placement',
 							context: {
-								path: pathOf(this.#ascend(index), child.first, child.second),
+								path: pathOf(
+									this.#ascend(index),
+									child.first,
+									INTRINSICS.own(child, 'second') ? child.second : undefined,
+								),
 								shape: 'optional',
 							},
 						},
@@ -1640,7 +1654,11 @@ export class ShapePass {
 		const edge = this.#within[index]
 		return edge === undefined
 			? this.#ascend(index)
-			: pathOf(this.#route(edge.parent), edge.first, edge.second)
+			: pathOf(
+					this.#route(edge.parent),
+					edge.first,
+					INTRINSICS.own(edge, 'second') ? edge.second : undefined,
+				)
 	}
 
 	// The declaration path to a node's DEEPEST occurrence, spelled out by walking
@@ -1650,7 +1668,13 @@ export class ShapePass {
 	#ascend(index: number): readonly string[] {
 		if (index === 0) return []
 		const edge = this.#via[index]
-		return edge === undefined ? [] : pathOf(this.#ascend(edge.parent), edge.first, edge.second)
+		return edge === undefined
+			? []
+			: pathOf(
+					this.#ascend(edge.parent),
+					edge.first,
+					INTRINSICS.own(edge, 'second') ? edge.second : undefined,
+				)
 	}
 
 	// The first excessive-depth witness in declaration order, reconstructed rather
@@ -1672,7 +1696,7 @@ export class ShapePass {
 				return this.#witness(
 					this.#locate(chosen.shape),
 					depth + 1,
-					pathOf(path, chosen.first, chosen.second),
+					pathOf(path, chosen.first, INTRINSICS.own(chosen, 'second') ? chosen.second : undefined),
 				)
 			}
 		}
@@ -1680,122 +1704,6 @@ export class ShapePass {
 			code: 'depth',
 			context: { path: pathOf(path), limit: COMPILE_DEPTH_LIMIT },
 		})
-	}
-
-	// The cyclic fallback. It walks the CAPTURED nodes and edges — never the
-	// caller's source again — carrying the deepest start each node already cleared,
-	// so a shared child off the cycle is still not re-walked from a shallower
-	// position. Depth outranks the recorded cycle, exactly as before: a back edge
-	// first reached beyond the limit is a depth refusal, and one reached inside it
-	// leaves the cycle to speak.
-	//
-	// A clearance is only reusable when the walk that produced it did not depend on
-	// the CALLER's path. A walk stopped by the active set stopped at some ancestor,
-	// and which ancestor decides everything: one admitted inside this subtree is
-	// re-admitted at the same relative place on every later arrival, so the walk
-	// repeats and the clearance holds; one that was already active when the subtree
-	// was entered belongs to the route in, and a later, shallower arrival without it
-	// walks on through the cycle to a depth this walk never measured. Memoizing that
-	// second kind made the verdict depend on how long the alias chain to the node
-	// was — shortening a declaration by one link turned `depth` into `cycle`.
-	//
-	// Admission order tells the two apart with one comparison and no extra
-	// collection: a node's own admission number bounds its subtree, so a blocker
-	// numbered below it came from outside. `oldest` carries the lowest-numbered
-	// blocker the open subtree met, seeded one past the subtree root so an
-	// unblocked walk compares as internal, and each exit hands its parent the lower
-	// of the two.
-	#trace(): void {
-		const settled: number[] = []
-		const order: number[] = []
-		const active = new ShapePass.#weakSet<object>()
-		const stack: Array<
-			| {
-					readonly operation: 'enter'
-					readonly index: number | undefined
-					readonly depth: number
-					readonly first?: string
-					readonly second?: string
-			  }
-			| {
-					readonly operation: 'exit'
-					readonly index: number
-					readonly depth: number
-					readonly segments: number
-					readonly outer: number
-			  }
-		> = [{ operation: 'enter', index: 0, depth: 0 }]
-
-		while (stack.length > 0) {
-			const frame = stack.pop()
-			if (frame === undefined) continue
-			if (frame.operation === 'exit') {
-				const capture = this.#captures[frame.index]
-				if (capture !== undefined) omitVisited(active, capture.shape)
-				if (
-					this.#oldest >= (order[frame.index] ?? 0) &&
-					(settled[frame.index] ?? -1) < frame.depth
-				) {
-					settled[frame.index] = frame.depth
-				}
-				if (frame.outer < this.#oldest) this.#oldest = frame.outer
-				this.#trail.length -= frame.segments
-				continue
-			}
-			const segments = (frame.first === undefined ? 0 : 1) + (frame.second === undefined ? 0 : 1)
-			if (frame.first !== undefined) {
-				this.#trail[this.#trail.length] = frame.first
-			}
-			if (frame.second !== undefined) {
-				this.#trail[this.#trail.length] = frame.second
-			}
-			if (frame.depth > COMPILE_DEPTH_LIMIT) {
-				throw new ContractError('validateShape: a shape exceeds the compilation depth limit', {
-					code: 'depth',
-					context: { path: pathOf(this.#trail), limit: COMPILE_DEPTH_LIMIT },
-				})
-			}
-			const index = frame.index
-			const capture = index === undefined ? undefined : this.#captures[index]
-			if (index === undefined || capture === undefined) {
-				this.#trail.length -= segments
-				continue
-			}
-			if (matchesVisited(active, capture.shape)) {
-				const blocker = order[index] ?? 0
-				if (blocker < this.#oldest) this.#oldest = blocker
-				this.#trail.length -= segments
-				continue
-			}
-			const recorded = settled[index]
-			if (recorded !== undefined && frame.depth <= recorded) {
-				this.#trail.length -= segments
-				continue
-			}
-			admitVisited(active, capture.shape)
-			order[index] = this.#clock
-			this.#clock += 1
-			stack[stack.length] = {
-				operation: 'exit',
-				index,
-				depth: frame.depth,
-				segments,
-				outer: this.#oldest,
-			}
-			this.#oldest = this.#clock
-			for (const offset of iterateIndices(() => capture.children.length)) {
-				const edge = capture.children.length - 1 - offset
-				const child = capture.children[edge]
-				if (child === undefined) continue
-				stack[stack.length] = {
-					operation: 'enter',
-					index: this.#locate(child.shape),
-					depth: frame.depth + 1,
-					first: child.first,
-					...(child.second === undefined ? {} : { second: child.second }),
-				}
-			}
-		}
 	}
 
 	#finish(): void {
@@ -1825,7 +1733,14 @@ export class ShapePass {
 					readonly operation: 'enter' | 'exit'
 					readonly first?: string
 					readonly second?: string
-				}) => (frame.operation === 'exit' ? pathOf([], frame.first, frame.second) : []),
+				}) =>
+					frame.operation === 'exit'
+						? pathOf(
+								[],
+								INTRINSICS.own(frame, 'first') ? frame.first : undefined,
+								INTRINSICS.own(frame, 'second') ? frame.second : undefined,
+							)
+						: [],
 			],
 		)
 		const prefix: string[] = []

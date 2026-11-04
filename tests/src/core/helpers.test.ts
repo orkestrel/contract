@@ -4381,6 +4381,7 @@ describe('matchesLosslessRepair', () => {
 		['a union', { reason: 'variant', path: 'a', variants: 2 }],
 		['a oneOf', { reason: 'oneOf', path: 'a', matched: 0 }],
 		['a json kind', { reason: 'type', path: 'a', expected: 'json', received: '' }],
+		['a shape kind', { reason: 'type', path: 'a', expected: 'shape', received: '' }],
 		['an object kind', { reason: 'type', path: 'a', expected: 'object', received: '' }],
 		['an array kind', { reason: 'type', path: 'a', expected: 'array', received: '' }],
 		['a null kind', { reason: 'type', path: 'a', expected: 'null', received: '' }],

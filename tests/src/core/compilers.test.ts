@@ -40,6 +40,7 @@ import {
 	seededRandom,
 	schemaToShape,
 	shapeShape,
+	SHAPE_FIELDS,
 	ShapeValidator,
 	stringShape,
 	unionShape,
@@ -99,6 +100,124 @@ import * as core from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 
 describe('shape-valued contracts', () => {
+	it('keeps the enclosing raw path at every declaration door', () => {
+		const refused: JSONSchema = { type: 'string' }
+		Reflect.set(refused, 'type', 'nonsense')
+		const shape: ContractShape = {
+			category: 'array',
+			items: { category: 'raw', schema: { properties: { a: refused } } },
+		}
+		for (const entry of [
+			validateShape,
+			createContract,
+			compileGuard,
+			cloneShape,
+			compileSchema,
+			ownShape,
+			compileParser,
+			compileAuditor,
+			compileReporter,
+			compileGenerator,
+		]) {
+			const error = captureContractError(() => entry(shape, undefined))
+			expect(error.code).toBe('structure')
+			expect(error.context?.path).toEqual(['items', 'schema', 'properties', 'a', 'type'])
+		}
+	})
+	it('reports missing declarations with the shape kind', () => {
+		const contract = createContract(objectShape({ declaration: shapeShape() }))
+		const expected = [{ reason: 'missing', path: ['declaration'], expected: 'shape' }]
+		expect(contract.audit({})).toEqual(expected)
+		expect(contract.explain({})).toEqual(expected)
+	})
+	it('keeps an empty caller description', () => {
+		expect(createContract(shapeShape({ description: '' })).schema.description).toBe('')
+	})
+	it('generates the declared empty closed object', () => {
+		expect(createContract(shapeShape()).generate()).toEqual({
+			category: 'object',
+			properties: {},
+			additionalProperties: false,
+		})
+	})
+	it('freezes every category field list and shares the complete vocabulary with the schema', () => {
+		const categories = [
+			'string',
+			'number',
+			'boolean',
+			'null',
+			'literal',
+			'array',
+			'object',
+			'union',
+			'optional',
+			'nullable',
+			'json',
+			'raw',
+			'shape',
+		]
+		expect(Object.keys(SHAPE_FIELDS)).toEqual(categories)
+		expect(Object.isFrozen(SHAPE_FIELDS)).toBe(true)
+		for (const fields of Object.values(SHAPE_FIELDS)) expect(Object.isFrozen(fields)).toBe(true)
+		expect(createContract(shapeShape()).schema.properties?.category?.enum).toEqual(categories)
+	})
+	it('holds parser laws under each declaration wrapper', () => {
+		const leaf = shapeShape()
+		const declaration = numberShape()
+		const rows: ReadonlyArray<readonly [ContractShape, unknown]> = [
+			[objectShape({ value: optionalShape(leaf) }), { value: declaration }],
+			[nullableShape(leaf), declaration],
+			[arrayShape(leaf), [declaration]],
+			[recordShape(leaf), { value: declaration }],
+			[unionShape(leaf, booleanShape()), declaration],
+			[oneOfShape(leaf, booleanShape()), declaration],
+			[leaf, objectShape({ value: leaf })],
+		]
+		for (const [shape, value] of rows) {
+			const contract = createContract(shape)
+			expect(contract.is(value)).toBe(true)
+			const parsed = contract.parse(value)
+			expect(parsed).toBeDefined()
+			expect(contract.is(parsed)).toBe(true)
+			for (const input of [42, null, {}, value]) {
+				const output = contract.parse(input)
+				expect(!contract.is(input) || output !== undefined).toBe(true)
+				expect(output === undefined || contract.is(output)).toBe(true)
+			}
+		}
+	})
+	it('limits the schema promise to declarations as JSON carries them', () => {
+		const value = Object.defineProperty({}, 'category', { value: 'number' })
+		const contract = createContract(shapeShape())
+		expect(contract.is(value)).toBe(true)
+		expect(() => validateShape(value)).not.toThrow()
+		expect(JSON.parse(JSON.stringify(value))).toEqual({})
+		expect(
+			createContract(schemaToShape(contract.schema)).is(JSON.parse(JSON.stringify(value))),
+		).toBe(false)
+		expect(contract.schema.description).toBe(
+			'Over-approximates the declaration language as JSON carries it; is decides whether the complete shape is valid.',
+		)
+	})
+	it('preserves oneOf identity for hidden and accessor declarations in either arm order', () => {
+		for (const value of [
+			Object.defineProperty({ category: 'number' }, 'min', { value: 'low' }),
+			Object.defineProperty({}, 'category', { enumerable: true, get: () => 'number' }),
+		]) {
+			for (const additionalProperties of [false, true]) {
+				const sibling = objectShape({ category: stringShape() }, { additionalProperties })
+				for (const declaration of [
+					oneOfShape(shapeShape(), sibling),
+					oneOfShape(sibling, shapeShape()),
+				]) {
+					const contract = createContract(declaration)
+					expect(contract.is(value)).toBe(true)
+					expect(contract.parse(value)).toBe(value)
+					expect(contract.is(contract.parse(value))).toBe(true)
+				}
+			}
+		}
+	})
 	it('reports a shape type fault at the containing field', () => {
 		const contract = createContract(objectShape({ shape: shapeShape() }))
 		const expected = [{ reason: 'type', path: ['shape'], expected: 'shape', received: '42' }]
@@ -111,7 +230,7 @@ describe('shape-valued contracts', () => {
 		expect(schema).toEqual({
 			type: 'object',
 			description:
-				'Over-approximates a contract declaration; is decides whether the complete shape is valid.',
+				'Over-approximates the declaration language as JSON carries it; is decides whether the complete shape is valid.',
 			properties: {
 				category: {
 					enum: [
@@ -183,8 +302,11 @@ describe('shape-valued contracts', () => {
 		const definition = createContract(objectShape({ shape: shapeShape() }))
 		expect(contract.is(value)).toBe(accepted)
 		expect(contract.parse(value)).toBe(accepted ? value : undefined)
-		expect(contract.audit(value).length === 0).toBe(accepted)
-		expect(contract.explain(value).length === 0).toBe(accepted)
+		const expected = accepted
+			? []
+			: [{ reason: 'type', path: [], expected: 'shape', received: preview(value) }]
+		expect(contract.audit(value)).toEqual(expected)
+		expect(contract.explain(value)).toEqual(expected)
 		expect(definition.is({ shape: value })).toBe(accepted)
 		expect(attempt(() => validateShape(value)).success).toBe(accepted)
 	})
@@ -195,8 +317,9 @@ describe('shape-valued contracts', () => {
 		const contract = createContract(shapeShape())
 		expect(contract.is(cycle)).toBe(false)
 		expect(contract.parse(cycle)).toBeUndefined()
-		expect(contract.audit(cycle)).not.toHaveLength(0)
-		expect(contract.explain(cycle)).not.toHaveLength(0)
+		const expected = [{ reason: 'type', path: [], expected: 'shape', received: preview(cycle) }]
+		expect(contract.audit(cycle)).toEqual(expected)
+		expect(contract.explain(cycle)).toEqual(expected)
 		expect(createContract(objectShape({ shape: shapeShape() })).is({ shape: cycle })).toBe(false)
 		expect(attempt(() => validateShape(cycle)).success).toBe(false)
 	})
@@ -493,7 +616,13 @@ describe('validateShape', () => {
 					expect(outcome.error.context?.path, `${category}.${field}`).toEqual(path)
 				}
 			}
-			expect(cases.length).toBe(41)
+			expect(cases.map(({ source, field }) => `${source.category}.${field}`).sort()).toEqual(
+				Object.entries(SHAPE_FIELDS)
+					.flatMap(([category, fields]) =>
+						['category', ...fields].map((field) => `${category}.${field}`),
+					)
+					.sort(),
+			)
 		},
 	)
 
@@ -890,7 +1019,13 @@ describe('validateShape', () => {
 			}
 		}
 
-		expect(members).toHaveLength(41)
+		expect([...members].sort()).toEqual(
+			Object.entries(SHAPE_FIELDS)
+				.flatMap(([category, fields]) =>
+					['category', ...fields].map((field) => `${category}.${field}`),
+				)
+				.sort(),
+		)
 		expect([...alternates.keys()].sort()).toEqual([...members].sort())
 		const incomplete = new Set(members)
 		const omitted = incomplete.values().next().value
@@ -4995,13 +5130,34 @@ describe('shape separation registry', () => {
 		})
 		const refusals = observed.filter((outcome) => outcome.refusal).length
 		const uncoded = observed.filter((outcome) => outcome.uncoded).length
-		expect(separations.length).toBe(4)
+		expect(separations.map((separation) => separation.shape.category).sort()).toEqual([
+			'json',
+			'null',
+			'raw',
+			'shape',
+		])
 		expect(uncoded).toBe(0)
 		expect(refusals).toBeGreaterThan(0)
 	})
 
 	it('validates and compiles representatives for all thirteen shape kinds', () => {
-		expect(Object.keys(SHAPE_SEPARATIONS)).toHaveLength(13)
+		expect(Object.keys(SHAPE_SEPARATIONS).sort()).toEqual(
+			[
+				'array',
+				'boolean',
+				'json',
+				'literal',
+				'nullable',
+				'null',
+				'number',
+				'object',
+				'optional',
+				'raw',
+				'shape',
+				'string',
+				'union',
+			].sort(),
+		)
 		for (const separation of Object.values(SHAPE_SEPARATIONS)) {
 			expect(() => validateShape(separation.shape)).not.toThrow()
 			expect(() => validateShape(separation.shape)).not.toThrow()

@@ -17,6 +17,7 @@ import {
 	rawShape,
 	seededRandom,
 	ShapeValidator,
+	shapeShape,
 	validateShape,
 } from '@src/core'
 import type { TerminalIntrinsic } from '../../setup.js'
@@ -47,6 +48,41 @@ import {
 import { describe, expect, it } from 'vitest'
 
 describe('raw schema refusal paths', () => {
+	it('ignores inherited first and second path segments', () => {
+		for (const key of ['first', 'second']) {
+			pollutePrototype(
+				Object.prototype,
+				key,
+				() => 'polluted',
+				() => {
+					const error = captureContractError(() =>
+						validateShape({ category: 'raw', schema: { properties: { a: { type: 'nonsense' } } } }),
+					)
+					expect(error.context?.path).toEqual(['schema', 'properties', 'a', 'type'])
+				},
+			)
+		}
+	})
+	it('preserves every raw property key verbatim', () => {
+		for (const key of ['a.b', 'sp ace', '0', '__proto__', 'constructor', '']) {
+			const schema = { properties: { [key]: { type: 'nonsense' } } }
+			const error = captureContractError(() => Reflect.apply(rawShape, undefined, [schema]))
+			expect(error.context?.path).toEqual(['schema', 'properties', key, 'type'])
+		}
+	})
+	it('refuses the shared cyclic graph at 16, 22, and 41 levels', () => {
+		const contract = createContract(shapeShape())
+		for (const levels of [16, 22, 41]) {
+			const root = { category: 'object', properties: {} }
+			const next = Array.from({ length: levels - 1 }).reduce<unknown>(
+				(child) => ({ category: 'object', properties: { a: child, b: child } }),
+				root,
+			)
+			Object.assign(root.properties, { a: next, b: next })
+			expect(contract.is(root)).toBe(false)
+			expect(captureContractError(() => validateShape(root)).code).toBe('cycle')
+		}
+	})
 	it.each([
 		[{ unsupported: true }, ['unsupported']],
 		[{ description: 42 }, ['description']],
@@ -566,7 +602,7 @@ describe('ShapeValidator', () => {
 		},
 	)
 
-	it('lets a later immediate depth failure outrank earlier deferred faults', () => {
+	it('keeps structure precedence on a cyclic graph without measuring depth', () => {
 		const source = createShapeValidationCase(['domain', 'cycle', 'structure'])
 		if (source.category !== 'object') return
 		const deep = Array.from({ length: COMPILE_DEPTH_LIMIT + 1 }).reduce<ContractShape>(
@@ -577,7 +613,7 @@ describe('ShapeValidator', () => {
 
 		const error = captureContractError(() => new ShapeValidator(source).validate())
 
-		expect(error.code).toBe('depth')
+		expect(error.code).toBe('structure')
 	})
 
 	it('validates present raw population members even when their captured value is undefined', () => {
@@ -1105,7 +1141,7 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 		expect(captureContractError(() => validateShape(shallow)).code).toBe('structure')
 	})
 
-	it('lets depth outrank a cycle reached beyond the limit and lose to one inside it', () => {
+	it('refuses cycles both inside and beyond the depth limit', () => {
 		const looped: ContractShape = { category: 'array', items: { category: 'string' } }
 		Reflect.set(looped, 'items', looped)
 		const near = captureContractError(() => validateShape(looped))
@@ -1115,14 +1151,11 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 			(node) => ({ category: 'array', items: node }),
 			looped,
 		)
-		expect(captureContractError(() => validateShape(buried)).code).toBe('depth')
+		expect(captureContractError(() => validateShape(buried)).code).toBe('cycle')
 	})
 
 	it('answers a cyclic declaration without re-reading the caller source', () => {
-		// The cyclic fallback walks the CAPTURED graph. Its instrument is the read
-		// count: a fallback that re-walked the source would multiply it, and the
-		// leaf is placed at two different depths so a per-edge walk cannot match the
-		// baseline by accident.
+		// Shared nodes are observed once even when the graph is cyclic.
 		const observed = new ObservedShape()
 		const looped: ContractShape = { category: 'object', properties: {} }
 		Reflect.set(looped, 'properties', {
@@ -1139,14 +1172,8 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 		expect(cyclic).toBe(observed.reads)
 	})
 
-	it('still finds a depth violation the cyclic walk first met through a truncated branch', () => {
-		// A node whose subtree walk was cut short by the ACTIVE path has not been
-		// cleared: the walk that ended at it never followed the edge back through
-		// the cycle, so reaching the same node again from a shallower position
-		// opens a route the first visit never took. Memoising that visit as a
-		// clearance discarded the route, and the verdict then depended on how long
-		// the alias chain was — SHORTENING the declaration turned a depth violation
-		// into a cycle, which no rule can justify.
+	it('refuses cycles independently of alias length while measuring acyclic twins', () => {
+		// Alias length cannot change a cyclic graph into an acyclic one.
 		for (const links of [1, 2, 3]) {
 			const deep = Array.from({ length: 510 }).reduce<ContractShape>(
 				(node) => ({ category: 'object', properties: { k0: node } }),
@@ -1165,16 +1192,16 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 			)
 			const root: ContractShape = { category: 'object', properties: { a: fork, b: alias } }
 			const error = captureContractError(() => validateShape(root))
-			expect(error.code).toBe('depth')
-			expect(error.message).toBe('validateShape: a shape exceeds the compilation depth limit')
+			expect(error.code).toBe('cycle')
+			expect(error.message).toBe('validateShape: a shape graph may not contain a cycle')
 			// The rule lives in one engine, but a repair proven at one door is a
 			// hypothesis at the others, so the typed entry point is asked too.
-			expect(captureContractError(() => createContract(root)).code).toBe('depth')
+			expect(captureContractError(() => createContract(root)).code).toBe('cycle')
 		}
 
 		// Control one: the same graph with the back edge pointing at a distinct
 		// structural twin instead of the ancestor. It is acyclic, so the ordered
-		// measurement rather than the fallback answers it — and it reports depth at
+		// depth measurement answers it, reporting depth at
 		// every alias length, proving the route really does overshoot.
 		for (const links of [1, 2, 3]) {
 			const deep = Array.from({ length: 510 }).reduce<ContractShape>(
@@ -1206,7 +1233,7 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 
 		// Control two: the same cycle with the deep chain removed. Nothing
 		// overshoots, so the cycle is the only diagnosis left and it is reported at
-		// every alias length — the fallback still detects the back edge.
+		// every alias length, because capture detects the back edge.
 		for (const links of [1, 2, 3]) {
 			const loopedProperties: Record<string, ContractShape> = {}
 			const looped: ContractShape = { category: 'object', properties: loopedProperties }
@@ -1279,19 +1306,11 @@ describe('depth is measured over the captured graph (R6-A)', () => {
 			verdicts[verdicts.length] =
 				`${error.code}:${Array.isArray(path) ? String(path.length) : 'unknown'}`
 		}
-		expect(verdicts).toEqual(['depth:1026', 'depth:1026', 'depth:1026'])
+		expect(verdicts).toEqual(['cycle:526', 'cycle:654', 'cycle:654'])
 	})
 
 	it('answers a cycle beneath a shared tower in the size of the declaration', () => {
-		// Twenty-six shared levels over one self-referencing leaf: twenty-seven
-		// authored nodes and sixty-seven million distinct paths. The fallback walks
-		// paths, so it can only answer this by NOT re-walking a node it already
-		// cleared — and every node here was stopped by the leaf's own back edge,
-		// which is re-met identically on every arrival and therefore costs the
-		// clearance nothing. A fallback that treated any stop as a poisoned
-		// clearance would walk all sixty-seven million: measured at twenty levels it
-		// took 897 ms, so at twenty-six it cannot finish inside the test timeout.
-		// The timeout is the instrument; no wall-clock assertion is needed.
+		// Twenty-seven authored nodes must not be expanded into their distinct paths.
 		const loopProperties: Record<string, ContractShape> = {}
 		const loop: ContractShape = { category: 'object', properties: loopProperties }
 		loopProperties.self = loop
@@ -1434,19 +1453,9 @@ describe('raw schema records are inspected once per call (R6-A)', () => {
 	})
 })
 
-describe('the cyclic fallback agrees with an unmemoized walk (R6-A-fix)', () => {
-	it('returns the memo-free verdict on four hundred seeded cyclic declarations', () => {
-		// The instrument that settled the memo's soundness, kept as its guard. Four
-		// hundred randomly wired hub-and-chain graphs, deterministic from one seed,
-		// each carrying enough chain length that both `cycle` and `depth` are
-		// reachable. The tally below is what the SAME corpus produces with the memo
-		// disabled entirely — the reference arm, sound by construction because it
-		// walks every path.
-		//
-		// The instrument is proven falsifiable rather than assumed so: run with the
-		// memo written unconditionally, as it was before this repair, and the corpus
-		// reports 286 cycle / 68 depth — three declarations whose depth violation is
-		// lost. A pin that could not report a wrong memo would be measuring nothing.
+describe('cycle detection on seeded declarations', () => {
+	it('preserves acceptance while classifying every cyclic declaration before depth', () => {
+		// This seeded corpus includes both acyclic and cyclic hub-and-chain graphs.
 		const draw = seededRandom(20260808)
 		const verdicts = Array.from({ length: 400 }, () => {
 			const hubCount = 3 + Math.floor(draw() * 4)
@@ -1487,7 +1496,7 @@ describe('the cyclic fallback agrees with an unmemoized walk (R6-A-fix)', () => 
 			depth: verdicts.filter((verdict) => verdict === 'depth').length,
 			other: verdicts.filter((verdict) => verdict === 'other').length,
 		}
-		expect(tally).toEqual({ accepted: 46, cycle: 283, depth: 71, other: 0 })
+		expect(tally).toEqual({ accepted: 46, cycle: 354, depth: 0, other: 0 })
 	})
 })
 

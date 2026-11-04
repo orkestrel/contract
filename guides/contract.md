@@ -773,7 +773,7 @@ For `rawShape`, a structure refusal names its nested schema keyword or member in
 
 Use `shapeShape` for a field that carries a contract declaration. Its guard accepts exactly a successful `validateShape`, including the depth and expansion limits. Each call reads the value again. Its parser returns that same value by identity, fills no defaults, and never compiles the supplied declaration. Structural validation accepts a default whose inner guard refuses it; compilation of that declaration still refuses it. A legal `RegExp` pattern remains valid.
 
-The emitted schema is shallow: an object with a required `category` enum and explicit `additionalProperties: true`. It over-approximates the declaration language. The default description states that limit and that `is` decides; a caller description replaces it. This schema cannot teach a language model to author a complete nested declaration. Both schema conversion modes preserve its shallow acceptance, and `rawShape` accepts it.
+The emitted schema is shallow: an object with a required `category` enum and explicit `additionalProperties: true`. It over-approximates the declaration language as JSON carries it. A non-enumerable category can pass structural validation while its JSON projection omits the category and fails this schema. The default description states that limit and that `is` decides; a caller description replaces it. This schema cannot teach a language model to author a complete nested declaration. Both schema conversion modes preserve its shallow acceptance, and `rawShape` accepts it.
 
 The public surface includes these declarations:
 
@@ -833,7 +833,7 @@ because neither measured one. `validateShape` reads it to apply `COMPILE_NODE_LI
 
 ##### Diagnostic precedence and reentry
 
-Immediate depth outranks deferred structure, cycle, and domain diagnoses. Within a string declaration the fixed domain order is invalid `min`, invalid `max`, flagged pattern, then contradictory range.
+Cycle detection precedes depth measurement. A cyclic graph reports structure before cycle; an acyclic graph reports depth before structure and domain diagnoses. Within a string declaration the fixed domain order is invalid `min`, invalid `max`, flagged pattern, then contradictory range.
 
 Every nested and outer call inside an active pass shares the exact reentry poison object, which carries no own cause. Cleanup restores idle state, so a later independent call observes the source again. A failed pass, including a caught-reentry-poisoned outer pass, leaves `expansion` undefined, and a later successful pass replaces it.
 

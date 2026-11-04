@@ -24,6 +24,7 @@ import { ContractError, isContractError } from './errors.js'
 import {
 	readIndexView,
 	admitVisited,
+	appendEntries,
 	attempt,
 	failure,
 	isFailure,
@@ -611,7 +612,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 				context: { path: pathOf(path, 'schema') },
 			})
 		}
-		this.#validateShape({ category: 'raw', schema })
+		this.#validateShape({ category: 'raw', schema }, path)
 		const outcome = attempt(() => new SchemaCloner(schema).clone())
 		if (isFailure(outcome)) {
 			if (isContractError(outcome.error)) {
@@ -1006,10 +1007,21 @@ export class ShapeCloner implements ShapeClonerInterface {
 		}
 	}
 
-	#validateShape(shape: ContractShape): void {
+	#validateShape(shape: ContractShape, path: readonly string[] = []): void {
 		const outcome = attempt(() => new ShapeValidator(shape).validate())
 		if (isSuccess(outcome)) return
 		if (isContractError(outcome.error)) {
+			if (path.length > 0) {
+				const tail = outcome.error.context?.path
+				const location: string[] = []
+				appendEntries(location, path)
+				appendEntries(location, typeof tail === 'string' ? [tail] : (tail ?? []))
+				throw this.#create(outcome.error.message, {
+					code: outcome.error.code,
+					context: { ...outcome.error.context, path: location },
+					...(INTRINSICS.own(outcome.error, 'cause') ? { cause: outcome.error.cause } : {}),
+				})
+			}
 			admitVisited(this.#owned, outcome.error)
 		}
 		throw outcome.error

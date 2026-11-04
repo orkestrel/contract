@@ -800,7 +800,7 @@ export class ContractCompiler<
 					type: 'object',
 					description:
 						owned.description ??
-						'Over-approximates a contract declaration; is decides whether the complete shape is valid.',
+						'Over-approximates the declaration language as JSON carries it; is decides whether the complete shape is valid.',
 					properties: INTRINSICS.freeze({
 						category: INTRINSICS.freeze({ enum: INTRINSICS.freeze(INTRINSICS.keys(SHAPE_FIELDS)) }),
 					}),
@@ -1472,8 +1472,8 @@ export class ContractCompiler<
 				const discriminated = this.#discriminate(owned)
 				// `oneOf` exactly-one semantics (documented on `oneOfShape`): judged on
 				// the RAW input's guard matches only — no coercion fallback. Exactly one
-				// variant's guard must accept the raw value; that variant's parser then
-				// runs (its parse must equal the already guard-valid input by clause A).
+				// variant's guard must accept the raw value; preserve that value by
+				// identity so rebuilding cannot change which variants accept it.
 				// Zero matches (no variant fits) or two-or-more matches (ambiguous —
 				// which variant the value belongs to isn't well-defined) both fail the
 				// parse, deliberately simpler than attempting a coercion-then-recheck
@@ -1486,12 +1486,16 @@ export class ContractCompiler<
 						// Indexed, not `filter`: an array prototype method decides how many
 						// variants matched, and a substitute answering a rigged list decides
 						// what this parser publishes.
-						const matching: ReadonlyArray<{ readonly parse: Parser<unknown> }> =
-							INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(variants), [
-								(variant: { readonly guard: Guard<unknown> }) => variant.guard(value),
-							])
+						const matching: ReadonlyArray<{
+							readonly parse: Parser<unknown>
+							readonly guard: Guard<unknown>
+						}> = INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(variants), [
+							(variant: { readonly guard: Guard<unknown> }) => variant.guard(value),
+						])
 						const only = matching[0]
-						return matching.length === 1 && only !== undefined ? only.parse(value) : undefined
+						return matching.length === 1 && only !== undefined
+							? ContractCompiler.#parseArm(only, value)
+							: undefined
 					}
 				}
 				return (value) => {
