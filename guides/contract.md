@@ -42,6 +42,12 @@ A guard-valid
 union can retain input identity. A successful undefined result is distinct from a refusal through
 the result discriminant; the root shape builders do not expose that undefined-only domain.
 
+Snapshot a foreign object before admission, as Tool.execute does. A getter changing between
+is and parse can publish a value that no recorded repair describes. A shallow snapshot stabilizes
+only its own level; nested foreign values must also provide stable reads.
+
+On a host with a polluted Object.prototype, a builder may read an inherited option; that host is outside the honest-intrinsics guarantee.
+
 The fault shape builds lazily and is reused. Its inferred values are assignable to the audit-fault
 type, with discriminator hints coupled more narrowly than that type's independent optional fields.
 Fault guards refuse non-finite limits, counts, and numeric discriminator hints.

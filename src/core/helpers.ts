@@ -70,6 +70,9 @@ import {
  * extras, lossy repairs, and a capped audit refuse. An own optional undefined field omitted or
  * filled by its declared default is not a repair. The result preserves parser ownership, including union input identity.
  * A read failure returns its cause rather than throwing.
+ * Snapshot a foreign object before admission, as Tool.execute does. A getter changing between
+ * is and parse can publish a value that no recorded repair describes. A shallow snapshot only
+ * stabilizes its own level; nested foreign values must also provide stable reads.
  *
  * @example
  * ```ts
@@ -3467,7 +3470,10 @@ export function extractPath(fault: AuditFault): readonly string[] {
  * ```
  */
 export function extractForms(schema: JSONSchema | undefined): readonly JSONSchema[] {
-	return schema === undefined ? [] : [schema, ...(schema.anyOf ?? schema.oneOf ?? [])]
+	if (schema === undefined) return []
+	const anyOf = INTRINSICS.own(schema, 'anyOf') ? schema.anyOf : undefined
+	const oneOf = INTRINSICS.own(schema, 'oneOf') ? schema.oneOf : undefined
+	return [schema, ...(anyOf ?? oneOf ?? [])]
 }
 
 /**
@@ -3494,13 +3500,19 @@ export function extractSchema(schema: JSONSchema, path: readonly string[]): JSON
 	return path.reduce<JSONSchema | undefined>(
 		(node, key) =>
 			extractForms(node)
-				.map((form) =>
-					form.properties !== undefined && Object.hasOwn(form.properties, key)
-						? form.properties[key]
-						: isRecord(form.additionalProperties)
-							? form.additionalProperties
-							: form.items,
-				)
+				.map((form) => {
+					const properties = INTRINSICS.own(form, 'properties') ? form.properties : undefined
+					const additional = INTRINSICS.own(form, 'additionalProperties')
+						? form.additionalProperties
+						: undefined
+					return properties !== undefined && INTRINSICS.own(properties, key)
+						? properties[key]
+						: isRecord(additional)
+							? additional
+							: INTRINSICS.own(form, 'items')
+								? form.items
+								: undefined
+				})
 				.find((child) => child !== undefined),
 		schema,
 	)
@@ -3579,9 +3591,18 @@ export function renderList(entries: readonly string[]): string {
 export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT): string {
 	const deep = room >= 16
 	const inner = Math.floor(room / 2)
-	const forms = schema.anyOf ?? schema.oneOf
-	const required = schema.required ?? []
-	const entries = Object.entries(schema.properties ?? {})
+	const anyOf = INTRINSICS.own(schema, 'anyOf') ? schema.anyOf : undefined
+	const oneOf = INTRINSICS.own(schema, 'oneOf') ? schema.oneOf : undefined
+	const forms = anyOf ?? oneOf
+	const required = (INTRINSICS.own(schema, 'required') ? schema.required : undefined) ?? []
+	const entries = Object.entries(
+		(INTRINSICS.own(schema, 'properties') ? schema.properties : undefined) ?? {},
+	)
+	const type = INTRINSICS.own(schema, 'type') ? schema.type : undefined
+	const enumeration = INTRINSICS.own(schema, 'enum') ? schema.enum : undefined
+	const additional = INTRINSICS.own(schema, 'additionalProperties')
+		? schema.additionalProperties
+		: undefined
 	const listed = (deep ? entries : [])
 		.toSorted(
 			([left], [right]) => Number(required.includes(right)) - Number(required.includes(left)),
@@ -3593,10 +3614,12 @@ export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT
 		)
 	const left = entries.length - listed.length
 	const child =
-		schema.type === 'array'
-			? schema.items
-			: isRecord(schema.additionalProperties)
-				? schema.additionalProperties
+		type === 'array'
+			? INTRINSICS.own(schema, 'items')
+				? schema.items
+				: undefined
+			: isRecord(additional)
+				? additional
 				: undefined
 	const bounds = Object.entries(schema)
 		.filter(([key]) =>
@@ -3610,12 +3633,12 @@ export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT
 			? deep
 				? forms.map((form) => renderForm(form, inner)).join(' | ')
 				: 'any'
-			: schema.enum !== undefined
-				? schema.enum.map((value) => preview(value)).join(' | ')
+			: enumeration !== undefined
+				? enumeration.map((value) => preview(value)).join(' | ')
 				: listed.length > 0
 					? `{${[...listed, ...(left > 0 ? [`and ${String(left)} more`] : [])].join(', ')}}`
 					: [
-							schema.type ?? (entries.length > 0 ? 'object' : 'any'),
+							type ?? (entries.length > 0 ? 'object' : 'any'),
 							...(deep && child !== undefined ? [` of ${renderForm(child, inner)}`] : []),
 							...(bounds.length > 0 ? [` (${bounds.join(', ')})`] : []),
 						].join('')
@@ -3649,21 +3672,23 @@ export function describeFaultLine(fault: AuditFault, schema: JSONSchema): string
 	const head = `${renderPath(path)}: ${fault.reason}`
 	if (fault.reason === 'extra') {
 		const keys = extractForms(extractSchema(schema, path.slice(0, -1))).flatMap((form) =>
-			Object.keys(form.properties ?? {}),
+			Object.keys((INTRINSICS.own(form, 'properties') ? form.properties : undefined) ?? {}),
 		)
 		return keys.length === 0
 			? `${head}; this key is not declared, remove it`
 			: `${head}; this key is not declared, remove it or use a declared key: ${renderList(keys.map((key) => renderPath([key])))}`
 	}
 	const node = extractSchema(schema, path)
+	const anyOf = node !== undefined && INTRINSICS.own(node, 'anyOf') ? node.anyOf : undefined
+	const oneOf = node !== undefined && INTRINSICS.own(node, 'oneOf') ? node.oneOf : undefined
 	if (fault.reason === 'variant' || fault.reason === 'oneOf') {
-		const count = fault.reason === 'variant' ? fault.variants : node?.oneOf?.length
+		const count = fault.reason === 'variant' ? fault.variants : oneOf?.length
 		const forms = count === undefined ? 'the declared forms' : `the ${String(count)} declared forms`
 		const claim =
 			fault.reason === 'oneOf' && fault.matched > 0
 				? `the value matches ${String(fault.matched)} of ${forms} and must match exactly one`
 				: `the value matches none of ${forms}`
-		const declared = node?.anyOf ?? node?.oneOf ?? []
+		const declared = anyOf ?? oneOf ?? []
 		const shown = declared.slice(0, FAULT_LIST_LIMIT)
 		const room = Math.min(
 			FAULT_SCHEMA_LIMIT,
@@ -3679,17 +3704,21 @@ export function describeFaultLine(fault: AuditFault, schema: JSONSchema): string
 	const candidates =
 		fault.expected === 'literal'
 			? extractForms(node).flatMap((form) => [
-					...(form.enum ?? []).map((value) => preview(value)),
-					...(form.type === 'null' ? [preview(null)] : []),
+					...((INTRINSICS.own(form, 'enum') ? form.enum : undefined) ?? []).map((value) =>
+						preview(value),
+					),
+					...(INTRINSICS.own(form, 'type') && form.type === 'null' ? [preview(null)] : []),
 				])
 			: []
+	const description =
+		node !== undefined && INTRINSICS.own(node, 'description') ? node.description : undefined
 	return [
 		head,
 		`expected ${fault.expected}`,
 		...('received' in fault ? [`received ${preview(fault.received)}`] : []),
 		...('constraint' in fault ? [`constraint ${fault.constraint}`] : []),
 		...('limit' in fault && fault.limit !== undefined ? [`limit ${preview(fault.limit)}`] : []),
-		...(node?.description === undefined ? [] : [`description ${preview(node.description)}`]),
+		...(description === undefined ? [] : [`description ${preview(description)}`]),
 		...(candidates.length > 0 ? [`send one of ${renderList(candidates)}`] : []),
 	].join('; ')
 }

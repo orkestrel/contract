@@ -30,7 +30,7 @@ import type {
 	Success,
 } from '@src/core'
 import * as door from '@src/core'
-import { createUndefinedContract, recordAdmission } from '../../setup.js'
+import { createUndefinedContract, recordAdmission, pollutePrototypeData } from '../../setup.js'
 
 describe('admitValue', () => {
 	it.each([
@@ -285,6 +285,80 @@ describe('admitValue', () => {
 })
 
 describe('shared fault text', () => {
+	it('ignores inherited schema vocabulary at formatting boundaries', () => {
+		const faults: readonly AuditFault[] = [
+			{ reason: 'missing', path: ['amount'], expected: 'literal' },
+			{ reason: 'extra', path: ['rogue'] },
+			{ reason: 'variant', path: [], variants: 2 },
+			{ reason: 'oneOf', path: [], matched: 2 },
+		]
+		const schemas: readonly JSONSchema[] = [
+			{},
+			{ properties: { amount: {} } },
+			{ type: 'array', items: {} },
+			{ type: 'object', properties: { amount: { enum: [1, 2] } } },
+			{ anyOf: [{ type: 'number' }, { type: 'null' }] },
+			{ oneOf: [{ type: 'string' }, { type: 'number' }] },
+		]
+		for (const key of [
+			'type',
+			'enum',
+			'oneOf',
+			'anyOf',
+			'nullable',
+			'minimum',
+			'maximum',
+			'minLength',
+			'maxLength',
+			'minItems',
+			'maxItems',
+			'required',
+			'title',
+			'deprecated',
+			'examples',
+			'description',
+			'properties',
+			'items',
+			'additionalProperties',
+			'const',
+			'pattern',
+			'format',
+			'default',
+			'$ref',
+			'prefixItems',
+			'patternProperties',
+			'propertyNames',
+			'readOnly',
+			'writeOnly',
+			'$schema',
+			'$id',
+			'$comment',
+		]) {
+			for (const value of [
+				'UNDECLARED DESCRIPTION',
+				42,
+				false,
+				{},
+				[],
+				['amount'],
+				[{ type: 'null' }],
+				{ amount: { type: 'number' } },
+			]) {
+				for (const schema of schemas) {
+					const expected = describeFaults(faults, schema)
+					const actual = pollutePrototypeData(key, value, () =>
+						door.attempt(() => describeFaults(faults, schema)),
+					)
+					expect({ key, value, actual }).toEqual({
+						key,
+						value,
+						actual: { success: true, value: expected },
+					})
+				}
+			}
+		}
+	})
+
 	it('encodes names, foreign text, limits and descriptions and ends with a send summary', () => {
 		const key = 'name\nFORGED'
 		const schema: door.JSONSchema = {

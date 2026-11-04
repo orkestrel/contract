@@ -158,11 +158,17 @@ export class SchemaShaper {
 			case 'nullable':
 				return nullableShape(this.#shallow(shape.inner))
 			case 'array':
-				return arrayShape(raw, {
-					...(shape.min === undefined ? {} : { min: shape.min }),
-					...(shape.max === undefined ? {} : { max: shape.max }),
-					...(shape.description === undefined ? {} : { description: shape.description }),
-				})
+				return arrayShape(
+					raw,
+					INTRINSICS.rebase(
+						{
+							...(shape.min === undefined ? {} : { min: shape.min }),
+							...(shape.max === undefined ? {} : { max: shape.max }),
+							...(shape.description === undefined ? {} : { description: shape.description }),
+						},
+						null,
+					),
+				)
 			case 'object': {
 				const pairs = INTRINSICS.reflect.apply(
 					INTRINSICS.project,
@@ -183,10 +189,16 @@ export class SchemaShaper {
 					null,
 				)
 				const extra = shape.additionalProperties
-				return objectShape(properties, {
-					additionalProperties: isObject(extra) ? raw : (extra ?? false),
-					...(shape.description === undefined ? {} : { description: shape.description }),
-				})
+				return objectShape(
+					properties,
+					INTRINSICS.rebase(
+						{
+							additionalProperties: isObject(extra) ? raw : (extra ?? false),
+							...(shape.description === undefined ? {} : { description: shape.description }),
+						},
+						null,
+					),
+				)
 			}
 			default:
 				return raw
@@ -724,20 +736,32 @@ export class SchemaShaper {
 				INTRINSICS.own(schema, 'minLength') ? schema.minLength : undefined,
 				INTRINSICS.own(schema, 'maxLength') ? schema.maxLength : undefined,
 			)
-			return stringShape({
-				...bounds,
-				...(description === undefined ? {} : { description }),
-			})
+			// Builder options admit inherited values; this projection must carry only
+			// the schema's own keywords, without reacquiring prototype data.
+			return stringShape(
+				INTRINSICS.rebase(
+					{
+						...bounds,
+						...(description === undefined ? {} : { description }),
+					},
+					null,
+				),
+			)
 		}
 		if (type === 'number') {
 			const bounds = deriveRangeBounds(
 				INTRINSICS.own(schema, 'minimum') ? schema.minimum : undefined,
 				INTRINSICS.own(schema, 'maximum') ? schema.maximum : undefined,
 			)
-			return numberShape({
-				...bounds,
-				...(description === undefined ? {} : { description }),
-			})
+			return numberShape(
+				INTRINSICS.rebase(
+					{
+						...bounds,
+						...(description === undefined ? {} : { description }),
+					},
+					null,
+				),
+			)
 		}
 		if (type === 'integer') {
 			const bounds = deriveRangeBounds(
@@ -751,11 +775,14 @@ export class SchemaShaper {
 				emptyRange
 					? description === undefined
 						? undefined
-						: { description }
-					: {
-							...bounds,
-							...(description === undefined ? {} : { description }),
-						},
+						: INTRINSICS.rebase({ description }, null)
+					: INTRINSICS.rebase(
+							{
+								...bounds,
+								...(description === undefined ? {} : { description }),
+							},
+							null,
+						),
 			)
 		}
 		if (type === 'boolean') {
@@ -775,10 +802,16 @@ export class SchemaShaper {
 				INTRINSICS.own(schema, 'minItems') ? schema.minItems : undefined,
 				INTRINSICS.own(schema, 'maxItems') ? schema.maxItems : undefined,
 			)
-			return arrayShape(items, {
-				...bounds,
-				...(description === undefined ? {} : { description }),
-			})
+			return arrayShape(
+				items,
+				INTRINSICS.rebase(
+					{
+						...bounds,
+						...(description === undefined ? {} : { description }),
+					},
+					null,
+				),
+			)
 		}
 
 		if (
