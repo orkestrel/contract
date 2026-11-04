@@ -98,8 +98,85 @@ describe('admitValue', () => {
 			expected: 'string',
 			received: '',
 		}
-		expect(() => door.matchesUndefinedOmission(fault, value, {})).toThrow(cause)
-		expect(door.matchesUndefinedOmission(fault, {}, {})).toBe(false)
+		expect(() => door.matchesUndefinedField(fault, value, {})).toThrow(cause)
+		expect(door.matchesUndefinedField(fault, {}, {})).toBe(false)
+	})
+
+	it.each([
+		{
+			location: 'root',
+			shape: door.objectShape({
+				age: door.numberShape(),
+				licensed: door.optionalShape(door.booleanShape(), { default: false }),
+			}),
+			input: { age: 30, licensed: undefined },
+			absent: { age: 30 },
+			filled: { age: 30, licensed: false },
+			path: ['licensed'],
+		},
+		{
+			location: 'nested',
+			shape: door.objectShape({
+				person: door.objectShape({
+					licensed: door.optionalShape(door.booleanShape(), { default: false }),
+				}),
+			}),
+			input: { person: { licensed: undefined } },
+			absent: { person: {} },
+			filled: { person: { licensed: false } },
+			path: ['person', 'licensed'],
+		},
+		{
+			location: 'array',
+			shape: door.objectShape({
+				people: door.arrayShape(
+					door.objectShape({
+						licensed: door.optionalShape(door.booleanShape(), { default: false }),
+					}),
+				),
+			}),
+			input: { people: [{ licensed: undefined }] },
+			absent: { people: [{}] },
+			filled: { people: [{ licensed: false }] },
+			path: ['people', '0', 'licensed'],
+		},
+	])(
+		'fills an own undefined default at $location without a repair',
+		({ shape, input, absent, filled, path }) => {
+			const contract = door.createContract(shape)
+			expect(contract.is(input)).toBe(false)
+			expect(contract.parse(input)).toEqual(filled)
+			expect(contract.parse(absent)).toEqual(filled)
+			expect(contract.audit(input)).toEqual([
+				{ reason: 'type', path, expected: 'boolean', received: 'undefined' },
+			])
+			expect(door.admitValue(contract, absent)).toEqual({
+				success: true,
+				value: { value: filled, repairs: [] },
+			})
+			expect(door.admitValue(contract, input)).toEqual({
+				success: true,
+				value: { value: filled, repairs: [] },
+			})
+		},
+	)
+
+	it('never coerces an undefined required nested field or array entry', () => {
+		for (const { shape, value } of [
+			{
+				shape: door.objectShape({ person: door.objectShape({ licensed: door.booleanShape() }) }),
+				value: { person: { licensed: undefined } },
+			},
+			{
+				shape: door.arrayShape(door.objectShape({ licensed: door.booleanShape() })),
+				value: [{ licensed: undefined }],
+			},
+			{ shape: door.arrayShape(door.booleanShape()), value: [undefined] },
+		]) {
+			const contract = door.createContract(shape)
+			expect(contract.parse(value)).toBeUndefined()
+			expect(door.admitValue(contract, value).success).toBe(false)
+		}
 	})
 
 	it('preserves parser ownership for objects and oneOf input identity', () => {

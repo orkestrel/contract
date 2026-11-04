@@ -67,8 +67,8 @@ import {
  * @remarks
  * Reads must remain stable across artifacts. Guard-valid input skips both reports and parses
  * once. Repairs use audit, parse once, and explain only on parse failure. Unresolved unions,
- * extras, lossy repairs, and a capped audit refuse. An own optional undefined omission is benign
- * and is not a repair. The result preserves parser ownership, including union input identity.
+ * extras, lossy repairs, and a capped audit refuse. An own optional undefined field omitted or
+ * filled by its declared default is not a repair. The result preserves parser ownership, including union input identity.
  * A read failure returns its cause rather than throwing.
  *
  * @example
@@ -91,7 +91,7 @@ export function admitValue<T>(
 		const explained = parsed === undefined ? contract.explain(value) : []
 		const repairs = audited.filter((fault) => matchesLosslessRepair(fault, value, parsed))
 		const refused = audited.filter(
-			(fault) => !repairs.includes(fault) && !matchesUndefinedOmission(fault, value, parsed),
+			(fault) => !repairs.includes(fault) && !matchesUndefinedField(fault, value, parsed),
 		)
 		const merged = [...explained, ...refused]
 		const faults = [
@@ -122,22 +122,19 @@ export function admitValue<T>(
 }
 
 /**
- * Checks whether a type fault describes an own undefined field omitted by a successful parse.
+ * Checks whether a type fault describes an own undefined field omitted or defaulted by a successful parse.
  *
  * @remarks
  * Reads own members directly so absence and an unreadable member cannot stand for undefined.
+ * A compiled parser fills an undefined field only through its declared default; it never coerces it.
  * Required reads propagate their cause to the admission boundary.
  *
  * @example
  * ```ts
- * matchesUndefinedOmission({ reason: 'type', path: ['note'], expected: 'string', received: 'undefined' }, { note: undefined }, {}) // true
+ * matchesUndefinedField({ reason: 'type', path: ['note'], expected: 'string', received: 'undefined' }, { note: undefined }, {}) // true
  * ```
  */
-export function matchesUndefinedOmission(
-	fault: AuditFault,
-	value: unknown,
-	parsed: unknown,
-): boolean {
+export function matchesUndefinedField(fault: AuditFault, value: unknown, parsed: unknown): boolean {
 	if (fault.reason !== 'type' || parsed === undefined) return false
 	const path = extractPath(fault)
 	const key = path.at(-1)
@@ -160,8 +157,7 @@ export function matchesUndefinedOmission(
 		isObject(raw) &&
 		INTRINSICS.own(raw, key) &&
 		INTRINSICS.reflect.read(raw, key) === undefined &&
-		isObject(result) &&
-		!INTRINSICS.own(result, key)
+		isObject(result)
 	)
 }
 
