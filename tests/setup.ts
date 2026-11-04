@@ -4977,7 +4977,6 @@ export const STRICT_SCHEMA_REFUSALS: ReadonlyArray<
 	['a false item schema', { type: 'array', items: false }, ['items']],
 	['an enum holding an object', { enum: [{ a: 1 }, 'x'] }, ['enum']],
 	['an enum holding an array', { enum: [[1], 'x'] }, ['enum']],
-	['an enum of null alone', { enum: [null] }, ['enum']],
 	['a reference', { $ref: '#/definitions/x' }, ['$ref']],
 	['a composition keyword', { type: 'object', allOf: [] }, ['allOf']],
 	['$defs', { type: 'object', $defs: {} }, ['$defs']],
@@ -5005,7 +5004,6 @@ export const STRICT_SCHEMA_REFUSALS: ReadonlyArray<
 	['a malformed description', { type: 'string', description: 3 }, ['description']],
 	['a malformed enum', { enum: 'a' }, ['enum']],
 	['an empty enum', { enum: [] }, ['enum']],
-	['an enum holding null', { enum: ['a', null] }, ['enum']],
 	['an enum holding a non-finite number', { enum: [Number.NaN] }, ['enum']],
 	['an enum holding a duplicate', { enum: ['a', 'a'] }, ['enum']],
 	['an enum its type contradicts', { type: 'number', enum: ['a'] }, ['enum']],
@@ -5340,12 +5338,6 @@ export const FOREIGN_SCHEMA_ROWS: ReadonlyArray<
 			additionalProperties: false,
 		},
 		{ a: 'q', 'x-a': 'b' },
-		true,
-	],
-	[
-		'propertyNames on a closed object',
-		{ type: 'object', propertyNames: { maxLength: 3 }, additionalProperties: false },
-		{ abc: 1 },
 		true,
 	],
 	[

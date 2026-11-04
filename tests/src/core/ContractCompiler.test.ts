@@ -11,6 +11,7 @@ import {
 	compileSchema,
 	ContractCompiler,
 	cloneJSONValue,
+	cloneShape,
 	createContract,
 	integerShape,
 	isRecord,
@@ -37,6 +38,7 @@ import {
 	buildSharedDagShape,
 	buildStaircaseShape,
 	captureContractError,
+	pollutePrototype,
 	listCompilerDoors,
 	ObservedShape,
 	ReentrantShape,
@@ -805,5 +807,80 @@ describe('ContractCompiler — field defaults', () => {
 				]),
 			),
 		)
+	})
+})
+
+describe('ContractCompiler — a prototype changed after compiling', () => {
+	const values = [{ n: 3 }, {}, { n: -1 }, { n: 'x' }, 5]
+
+	it.each<readonly [string, () => ContractShape]>([
+		[
+			'a built declaration',
+			() => objectShape({ n: optionalShape(numberShape({ min: 0 }), { default: 3 }) }),
+		],
+		[
+			'a cloned declaration',
+			() => cloneShape(objectShape({ n: optionalShape(numberShape({ min: 0 }), { default: 3 }) })),
+		],
+		[
+			'a hand-written declaration',
+			() => ({
+				category: 'object',
+				properties: {
+					n: {
+						category: 'optional',
+						inner: { category: 'number', min: 0 },
+						default: 3,
+					},
+				},
+			}),
+		],
+	])('keeps both laws over %s', (_label, build) => {
+		const compiler = new ContractCompiler(build())
+		const { is, parse, audit, explain } = compiler.contract
+		const answers = pollutePrototype(
+			Object.prototype,
+			'max',
+			() => 2,
+			() =>
+				values.map((value) => ({
+					is: is(value),
+					parsed: parse(value) !== undefined,
+					auditClean: audit(value).length === 0,
+					explainClean: explain(value).length === 0,
+				})),
+		)
+
+		expect(answers.map(({ auditClean }) => auditClean)).toEqual(answers.map((answer) => answer.is))
+		expect(answers.map(({ explainClean }) => explainClean)).toEqual(
+			answers.map(({ parsed }) => parsed),
+		)
+		expect(answers[0]).toEqual({ is: true, parsed: true, auditClean: true, explainClean: true })
+	})
+
+	it.each<readonly [string, unknown]>([
+		['min', 100],
+		['max', 0],
+		['pattern', /^never$/],
+		['integer', true],
+	])('reads no inherited %s from any leaf or array at call time', (field, inherited) => {
+		const hand: ContractShape = {
+			category: 'object',
+			properties: {
+				text: { category: 'string' },
+				count: { category: 'number' },
+				list: { category: 'array', items: { category: 'string' } },
+			},
+		}
+		const value = { text: 'abc', count: 1.5, list: ['a'] }
+		const { is, audit, explain } = new ContractCompiler(hand).contract
+		const answers = pollutePrototype(
+			Object.prototype,
+			field,
+			() => inherited,
+			() => ({ is: is(value), audit: audit(value), explain: explain(value) }),
+		)
+
+		expect(answers).toEqual({ is: true, audit: [], explain: [] })
 	})
 })

@@ -1897,8 +1897,8 @@ describe('schemaToShape — performance guard', () => {
 		const widened = schemaToShape(node)
 		expect(performance.now() - start).toBeLessThan(5000)
 		// The conversion stays fast, and a shape this DAG expands past the compile limit
-		// widens whole, so `createContract` over it answers instead of refusing.
-		expect(widened.category).toBe('raw')
+		// keeps only its root, so `createContract` over it answers instead of refusing.
+		expect(widened.category).toBe('object')
 
 		const small = Array.from({ length: 10 }).reduce<JSONSchema>(
 			(child) => ({ type: 'object', properties: { a: child, b: child }, required: ['a', 'b'] }),

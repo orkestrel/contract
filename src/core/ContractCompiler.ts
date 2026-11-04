@@ -421,7 +421,7 @@ export class ContractCompiler<
 		const sealed = ShapePass.expansionOf(source)
 		if (sealed !== undefined) {
 			refuseExpansion(sealed)
-			this.#discover(source, true)
+			this.#discover(source)
 			this.#source = undefined
 			return
 		}
@@ -435,11 +435,11 @@ export class ContractCompiler<
 		const validator = new ShapeValidator(owned)
 		validator.validate()
 		refuseExpansion(validator.expansion)
-		this.#discover(owned, false)
+		this.#discover(owned)
 		this.#source = undefined
 	}
 
-	#discover(root: ContractShape, sealed: boolean): void {
+	#discover(root: ContractShape): void {
 		// Narrowed once at the door, because both dispatches below take their
 		// receiver type from this value. `#prepare` is the only caller and it
 		// refuses while the declaration is gone, so the walk always finds the map
@@ -474,9 +474,10 @@ export class ContractCompiler<
 			// what makes one entry per unique node correct rather than merely cheap.
 			if (INTRINSICS.reflect.apply(INTRINSICS.recall, known, [shape]) !== undefined) continue
 			const index = this.#nodes.length
-			// A family may build long after this call, when `Object.prototype` may hold a
-			// field a sealed node leaves out, so it reads an own copy that cannot inherit.
-			const node: ContractShape = sealed ? INTRINSICS.rebase({ ...shape }, null) : shape
+			// `Object.prototype` can gain a field a node leaves out at any time after this
+			// call, and a family or a report plan reading the node would answer from it, so
+			// they read an own copy that cannot inherit.
+			const node: ContractShape = INTRINSICS.rebase({ ...shape }, null)
 			this.#nodes[index] = node
 			INTRINSICS.reflect.apply(INTRINSICS.retain, known, [node, index])
 			INTRINSICS.reflect.apply(INTRINSICS.retain, known, [shape, index])

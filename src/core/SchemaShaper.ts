@@ -39,6 +39,7 @@ import {
 	isInteger,
 	isJSONValue,
 	isLiteralValue,
+	isObject,
 	isRecord,
 	isString,
 } from './validators.js'
@@ -53,6 +54,7 @@ import {
 	nullableShape,
 	nullShape,
 	numberShape,
+	objectShape,
 	oneOfShape,
 	optionalShape,
 	rawShape,
@@ -97,7 +99,11 @@ export class SchemaShaper {
 	// A second memo for the nodes reached below a union, because a default that fills
 	// beside a union must drop inside one, so one node converts to two different shapes.
 	readonly #enclosed: WeakMap<object, Map<number, ContractShape>>
+	// A third for the nodes reached below a strict `oneOf`, where a silent object refuses
+	// though it would close anywhere else.
+	readonly #exclusive: WeakMap<object, Map<number, ContractShape>>
 	readonly #path: string[]
+	#oneOfs: number
 	// The steps that built a shape node, and whether a memo served a node twice, so a tree
 	// too small to overflow the compile limit pays for no second count.
 	#built: number
@@ -109,7 +115,9 @@ export class SchemaShaper {
 		this.#visited = new SchemaShaper.#weakSet()
 		this.#memo = new SchemaShaper.#weakMap()
 		this.#enclosed = new SchemaShaper.#weakMap()
+		this.#exclusive = new SchemaShaper.#weakMap()
 		this.#path = []
+		this.#oneOfs = 0
 		this.#built = 0
 		this.#shared = false
 	}
@@ -125,18 +133,64 @@ export class SchemaShaper {
 			throw this.#refusal('a default needs an optional property to fill', 'default')
 		}
 		const shape = this.#convert(this.#source, INFER_DEPTH_LIMIT, false)
-		return !this.#strict && this.#exceeds(shape) ? rawShape({}) : shape
+		return !this.#strict && this.#exceeds(shape) ? this.#shallow(shape) : shape
 	}
 
-	// A lenient schema must always compile, so one past the compile limit widens whole. No
-	// step builds more than nine shape nodes, so a sharing-free walk of a sixteenth of the
-	// limit cannot overflow it and pays for no second count. A memo hit means the walk
-	// built less than the shape expands into, so it always asks the validator.
+	// A lenient schema must always compile, so one past the compile limit keeps only its
+	// root. No step builds more than nine shape nodes, so a sharing-free walk of a
+	// sixteenth of the limit cannot overflow it and pays for no second count. A memo hit
+	// means the walk built less than the shape expands into, so it always asks the
+	// validator.
 	#exceeds(shape: ContractShape): boolean {
 		if (!this.#shared && this.#built <= COMPILE_NODE_LIMIT / 16) return false
 		const validator = new ShapeValidator(shape)
 		validator.validate()
 		return (validator.expansion ?? 0) > COMPILE_NODE_LIMIT
+	}
+
+	// What a shape too large to compile can still enforce: its root's type, an array's
+	// bounds, and an object's required keys and closure, with every value below them raw.
+	// A root with no such form widens whole. Keys stop at `INFER_BREADTH_LIMIT`, so what
+	// this builds always compiles.
+	#shallow(shape: ContractShape): ContractShape {
+		const raw = rawShape({})
+		switch (shape.category) {
+			case 'nullable':
+				return nullableShape(this.#shallow(shape.inner))
+			case 'array':
+				return arrayShape(raw, {
+					...(shape.min === undefined ? {} : { min: shape.min }),
+					...(shape.max === undefined ? {} : { max: shape.max }),
+					...(shape.description === undefined ? {} : { description: shape.description }),
+				})
+			case 'object': {
+				const pairs = INTRINSICS.reflect.apply(
+					INTRINSICS.project,
+					readIndexView(INTRINSICS.keys(shape.properties)),
+					[
+						(key: string) => [
+							key,
+							shape.properties[key]?.category === 'optional' ? optionalShape(raw) : raw,
+						],
+					],
+				)
+				const properties = INTRINSICS.rebase(
+					INTRINSICS.record<ContractShape>({
+						[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+							pairs,
+						]),
+					}),
+					null,
+				)
+				const extra = shape.additionalProperties
+				return objectShape(properties, {
+					additionalProperties: isObject(extra) ? raw : (extra ?? false),
+					...(shape.description === undefined ? {} : { description: shape.description }),
+				})
+			}
+			default:
+				return raw
+		}
 	}
 
 	// The per-node entry point the root and every child recursion share. Guards
@@ -158,7 +212,7 @@ export class SchemaShaper {
 		// The memo read is dispatched through the captured `Map.prototype.get`
 		// too: a substitute answering a decoy would put a shape this package
 		// never built into one it publishes as its own.
-		const memo = enclosed ? this.#enclosed : this.#memo
+		const memo = this.#oneOfs > 0 ? this.#exclusive : enclosed ? this.#enclosed : this.#memo
 		const depthMemo = INTRINSICS.reflect.apply(INTRINSICS.recall, memo, [schema])
 		const cached =
 			depthMemo === undefined
@@ -333,7 +387,8 @@ export class SchemaShaper {
 			const members = this.#entries(schema.enum, 'enum')
 			const malformed = INTRINSICS.reflect.apply(INTRINSICS.some, members, [
 				(entry: unknown) =>
-					!isLiteralValue(entry) || (typeof entry === 'number' && !isFiniteNumber(entry)),
+					entry !== null &&
+					(!isLiteralValue(entry) || (typeof entry === 'number' && !isFiniteNumber(entry))),
 			])
 			if (members.length === 0 || malformed || !this.#unique(members)) {
 				throw this.#refusal('enum must list unique finite primitives', 'enum')
@@ -445,6 +500,7 @@ export class SchemaShaper {
 	}
 
 	#fits(entry: unknown, types: readonly string[]): boolean {
+		if (entry === null) return this.#names(types, 'null')
 		if (isString(entry)) return this.#names(types, 'string')
 		if (isBoolean(entry)) return this.#names(types, 'boolean')
 		return isInteger(entry) ? this.#names(types, 'number', 'integer') : this.#names(types, 'number')
@@ -473,6 +529,8 @@ export class SchemaShaper {
 	// keyword falls through to the next rule instead of throwing. Precedence,
 	// top-down:
 	//
+	// 0. `$ref` — this walk resolves no reference, and under draft-07 a reference
+	//    replaces its siblings, so nothing beside one can be read and the node widens.
 	// 1. `enum` — finite string/number/boolean entries become a literal shape, a
 	//    `null` entry wraps it in a nullable, and `null` alone becomes a null shape.
 	//    Any other entry widens the node, because dropping it would narrow. An empty
@@ -525,6 +583,10 @@ export class SchemaShaper {
 	#build(schema: JSONSchema, depth: number, enclosed: boolean): ContractShape {
 		this.#built += 1
 		const description = isString(schema.description) ? schema.description : undefined
+
+		if (INTRINSICS.own(schema, '$ref')) {
+			return this.#widen('a reference is not resolved', description, '$ref')
+		}
 
 		if (isArray(schema.enum)) {
 			const observed = INTRINSICS.from(
@@ -733,6 +795,7 @@ export class SchemaShaper {
 				(entry: JSONSchema | true) =>
 					entry !== true &&
 					entry.type === 'null' &&
+					!INTRINSICS.own(entry, '$ref') &&
 					!INTRINSICS.own(entry, 'enum') &&
 					!INTRINSICS.own(entry, 'oneOf') &&
 					!INTRINSICS.own(entry, 'anyOf'),
@@ -743,6 +806,8 @@ export class SchemaShaper {
 		])
 		const paired =
 			arms.length === 2 && nulls.length === 1 && !hasTrue && !(this.#strict && keyword === 'oneOf')
+		const exclusive = this.#strict && keyword === 'oneOf' ? 1 : 0
+		this.#oneOfs += exclusive
 		const variants: readonly ContractShape[] = INTRINSICS.reflect.apply(
 			INTRINSICS.project,
 			readIndexView(arms),
@@ -757,6 +822,7 @@ export class SchemaShaper {
 				},
 			],
 		)
+		this.#oneOfs -= exclusive
 		const other = variants[arms[0] === nulls[0] ? 1 : 0]
 		if (paired && other !== undefined) {
 			return nullableShape(this.#describe(other, description))
@@ -789,15 +855,23 @@ export class SchemaShaper {
 	// mirroring the record inference's partial-key handling. The accumulator uses
 	// a null-prototype record so a property literally named `__proto__` becomes an
 	// own data key rather than mutating the prototype. A present `patternProperties`
-	// or `propertyNames` opens the object whatever its own `additionalProperties` says,
-	// because a key that keyword admits is unread here. A strict conversion refuses
-	// the truncation and closes an object whose schema is silent.
+	// opens the object whatever its own `additionalProperties` says, because a key
+	// that keyword admits is unread here; `propertyNames` exempts no key from
+	// `additionalProperties`, so it opens nothing. A strict conversion refuses the
+	// truncation and closes an object whose schema is silent, except below a `oneOf`,
+	// where closing it could change which arms match, so it refuses that too.
 	#buildObject(
 		schema: JSONSchema,
 		depth: number,
 		description: string | undefined,
 		enclosed: boolean,
 	): ContractShape {
+		if (this.#oneOfs > 0 && !INTRINSICS.own(schema, 'additionalProperties')) {
+			throw this.#refusal(
+				'an object below a oneOf must declare additionalProperties, because closing it could change which arms match',
+				'additionalProperties',
+			)
+		}
 		const propertiesSource = isRecord(schema.properties) ? schema.properties : undefined
 		const requiredSource = isArray(schema.required)
 			? INTRINSICS.from(
@@ -819,10 +893,7 @@ export class SchemaShaper {
 		}
 		const keys = limitEntries(allKeys, INFER_BREADTH_LIMIT)
 		const extra = schema.additionalProperties
-		const unread =
-			truncated ||
-			INTRINSICS.own(schema, 'patternProperties') ||
-			INTRINSICS.own(schema, 'propertyNames')
+		const unread = truncated || INTRINSICS.own(schema, 'patternProperties')
 		const open = unread || (extra !== false && (!this.#strict || extra !== undefined))
 		const pairs = INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(keys), [
 			(key: string) => {

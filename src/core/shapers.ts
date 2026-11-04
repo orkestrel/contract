@@ -824,8 +824,10 @@ export function rawShape(schema: JSONSchema): RawShape {
  * lenient conversion builds from it, because the walk widens what it cannot read.
  * So `oneOf` builds an inclusive union, a `true` arm is a raw variant and a `false`
  * arm is dropped, an `enum` holding `null` admits it, `nullable: true` wraps the
- * node, a present `patternProperties` or `propertyNames` opens the object, and a
- * present `prefixItems` widens the elements.
+ * node, a present `patternProperties` opens the object, a present `prefixItems`
+ * widens the elements, and a `$ref` widens the node before anything beside it is read.
+ * A schema past the compile limit keeps only its root's type, an array's bounds, and an
+ * object's required keys and closure, with every value below them raw.
  *
  * DEFAULTS: a lenient conversion carries a property's `default` when the key is
  * not `required`, its object is closed with no union ancestor, and the value is
@@ -837,11 +839,12 @@ export function rawShape(schema: JSONSchema): RawShape {
  * would ignore (`pattern`, `format`, `nullable`, `patternProperties`,
  * `propertyNames`, `prefixItems`, and anything else outside
  * {@link STRICT_SCHEMA_KEYWORDS}), a malformed keyword or annotation, a boolean schema, an `enum` entry
- * that is not a finite primitive, a contradictory bound, a `required` name not in
+ * that is neither a finite primitive nor `null`, a contradictory bound, a `required` name not in
  * `properties`, breadth past {@link INFER_BREADTH_LIMIT}, and a `default` with no
  * optional property to fill. An object with no `additionalProperties` closes
  * rather than opens, and `oneOf` keeps exactly-one, because a strict walk reads
- * every keyword that could keep two arms apart.
+ * every keyword that could keep two arms apart. Below a `oneOf` that object refuses
+ * instead, since closing it could change which arms match.
  *
  * @param schema - The JSON Schema value to convert
  * @param options - Optional `strict`, default `false`
