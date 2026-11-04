@@ -306,6 +306,49 @@ export const JSON_SCHEMA_TYPES: readonly JSONSchemaType[] = Object.freeze([
 ])
 
 /**
+ * Lists the JSON Schema keywords a strict `schemaToShape` conversion reads, frozen.
+ *
+ * @remarks
+ * The keywords a shape can honour, plus the annotations that assert nothing and so
+ * lose nothing when a shape drops them: `title`, `$schema`, `$id`, `$comment`,
+ * `examples`, `deprecated`, `readOnly`, and `writeOnly`. Every other keyword refuses.
+ * `pattern` and `format` are absent because no compiled shape asserts them, so a
+ * schema holding one would convert to a shape wider than the schema it came from.
+ *
+ * @example
+ * ```ts
+ * STRICT_SCHEMA_KEYWORDS.includes('title') // true
+ * STRICT_SCHEMA_KEYWORDS.includes('pattern') // false
+ * ```
+ */
+export const STRICT_SCHEMA_KEYWORDS: readonly string[] = Object.freeze([
+	'type',
+	'title',
+	'description',
+	'$schema',
+	'$id',
+	'$comment',
+	'examples',
+	'deprecated',
+	'readOnly',
+	'writeOnly',
+	'default',
+	'enum',
+	'minLength',
+	'maxLength',
+	'minimum',
+	'maximum',
+	'minItems',
+	'maxItems',
+	'items',
+	'properties',
+	'required',
+	'additionalProperties',
+	'anyOf',
+	'oneOf',
+])
+
+/**
  * Lists every declared {@link ContractCode} refusal category, frozen.
  *
  * @remarks

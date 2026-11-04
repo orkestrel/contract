@@ -735,32 +735,89 @@ export function matchesStringLength(
 	const length = value.length
 	if (min !== undefined && length < min) return false
 	if (max !== undefined && length > 2 * max) return false
-	if ((min === undefined || length >= 2 * min - 1) && (max === undefined || length <= max)) {
+	if (
+		(min === undefined || INTRINSICS.ceil(length / 2) >= min) &&
+		(max === undefined || length <= max)
+	) {
 		return true
 	}
-	// Indexed reads on a string primitive dispatch through nothing, so no replaced
-	// string member decides this count.
-	const pairs: number = INTRINSICS.reflect.apply(
-		INTRINSICS.reduce,
-		iterateIndices(() => length - 1),
-		[
-			(total: number, index: number) => {
-				const high = value[index]
-				const low = value[index + 1]
-				return high !== undefined &&
-					low !== undefined &&
-					high >= '\ud800' &&
-					high <= '\udbff' &&
-					low >= '\udc00' &&
-					low <= '\udfff'
-					? total + 1
-					: total
-			},
-			0,
-		],
-	)
+	// The code points are the units less the pairs. `max` holds at `length - max` pairs,
+	// and `min` fails one past `length - min`, so the walk stops at whichever it reaches.
+	const pairs = computeSurrogatePairs(value, length - (min === undefined ? (max ?? 0) : min - 1))
 	const points = length - pairs
 	return (min === undefined || points >= min) && (max === undefined || points <= max)
+}
+
+/**
+ * Counts the surrogate pairs in a string, stopping at a limit.
+ *
+ * @remarks
+ * A regular-expression literal builds a fresh `RegExp` per evaluation, so this call
+ * owns the `lastIndex` that is its cursor, and the captured `exec` reads the internal
+ * slots and no member a caller can replace. Text with no surrogate costs one native
+ * scan, and a string of pairs costs one `exec` per pair up to the limit.
+ *
+ * @param value - The string to scan
+ * @param limit - The count to stop at
+ * @returns The number of surrogate pairs, or `limit` when the string holds at least that many
+ *
+ * @example
+ * ```ts
+ * computeSurrogatePairs('😀a😀', 8) // 2
+ * computeSurrogatePairs('😀😀😀', 2) // 2
+ * ```
+ */
+export function computeSurrogatePairs(value: string, limit: number): number {
+	const pair = /[\uD800-\uDBFF][\uDC00-\uDFFF]/g
+	const steps = limit > 0 ? INTRINSICS.ceil(limit) : 0
+	for (const step of iterateIndices(() => steps)) {
+		if (INTRINSICS.reflect.apply(INTRINSICS.captures, pair, [value]) === null) return step
+	}
+	return steps
+}
+
+/**
+ * Refuses an options record that holds a key its builder does not read.
+ *
+ * @remarks
+ * The door for an option that decides what a contract accepts, where a misspelled key
+ * would otherwise read as an absent option and fail open. It looks at own enumerable
+ * string keys, so an inherited or symbol-keyed member is not a misspelling.
+ *
+ * @param source - The builder options, when there are any
+ * @param keys - The keys that builder reads
+ * @param builder - The builder name used in the refusal
+ * @param shape - The shape category used in structured error context
+ * @throws {ContractError} When the record holds any other key
+ *
+ * @example
+ * ```ts
+ * refuseOptionKeys({ strict: true }, ['strict'], 'schemaToShape', 'schema') // returns
+ * refuseOptionKeys({ strct: true }, ['strict'], 'schemaToShape', 'schema') // throws
+ * ```
+ */
+export function refuseOptionKeys(
+	source: object | undefined,
+	keys: readonly string[],
+	builder: string,
+	shape: string,
+): void {
+	if (source === undefined) return
+	const strays: readonly string[] = INTRINSICS.reflect.apply(
+		INTRINSICS.select,
+		readIndexView(INTRINSICS.keys(source)),
+		[
+			(key: string) =>
+				!INTRINSICS.reflect.apply(INTRINSICS.some, keys, [(name: string) => name === key]),
+		],
+	)
+	const first = strays[0]
+	if (first === undefined) return
+	const known: string = INTRINSICS.reflect.apply(INTRINSICS.join, keys, [', '])
+	throw new ContractError(
+		`${builder}: unknown option ${preview(first)}; the options are ${known}`,
+		{ code: 'structure', context: { path: [first], shape } },
+	)
 }
 
 /**

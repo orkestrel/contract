@@ -126,6 +126,7 @@ import {
 	matchesJSONValue,
 	matchesRecordBrand,
 	matchesStringLength,
+	computeSurrogatePairs,
 	objectShape,
 	nullableShape,
 	optionalShape,
@@ -4237,5 +4238,46 @@ describe('matchesStringLength', () => {
 		expect(
 			buildStringFaults(shape, `${ASTRAL}a${ASTRAL}`, []).map((fault) => fault.reason),
 		).toEqual(['constraint'])
+	})
+
+	it('keeps a fractional bound exact', () => {
+		expect(matchesStringLength(ASTRAL, 1.5, undefined)).toBe(false)
+		expect(matchesStringLength('ab', 1.5, undefined)).toBe(true)
+		expect(matchesStringLength('ab', undefined, 1.5)).toBe(false)
+		expect(matchesStringLength(ASTRAL, undefined, 1.5)).toBe(true)
+	})
+})
+
+describe('computeSurrogatePairs', () => {
+	it.each<readonly [string, string, number, number]>([
+		['no pair', 'abc', 8, 0],
+		['the empty string', '', 8, 0],
+		['every pair under the limit', `${ASTRAL}a${ASTRAL}`, 8, 2],
+		['a lone high surrogate', '\uD83Da', 8, 0],
+		['a lone low surrogate', '\uDE00a', 8, 0],
+		['two high surrogates before a low', '\uD83D😀', 8, 1],
+		['a pair then a lone low surrogate', '😀\uDE00', 8, 1],
+		['a limit below the pairs', `${ASTRAL}${ASTRAL}${ASTRAL}${ASTRAL}`, 2, 2],
+		['a limit at the pairs', `${ASTRAL}${ASTRAL}`, 2, 2],
+		['a limit of zero', ASTRAL, 0, 0],
+		['a negative limit', ASTRAL, -1, 0],
+	])('answers for %s', (_label, value, limit, expected) => {
+		expect(computeSurrogatePairs(value, limit)).toBe(expected)
+	})
+
+	it('agrees with a string iterator over surrogate text', () => {
+		const samples = Array.from({ length: 256 }, (_entry, seed) => buildSurrogateText(seed))
+		const wrong = samples.filter(
+			(text) => text.length - computeSurrogatePairs(text, text.length) !== Array.from(text).length,
+		)
+
+		expect(wrong).toEqual([])
+	})
+
+	it('holds no state between two calls', () => {
+		const value = `${ASTRAL}${ASTRAL}`
+
+		expect(computeSurrogatePairs(value, 1)).toBe(1)
+		expect(computeSurrogatePairs(value, 8)).toBe(2)
 	})
 })

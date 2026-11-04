@@ -4793,6 +4793,28 @@ export const STRICT_SCHEMA_REFUSALS: ReadonlyArray<
 	['an enum of null alone', { enum: [null] }, ['enum']],
 	['a reference', { $ref: '#/definitions/x' }, ['$ref']],
 	['a composition keyword', { type: 'object', allOf: [] }, ['allOf']],
+	['$defs', { type: 'object', $defs: {} }, ['$defs']],
+	['definitions', { type: 'object', definitions: {} }, ['definitions']],
+	['$anchor', { type: 'string', $anchor: 'x' }, ['$anchor']],
+	['$dynamicAnchor', { type: 'string', $dynamicAnchor: 'x' }, ['$dynamicAnchor']],
+	['contentEncoding', { type: 'string', contentEncoding: 'base64' }, ['contentEncoding']],
+	['contentMediaType', { type: 'string', contentMediaType: 'text/plain' }, ['contentMediaType']],
+	['contentSchema', { type: 'string', contentSchema: {} }, ['contentSchema']],
+	['discriminator', { type: 'object', discriminator: {} }, ['discriminator']],
+	['example', { type: 'string', example: 'x' }, ['example']],
+	['a title that is not text', { type: 'string', title: 3 }, ['title']],
+	['a $schema that is not text', { type: 'string', $schema: 3 }, ['$schema']],
+	['an $id that is not text', { type: 'string', $id: 3 }, ['$id']],
+	['a $comment that is not text', { type: 'string', $comment: 3 }, ['$comment']],
+	['examples that are not an array', { type: 'string', examples: 'x' }, ['examples']],
+	[
+		'a deprecated flag that is not a boolean',
+		{ type: 'string', deprecated: 'yes' },
+		['deprecated'],
+	],
+	['a readOnly flag that is not a boolean', { type: 'string', readOnly: 1 }, ['readOnly']],
+	['a writeOnly flag that is not a boolean', { type: 'string', writeOnly: null }, ['writeOnly']],
+	['annotations alone', { title: 'name', $comment: 'text' }, []],
 	['a malformed description', { type: 'string', description: 3 }, ['description']],
 	['a malformed enum', { enum: 'a' }, ['enum']],
 	['an empty enum', { enum: [] }, ['enum']],
@@ -5191,6 +5213,36 @@ export const FOREIGN_SCHEMA_ROWS: ReadonlyArray<
 	// The schema refuses this value; a boolean property schema widens past it.
 	['a false property schema', { type: 'object', properties: { a: false } }, { a: 1 }, true],
 	['the empty schema', {}, { a: 1 }, true],
+	[
+		'typeless properties given a number',
+		{ properties: { a: { type: 'string' } }, required: ['a'] },
+		5,
+		true,
+	],
+	[
+		'typeless properties given a string',
+		{ properties: { a: { type: 'string' } }, required: ['a'] },
+		'x',
+		true,
+	],
+	[
+		'typeless properties given an array',
+		{ properties: { a: { type: 'string' } }, required: ['a'] },
+		[1],
+		true,
+	],
+	[
+		'typeless properties given null',
+		{ properties: { a: { type: 'string' } }, required: ['a'] },
+		null,
+		true,
+	],
+	[
+		'typeless properties given a matching object',
+		{ properties: { a: { type: 'string' } }, required: ['a'] },
+		{ a: 'x' },
+		true,
+	],
 	['a number property', { type: 'object', properties: { n: { type: 'number' } } }, { n: 5 }, true],
 	[
 		'extras on an open object',
@@ -5254,6 +5306,68 @@ export const FOREIGN_SCHEMA_ROWS: ReadonlyArray<
 		{},
 		false,
 	],
+])
+
+/**
+ * Builds an object schema of `outer` object properties holding `inner` string properties.
+ *
+ * @param outer - The number of object properties
+ * @param inner - The number of string properties under each
+ * @returns The schema, sharing no node
+ */
+export function buildWideSchema(outer: number, inner: number): Readonly<Record<string, unknown>> {
+	return {
+		type: 'object',
+		properties: Object.fromEntries(
+			Array.from({ length: outer }, (_outer, row) => [
+				`k${String(row)}`,
+				{
+					type: 'object',
+					properties: Object.fromEntries(
+						Array.from({ length: inner }, (_inner, column) => [
+							`p${String(column)}`,
+							{ type: 'string' },
+						]),
+					),
+				},
+			]),
+		),
+	}
+}
+
+/**
+ * Builds an object schema whose `outer` properties all hold one shared object schema.
+ *
+ * @param outer - The number of properties sharing the node
+ * @param inner - The number of string properties on the shared node
+ * @returns The schema, holding `inner + 1` distinct nodes below its root
+ */
+export function buildSharedSchema(outer: number, inner: number): Readonly<Record<string, unknown>> {
+	const shared = {
+		type: 'object',
+		properties: Object.fromEntries(
+			Array.from({ length: inner }, (_inner, column) => [`p${String(column)}`, { type: 'string' }]),
+		),
+	}
+	return {
+		type: 'object',
+		properties: Object.fromEntries(
+			Array.from({ length: outer }, (_outer, row) => [`k${String(row)}`, shared]),
+		),
+	}
+}
+
+/** Lists every annotation a strict conversion accepts, each with a value of its domain. */
+export const STRICT_SCHEMA_ANNOTATIONS: ReadonlyArray<readonly [string, unknown]> = Object.freeze([
+	['title', 'name'],
+	['description', 'text'],
+	['$schema', 'https://json-schema.org/draft/2020-12/schema'],
+	['$id', 'https://example.com/schema'],
+	['$comment', 'text'],
+	['examples', ['x']],
+	['deprecated', true],
+	['readOnly', false],
+	['writeOnly', true],
 ])
 
 // === Code points

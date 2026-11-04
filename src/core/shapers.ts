@@ -44,6 +44,7 @@ import {
 	readPatternFlags,
 	readPatternSource,
 	readValue,
+	refuseOptionKeys,
 } from './helpers.js'
 import { isJSONValue, isLiteralValue, isObject, isRegExp } from './validators.js'
 import { ContractError, isContractError } from './errors.js'
@@ -620,6 +621,7 @@ export function optionalShape<S extends ContractShape>(
 ): OptionalShape<S> {
 	return contain(() => {
 		const safe = readOptions(options, ['default'], 'optionalShape', 'optional')
+		refuseOptionKeys(options, ['default'], 'optionalShape', 'optional')
 		// Own presence, read apart from the value: the snapshot above omits a present
 		// `undefined` and keeps an inherited value, and neither may decide this field.
 		const present = options !== undefined && INTRINSICS.own(options, 'default')
@@ -630,10 +632,18 @@ export function optionalShape<S extends ContractShape>(
 				context: { path: ['default'], shape: 'optional', received: preview(value) },
 			})
 		}
+		const owned = value === undefined ? undefined : attempt(() => cloneJSONValue(value))
+		if (owned !== undefined && isFailure(owned)) {
+			throw new ContractError('optionalShape: default must be a JSON value', {
+				code: 'structure',
+				context: { path: ['default'], shape: 'optional', received: preview(value) },
+				cause: owned.error,
+			})
+		}
 		const shape: OptionalShape<S> = {
 			category: 'optional',
 			inner,
-			...(value === undefined ? {} : { default: cloneJSONValue(value) }),
+			...(owned === undefined ? {} : { default: owned.value }),
 		}
 		new ShapeValidator({ category: 'object', properties: { value: shape } }).validate()
 		return INTRINSICS.freeze(shape)
@@ -837,8 +847,8 @@ export function rawShape(schema: JSONSchema): RawShape {
  * STRICT: `{ strict: true }` is the door for a foreign schema. It refuses, with
  * code `structure`, every node the lenient walk would widen, every keyword it
  * would ignore (`pattern`, `format`, `nullable`, `patternProperties`,
- * `propertyNames`, `prefixItems`, and anything outside the {@link JSONSchema}
- * vocabulary included), a malformed keyword, a boolean schema, an `enum` entry
+ * `propertyNames`, `prefixItems`, and anything else outside
+ * {@link STRICT_SCHEMA_KEYWORDS}), a malformed keyword or annotation, a boolean schema, an `enum` entry
  * that is not a finite primitive, a contradictory bound, a `required` name not in
  * `properties`, breadth past {@link INFER_BREADTH_LIMIT}, and a `default` with no
  * optional property to fill. An object with no `additionalProperties` closes
@@ -861,6 +871,7 @@ export function rawShape(schema: JSONSchema): RawShape {
 export function schemaToShape(schema: JSONSchema, options?: SchemaToShapeOptions): ContractShape {
 	return contain(() => {
 		const safe = readOptions(options, ['strict'], 'schemaToShape', 'schema')
+		refuseOptionKeys(options, ['strict'], 'schemaToShape', 'schema')
 		const named = options !== undefined && INTRINSICS.own(options, 'strict')
 		const strict = named ? safe?.strict : undefined
 		if (strict !== undefined && typeof strict !== 'boolean') {

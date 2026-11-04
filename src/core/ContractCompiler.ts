@@ -1261,10 +1261,11 @@ export class ContractCompiler<
 							const raw = absent ? undefined : record[entry.key]
 							if (raw === undefined) {
 								if (!entry.optional) return undefined
-								// Parsed from a fresh copy, so nested defaults apply and no two
-								// results share a tree, whichever parser the inner shape holds.
+								// A container parses from a fresh copy, so nested defaults apply and no
+								// two results share a tree, whichever parser the inner shape holds.
 								if (entry.fill !== undefined) {
-									selected[selected.length] = [entry.key, entry.parse(cloneJSONValue(entry.fill))]
+									const fill = isObject(entry.fill) ? cloneJSONValue(entry.fill) : entry.fill
+									selected[selected.length] = [entry.key, entry.parse(fill)]
 								}
 								continue
 							}

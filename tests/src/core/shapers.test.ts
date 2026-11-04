@@ -401,7 +401,6 @@ describe('shape builders', () => {
 		const controls: readonly object[] = [
 			{},
 			Object.freeze({}),
-			{ ...{ description: undefined } },
 			nullPrototype,
 			new Proxy(
 				{},
@@ -412,12 +411,15 @@ describe('shape builders', () => {
 				},
 			),
 		]
+		// A key the builder reads may hold `undefined`, which reads as absent. A door that
+		// refuses unknown keys has no `description`, so this control belongs to the others.
+		const described = { ...{ description: undefined } }
 
 		for (const builder of BUILDER_CASES) {
 			const base = builder.valid[0] ?? []
 			for (const [positionText, keys] of Object.entries(builder.options ?? {})) {
 				const position = Number(positionText)
-				for (const options of controls) {
+				for (const options of keys.includes('description') ? [...controls, described] : controls) {
 					const args = [...base]
 					args[position] = options
 					expect(attempt(() => builder.run(args)).success).toBe(true)
@@ -1879,8 +1881,17 @@ describe('schemaToShape — performance guard', () => {
 			{ type: 'string' },
 		)
 		const start = performance.now()
-		const shape = schemaToShape(node)
+		const widened = schemaToShape(node)
 		expect(performance.now() - start).toBeLessThan(5000)
+		// The conversion stays fast, and a shape this DAG expands past the compile limit
+		// widens whole, so `createContract` over it answers instead of refusing.
+		expect(widened.category).toBe('raw')
+
+		const small = Array.from({ length: 10 }).reduce<JSONSchema>(
+			(child) => ({ type: 'object', properties: { a: child, b: child }, required: ['a', 'b'] }),
+			{ type: 'string' },
+		)
+		const shape = schemaToShape(small)
 		expect(shape.category).toBe('object')
 		// Both keys are `required`, so neither is optionalShape-wrapped — the
 		// memoized inner shape is returned by reference for both, proving the
@@ -2094,5 +2105,36 @@ describe('optionalShape — default', () => {
 
 		expectTypeOf<Infer<typeof shape>>().toEqualTypeOf<{ readonly a?: number }>()
 		expectTypeOf(shape.properties.a.inner).toEqualTypeOf<NumberShape>()
+	})
+
+	it('refuses a misspelled option, naming it', () => {
+		const options: Readonly<Record<string, unknown>> = { defalt: 1 }
+		const error = captureContractError(() =>
+			Reflect.apply(optionalShape, undefined, [numberShape(), options]),
+		)
+
+		expect(error.code).toBe('structure')
+		expect(error.context?.path).toEqual(['defalt'])
+		expect(error.message).toContain('default')
+	})
+
+	it('refuses an extra key beside a real one', () => {
+		const options: Readonly<Record<string, unknown>> = { default: 1, extra: 2 }
+		const error = captureContractError(() =>
+			Reflect.apply(optionalShape, undefined, [numberShape(), options]),
+		)
+
+		expect(error.context?.path).toEqual(['extra'])
+	})
+
+	it('refuses a default it cannot copy, with structure at its path', () => {
+		const value: Record<string, unknown> = {}
+		Object.defineProperty(value, 'x', { enumerable: true, get: () => 1 })
+		const error = captureContractError(() =>
+			Reflect.apply(optionalShape, undefined, [jsonShape(), { default: value }]),
+		)
+
+		expect(error.code).toBe('structure')
+		expect(error.context?.path).toEqual(['default'])
 	})
 })

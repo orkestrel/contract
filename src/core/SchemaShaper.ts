@@ -6,10 +6,12 @@ import type {
 	OptionalShape,
 } from './types.js'
 import {
+	COMPILE_NODE_LIMIT,
 	INFER_BREADTH_LIMIT,
 	INFER_DEPTH_LIMIT,
 	INTRINSICS,
 	JSON_SCHEMA_TYPES,
+	STRICT_SCHEMA_KEYWORDS,
 } from './constants.js'
 import { ContractError } from './errors.js'
 import {
@@ -88,27 +90,6 @@ export class SchemaShaper {
 	// boundary can see.
 	static readonly #weakSet = WeakSet
 	static readonly #weakMap = WeakMap
-	// The keywords a strict conversion can honour. `pattern` and `format` are absent
-	// because no compiled shape asserts them, so a schema holding one would convert to
-	// a shape wider than the schema it came from.
-	static readonly #keywords: readonly string[] = INTRINSICS.freeze([
-		'type',
-		'description',
-		'default',
-		'enum',
-		'minLength',
-		'maxLength',
-		'minimum',
-		'maximum',
-		'minItems',
-		'maxItems',
-		'items',
-		'properties',
-		'required',
-		'additionalProperties',
-		'anyOf',
-		'oneOf',
-	])
 	readonly #source: JSONSchema
 	readonly #strict: boolean
 	readonly #visited: WeakSet<object>
@@ -117,6 +98,10 @@ export class SchemaShaper {
 	// beside a union must drop inside one, so one node converts to two different shapes.
 	readonly #enclosed: WeakMap<object, Map<number, ContractShape>>
 	readonly #path: string[]
+	// The steps that built a shape node, and whether a memo served a node twice, so a tree
+	// too small to overflow the compile limit pays for no second count.
+	#built: number
+	#shared: boolean
 
 	constructor(schema: JSONSchema, strict = false) {
 		this.#source = schema
@@ -125,6 +110,8 @@ export class SchemaShaper {
 		this.#memo = new SchemaShaper.#weakMap()
 		this.#enclosed = new SchemaShaper.#weakMap()
 		this.#path = []
+		this.#built = 0
+		this.#shared = false
 	}
 
 	/**
@@ -134,13 +121,22 @@ export class SchemaShaper {
 	 * @throws {ContractError} When schema traversal fails, or when a strict conversion refuses
 	 */
 	shape(): ContractShape {
-		if (!this.#strict) return this.#convert(this.#source, INFER_DEPTH_LIMIT, false)
-		if (isRecord(this.#source) && INTRINSICS.own(this.#source, 'default')) {
+		if (this.#strict && isRecord(this.#source) && INTRINSICS.own(this.#source, 'default')) {
 			throw this.#refusal('a default needs an optional property to fill', 'default')
 		}
 		const shape = this.#convert(this.#source, INFER_DEPTH_LIMIT, false)
-		new ShapeValidator(shape).validate()
-		return shape
+		return !this.#strict && this.#exceeds(shape) ? rawShape({}) : shape
+	}
+
+	// A lenient schema must always compile, so one past the compile limit widens whole. No
+	// step builds more than nine shape nodes, so a sharing-free walk of a sixteenth of the
+	// limit cannot overflow it and pays for no second count. A memo hit means the walk
+	// built less than the shape expands into, so it always asks the validator.
+	#exceeds(shape: ContractShape): boolean {
+		if (!this.#shared && this.#built <= COMPILE_NODE_LIMIT / 16) return false
+		const validator = new ShapeValidator(shape)
+		validator.validate()
+		return (validator.expansion ?? 0) > COMPILE_NODE_LIMIT
 	}
 
 	// The per-node entry point the root and every child recursion share. Guards
@@ -168,7 +164,10 @@ export class SchemaShaper {
 			depthMemo === undefined
 				? undefined
 				: INTRINSICS.reflect.apply(INTRINSICS.fetch, depthMemo, [depth])
-		if (cached) return cached
+		if (cached) {
+			this.#shared = true
+			return cached
+		}
 		admitVisited(this.#visited, schema)
 		try {
 			if (this.#strict) this.#inspect(schema)
@@ -217,7 +216,24 @@ export class SchemaShaper {
 		second?: string,
 	): ContractShape {
 		if (this.#strict) throw this.#refusal(message, first, second)
+		this.#built += 1
 		return rawShape(description === undefined ? {} : { description })
+	}
+
+	// Sets a description on a shape that has a place for one, overriding its own: a keyword
+	// beside a union describes the field, which outranks what one arm says of itself.
+	#describe(shape: ContractShape, description: string | undefined): ContractShape {
+		if (description === undefined) return shape
+		switch (shape.category) {
+			case 'optional':
+				return shape
+			case 'nullable':
+				return nullableShape(this.#describe(shape.inner, description))
+			case 'raw':
+				return rawShape({ ...shape.schema, description })
+			default:
+				return INTRINSICS.freeze({ ...shape, description })
+		}
 	}
 
 	#refusal(message: string, first?: string, second?: string, third?: string): ContractError {
@@ -236,14 +252,12 @@ export class SchemaShaper {
 		for (const index of iterateIndices(() => keys.length)) {
 			const key = keys[index]
 			if (key === undefined) continue
-			const known = INTRINSICS.reflect.apply(INTRINSICS.some, SchemaShaper.#keywords, [
+			const known = INTRINSICS.reflect.apply(INTRINSICS.some, STRICT_SCHEMA_KEYWORDS, [
 				(keyword: string) => keyword === key,
 			])
 			if (!known) throw this.#refusal('a strict conversion refuses a keyword it cannot honour', key)
 		}
-		if (schema.description !== undefined && !isString(schema.description)) {
-			throw this.#refusal('description must be a string', 'description')
-		}
+		this.#inspectAnnotations(schema)
 		if (INTRINSICS.own(schema, 'default') && !isJSONValue(schema.default)) {
 			throw this.#refusal('a default must be a JSON value', 'default')
 		}
@@ -267,6 +281,31 @@ export class SchemaShaper {
 		this.#inspectLength(schema.minItems, schema.maxItems, 'minItems', 'maxItems')
 		this.#inspectRange(schema, this.#names(effective, 'integer'))
 		this.#inspectObject(schema)
+	}
+
+	#inspectAnnotations(schema: JSONSchema): void {
+		const texts = ['title', 'description', '$schema', '$id', '$comment']
+		for (const index of iterateIndices(() => texts.length)) {
+			const keyword = texts[index]
+			if (keyword === undefined) continue
+			const value: unknown = INTRINSICS.reflect.read(schema, keyword)
+			if (value !== undefined && !isString(value)) {
+				throw this.#refusal(`${keyword} must be a string`, keyword)
+			}
+		}
+		const flags = ['deprecated', 'readOnly', 'writeOnly']
+		for (const index of iterateIndices(() => flags.length)) {
+			const keyword = flags[index]
+			if (keyword === undefined) continue
+			const value: unknown = INTRINSICS.reflect.read(schema, keyword)
+			if (value !== undefined && !isBoolean(value)) {
+				throw this.#refusal(`${keyword} must be a boolean`, keyword)
+			}
+		}
+		const examples: unknown = INTRINSICS.reflect.read(schema, 'examples')
+		if (examples !== undefined && !isArray(examples)) {
+			throw this.#refusal('examples must be an array', 'examples')
+		}
 	}
 
 	// The node's type names, an absent keyword reading as none.
@@ -449,7 +488,9 @@ export class SchemaShaper {
 	//    accepts. A strict walk reads every keyword, so it keeps exactly-one.
 	// 3. `anyOf` — identically. In both, a `true` arm admits anything and a `false`
 	//    arm admits nothing, so `true` is a raw variant in declaration order and
-	//    `false` is dropped; a list its `false` arms leave empty widens.
+	//    `false` is dropped; a list its `false` arms leave empty widens. Two arms, one
+	//    of them `{ type: 'null' }`, read as a nullable of the other, which stays
+	//    outside a union, except under a strict `oneOf`. A description carries.
 	// 4. Array-valued `type` — distinct recognized names become an inclusive
 	//    union, or a single shape for one name. An empty list or any unrecognized
 	//    member widens the whole node; dropping a member would narrow it.
@@ -463,8 +504,11 @@ export class SchemaShaper {
 	//    record-valued `items`, widening to `rawShape` otherwise, with bounds from
 	//    `minItems` / `maxItems`. A present `prefixItems` widens the elements too,
 	//    because `items` then applies only past the prefix.
-	// 7. `type: 'object'`, OR no `type` / `enum` / `oneOf` / `anyOf` but a
-	//    record-valued `properties` — delegates to the object branch.
+	// 7. `type: 'object'` — delegates to the object branch. No `type` / `enum` /
+	//    `oneOf` / `anyOf` but a record-valued `properties` — `properties` and
+	//    `required` constrain only an object, so a lenient walk builds a union of
+	//    that object first, for field validation, and every other JSON type. A strict
+	//    walk reads it as an object.
 	// 8. Everything else — an empty schema, an unrecognized/absent `type`, or
 	//    exhausted depth/breadth — widens to `rawShape`, whose guard accepts every
 	//    defined value and whose emitted schema is the same `{}` (plus
@@ -477,6 +521,7 @@ export class SchemaShaper {
 	// is a ReDoS vector. `description`, when a string, carries through to the
 	// produced shape's `description` option.
 	#build(schema: JSONSchema, depth: number, enclosed: boolean): ContractShape {
+		this.#built += 1
 		const description = isString(schema.description) ? schema.description : undefined
 
 		if (isArray(schema.enum)) {
@@ -531,12 +576,12 @@ export class SchemaShaper {
 		}
 
 		if (isArray(schema.oneOf)) {
-			const union = this.#buildUnion(schema.oneOf, 'oneOf', depth, description)
+			const union = this.#buildUnion(schema.oneOf, 'oneOf', depth, description, enclosed)
 			if (union !== undefined) return union
 		}
 
 		if (isArray(schema.anyOf)) {
-			const union = this.#buildUnion(schema.anyOf, 'anyOf', depth, description)
+			const union = this.#buildUnion(schema.anyOf, 'anyOf', depth, description, enclosed)
 			if (union !== undefined) return union
 		}
 
@@ -629,8 +674,21 @@ export class SchemaShaper {
 			})
 		}
 
-		if (type === 'object' || (type === undefined && isRecord(schema.properties))) {
+		if (type === 'object' || (this.#strict && type === undefined && isRecord(schema.properties))) {
 			return this.#buildObject(schema, depth, description, enclosed)
+		}
+		if (type === undefined && isRecord(schema.properties)) {
+			return this.#describe(
+				unionShape(
+					this.#buildObject(schema, depth, undefined, true),
+					stringShape(),
+					numberShape(),
+					booleanShape(),
+					nullShape(),
+					arrayShape(rawShape({})),
+				),
+				description,
+			)
 		}
 
 		return this.#widen('a schema must name a type, an enum, or a union', description)
@@ -643,6 +701,7 @@ export class SchemaShaper {
 		keyword: 'oneOf' | 'anyOf',
 		depth: number,
 		description: string | undefined,
+		enclosed: boolean,
 	): ContractShape | undefined {
 		const observed = INTRINSICS.from(
 			iterateIndices(() => list.length),
@@ -656,21 +715,46 @@ export class SchemaShaper {
 		if (arms.length > INFER_BREADTH_LIMIT) {
 			return this.#widen(`${keyword} exceeds the breadth limit`, description, keyword)
 		}
+		const nulls: ReadonlyArray<JSONSchema | true> = INTRINSICS.reflect.apply(
+			INTRINSICS.select,
+			readIndexView(arms),
+			[
+				(entry: JSONSchema | true) =>
+					entry !== true &&
+					entry.type === 'null' &&
+					!INTRINSICS.own(entry, 'enum') &&
+					!INTRINSICS.own(entry, 'oneOf') &&
+					!INTRINSICS.own(entry, 'anyOf'),
+			],
+		)
+		const hasTrue = INTRINSICS.reflect.apply(INTRINSICS.some, arms, [
+			(entry: JSONSchema | true) => entry === true,
+		])
+		const paired =
+			arms.length === 2 && nulls.length === 1 && !hasTrue && !(this.#strict && keyword === 'oneOf')
 		const variants: readonly ContractShape[] = INTRINSICS.reflect.apply(
 			INTRINSICS.project,
 			readIndexView(arms),
 			[
-				(entry: JSONSchema | true, index: number) =>
-					entry === true
-						? rawShape({})
-						: this.#descend(entry, depth - 1, true, keyword, INTRINSICS.text(index)),
+				(entry: JSONSchema | true, index: number) => {
+					if (entry !== true) {
+						const position = paired ? enclosed : true
+						return this.#descend(entry, depth - 1, position, keyword, INTRINSICS.text(index))
+					}
+					this.#built += 1
+					return rawShape({})
+				},
 			],
 		)
+		const other = variants[arms[0] === nulls[0] ? 1 : 0]
+		if (paired && other !== undefined) {
+			return nullableShape(this.#describe(other, description))
+		}
 		// `Reflect.apply` reads its argument list by index, where a spread call
 		// would dispatch through the caller-writable array iterator.
 		if (variants.length > 0) {
 			const build = this.#strict && keyword === 'oneOf' ? oneOfShape : unionShape
-			return INTRINSICS.reflect.apply(build, undefined, variants)
+			return this.#describe(INTRINSICS.reflect.apply(build, undefined, variants), description)
 		}
 		const dropped = INTRINSICS.reflect.apply(INTRINSICS.some, observed, [
 			(entry: unknown) => entry === false,
@@ -776,19 +860,28 @@ export class SchemaShaper {
 
 	// The one place a schema's `default` becomes a shape's. The lenient walk stays total
 	// by carrying only what can compile: a primitive or literal the property's guard
-	// accepts, in a slot that can fill. The strict walk carries any default and refuses
-	// one the guard refuses; a slot that cannot fill refuses when the finished shape is
-	// validated.
+	// accepts, in a slot that can fill. The strict walk carries any default, and refuses
+	// one the guard refuses or a slot that cannot fill, naming the path in the schema.
 	#wrap(
 		key: string,
 		child: JSONSchema | undefined,
 		shape: ContractShape,
 		sealed: boolean,
 	): OptionalShape {
+		this.#built += 1
 		if (!isRecord(child) || !INTRINSICS.own(child, 'default')) return optionalShape(shape)
 		const value = child.default
 		if (!isJSONValue(value)) return optionalShape(shape)
 		if (this.#strict) {
+			if (sealed) {
+				throw new ContractError(
+					'schemaToShape: a default cannot fill under a union or on a property of an open object; close the object or remove the default',
+					{
+						code: 'placement',
+						context: { path: pathOf(this.#path, 'properties', key, 'default'), shape: 'schema' },
+					},
+				)
+			}
 			if (new ContractCompiler(shape).guard(value)) return optionalShape(shape, { default: value })
 			throw this.#refusal('a default must satisfy its schema', 'properties', key, 'default')
 		}
