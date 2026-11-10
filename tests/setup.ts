@@ -106,6 +106,7 @@ import {
 	complementOf,
 	ContractError,
 	createContract,
+	dateShape,
 	drawRandom,
 	enumerableKeys,
 	enumerableSymbolCount,
@@ -1635,6 +1636,7 @@ export function publicDoors(): readonly PublicDoor[] {
 		['stringShape/pattern', () => stringShape({ pattern: /ab/ }).pattern],
 		['numberShape', () => numberShape({ min: 0 })],
 		['integerShape', () => integerShape({ min: 0 })],
+		['dateShape', () => dateShape({ min: 10 })],
 		['booleanShape', () => booleanShape()],
 		['nullShape', () => nullShape()],
 		['jsonShape', () => jsonShape()],
@@ -6144,3 +6146,42 @@ export function buildLawShapes(seed: number): readonly ContractShape[] {
 		objectShape({ a: number }, { additionalProperties: text }),
 	]
 }
+
+/** Lists the strings a date string shape admits: an ordinary date, leap days, and the year bounds. */
+export const DATE_ADMITTED: readonly string[] = Object.freeze([
+	'2026-11-10',
+	'2024-02-29',
+	'2000-02-29',
+	'0000-02-29',
+	'9999-12-31',
+])
+
+/** Lists the values a date string shape refuses, each labelled with the defect it carries. */
+export const DATE_REFUSED: ReadonlyArray<readonly [string, unknown]> = Object.freeze([
+	['a leap day in a common year', '2026-02-29'],
+	['a leap day in a century year', '1900-02-29'],
+	['a 30th of February', '2026-02-30'],
+	['a 13th month', '2026-13-01'],
+	['a zeroth month', '2026-00-10'],
+	['a one-digit month', '2026-1-10'],
+	['a two-digit year', '26-01-10'],
+	['a date-time', '2026-01-10T00:00:00Z'],
+	['a leading space', ' 2026-01-10'],
+	['a trailing space', '2026-01-10 '],
+	['the empty string', ''],
+	['a 5-digit year', '12026-01-10'],
+	['a plus-signed year', '+02026-01-10'],
+	['a minus-signed year', '-0001-01-10'],
+	['fullwidth digits', '\uFF12\uFF10\uFF12\uFF16-\uFF10\uFF11-\uFF11\uFF10'],
+	['Arabic-Indic digits', '\u0662\u0660\u0662\u0666-\u0660\u0661-\u0661\u0660'],
+	['non-breaking hyphens', '2026\u201101\u201110'],
+	['a leading zero-width space', '\u200B2026-01-10'],
+	['a trailing zero-width space', '2026-01-10\u200B'],
+	['a leading byte order mark', '\uFEFF2026-01-10'],
+	['a trailing line feed', '2026-01-10\n'],
+	['a number', 20260110],
+	['a Date', new Date('2026-01-10T00:00:00Z')],
+])
+
+/** Lists the seeds the date generator proofs draw from. */
+export const DATE_SEEDS: readonly number[] = Object.freeze([1, 7, 42, 2026])

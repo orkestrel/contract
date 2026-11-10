@@ -1,5 +1,11 @@
 import type { ContractShape } from './types.js'
-import { CLONE_NODE_LIMIT, COMPILE_DEPTH_LIMIT, INTRINSICS, SHAPE_FIELDS } from './constants.js'
+import {
+	CLONE_NODE_LIMIT,
+	COMPILE_DEPTH_LIMIT,
+	DATE_LENGTH,
+	INTRINSICS,
+	SHAPE_FIELDS,
+} from './constants.js'
 import { ContractError, isContractError } from './errors.js'
 import {
 	readIndexView,
@@ -41,6 +47,7 @@ export class ShapePass {
 		'min',
 		'max',
 		'pattern',
+		'date',
 		'description',
 		'integer',
 		'additionalProperties',
@@ -497,6 +504,9 @@ export class ShapePass {
 			if (current.max !== undefined && typeof current.max !== 'number') {
 				return this.#refuse('validateShape: string max must be a number', 'max')
 			}
+			if (current.date !== undefined && typeof current.date !== 'boolean') {
+				return this.#refuse('validateShape: string date must be a boolean', 'date')
+			}
 			if (current.pattern !== undefined) {
 				const pattern = current.pattern
 				if (!isRegExp(pattern)) {
@@ -745,6 +755,29 @@ export class ShapePass {
 				code: 'range',
 				context: { path: pathOf(this.#path), shape: 'string' },
 			})
+		}
+		if (this.#domain === undefined && current.date === true && current.pattern !== undefined) {
+			this.#domain = new ContractError(
+				'validateShape: a string shape declares date or pattern, never both',
+				{
+					code: 'pattern',
+					context: { path: pathOf(this.#path), shape: 'string' },
+				},
+			)
+		}
+		if (
+			this.#domain === undefined &&
+			current.date === true &&
+			((typeof current.min === 'number' && current.min > DATE_LENGTH) ||
+				(typeof current.max === 'number' && current.max < DATE_LENGTH))
+		) {
+			this.#domain = new ContractError(
+				`validateShape: a date string shape needs min and max to admit length ${DATE_LENGTH}`,
+				{
+					code: 'range',
+					context: { path: pathOf(this.#path), shape: 'string', limit: DATE_LENGTH },
+				},
+			)
 		}
 	}
 

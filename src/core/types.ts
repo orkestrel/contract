@@ -676,11 +676,13 @@ export type ContractShape =
 	| RawShape
 
 /**
- * Describes a string with optional length and pattern constraints.
+ * Describes a string with optional length, pattern, and calendar-date constraints.
  *
  * @remarks
  * `min` and `max` count code points, as the `minLength` and `maxLength` the shape
- * emits do, so one astral character has a length of one.
+ * emits do, so one astral character has a length of one. `date` restricts the string
+ * to a calendar-valid `YYYY-MM-DD` and emits `format: 'date'`; a shape that declares
+ * `date` declares no `pattern`.
  */
 export interface StringShape {
 	readonly category: 'string'
@@ -691,6 +693,7 @@ export interface StringShape {
 	 * Builders and cloners expose an owned fresh frozen zero-state copy per read.
 	 */
 	readonly pattern?: RegExp
+	readonly date?: boolean
 	readonly description?: string
 }
 
@@ -1042,6 +1045,7 @@ export interface StringShapeOptions {
 	readonly min?: number
 	readonly max?: number
 	readonly pattern?: RegExp
+	readonly date?: boolean
 	readonly description?: string
 }
 
@@ -1050,9 +1054,9 @@ export interface StringShapeOptions {
  *
  * @remarks
  * The refinement half of {@link StringShapeOptions}: the same `min`, `max`, and
- * `pattern` members, without the `description` a shape carries for its emitted
- * schema. A guard publishes no description, so the two surfaces share the
- * refinements and nothing else.
+ * `pattern` members, without the `date` flag and the `description` a shape
+ * carries for its emitted schema. A compiled date shape composes this guard with
+ * {@link matchesCalendarDate}.
  */
 export interface StringGuardOptions {
 	readonly min?: number
@@ -1136,11 +1140,12 @@ export interface SchemaToShapeOptions {
  * a `ContractShape`'s `category`.
  *
  * @remarks
- * The vocabulary is `'string'`, `'number'`, `'integer'`, `'boolean'`, `'null'`,
+ * The vocabulary is `'string'`, `'date'`, `'number'`, `'integer'`, `'boolean'`, `'null'`,
  * `'literal'`, `'array'`, `'object'`, `'union'`, `'json'`, and `'shape'`.
  */
 export type FaultKind =
 	| 'string'
+	| 'date'
 	| 'number'
 	| 'integer'
 	| 'boolean'
@@ -1156,9 +1161,9 @@ export type FaultKind =
  * Names the refinement a {@link Fault} of reason `'constraint'` violates.
  *
  * @remarks
- * The vocabulary is `'min'`, `'max'`, `'pattern'`, and `'integer'`.
+ * The vocabulary is `'min'`, `'max'`, `'pattern'`, `'date'`, and `'integer'`.
  */
-export type FaultConstraint = 'min' | 'max' | 'pattern' | 'integer'
+export type FaultConstraint = 'min' | 'max' | 'pattern' | 'date' | 'integer'
 
 /**
  * Represents a single structured parse-failure diagnostic — one entry of an
@@ -1169,7 +1174,7 @@ export type FaultConstraint = 'min' | 'max' | 'pattern' | 'integer'
  * - `'type'` — the value could not coerce to `expected` at all.
  * - `'missing'` — a required object property was absent.
  * - `'constraint'` — the value coerced to `expected` but violated one
- *   refinement (`min` / `max` / `pattern` / `integer`); `limit` carries the
+ *   refinement (`min` / `max` / `pattern` / `date` / `integer`); `limit` carries the
  *   violated bound/pattern when applicable.
  * - `'variant'` — an `anyOf`-mode union matched no variant; `variants` is the
  *   variant count, followed (in the report) by the closest variant's own faults.

@@ -41,11 +41,13 @@ import {
 	buildPositions,
 	buildNumberFaults,
 	buildStringFaults,
+	computeMonthLength,
 	drawRandom,
 	enumerableKeys,
 	isFailure,
 	isSuccess,
 	limitEntries,
+	matchesCalendarDate,
 	matchesMember,
 	ownPattern,
 	pathOf,
@@ -825,6 +827,7 @@ export class ContractCompiler<
 					...(owned.min !== undefined ? { minLength: owned.min } : {}),
 					...(owned.max !== undefined ? { maxLength: owned.max } : {}),
 					...(text !== undefined ? { pattern: text } : {}),
+					...(owned.date === true ? { format: 'date' } : {}),
 					...(owned.description !== undefined ? { description: owned.description } : {}),
 				})
 			}
@@ -994,11 +997,12 @@ export class ContractCompiler<
 	}
 
 	// `stringOf` returns bare `isString` when unrefined, else composes the length-bounds
-	// + pattern refinement — the same guard the parser re-applies. It reads its options
+	// + pattern refinement, and a date shape adds the calendar check — the same guard
+	// the parser re-applies. It reads its options
 	// through the prototype chain and a family may build after `Object.prototype` gained
 	// a field these leave out, so they carry no prototype.
 	#stringGuard(owned: StringShape): Guard<string> {
-		return stringOf(
+		const guard = stringOf(
 			INTRINSICS.rebase(
 				{
 					...(owned.min === undefined ? {} : { min: owned.min }),
@@ -1008,6 +1012,7 @@ export class ContractCompiler<
 				null,
 			),
 		)
+		return owned.date === true ? whereOf(guard, matchesCalendarDate) : guard
 	}
 
 	static #acceptShape(value: unknown): boolean {
@@ -1226,7 +1231,12 @@ export class ContractCompiler<
 		const owned = this.#node(index)
 		switch (owned.category) {
 			case 'string': {
-				if (owned.min === undefined && owned.max === undefined && owned.pattern === undefined) {
+				if (
+					owned.min === undefined &&
+					owned.max === undefined &&
+					owned.pattern === undefined &&
+					owned.date !== true
+				) {
 					return parseString
 				}
 				// Coerce by type, then re-apply the SAME refinement the guard enforces (the
@@ -1597,11 +1607,16 @@ export class ContractCompiler<
 				// same `pattern` code and `{ shape: 'string' }` context the schema leaf
 				// publishes.
 				const declared = owned.pattern
-				const refined = owned.min !== undefined || owned.max !== undefined || declared !== undefined
+				const kind: FaultKind = owned.date === true ? 'date' : 'string'
+				const refined =
+					owned.min !== undefined ||
+					owned.max !== undefined ||
+					declared !== undefined ||
+					owned.date === true
 				const pattern = declared === undefined ? undefined : ownPattern(declared, 'compileAuditor')
 				return (value, path) => {
 					if (!isString(value)) {
-						return [{ reason: 'type', path, expected: 'string', received: preview(value) }]
+						return [{ reason: 'type', path, expected: kind, received: preview(value) }]
 					}
 					return refined ? buildStringFaults(node, value, path, pattern) : []
 				}
@@ -1915,12 +1930,17 @@ export class ContractCompiler<
 				// The same one-time pattern read the auditor's leaf takes, for the same
 				// accessor and the same reason; see `#auditOf`.
 				const declared = owned.pattern
-				const refined = owned.min !== undefined || owned.max !== undefined || declared !== undefined
+				const kind: FaultKind = owned.date === true ? 'date' : 'string'
+				const refined =
+					owned.min !== undefined ||
+					owned.max !== undefined ||
+					declared !== undefined ||
+					owned.date === true
 				const pattern = declared === undefined ? undefined : ownPattern(declared, 'compileReporter')
 				return (value, path) => {
 					const parsed = parseString(value)
 					if (parsed === undefined) {
-						return [{ reason: 'type', path, expected: 'string', received: preview(value) }]
+						return [{ reason: 'type', path, expected: kind, received: preview(value) }]
 					}
 					return refined ? buildStringFaults(node, parsed, path, pattern) : []
 				}
@@ -2250,6 +2270,17 @@ export class ContractCompiler<
 		const owned = this.#node(index)
 		switch (owned.category) {
 			case 'string': {
+				// Every date is 10 characters long, and validation refuses a date shape
+				// whose bounds exclude that length, so the draw never reads them.
+				if (owned.date === true) {
+					return (random) => {
+						const year = 2000 + INTRINSICS.floor(drawRandom(random, 'string') * 100)
+						const month = 1 + INTRINSICS.floor(drawRandom(random, 'string') * 12)
+						const length = computeMonthLength(year, month)
+						const day = 1 + INTRINSICS.floor(drawRandom(random, 'string') * length)
+						return `${year}-${month < 10 ? '0' : ''}${month}-${day < 10 ? '0' : ''}${day}`
+					}
+				}
 				const min = owned.min ?? 0
 				const max = owned.max ?? INTRINSICS.max(min, 12)
 				const length = INTRINSICS.max(min, INTRINSICS.min(max, 8))

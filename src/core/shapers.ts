@@ -89,10 +89,12 @@ export function auditFaultShape(): AuditFaultShape {
  * A supplied pattern is captured by source and flags. The shape exposes a fresh
  * frozen zero-state `RegExp` on every `pattern` read, so neither the caller's
  * original nor a value read from the shape can drift later compiled artifacts.
+ * `date: true` restricts the string to a calendar-valid `YYYY-MM-DD`, as
+ * {@link dateShape} builds it.
  *
- * @param options - Optional length (`min` / `max`), `pattern`, and `description`
+ * @param options - Optional length (`min` / `max`), `pattern`, `date`, and `description`
  * @returns A string shape
- * @throws {ContractError} When a present bound is invalid, `pattern` is not a `RegExp`, or `pattern` has flags
+ * @throws {ContractError} When a present bound is invalid, `pattern` is not a `RegExp`, `pattern` has flags, `date` is not a boolean, or `date` meets `pattern` or a bound that excludes length 10
  *
  * @example
  * ```ts
@@ -103,7 +105,7 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 	return contain(() => {
 		const safe = readOptions(
 			options,
-			['min', 'max', 'pattern', 'description'],
+			['min', 'max', 'pattern', 'date', 'description'],
 			'stringShape',
 			'string',
 		)
@@ -170,6 +172,8 @@ export function stringShape(options?: StringShapeOptions): StringShape {
 			...(patternSnapshot === undefined
 				? {}
 				: { pattern: new INTRINSICS.pattern(patternSnapshot.source) }),
+			// A `false` flag reads as absent, and any other value stays for the seal to refuse.
+			...(safe?.date === undefined || safe.date === false ? {} : { date: safe.date }),
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
 		// The snapshot is what refuses a field inherited as `undefined`, which a walk reads
@@ -245,6 +249,32 @@ export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): Num
 		const safe = readOptions(options, ['min', 'max', 'description'], 'integerShape', 'integer')
 		return numberShape({ ...safe, integer: true })
 	}, 'integerShape')
+}
+
+/**
+ * Builds a calendar-date {@link StringShape} — forces `date: true`.
+ *
+ * @remarks
+ * The guard and the parser admit exactly a calendar-valid `YYYY-MM-DD` and coerce
+ * nothing, so `2026-02-30`, `2026-1-10`, and a date-time all refuse. The emitted JSON
+ * Schema carries `"format": "date"`. Options other than `min`, `max`, and `description`
+ * refuse, because a dropped `pattern` would widen the shape.
+ *
+ * @param options - Optional length bounds and `description` (no `date` or `pattern` key)
+ * @returns A date string shape
+ * @throws {ContractError} When an option key is unknown, or a present bound is invalid or excludes length 10
+ *
+ * @example
+ * ```ts
+ * createContract(dateShape()).is('2024-02-29') // true
+ * ```
+ */
+export function dateShape(options?: Omit<StringShapeOptions, 'date' | 'pattern'>): StringShape {
+	return contain(() => {
+		const safe = readOptions(options, ['min', 'max', 'description'], 'dateShape', 'string')
+		refuseOptionKeys(options, ['min', 'max', 'description'], 'dateShape', 'string')
+		return stringShape({ ...safe, date: true })
+	}, 'dateShape')
 }
 
 /**
@@ -889,15 +919,18 @@ export function rawShape(schema: JSONSchema): RawShape {
  *
  * STRICT: `{ strict: true }` is the door for a foreign schema. It refuses, with
  * code `structure`, every node the lenient walk would widen, every keyword it
- * would ignore (`pattern`, `format`, `nullable`, `patternProperties`,
- * `propertyNames`, `prefixItems`, and anything else outside
+ * would ignore (`pattern`, every `format` but `'date'` on a string node, `nullable`,
+ * `patternProperties`, `propertyNames`, `prefixItems`, and anything else outside
  * {@link STRICT_SCHEMA_KEYWORDS}), a malformed keyword or annotation, a boolean schema, an `enum` entry
- * that is neither a finite primitive nor `null`, a contradictory bound, a `required` name not in
+ * that is neither a finite primitive nor `null`, a contradictory bound, a date format whose
+ * length bounds exclude length 10, a `required` name not in
  * `properties`, breadth past {@link INFER_BREADTH_LIMIT}, and a `default` with no
  * optional property to fill. An object with no `additionalProperties` closes
  * rather than opens, and `oneOf` keeps exactly-one, because a strict walk reads
  * every keyword that could keep two arms apart. Below a `oneOf` that object refuses
- * instead, since closing it could change which arms match.
+ * instead, since closing it could change which arms match. A strict conversion is the
+ * one walk that asserts a `format`: it reads `format: 'date'` on a string node as a
+ * date string shape, so a compiled {@link dateShape} round-trips.
  *
  * @param schema - The JSON Schema value to convert
  * @param options - Optional `strict`, default `false`

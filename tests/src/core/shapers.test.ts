@@ -30,6 +30,8 @@ import {
 	compileSchema,
 	ContractError,
 	createContract,
+	DATE_LENGTH,
+	dateShape,
 	INFER_BREADTH_LIMIT,
 	INFER_DEPTH_LIMIT,
 	integerShape,
@@ -87,6 +89,7 @@ import {
 	createUnstableArray,
 	NullBaseDeclaration,
 	pollutePrototype,
+	pollutePrototypeData,
 	SOUNDNESS_SAMPLE,
 } from '../../setup.js'
 import { createForeignRegExp } from '../../setupServer.js'
@@ -2689,5 +2692,124 @@ describe('auditFaultShape() hints', () => {
 			expect(isAuditFault(fault)).toBe(accepted)
 			expect(contract.is(fault)).toBe(accepted)
 		}
+	})
+})
+
+describe('dateShape', () => {
+	it('builds a string shape that carries date beside its bounds and description', () => {
+		expect(dateShape()).toEqual({ category: 'string', date: true })
+		expect(dateShape({ min: 10, max: 12, description: 'Check-in day' })).toEqual({
+			category: 'string',
+			min: 10,
+			max: 12,
+			date: true,
+			description: 'Check-in day',
+		})
+		expect(Object.isFrozen(dateShape())).toBe(true)
+		expect(stringShape({ date: true })).toEqual(dateShape())
+		expect(stringShape({ date: false })).toEqual(stringShape())
+	})
+
+	it('refuses a date or a pattern key in its options', () => {
+		expectTypeOf<Parameters<typeof dateShape>[0]>().toEqualTypeOf<
+			Omit<StringShapeOptions, 'date' | 'pattern'> | undefined
+		>()
+		for (const options of [{ date: false }, { pattern: /^2026/ }]) {
+			const error = captureContractError(() => Reflect.apply(dateShape, undefined, [options]))
+			expect(error.code).toBe('structure')
+			expect(error.message).toContain('dateShape: unknown option')
+		}
+	})
+
+	it('refuses at build a length bound that no date satisfies', () => {
+		expect(DATE_LENGTH).toBe(10)
+		for (const options of [{ min: 11 }, { max: 9 }, { min: 11, max: 20 }]) {
+			const error = captureContractError(() => dateShape(options))
+			expect(error.code).toBe('range')
+			expect(error.context?.limit).toBe(DATE_LENGTH)
+		}
+		expect(dateShape({ min: 10, max: 10 })).toMatchObject({ min: 10, max: 10, date: true })
+	})
+
+	it('refuses a plain string shape while Object.prototype carries date', () => {
+		const plain = stringShape()
+		const outcomes = pollutePrototypeData('date', true, () => [
+			attempt(() => stringShape()),
+			attempt(() => validateShape({ category: 'string' })),
+			attempt(() => cloneShape({ category: 'string' })),
+			attempt(() => createContract(plain).is('2026-02-30')),
+		])
+
+		expect(Object.hasOwn(Object.prototype, 'date')).toBe(false)
+		expect(
+			outcomes.map((outcome) =>
+				outcome.success
+					? 'accepted'
+					: isContractError(outcome.error)
+						? outcome.error.context?.path
+						: 'uncoded',
+			),
+		).toEqual([['date'], ['date'], ['date'], ['date']])
+		expect(stringShape()).toEqual({ category: 'string' })
+	})
+
+	it('refuses a date flag that is not a boolean', () => {
+		const built = captureContractError(() => Reflect.apply(stringShape, undefined, [{ date: 1 }]))
+		const authored = captureContractError(() =>
+			Reflect.apply(validateShape, undefined, [{ category: 'string', date: 'yes' }]),
+		)
+		for (const error of [built, authored]) expect(error.message).toContain('date')
+	})
+
+	it('refuses a string shape that declares both date and pattern', () => {
+		const built = captureContractError(() => stringShape({ date: true, pattern: /^2026/ }))
+		const authored = captureContractError(() =>
+			validateShape({ category: 'string', date: true, pattern: /^2026/ }),
+		)
+		for (const error of [built, authored]) {
+			expect(error.message).toContain('date')
+			expect(error.message).toContain('pattern')
+		}
+	})
+
+	it('reads format date back to a date shape in a strict conversion only', () => {
+		const shape = dateShape({ min: 10, description: 'Check-in day' })
+		const schema = compileSchema(shape)
+		const lenient = schemaToShape(schema)
+
+		expect(schemaToShape(schema, { strict: true })).toEqual(shape)
+		expect(compileSchema(schemaToShape(schema, { strict: true }))).toEqual(schema)
+		expect(lenient).toEqual(stringShape({ min: 10, description: 'Check-in day' }))
+		expect(createContract(lenient).is('2026-02-30')).toBe(true)
+		expect(schemaToShape({ type: 'string', format: 'date' })).toEqual(stringShape())
+	})
+
+	it('reads a string-or-null type with format date as a nullable date in a strict conversion', () => {
+		const schema: unknown = { type: ['string', 'null'], format: 'date' }
+
+		expect(Reflect.apply(schemaToShape, undefined, [schema, { strict: true }])).toEqual(
+			nullableShape(dateShape()),
+		)
+		expect(Reflect.apply(schemaToShape, undefined, [schema])).toEqual(nullableShape(stringShape()))
+	})
+
+	it('keeps refusing every other format in a strict conversion', () => {
+		const refusals: readonly JSONSchema[] = [
+			{ type: 'string', format: 'email' },
+			{ type: 'number', format: 'date' },
+			{ type: 'string', format: 'date', minLength: 11 },
+			{ type: 'string', format: 'date', enum: ['2026-11-10'] },
+			{ format: 'date', oneOf: [{ type: 'string' }] },
+			{ format: 'date', anyOf: [{ type: 'string' }] },
+		]
+		for (const schema of refusals) {
+			expect(captureContractError(() => schemaToShape(schema, { strict: true })).code).toBe(
+				'structure',
+			)
+		}
+		expect(schemaToShape({ type: 'string', format: 'email' })).toEqual(stringShape())
+		expect(schemaToShape({ type: 'string', format: 'date', maxLength: 9 })).toEqual(
+			stringShape({ max: 9 }),
+		)
 	})
 })

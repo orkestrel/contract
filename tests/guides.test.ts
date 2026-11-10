@@ -55,6 +55,7 @@ await new GuideCommand({
 		ShapeCloner,
 		ShapeValidator,
 		createContract,
+		dateShape,
 		integerShape,
 		objectShape,
 		optionalShape,
@@ -375,6 +376,43 @@ await new GuideCommand({
 			expect(guideText).toContain("retries.parse({ limit: '5' }) // { limit: 5 }")
 			expect(guideText).toContain('retries.is({}) // true — an absent optional stays canonical')
 			expect(guideText).toContain('retries.schema.properties?.limit?.default // 3')
+		})
+
+		it('admits, refuses, reports, and emits a calendar date as the date fence shows', () => {
+			// The calendar-dates fence. Each expectation is that fence's own comment, executed.
+			const booking = createContract(objectShape({ arrival: dateShape() }))
+
+			expect(booking.is({ arrival: '2024-02-29' })).toBe(true)
+			expect(booking.is({ arrival: '2026-02-29' })).toBe(false)
+			expect(booking.parse({ arrival: '2026-1-10' })).toBeUndefined()
+			expect(booking.audit({ arrival: '2026-02-30' })).toEqual([
+				{
+					reason: 'constraint',
+					path: ['arrival'],
+					expected: 'date',
+					constraint: 'date',
+					received: '"2026-02-30"',
+				},
+			])
+			expect(booking.schema.properties?.arrival).toEqual({ type: 'string', format: 'date' })
+		})
+
+		it('carries the calendar-dates fence lines the transcription copies', () => {
+			expect(guideText).toContain(
+				'const booking = createContract(objectShape({ arrival: dateShape() }))',
+			)
+			expect(guideText).toContain("booking.is({ arrival: '2024-02-29' }) // true")
+			expect(guideText).toContain(
+				"booking.is({ arrival: '2026-02-29' }) // false — 2026 is not a leap year",
+			)
+			expect(guideText).toContain("booking.parse({ arrival: '2026-1-10' }) // undefined")
+			expect(guideText).toContain("booking.audit({ arrival: '2026-02-30' })")
+			expect(guideText).toContain(
+				`// [{ reason: 'constraint', path: ['arrival'], expected: 'date', constraint: 'date', received: '"2026-02-30"' }]`,
+			)
+			expect(guideText).toContain(
+				"booking.schema.properties?.arrival // { type: 'string', format: 'date' }",
+			)
 		})
 	})
 

@@ -22,6 +22,7 @@ import {
 	ContractCompiler,
 	ContractError,
 	createContract,
+	dateShape,
 	FAULT_LIMIT,
 	integerShape,
 	isContractError,
@@ -54,6 +55,9 @@ import {
 import {
 	acceptValue,
 	ASTRAL,
+	DATE_ADMITTED,
+	DATE_REFUSED,
+	DATE_SEEDS,
 	buildSurrogateText,
 	denyValue,
 	createMarker,
@@ -552,8 +556,9 @@ const COMPLETE_SHAPES = {
 	string: {
 		category: 'string',
 		min: 0,
-		max: 1,
+		max: 10,
 		pattern: /^x$/,
+		date: false,
 		description: 'complete',
 	},
 	number: { category: 'number', min: 0, max: 1, integer: true, description: 'complete' },
@@ -740,7 +745,7 @@ describe('validateShape', () => {
 			['createContract', (shape: ContractShape) => createContract(shape), true],
 		]),
 	)(
-		'%s applies descriptor-first accessor policy across all 41 node fields',
+		'%s applies descriptor-first accessor policy across all 42 node fields',
 		(_name, entry, ownership) => {
 			const cases = Object.values(COMPLETE_SHAPES).flatMap((source) =>
 				Object.keys(source).map((field) => ({ source, field })),
@@ -954,6 +959,7 @@ describe('validateShape', () => {
 			['string.min', 1],
 			['string.max', 2],
 			['string.pattern', /^y$/],
+			['string.date', true],
 			['string.description', 'alternate'],
 			['number.category', 'boolean'],
 			['number.min', -1],
@@ -1014,6 +1020,8 @@ describe('validateShape', () => {
 						? { category: 'object', properties: { value: laterNode } }
 						: laterNode
 				Reflect.set(laterNode, field, alternate)
+				// A date shape declares no pattern, so the date opposite drops it.
+				if (name === 'string.date') Reflect.deleteProperty(laterNode, 'pattern')
 				const laterSchema = compileSchema(laterRoot)
 				expect(laterSchema, `${name} observable opposite`).not.toEqual(stableSchema)
 
@@ -6072,5 +6080,92 @@ describe('string bounds in code points', () => {
 		)
 
 		expect(drawn.filter((value) => !contract.is(value))).toEqual([])
+	})
+})
+
+describe('date string shapes', () => {
+	it('admits exactly a calendar-valid YYYY-MM-DD through the guard and the parser', () => {
+		const contract = createContract(dateShape())
+
+		expect(DATE_ADMITTED.filter((value) => !contract.is(value))).toEqual([])
+		expect(DATE_ADMITTED.map((value) => contract.parse(value))).toEqual(DATE_ADMITTED)
+		expect(DATE_REFUSED.filter(([, value]) => contract.is(value)).map(([label]) => label)).toEqual(
+			[],
+		)
+		expect(
+			DATE_REFUSED.filter(([, value]) => contract.parse(value) !== undefined).map(
+				([label]) => label,
+			),
+		).toEqual([])
+	})
+
+	it('reports a refused date at the member path as an integer shape reports a fraction', () => {
+		const counts = createContract(objectShape({ stay: objectShape({ nights: integerShape() }) }))
+		const booking = createContract(objectShape({ stay: objectShape({ arrival: dateShape() }) }))
+		const path = ['stay', 'arrival']
+		const fault: Fault = {
+			reason: 'constraint',
+			path,
+			expected: 'date',
+			constraint: 'date',
+			received: '"2026-02-30"',
+		}
+
+		expect(counts.audit({ stay: { nights: 1.5 } })).toEqual([
+			{
+				reason: 'constraint',
+				path: ['stay', 'nights'],
+				expected: 'integer',
+				constraint: 'integer',
+				received: '1.5',
+			},
+		])
+		expect(booking.audit({ stay: { arrival: '2026-02-30' } })).toEqual([fault])
+		expect(booking.explain({ stay: { arrival: '2026-02-30' } })).toEqual([fault])
+		expect(booking.audit({ stay: { arrival: 20260110 } })).toEqual([
+			{ reason: 'type', path, expected: 'date', received: '20260110' },
+		])
+		expect(booking.explain({ stay: {} })).toEqual([{ reason: 'missing', path, expected: 'date' }])
+		expect(isFault(fault)).toBe(true)
+	})
+
+	it('compiles a string schema with format date and no pattern', () => {
+		const schema = compileSchema(dateShape({ min: 10, max: 10, description: 'Check-in day' }))
+
+		expect(schema).toEqual({
+			type: 'string',
+			minLength: 10,
+			maxLength: 10,
+			format: 'date',
+			description: 'Check-in day',
+		})
+		expect(Object.hasOwn(schema, 'pattern')).toBe(false)
+	})
+
+	it('draws calendar-valid dates, the same ones for one seed', () => {
+		const contract = createContract(dateShape())
+		const first = DATE_SEEDS.flatMap((seed) => {
+			const random = seededRandom(seed)
+			return Array.from({ length: 250 }, () => contract.generate(random))
+		})
+		const second = DATE_SEEDS.flatMap((seed) => {
+			const random = seededRandom(seed)
+			return Array.from({ length: 250 }, () => contract.generate(random))
+		})
+		const bounded = createContract(dateShape({ min: 10, max: 10 }))
+
+		expect(first).toHaveLength(1000)
+		expect(first.filter((value) => !contract.is(value))).toEqual([])
+		expect(second).toEqual(first)
+		expect(new Set(first.map((value) => String(value).slice(5, 7))).size).toBe(12)
+		expect(bounded.is(bounded.generate(seededRandom(3)))).toBe(true)
+	})
+
+	it('validates a hand-authored date shape and compiles it to the same guard', () => {
+		const authored: ContractShape = { category: 'string', date: true }
+
+		expect(validateShape(authored)).toBeUndefined()
+		expect(compileGuard(authored)('2026-11-10')).toBe(true)
+		expect(compileGuard(authored)('2026-02-30')).toBe(false)
 	})
 })

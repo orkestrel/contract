@@ -453,6 +453,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		const min = this.#captureField(source, 'min', path)
 		const max = this.#captureField(source, 'max', path)
 		const pattern = this.#capturePattern(source, path)
+		const date = this.#captureField(source, 'date', path)
 		const description = this.#captureField(source, 'description', path)
 		// No declaration-policy rule is enforced here. `ShapeValidator` owns every
 		// bound, range and pattern-flag rule and runs on the carried clone at
@@ -464,6 +465,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 			category: 'string',
 			...(min === undefined ? {} : { min }),
 			...(max === undefined ? {} : { max }),
+			...(date === undefined ? {} : { date }),
 			...(description === undefined ? {} : { description }),
 		}
 		if (pattern === undefined) return fields

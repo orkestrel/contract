@@ -6,6 +6,7 @@ import {
 	cloneSchema,
 	cloneShape,
 	ContractError,
+	dateShape,
 	isRecord,
 	objectShape,
 	ownShape,
@@ -661,5 +662,22 @@ describe('eager ownership boundaries — reparented class brands', () => {
 		expect(owned).toEqual({ category: 'string', min: 1 })
 		expect(Object.getPrototypeOf(owned)).toBeNull()
 		expect(Object.isFrozen(owned)).toBe(true)
+	})
+})
+
+describe('date string shapes', () => {
+	it('keeps date through cloneShape, ownShape, and ShapeCloner', () => {
+		const authored: StringShape = { category: 'string', min: 10, date: true }
+
+		expect(cloneShape(authored)).toEqual(authored)
+		expect(ownShape(authored)).toEqual(authored)
+		expect(cloneShape(dateShape())).toEqual({ category: 'string', date: true })
+		expect(ownShape(dateShape())).toEqual({ category: 'string', date: true })
+		expect(new ShapeCloner(dateShape()).clone()).toEqual({ category: 'string', date: true })
+		expect(
+			captureContractError(() =>
+				Reflect.apply(cloneShape, undefined, [{ category: 'string', date: 'yes' }]),
+			).message,
+		).toContain('date')
 	})
 })

@@ -15,7 +15,7 @@ import type {
  * ```
  */
 export const SHAPE_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freeze({
-	string: Object.freeze(['min', 'max', 'pattern', 'description']),
+	string: Object.freeze(['min', 'max', 'pattern', 'date', 'description']),
 	number: Object.freeze(['integer', 'min', 'max', 'description']),
 	boolean: Object.freeze(['description']),
 	null: Object.freeze(['description']),
@@ -343,7 +343,9 @@ export const JSON_SCHEMA_TYPES: readonly JSONSchemaType[] = Object.freeze([
  * lose nothing when a shape drops them: `title`, `$schema`, `$id`, `$comment`,
  * `examples`, `deprecated`, `readOnly`, and `writeOnly`. Every other keyword refuses.
  * `pattern` and `format` are absent because no compiled shape asserts them, so a
- * schema holding one would convert to a shape wider than the schema it came from.
+ * schema holding one would convert to a shape wider than the schema it came from. The
+ * one exception is `format: 'date'` on a string node, which a strict conversion reads
+ * as a date string shape.
  *
  * @example
  * ```ts
@@ -425,6 +427,7 @@ export const CONTRACT_CODES: readonly ContractCode[] = Object.freeze([
  */
 export const FAULT_KINDS: readonly FaultKind[] = Object.freeze([
 	'string',
+	'date',
 	'number',
 	'integer',
 	'boolean',
@@ -452,6 +455,7 @@ export const FAULT_CONSTRAINTS: readonly FaultConstraint[] = Object.freeze([
 	'min',
 	'max',
 	'pattern',
+	'date',
 	'integer',
 ])
 
@@ -694,6 +698,20 @@ export const FORMAT_PATTERNS: Readonly<Record<'uuid' | 'email' | 'uri', RegExp>>
 	email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
 	uri: /^[a-z][a-z0-9+.-]*:\/\//i,
 })
+
+/**
+ * Holds `10`, the length of every `YYYY-MM-DD` date a date string shape admits.
+ *
+ * @remarks
+ * A date string shape whose `min` or `max` excludes this length admits no value, so
+ * building one refuses with code `range`.
+ *
+ * @example
+ * ```ts
+ * DATE_LENGTH // 10
+ * ```
+ */
+export const DATE_LENGTH = 10
 
 // Schema retention limits, declared for a package whose schema retains authored data.
 

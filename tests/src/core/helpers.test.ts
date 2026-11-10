@@ -30,7 +30,13 @@ import type {
 	Success,
 } from '@src/core'
 import * as door from '@src/core'
-import { createUndefinedContract, recordAdmission, pollutePrototypeData } from '../../setup.js'
+import {
+	createUndefinedContract,
+	DATE_ADMITTED,
+	DATE_REFUSED,
+	pollutePrototypeData,
+	recordAdmission,
+} from '../../setup.js'
 import {
 	FAULT_TEXT_UNION_INPUTS,
 	FAULT_TEXT_PREVIEWS,
@@ -5506,5 +5512,80 @@ describe('describeFaults', () => {
 
 		expect(lines[0]?.endsWith('extra; this key is not declared, remove it')).toBe(true)
 		expect(lines.join('\n').length).toBeLessThanOrEqual(FAULT_TEXT_LIMIT)
+	})
+})
+
+describe('calendar dates', () => {
+	it('matches exactly a calendar-valid YYYY-MM-DD', () => {
+		const texts = DATE_REFUSED.filter(([, value]) => typeof value === 'string')
+
+		expect(DATE_ADMITTED.filter((value) => !door.matchesCalendarDate(value))).toEqual([])
+		expect(texts).toHaveLength(DATE_REFUSED.length - 2)
+		expect(
+			texts.filter(([, value]) => door.matchesCalendarDate(String(value))).map(([label]) => label),
+		).toEqual([])
+	})
+
+	it('computes the days of a month under the Gregorian leap rule', () => {
+		const months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+		expect(months.map((month) => door.computeMonthLength(2026, month))).toEqual([
+			31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+		])
+		expect(door.computeMonthLength(2024, 2)).toBe(29)
+		expect(door.computeMonthLength(2000, 2)).toBe(29)
+		expect(door.computeMonthLength(1900, 2)).toBe(28)
+	})
+
+	it('reports the date fault before the bounds and names the date kind', () => {
+		const shape = door.dateShape({ min: 10 })
+
+		expect(door.buildStringFaults(shape, '2026-1-10', [])).toEqual([
+			{
+				reason: 'constraint',
+				path: [],
+				expected: 'date',
+				constraint: 'date',
+				received: '"2026-1-10"',
+			},
+			{
+				reason: 'constraint',
+				path: [],
+				expected: 'date',
+				constraint: 'min',
+				limit: 10,
+				received: '"2026-1-10"',
+			},
+		])
+		expect(door.buildStringFaults(shape, '2026-11-10', [])).toEqual([])
+		expect(door.shapeToKind(shape)).toBe('date')
+		expect(door.shapeToKind(door.nullableShape(shape))).toBe('date')
+		expect(door.renderForm(door.compileSchema(shape))).toBe('string (minLength 10, format "date")')
+	})
+
+	it('refuses a refused date rather than repairing it', () => {
+		const contract = door.createContract(door.objectShape({ arrival: door.dateShape() }))
+		const text = door.createContract(door.objectShape({ arrival: door.stringShape() }))
+
+		expect(door.admitValue(contract, { arrival: '2026-02-30' })).toEqual({
+			success: false,
+			error: {
+				faults: [
+					{
+						reason: 'constraint',
+						path: ['arrival'],
+						expected: 'date',
+						constraint: 'date',
+						received: '"2026-02-30"',
+					},
+				],
+			},
+		})
+		expect(door.admitValue(contract, { arrival: 20260110 }).success).toBe(false)
+		expect(door.admitValue(text, { arrival: 20260110 }).success).toBe(true)
+		expect(door.admitValue(contract, { arrival: '2026-11-10' })).toEqual({
+			success: true,
+			value: { value: { arrival: '2026-11-10' }, repairs: [] },
+		})
 	})
 })

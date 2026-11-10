@@ -2566,6 +2566,30 @@ export function canonicalStringify(value: unknown): string | undefined {
 // === Format classification
 
 /**
+ * Computes the number of days in a month of the Gregorian calendar.
+ *
+ * @remarks
+ * February has 29 days in a year divisible by 4, except a century year not divisible
+ * by 400. The caller supplies a month from 1 to 12.
+ *
+ * @param year - The calendar year
+ * @param month - The month, from 1 for January to 12 for December
+ * @returns The days in that month, from 28 to 31
+ *
+ * @example
+ * ```ts
+ * computeMonthLength(2024, 2) // 29
+ * computeMonthLength(1900, 2) // 28
+ * ```
+ */
+export function computeMonthLength(year: number, month: number): number {
+	const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+	return month === 2
+		? 28 + INTRINSICS.numeric(leap)
+		: 31 - INTRINSICS.numeric(month === 4 || month === 6 || month === 9 || month === 11)
+}
+
+/**
  * Checks whether a supported ISO-8601 date or date-time names a real instant.
  *
  * @remarks
@@ -2604,12 +2628,7 @@ export function matchesISOInstant(value: string): boolean {
 		const month = INTRINSICS.numeric(monthText)
 		const day = INTRINSICS.numeric(dayText)
 		if (month < 1 || month > 12) return false
-		const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
-		const limit =
-			month === 2
-				? 28 + INTRINSICS.numeric(leap)
-				: 31 - INTRINSICS.numeric(month === 4 || month === 6 || month === 9 || month === 11)
-		if (day < 1 || day > limit) return false
+		if (day < 1 || day > computeMonthLength(year, month)) return false
 		const hourText = match?.[4]
 		const minuteText = match?.[5]
 		const secondText = match?.[6]
@@ -2627,6 +2646,28 @@ export function matchesISOInstant(value: string): boolean {
 		return !INTRINSICS.nan(INTRINSICS.reflect.apply(INTRINSICS.instant, date, []))
 	})
 	return isSuccess(outcome) && outcome.value
+}
+
+/**
+ * Checks whether a string is exactly a calendar-valid `YYYY-MM-DD` date.
+ *
+ * @remarks
+ * Refuses a date-time, surrounding whitespace, and a date the Gregorian calendar
+ * lacks, such as `2026-02-29`. Backs a date string shape and {@link classifyFormat}'s
+ * `date`.
+ *
+ * @param value - The candidate string
+ * @returns True if `value` is a calendar-valid `YYYY-MM-DD`; false otherwise
+ * @throws The exact value thrown by a redirected pattern dispatch
+ *
+ * @example
+ * ```ts
+ * matchesCalendarDate('2024-02-29') // true
+ * matchesCalendarDate('2026-02-29') // false
+ * ```
+ */
+export function matchesCalendarDate(value: string): boolean {
+	return matchesPattern(/^\d{4}-\d{2}-\d{2}$/, value) && matchesISOInstant(value)
 }
 
 /**
@@ -2656,9 +2697,7 @@ export function classifyFormat(value: string): SchemaFormat | undefined {
 	) {
 		return 'date-time'
 	}
-	if (matchesPattern(/^\d{4}-\d{2}-\d{2}$/, value) && matchesISOInstant(value)) {
-		return 'date'
-	}
+	if (matchesCalendarDate(value)) return 'date'
 	if (
 		matchesPattern(/^\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/, value) &&
 		matchesISOInstant(`1970-01-01T${value}`)
@@ -2891,8 +2930,10 @@ export function preview(value: unknown): string {
  * OBTAIN the string — the reporter coerces through `parseString`, the auditor
  * demands a primitive string — and share every constraint afterwards through
  * this helper, so a constraint cannot drift between them.
- * Faults come out in declaration order — `min`, then `max`, then
+ * Faults come out in declaration order — `date`, then `min`, then `max`, then
  * `pattern` — because a report is read top to bottom and its order is public.
+ * `expected` is `'date'` on a date string shape and `'string'` otherwise, as
+ * {@link buildNumberFaults} names `'integer'`.
  *
  * The declaration's pattern is applied through an OWNED stateless rebuild
  * ({@link readPattern}) asked through {@link matchesPattern}, so the shape's own
@@ -2945,7 +2986,18 @@ export function buildStringFaults(
 ): readonly Fault[] {
 	return readValue(
 		() => {
+			const dated = INTRINSICS.own(shape, 'date') && shape.date === true
+			const expected: FaultKind = dated ? 'date' : 'string'
 			const faults: Fault[] = []
+			if (dated && !matchesCalendarDate(value)) {
+				faults[faults.length] = {
+					reason: 'constraint',
+					path,
+					expected,
+					constraint: 'date',
+					received: preview(value),
+				}
+			}
 			if (
 				INTRINSICS.own(shape, 'min') &&
 				shape.min !== undefined &&
@@ -2954,7 +3006,7 @@ export function buildStringFaults(
 				faults[faults.length] = {
 					reason: 'constraint',
 					path,
-					expected: 'string',
+					expected,
 					constraint: 'min',
 					limit: shape.min,
 					received: preview(value),
@@ -2968,7 +3020,7 @@ export function buildStringFaults(
 				faults[faults.length] = {
 					reason: 'constraint',
 					path,
-					expected: 'string',
+					expected,
 					constraint: 'max',
 					limit: shape.max,
 					received: preview(value),
@@ -2991,7 +3043,7 @@ export function buildStringFaults(
 				faults[faults.length] = {
 					reason: 'constraint',
 					path,
-					expected: 'string',
+					expected,
 					constraint: 'pattern',
 					...(limit === undefined ? {} : { limit }),
 					received: preview(value),
@@ -3188,7 +3240,8 @@ export function selectClosestFaults<T extends AuditFault>(
  * A structural mapping used by {@link compileReporter} to fill a `Fault`'s
  * `expected` field and by {@link compileAuditor} to fill an `AuditFault`'s:
  * most shapes map to their own `category` (`numberShape` maps to
- * `'integer'` when `integer: true`, else `'number'`); `optionalShape` /
+ * `'integer'` when `integer: true`, else `'number'`, and `stringShape` maps to
+ * `'date'` when `date: true`, else `'string'`); `optionalShape` /
  * `nullableShape` project through to their inner shape's kind, and `rawShape`
  * (an arbitrary embedded schema with no fixed kind) projects to `'json'`.
  *
@@ -3213,7 +3266,7 @@ export function shapeToKind(shape: ContractShape): FaultKind {
 		() => {
 			switch (shape.category) {
 				case 'string':
-					return 'string'
+					return INTRINSICS.own(shape, 'date') && shape.date === true ? 'date' : 'string'
 				case 'number':
 					return INTRINSICS.own(shape, 'integer') && shape.integer === true ? 'integer' : 'number'
 				case 'boolean':
@@ -3586,7 +3639,7 @@ export function renderList(entries: readonly string[]): string {
  *
  * @remarks
  * An object lists its required keys first and marks the rest with `?`, at most `FAULT_LIST_LIMIT`
- * of them. A leaf or array keeps its numeric bounds and pattern, a union joins its forms with ` | `,
+ * of them. A leaf or array keeps its numeric bounds, pattern, and format, a union joins its forms with ` | `,
  * and a schema that says nothing reads `any`. Each nested form takes half the room of its parent, and
  * below 16 characters a form stops at its type, so a schema that holds itself still ends. Text past
  * `room` is cut and closes with `…`. A type word outside JSON Schema's vocabulary is encoded.
@@ -3637,9 +3690,16 @@ export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT
 				: undefined
 	const bounds = Object.entries(schema)
 		.filter(([key]) =>
-			['minLength', 'maxLength', 'minimum', 'maximum', 'minItems', 'maxItems', 'pattern'].includes(
-				key,
-			),
+			[
+				'minLength',
+				'maxLength',
+				'minimum',
+				'maximum',
+				'minItems',
+				'maxItems',
+				'pattern',
+				'format',
+			].includes(key),
 		)
 		.map(([key, value]) => `${key} ${preview(value)}`)
 	const text =

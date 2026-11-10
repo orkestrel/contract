@@ -7,6 +7,7 @@ import type {
 } from './types.js'
 import {
 	COMPILE_NODE_LIMIT,
+	DATE_LENGTH,
 	FAULT_SCHEMA_LIMIT,
 	INFER_BREADTH_LIMIT,
 	INFER_DEPTH_LIMIT,
@@ -326,9 +327,11 @@ export class SchemaShaper {
 		for (const index of iterateIndices(() => keys.length)) {
 			const key = keys[index]
 			if (key === undefined) continue
-			const known = INTRINSICS.reflect.apply(INTRINSICS.some, STRICT_SCHEMA_KEYWORDS, [
-				(keyword: string) => keyword === key,
-			])
+			const known =
+				INTRINSICS.reflect.apply(INTRINSICS.some, STRICT_SCHEMA_KEYWORDS, [
+					(keyword: string) => keyword === key,
+				]) ||
+				(key === 'format' && schema.format === 'date')
 			if (!known) throw this.#refusal('a strict conversion refuses a keyword it cannot honour', key)
 		}
 		this.#inspectAnnotations(schema)
@@ -343,7 +346,7 @@ export class SchemaShaper {
 			INTRINSICS.own(schema, 'anyOf')
 		const object = types.length === 0 && INTRINSICS.own(schema, 'properties') ? ['object'] : types
 		const effective: readonly string[] = hasForm ? [] : object
-		this.#confine(schema, ['minLength', 'maxLength'], this.#names(effective, 'string'))
+		this.#confine(schema, ['minLength', 'maxLength', 'format'], this.#names(effective, 'string'))
 		this.#confine(schema, ['minimum', 'maximum'], this.#names(effective, 'number', 'integer'))
 		this.#confine(schema, ['items', 'minItems', 'maxItems'], this.#names(effective, 'array'))
 		this.#confine(
@@ -614,9 +617,10 @@ export class SchemaShaper {
 	//    Schema's accept-anything schema, and where the inferers themselves bottom
 	//    out at their own limits.
 	//
-	// `format` and `pattern` are NEVER read into the compiled shape — `format` is
+	// `format` and `pattern` are NEVER read into a lenient walk's shape — `format` is
 	// annotation-only and compiling an attacker-supplied `pattern` into a `RegExp`
-	// is a ReDoS vector. `description`, when a string, carries through to the
+	// is a ReDoS vector. A strict walk reads `format: 'date'` on a string node as a
+	// date string shape. `description`, when a string, carries through to the
 	// produced shape's `description` option.
 	#build(schema: JSONSchema, depth: number, enclosed: boolean): ContractShape {
 		this.#built += 1
@@ -743,12 +747,21 @@ export class SchemaShaper {
 				INTRINSICS.own(schema, 'minLength') ? schema.minLength : undefined,
 				INTRINSICS.own(schema, 'maxLength') ? schema.maxLength : undefined,
 			)
+			// A lenient walk keeps `format` an annotation, as JSON Schema's default does, so
+			// a foreign schema's own answers are never refused; only a strict walk asserts it.
+			const formatted = this.#strict && INTRINSICS.own(schema, 'format') && schema.format === 'date'
+			const dated =
+				formatted && (bounds.min ?? 0) <= DATE_LENGTH && (bounds.max ?? DATE_LENGTH) >= DATE_LENGTH
+			if (formatted && !dated) {
+				throw this.#refusal(`a date length range must admit length ${DATE_LENGTH}`, 'format')
+			}
 			// Builder options admit inherited values; this projection must carry only
 			// the schema's own keywords, without reacquiring prototype data.
 			return stringShape(
 				INTRINSICS.rebase(
 					{
 						...bounds,
+						...(dated ? { date: true } : {}),
 						...(description === undefined ? {} : { description }),
 					},
 					null,

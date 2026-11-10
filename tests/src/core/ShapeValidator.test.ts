@@ -223,6 +223,7 @@ describe('raw schema refusal paths', () => {
 				min: undefined,
 				max: undefined,
 				pattern: undefined,
+				date: undefined,
 				description: undefined,
 			},
 			...['boolean', 'null', 'json', 'shape'].map((category) => ({
