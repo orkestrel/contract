@@ -3,6 +3,7 @@ import type {
 	BooleanShape,
 	ContractErrorOptions,
 	ContractShape,
+	FunctionShape,
 	JSONShape,
 	LiteralShape,
 	LiteralValue,
@@ -294,6 +295,8 @@ export class ShapeCloner implements ShapeClonerInterface {
 				return this.#captureSimple(source, path, 'json')
 			case 'shape':
 				return this.#captureSimple(source, path, 'shape')
+			case 'function':
+				return this.#captureSimple(source, path, 'function')
 			case 'raw':
 				return this.#captureRaw(source, path, budget)
 			default:
@@ -496,10 +499,10 @@ export class ShapeCloner implements ShapeClonerInterface {
 	}
 
 	#captureSimple(
-		source: BooleanShape | NullShape | JSONShape | ShapeShape,
+		source: BooleanShape | NullShape | JSONShape | ShapeShape | FunctionShape,
 		path: readonly string[],
-		category: 'boolean' | 'null' | 'json' | 'shape',
-	): BooleanShape | NullShape | JSONShape | ShapeShape {
+		category: 'boolean' | 'null' | 'json' | 'shape' | 'function',
+	): BooleanShape | NullShape | JSONShape | ShapeShape | FunctionShape {
 		const description = this.#captureField(source, 'description', path)
 		if (category === 'boolean') {
 			return { category: 'boolean', ...(description === undefined ? {} : { description }) }
@@ -509,6 +512,9 @@ export class ShapeCloner implements ShapeClonerInterface {
 		}
 		if (category === 'shape') {
 			return { category: 'shape', ...(description === undefined ? {} : { description }) }
+		}
+		if (category === 'function') {
+			return { category: 'function', ...(description === undefined ? {} : { description }) }
 		}
 		return { category: 'json', ...(description === undefined ? {} : { description }) }
 	}

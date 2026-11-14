@@ -406,9 +406,93 @@ describe('JSONCloner', () => {
 
 			expect(error).not.toBe(reason)
 			expect(error.code).toBe('clone')
-			expect(error.context).toEqual({ shape: 'json' })
+			expect(error.context).toEqual({ shape: 'json', path: [], received: 'object' })
 			expect(Object.hasOwn(error, 'cause')).toBe(false)
 		}
+	})
+
+	it('locates a refusal under polluted array construction and replays it by identity', () => {
+		const cloner = new JSONCloner({ a: Math.max })
+
+		const { eager, first } = polluteArrayConstruction(() => ({
+			eager: captureContractError(() => cloneJSONValue({ a: Math.max })),
+			first: captureContractError(() => cloner.clone()),
+		}))
+		const replay = captureContractError(() => cloner.clone())
+
+		expect(replay).toBe(first)
+		expect([eager, first].map(({ message, context }) => ({ message, context }))).toEqual([
+			{
+				message: 'cloneJSONValue: property is not JSON data at a',
+				context: { shape: 'json', path: ['a'], received: 'function' },
+			},
+			{
+				message: 'cloneJSONValue: property is not JSON data at a',
+				context: { shape: 'json', path: ['a'], received: 'function' },
+			},
+		])
+	})
+
+	it('refuses an accessor at its path while Object.prototype.value is installed', () => {
+		const accesses = new ObservationCounter()
+		const accessorIndex: unknown[] = []
+		Object.defineProperty(accessorIndex, '0', {
+			enumerable: true,
+			configurable: true,
+			get() {
+				accesses.increment()
+				return 1
+			},
+		})
+
+		const errors = pollutePrototype(
+			Object.prototype,
+			'value',
+			() => 'inherited',
+			() => [
+				captureContractError(() =>
+					new JSONCloner({
+						get a() {
+							accesses.increment()
+							return 1
+						},
+					}).clone(),
+				),
+				captureContractError(() => new JSONCloner({ rows: accessorIndex }).clone()),
+			],
+		)
+
+		expect(accesses.value).toBe(0)
+		expect(errors.map(({ message, context }) => ({ message, context }))).toEqual([
+			{
+				message: 'cloneJSONValue: record property is not enumerable data at a',
+				context: { shape: 'json', path: ['a'], received: 'accessor' },
+			},
+			{
+				message: 'cloneJSONValue: array index is not enumerable data at rows.0',
+				context: { shape: 'json', path: ['rows', '0'], received: 'accessor' },
+			},
+		])
+	})
+
+	it('replays a refusal that names a member as the same error by identity', () => {
+		const accesses = new ObservationCounter()
+		const cloner = new JSONCloner({
+			a: {
+				get b() {
+					accesses.increment()
+					return 1
+				},
+			},
+		})
+
+		const first = captureContractError(() => cloner.clone())
+		const second = captureContractError(() => cloner.clone())
+
+		expect(second).toBe(first)
+		expect(accesses.value).toBe(0)
+		expect(first.message).toBe('cloneJSONValue: record property is not enumerable data at a.b')
+		expect(first.context).toEqual({ shape: 'json', path: ['a', 'b'], received: 'accessor' })
 	})
 
 	it('matches the eager boundary for primitives, arrays, records, and aliases', () => {

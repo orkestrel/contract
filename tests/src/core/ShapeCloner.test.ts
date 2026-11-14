@@ -461,6 +461,10 @@ describe('ShapeCloner', () => {
 				fields: ['category', 'description'],
 			},
 			{
+				source: { category: 'function', description: 'function' },
+				fields: ['category', 'description'],
+			},
+			{
 				source: { category: 'string' },
 				fields: ['category'],
 				absent: ['min', 'max', 'pattern', 'description'],
@@ -481,6 +485,7 @@ describe('ShapeCloner', () => {
 			'json',
 			'raw',
 			'shape',
+			'function',
 			'string',
 		])
 		for (const row of rows) {
@@ -1348,5 +1353,18 @@ describe('ShapeCloner — optional defaults', () => {
 		if (!outcome.success) throw new Error('expected the nullable node to clone')
 
 		expect(Object.hasOwn(outcome.value, 'default')).toBe(false)
+	})
+})
+
+describe('ShapeCloner — function shape', () => {
+	it('captures a function declaration and refuses a description that is not a string', () => {
+		const clone = cloneShape({ category: 'function', description: 'Runs the schema migration' })
+		expect(clone).toEqual({ category: 'function', description: 'Runs the schema migration' })
+		expect(Object.isFrozen(clone)).toBe(true)
+		const error = captureContractError(() =>
+			Reflect.apply(cloneShape, undefined, [{ category: 'function', description: 42 }]),
+		)
+		expect(error.message).toBe('validateShape: description must be a string')
+		expect(error.context).toEqual({ path: ['description'] })
 	})
 })

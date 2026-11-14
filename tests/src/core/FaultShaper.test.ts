@@ -13,4 +13,15 @@ describe('FaultShaper', () => {
 		expect(createContract(fresh).is({ reason: 'extra', path: [] })).toBe(true)
 		expectTypeOf<Infer<AuditFaultShape>>().toExtend<AuditFault>()
 	})
+
+	it('admits a type fault that expected a function', () => {
+		expect(
+			createContract(new FaultShaper().build()).is({
+				reason: 'type',
+				path: ['upgrade'],
+				expected: 'function',
+				received: '"migrate"',
+			}),
+		).toBe(true)
+	})
 })

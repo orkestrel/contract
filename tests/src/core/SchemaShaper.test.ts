@@ -1089,6 +1089,19 @@ describe('SchemaShaper — strict', () => {
 		expect(schemaToShape(schema, { strict: true }).category).toBe('string')
 	})
 
+	it.each(STRICT_SCHEMA_ANNOTATIONS)(
+		'accepts the annotation %s beside a function leaf',
+		(keyword, value) => {
+			const schema: Readonly<Record<string, unknown>> = {
+				not: {},
+				format: 'function',
+				[keyword]: value,
+			}
+
+			expect(schemaToShape(schema, { strict: true }).category).toBe('function')
+		},
+	)
+
 	it('converts the annotated object a schema generator emits', () => {
 		const schema: Readonly<Record<string, unknown>> = {
 			$schema: 'https://json-schema.org/draft/2020-12/schema',

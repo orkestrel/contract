@@ -176,7 +176,18 @@ export function matchesUndefinedField(fault: AuditFault, value: unknown, parsed:
 export function truncateFaultText(text: string, limit: number): string {
 	if (limit <= 0) return ''
 	if (text.length <= limit) return text
-	return `${text.slice(0, limit - 1).replace(/[\uD800-\uDBFF]$/u, '')}…`
+	const bound = INTRINSICS.floor(limit)
+	const last = text[bound - 2]
+	const kept = last !== undefined && last >= '\uD800' && last <= '\uDBFF' ? bound - 2 : bound - 1
+	const head: string = INTRINSICS.reflect.apply(
+		INTRINSICS.join,
+		INTRINSICS.from(
+			iterateIndices(() => kept),
+			(index) => text[index],
+		),
+		[''],
+	)
+	return `${head}…`
 }
 
 /**
@@ -202,29 +213,60 @@ export function describeFaults(
 	if (!isInteger(requested) || requested < 0) {
 		throw new ContractError('Fault text limit must be a non-negative integer', { code: 'range' })
 	}
-	const limit = Math.min(requested, FAULT_TEXT_LIMIT)
+	const limit = INTRINSICS.min(requested, FAULT_TEXT_LIMIT)
 	const send =
 		schema === undefined
 			? ''
-			: `send ${renderForm(schema, Math.min(FAULT_SCHEMA_LIMIT, Math.floor(limit / 3)))}`
-	const lines = limitEntries(faults, FAULT_LIMIT).map((fault) =>
-		describeFaultLine(fault, schema ?? {}),
+			: `send ${renderForm(schema, INTRINSICS.min(FAULT_SCHEMA_LIMIT, INTRINSICS.floor(limit / 3)))}`
+	const lines: readonly string[] = INTRINSICS.reflect.apply(
+		INTRINSICS.project,
+		readIndexView(limitEntries(faults, FAULT_LIMIT)),
+		[(fault: AuditFault) => describeFaultLine(fault, schema ?? {})],
 	)
-	const room = Math.max(0, limit - send.length - 82)
-	const kept = lines.filter((_, index) => lines.slice(0, index + 1).join('\n').length <= room)
+	const room = INTRINSICS.max(0, limit - send.length - 82)
+	const kept: readonly string[] = INTRINSICS.reflect.apply(
+		INTRINSICS.select,
+		readIndexView(lines),
+		[
+			(_line: string, index: number) =>
+				INTRINSICS.reflect.apply(INTRINSICS.join, limitEntries(lines, index + 1), ['\n']).length <=
+				room,
+		],
+	)
 	const hidden = faults.length - kept.length
-	const note = [
-		...(hidden > 0 ? [`and ${String(hidden)} more faults`] : []),
-		...(faults.length >= FAULT_LIMIT ? [`the report stops at ${String(FAULT_LIMIT)}`] : []),
-	].join(', ')
-	const text = [
-		...kept,
-		...(kept.length === 0 && lines.length > 0 && room > 0
-			? [truncateFaultText(lines[0] ?? '', room)]
-			: []),
-		...(note.length === 0 ? [] : [note]),
-		...(send.length === 0 ? [] : [send]),
-	].join('\n')
+	const note: string = INTRINSICS.reflect.apply(
+		INTRINSICS.join,
+		INTRINSICS.reflect.apply(
+			INTRINSICS.select,
+			readIndexView([
+				hidden > 0 ? `and ${INTRINSICS.text(hidden)} more faults` : undefined,
+				faults.length >= FAULT_LIMIT
+					? `the report stops at ${INTRINSICS.text(FAULT_LIMIT)}`
+					: undefined,
+			]),
+			[(part: string | undefined) => part !== undefined],
+		),
+		[', '],
+	)
+	const extras: readonly string[] = INTRINSICS.reflect.apply(
+		INTRINSICS.select,
+		readIndexView([
+			kept.length === 0 && lines.length > 0 && room > 0
+				? truncateFaultText(lines[0] ?? '', room)
+				: undefined,
+			note.length === 0 ? undefined : note,
+			send.length === 0 ? undefined : send,
+		]),
+		[(part: string | undefined) => part !== undefined],
+	)
+	const text: string = INTRINSICS.reflect.apply(
+		INTRINSICS.join,
+		INTRINSICS.from(
+			iterateIndices(() => kept.length + extras.length),
+			(index) => (index < kept.length ? kept[index] : extras[index - kept.length]),
+		),
+		['\n'],
+	)
 	return truncateFaultText(text, limit)
 }
 
@@ -2522,7 +2564,8 @@ export function canonicalStringify(value: unknown): string | undefined {
 				  }
 			> = [{ operation: 'enter', value }]
 			while (stack.length > 0) {
-				const frame = stack.pop()
+				const frame = stack[stack.length - 1]
+				stack.length -= 1
 				if (frame === undefined) return undefined
 				if (frame.operation === 'exit') {
 					const parts = INTRINSICS.from(encodeParts(frame.members, frame.keys, encodings))
@@ -2860,41 +2903,51 @@ export function sanitizeDepth(value: number | undefined): number {
 // === Reporting
 
 /**
- * Renders an unknown value as a short, safe, TOTAL string for a {@link Fault}'s
- * `received` field.
+ * Renders a value as a bounded single-line string for a {@link Fault}'s `received` field, running
+ * a `Proxy` object's `getPrototypeOf` trap.
  *
  * @remarks
- * A primitive renders as printable text: a string retains its quoted JSON
- * representation, while a narrowed symbol renders through intrinsic `String`
- * and receives the same escaping without outer quotes. A string of at most
- * {@link PREVIEW_LIMIT} code units takes its answer from one whole-string
- * encode when that encode fits the same limit, and the length predicate
- * deciding it is exact rather than approximate. Every other string and every
- * symbol renders through one bounded indexed encoder that appends only
- * complete escaped code-point tokens within {@link PREVIEW_LIMIT}; clipping
- * therefore never retrieves the mutable string iterator or splits an
- * escape/surrogate pair before its trailing `…`, and enormous primitive text
- * is not fully traversed. A number / boolean / bigint renders through `String`;
- * `null` and `undefined` render as their own name. An array renders as
- * `'array'`. Every other host — a plain object, a function, a class instance,
- * a `Map` — is NEVER traversed or stringified; it renders as its bare
- * `typeof` tag (`'object'` / `'function'`).
+ * Every preview, its quotes and its `…` included, is at most
+ * {@link PREVIEW_LIMIT} UTF-16 code units long and holds no control character
+ * and no line terminator.
  *
- * The indexed encoder appends every token and closes with the quote exactly
- * when the escaped inner length is at most `PREVIEW_LIMIT - 2`, which is
- * character for character what one `JSON.stringify` call returns. At an inner
- * length of `PREVIEW_LIMIT - 1` the indexed encoder appends every token and
- * closes with `…` instead, while one `JSON.stringify` call over that same
- * string measures `PREVIEW_LIMIT + 1` — so the predicate refuses that string
- * and every longer one, and each of them renders through the indexed encoder.
- * Escaping never shrinks text, so the leading `source.length` gate admits
- * every string the predicate could accept while keeping enormous primitive
- * text out of the whole-string encode. A symbol renders through the indexed
- * encoder because its unquoted text is not what a `JSON.stringify` call
- * returns.
+ * A string renders as its quoted JSON representation, and a narrowed symbol
+ * through intrinsic `String` with the same escaping and no outer quotes. DEL
+ * (U+007F), the C1 controls (U+0080 to U+009F), U+2028, and U+2029, which a
+ * `JSON.stringify` call leaves raw, render as `\u` sequences. A string of at
+ * most {@link PREVIEW_LIMIT} UTF-16 code units that holds none of those raw
+ * characters takes its answer from one whole-string encode when that encode
+ * fits the same limit. Every other string and every symbol renders through one
+ * bounded indexed encoder that appends only complete escaped code-point tokens,
+ * at most `PREVIEW_LIMIT - 2` UTF-16 code units between a string's quotes and
+ * `PREVIEW_LIMIT - 1` of a symbol, and then closes with the quote when every
+ * token fit and with `…` otherwise. Clipping therefore never retrieves the
+ * mutable string iterator or splits an escape or a surrogate pair, and
+ * enormous primitive text is not fully traversed. The two paths agree: one
+ * `JSON.stringify` call fits the limit exactly when the escaped inner length
+ * is at most `PREVIEW_LIMIT - 2`, which is when the indexed encoder closes
+ * with the quote.
+ *
+ * A number or a boolean renders through `String`. A bigint renders through
+ * `String` with a trailing `n`; when its text reaches {@link PREVIEW_LIMIT}
+ * UTF-16 code units, the preview keeps the leading `PREVIEW_LIMIT - 2`, then
+ * `…`, then `n`. `null` and `undefined` render as their own name.
+ *
+ * An array renders as `'array'`, a function as `'function'`, a plain or
+ * null-prototype record as `'object'`, and every other object, such as a class
+ * instance, a `Map`, a `Date`, or a revoked `Proxy`, as `'instance'`. To tell a
+ * record from an instance, the {@link isRecord} guard reads the object's
+ * prototype, that prototype's prototype, and, when the second is `null`, the
+ * first one's own property descriptors. A `Proxy` object's `getPrototypeOf`
+ * trap therefore runs, and so do the `getPrototypeOf` and
+ * `getOwnPropertyDescriptor` traps of a `Proxy` object that stands as the
+ * prototype; a trap that throws yields `'instance'`. Every read is a prototype
+ * or descriptor read, so no accessor on the object or its prototype runs, and
+ * no object is stringified.
  *
  * @param value - The value to preview
- * @returns A short descriptive string, always safe to embed in a diagnostic
+ * @returns A string of at most {@link PREVIEW_LIMIT} UTF-16 code units with no
+ * control character and no line terminator
  *
  * @example
  * ```ts
@@ -2902,6 +2955,7 @@ export function sanitizeDepth(value: number | undefined): number {
  * preview(42)           // '42'
  * preview(null)         // 'null'
  * preview({ a: 1 })     // 'object'
+ * preview(new Map())    // 'instance'
  * preview([1, 2, 3])    // 'array'
  * ```
  */
@@ -2911,17 +2965,28 @@ export function preview(value: unknown): string {
 	if (isString(value) || isSymbol(value)) {
 		const quoted = isString(value)
 		const source = INTRINSICS.text(value)
-		if (quoted && source.length <= PREVIEW_LIMIT) {
+		if (
+			quoted &&
+			source.length <= PREVIEW_LIMIT &&
+			!matchesPattern(/[\x7f-\x9f\u{2028}\u{2029}]/u, source)
+		) {
 			const whole = INTRINSICS.stringify(source)
 			if (whole.length <= PREVIEW_LIMIT) return whole
 		}
-		const parts = previewParts(source, 0, PREVIEW_LIMIT - (quoted ? 1 : 0), quoted)
+		const parts = previewParts(source, 0, PREVIEW_LIMIT - (quoted ? 2 : 1), quoted)
 		const body: string = INTRINSICS.reflect.apply(INTRINSICS.join, parts, [''])
 		return quoted ? `"${body}` : body
 	}
 	if (isNumber(value) || isBoolean(value)) return INTRINSICS.text(value)
-	if (isBigInt(value)) return `${value}n`
+	if (isBigInt(value)) {
+		const digits = INTRINSICS.text(value)
+		if (digits.length < PREVIEW_LIMIT) return `${digits}n`
+		const parts = previewParts(digits, 0, PREVIEW_LIMIT - 2, false)
+		const body: string = INTRINSICS.reflect.apply(INTRINSICS.join, parts, [''])
+		return `${body}n`
+	}
 	if (isArray(value)) return 'array'
+	if (isObject(value) && !isRecord(value)) return 'instance'
 	return typeof value
 }
 
@@ -3248,6 +3313,7 @@ export function selectClosestFaults<T extends AuditFault>(
  * `'date'` when `date: true`, else `'string'`); `optionalShape` /
  * `nullableShape` project through to their inner shape's kind, and `rawShape`
  * (an arbitrary embedded schema with no fixed kind) projects to `'json'`.
+ * `functionShape` projects to `'function'`.
  *
  * A hand-authored node carrying an unrecognized discriminant is REFUSED rather
  * than answered out of type, which keeps the declared non-optional
@@ -3289,6 +3355,8 @@ export function shapeToKind(shape: ContractShape): FaultKind {
 					return 'json'
 				case 'shape':
 					return 'shape'
+				case 'function':
+					return 'function'
 				case 'optional':
 					return shapeToKind(shape.inner)
 				case 'nullable':
@@ -3384,9 +3452,14 @@ export function* encodeParts(
 /**
  * Builds bounded escaped preview parts without splitting a surrogate pair.
  *
+ * @remarks
+ * Each token is one code point's escape: its `JSON.stringify` form, or a `\u` sequence for DEL
+ * (U+007F), a C1 control (U+0080 to U+009F), U+2028, or U+2029. The parts end with `…` when a
+ * token does not fit, and otherwise with the closing quote of a quoted source.
+ *
  * @param source - The source text
  * @param index - The next UTF-16 offset
- * @param capacity - The unused preview width
+ * @param capacity - The UTF-16 code units left for tokens; the closing quote or `…` takes one more
  * @param quoted - Whether the final part closes a string quote
  * @returns The escaped parts with their closing quote or truncation mark
  *
@@ -3403,9 +3476,7 @@ export function previewParts(
 ): readonly string[] {
 	const available = INTRINSICS.min(capacity, PREVIEW_LIMIT)
 	const first = source[index]
-	if (index >= source.length || first === undefined) {
-		return quoted ? [available > 0 ? '"' : '…'] : []
-	}
+	if (index >= source.length || first === undefined) return quoted ? ['"'] : []
 	const second = index + 1 < source.length ? source[index + 1] : undefined
 	const paired =
 		first >= '\ud800' &&
@@ -3414,7 +3485,24 @@ export function previewParts(
 		second >= '\udc00' &&
 		second <= '\udfff'
 	const character = paired ? `${first}${second}` : first
-	const encoded = INTRINSICS.stringify(character)
+	// A `JSON.stringify` call leaves DEL, the C1 controls, U+2028, and U+2029 raw, so each takes its `\u` sequence here.
+	const control: number =
+		character >= '\x7f' && character <= '\x9f'
+			? INTRINSICS.reflect.apply(
+					INTRINSICS.find,
+					'\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f',
+					[(entry: unknown) => entry === character],
+				)
+			: -1
+	const code = 0x7f + control
+	const encoded =
+		control >= 0
+			? `"\\u00${'0123456789abcdef'[INTRINSICS.floor(code / 16)] ?? ''}${'0123456789abcdef'[code % 16] ?? ''}"`
+			: character === '\u{2028}'
+				? '"\\u2028"'
+				: character === '\u{2029}'
+					? '"\\u2029"'
+					: INTRINSICS.stringify(character)
 	const length = encoded.length - 2
 	if (length > available) return ['…']
 	const characters = INTRINSICS.from(
@@ -3533,7 +3621,18 @@ export function extractForms(schema: JSONSchema | undefined): readonly JSONSchem
 	if (schema === undefined) return []
 	const anyOf = INTRINSICS.own(schema, 'anyOf') ? schema.anyOf : undefined
 	const oneOf = INTRINSICS.own(schema, 'oneOf') ? schema.oneOf : undefined
-	return [schema, ...(anyOf ?? oneOf ?? [])]
+	const arms = isArray(anyOf) ? anyOf : isArray(oneOf) ? oneOf : []
+	const members = INTRINSICS.from(
+		iterateIndices(() => arms.length),
+		(index) => arms[index],
+	)
+	const forms = INTRINSICS.from(
+		iterateIndices(() => members.length + 1),
+		(index) => (index === 0 ? schema : members[index - 1]),
+	)
+	return INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(forms), [
+		(form: JSONSchema | undefined) => form !== undefined,
+	])
 }
 
 /**
@@ -3559,13 +3658,18 @@ export function extractForms(schema: JSONSchema | undefined): readonly JSONSchem
  * ```
  */
 export function extractSchema(schema: JSONSchema, path: readonly string[]): JSONSchema | undefined {
-	const nodes = path.reduce<readonly JSONSchema[]>(
-		(parents, key) =>
-			Array.from(
-				new Set(
-					parents
-						.flatMap((node) => extractForms(node))
-						.map((form) => {
+	const nodes: readonly JSONSchema[] = INTRINSICS.reflect.apply(INTRINSICS.fold, path, [
+		(parents: readonly JSONSchema[], key: string) => {
+			const forms: readonly JSONSchema[] = INTRINSICS.reflect.apply(
+				INTRINSICS.expand,
+				readIndexView(parents),
+				[(node: JSONSchema) => extractForms(node)],
+			)
+			const children: readonly JSONSchema[] = INTRINSICS.reflect.apply(
+				INTRINSICS.select,
+				readIndexView(
+					INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(forms), [
+						(form: JSONSchema) => {
 							const properties = INTRINSICS.own(form, 'properties') ? form.properties : undefined
 							const additional = INTRINSICS.own(form, 'additionalProperties')
 								? form.additionalProperties
@@ -3577,16 +3681,27 @@ export function extractSchema(schema: JSONSchema, path: readonly string[]): JSON
 									: INTRINSICS.own(form, 'items')
 										? form.items
 										: undefined
-						})
-						.filter((child) => child !== undefined),
+						},
+					]),
 				),
-			),
+				[(child: JSONSchema | undefined) => child !== undefined],
+			)
+			return INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(children), [
+				(child: JSONSchema, index: number) =>
+					INTRINSICS.reflect.apply(INTRINSICS.find, children, [
+						(other: JSONSchema) => other === child,
+					]) === index,
+			])
+		},
 		[schema],
-	)
+	])
 	const first = nodes[0]
 	if (nodes.length < 2) return first
 	const encoded = canonicalStringify(first)
-	return encoded !== undefined && nodes.every((node) => canonicalStringify(node) === encoded)
+	return encoded !== undefined &&
+		!INTRINSICS.reflect.apply(INTRINSICS.some, nodes, [
+			(node: JSONSchema) => canonicalStringify(node) !== encoded,
+		])
 		? first
 		: undefined
 }
@@ -3611,13 +3726,26 @@ export function extractSchema(schema: JSONSchema, path: readonly string[]): JSON
  * ```
  */
 export function renderPath(path: readonly string[]): string {
-	const segments = path.map((segment) =>
-		/^[\w$-]{1,64}$/u.test(segment) ? segment : preview(segment),
+	const segments = INTRINSICS.from(
+		iterateIndices(() => path.length),
+		(index): string => {
+			const segment = path[index]
+			if (segment === undefined) return ''
+			return matchesPattern(/^[\w$-]{1,64}$/u, segment) ? segment : preview(segment)
+		},
 	)
-	const text = segments.join('.')
-	return segments.length <= 4 || text.length <= 120
-		? text
-		: [...segments.slice(0, 1), '…', ...segments.slice(-3)].join('.')
+	const text: string = INTRINSICS.reflect.apply(INTRINSICS.join, segments, ['.'])
+	if (segments.length <= 4 || text.length <= 120) return text
+	const elided = INTRINSICS.from(
+		iterateIndices(() => 5),
+		(index): string =>
+			index === 0
+				? (segments[0] ?? '')
+				: index === 1
+					? '…'
+					: (segments[segments.length - 5 + index] ?? ''),
+	)
+	return INTRINSICS.reflect.apply(INTRINSICS.join, elided, ['.'])
 }
 
 /**
@@ -3634,9 +3762,13 @@ export function renderPath(path: readonly string[]): string {
  * ```
  */
 export function renderList(entries: readonly string[]): string {
-	const listed = entries.slice(0, FAULT_LIST_LIMIT).join(', ')
+	const listed: string = INTRINSICS.reflect.apply(
+		INTRINSICS.join,
+		limitEntries(entries, FAULT_LIST_LIMIT),
+		[', '],
+	)
 	return entries.length > FAULT_LIST_LIMIT
-		? `${listed} and ${String(entries.length - FAULT_LIST_LIMIT)} more`
+		? `${listed} and ${INTRINSICS.text(entries.length - FAULT_LIST_LIMIT)} more`
 		: listed
 }
 
@@ -3649,6 +3781,8 @@ export function renderList(entries: readonly string[]): string {
  * and a schema that says nothing reads `any`. Each nested form takes half the room of its parent, and
  * below 16 characters a form stops at its type, so a schema that holds itself still ends. Text past
  * `room` is cut and closes with `…`. A type word outside JSON Schema's vocabulary is encoded.
+ * A schema with an own `not` reads `function` when its `format` is `'function'` and `never`
+ * otherwise.
  *
  * @param schema - The schema to summarize
  * @param room - The characters the summary can take. Default: `FAULT_SCHEMA_LIMIT`
@@ -3663,29 +3797,45 @@ export function renderList(entries: readonly string[]): string {
  */
 export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT): string {
 	const deep = room >= 16
-	const inner = Math.floor(room / 2)
+	const inner = INTRINSICS.floor(room / 2)
 	const anyOf = INTRINSICS.own(schema, 'anyOf') ? schema.anyOf : undefined
 	const oneOf = INTRINSICS.own(schema, 'oneOf') ? schema.oneOf : undefined
-	const forms = anyOf ?? oneOf
-	const required = (INTRINSICS.own(schema, 'required') ? schema.required : undefined) ?? []
-	const entries = Object.entries(
-		(INTRINSICS.own(schema, 'properties') ? schema.properties : undefined) ?? {},
+	const forms = isArray(anyOf) ? anyOf : isArray(oneOf) ? oneOf : undefined
+	const required = collectMembers(
+		(INTRINSICS.own(schema, 'required') ? schema.required : undefined) ?? [],
 	)
+	const properties = (INTRINSICS.own(schema, 'properties') ? schema.properties : undefined) ?? {}
+	const keys = INTRINSICS.keys(properties)
 	const type = INTRINSICS.own(schema, 'type') ? schema.type : undefined
 	const enumeration = INTRINSICS.own(schema, 'enum') ? schema.enum : undefined
 	const additional = INTRINSICS.own(schema, 'additionalProperties')
 		? schema.additionalProperties
 		: undefined
-	const listed = (deep ? entries : [])
-		.toSorted(
-			([left], [right]) => Number(required.includes(right)) - Number(required.includes(left)),
-		)
-		.slice(0, FAULT_LIST_LIMIT)
-		.map(
-			([key, child]) =>
-				`${preview(key)}${required.includes(key) ? '' : '?'}: ${renderForm(child, inner)}`,
-		)
-	const left = entries.length - listed.length
+	const negated = INTRINSICS.own(schema, 'not')
+	const callable = INTRINSICS.own(schema, 'format') && schema.format === 'function'
+	const ordered: readonly string[] = deep
+		? INTRINSICS.reflect.apply(
+				INTRINSICS.order,
+				INTRINSICS.from(
+					iterateIndices(() => keys.length),
+					(index) => keys[index] ?? '',
+				),
+				[
+					(left: string, right: string) =>
+						INTRINSICS.numeric(matchesMember(required, right)) -
+						INTRINSICS.numeric(matchesMember(required, left)),
+				],
+			)
+		: []
+	const listed: readonly string[] = INTRINSICS.reflect.apply(
+		INTRINSICS.project,
+		readIndexView(limitEntries(ordered, FAULT_LIST_LIMIT)),
+		[
+			(key: string) =>
+				`${preview(key)}${matchesMember(required, key) ? '' : '?'}: ${renderForm(properties[key] ?? {}, inner)}`,
+		],
+	)
+	const left = keys.length - listed.length
 	const child =
 		type === 'array'
 			? INTRINSICS.own(schema, 'items')
@@ -3694,40 +3844,64 @@ export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT
 			: isRecord(additional)
 				? additional
 				: undefined
-	const bounds = Object.entries(schema)
-		.filter(([key]) =>
-			[
-				'minLength',
-				'maxLength',
-				'minimum',
-				'maximum',
-				'minItems',
-				'maxItems',
-				'pattern',
-				'format',
-			].includes(key),
-		)
-		.map(([key, value]) => `${key} ${preview(value)}`)
-	const text =
-		forms !== undefined
+	const bounds: readonly string[] = INTRINSICS.reflect.apply(
+		INTRINSICS.project,
+		readIndexView(
+			INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(INTRINSICS.keys(schema)), [
+				(key: string) =>
+					INTRINSICS.reflect.apply(
+						INTRINSICS.some,
+						[
+							'minLength',
+							'maxLength',
+							'minimum',
+							'maximum',
+							'minItems',
+							'maxItems',
+							'pattern',
+							'format',
+						],
+						[(name: string) => name === key],
+					),
+			]),
+		),
+		[(key: string) => `${key} ${preview(INTRINSICS.reflect.read(schema, key))}`],
+	)
+	const word =
+		type === undefined
+			? keys.length > 0
+				? 'object'
+				: 'any'
+			: INTRINSICS.reflect.apply(INTRINSICS.some, JSON_SCHEMA_TYPES, [
+						(name: string) => name === type,
+				  ])
+				? INTRINSICS.text(type)
+				: preview(type)
+	const text: string = negated
+		? callable
+			? 'function'
+			: 'never'
+		: forms !== undefined
 			? deep
-				? forms.map((form) => renderForm(form, inner)).join(' | ')
+				? INTRINSICS.reflect.apply(
+						INTRINSICS.join,
+						INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(forms), [
+							(form: JSONSchema) => renderForm(form, inner),
+						]),
+						[' | '],
+					)
 				: 'any'
 			: enumeration !== undefined
-				? enumeration.map((value) => preview(value)).join(' | ')
+				? INTRINSICS.reflect.apply(
+						INTRINSICS.join,
+						INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(enumeration), [
+							(value: unknown) => preview(value),
+						]),
+						[' | '],
+					)
 				: listed.length > 0
-					? `{${[...listed, ...(left > 0 ? [`and ${String(left)} more`] : [])].join(', ')}}`
-					: [
-							type === undefined
-								? entries.length > 0
-									? 'object'
-									: 'any'
-								: JSON_SCHEMA_TYPES.some((name) => name === type)
-									? type
-									: preview(type),
-							...(deep && child !== undefined ? [` of ${renderForm(child, inner)}`] : []),
-							...(bounds.length > 0 ? [` (${bounds.join(', ')})`] : []),
-						].join('')
+					? `{${INTRINSICS.reflect.apply(INTRINSICS.join, listed, [', '])}${left > 0 ? `, and ${INTRINSICS.text(left)} more` : ''}}`
+					: `${word}${deep && child !== undefined ? ` of ${renderForm(child, inner)}` : ''}${bounds.length > 0 ? ` (${INTRINSICS.reflect.apply(INTRINSICS.join, bounds, [', '])})` : ''}`
 	return truncateFaultText(text, room)
 }
 
@@ -3760,50 +3934,106 @@ export function describeFaultLine(fault: AuditFault, schema: JSONSchema): string
 	const path = extractPath(fault)
 	const head = `${renderPath(path) || 'value'}: ${fault.reason}`
 	if (fault.reason === 'extra') {
-		const declarations = extractForms(extractSchema(schema, path.slice(0, -1)))
-			.filter((form) => INTRINSICS.own(form, 'properties') && form.properties !== undefined)
-			.map((form) => Object.keys(form.properties ?? {}))
-		const first = declarations[0] ?? []
-		const keys = declarations.every(
-			(declared) =>
-				declared.length === first.length && declared.every((key) => first.includes(key)),
+		const parent = INTRINSICS.from(
+			iterateIndices(() => path.length - 1),
+			(index) => path[index] ?? '',
 		)
-			? first
-			: []
+		const declarations: ReadonlyArray<readonly string[]> = INTRINSICS.reflect.apply(
+			INTRINSICS.project,
+			readIndexView(
+				INTRINSICS.reflect.apply(
+					INTRINSICS.select,
+					readIndexView(extractForms(extractSchema(schema, parent))),
+					[
+						(form: JSONSchema) =>
+							INTRINSICS.own(form, 'properties') && form.properties !== undefined,
+					],
+				),
+			),
+			[(form: JSONSchema) => INTRINSICS.keys(form.properties ?? {})],
+		)
+		const first = declarations[0] ?? []
+		const keys = INTRINSICS.reflect.apply(INTRINSICS.some, declarations, [
+			(declared: readonly string[]) =>
+				declared.length !== first.length ||
+				INTRINSICS.reflect.apply(INTRINSICS.some, declared, [
+					(key: string) =>
+						!INTRINSICS.reflect.apply(INTRINSICS.some, first, [(name: string) => name === key]),
+				]),
+		])
+			? []
+			: first
 		return keys.length === 0
 			? `${head}; this key is not declared, remove it`
-			: `${head}; this key is not declared, remove it or use a declared key: ${renderList(keys.map((key) => renderPath([key])))}`
+			: `${head}; this key is not declared, remove it or use a declared key: ${renderList(
+					INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(keys), [
+						(key: string) => renderPath([key]),
+					]),
+				)}`
 	}
 	const node = extractSchema(schema, path)
 	const anyOf = node !== undefined && INTRINSICS.own(node, 'anyOf') ? node.anyOf : undefined
 	const oneOf = node !== undefined && INTRINSICS.own(node, 'oneOf') ? node.oneOf : undefined
 	if (fault.reason === 'variant' || fault.reason === 'oneOf') {
 		const count = fault.reason === 'variant' ? fault.variants : oneOf?.length
-		const forms = count === undefined ? 'the declared forms' : `the ${String(count)} declared forms`
+		const forms =
+			count === undefined ? 'the declared forms' : `the ${INTRINSICS.text(count)} declared forms`
 		const claim =
 			fault.reason === 'oneOf' && fault.matched > 0
-				? `the value matches ${String(fault.matched)} of ${forms} and must match exactly one`
+				? `the value matches ${INTRINSICS.text(fault.matched)} of ${forms} and must match exactly one`
 				: `the value matches none of ${forms}`
 		const declared = anyOf ?? oneOf ?? []
-		const shown = declared.slice(0, FAULT_LIST_LIMIT)
-		const room = Math.min(
+		const shown = limitEntries(declared, FAULT_LIST_LIMIT)
+		const room = INTRINSICS.min(
 			FAULT_SCHEMA_LIMIT,
-			Math.floor(FAULT_TEXT_LIMIT / 2 / Math.max(shown.length, 1)),
+			INTRINSICS.floor(FAULT_TEXT_LIMIT / 2 / INTRINSICS.max(shown.length, 1)),
 		)
 		const more = declared.length - shown.length
 		const summary =
 			shown.length === 0
 				? ''
-				: `, one of: ${shown.map((form) => renderForm(form, room)).join(' or ')}${more > 0 ? ` and ${String(more)} more` : ''}`
-		return `${head}; ${claim}${fault.key === undefined ? '' : `; discriminator ${preview(fault.key)} expects ${renderList((fault.expected ?? []).map((value) => preview(value)))}`}; send it exactly as the schema declares${summary}`
+				: `, one of: ${INTRINSICS.reflect.apply(
+						INTRINSICS.join,
+						INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(shown), [
+							(form: JSONSchema) => renderForm(form, room),
+						]),
+						[' or '],
+					)}${more > 0 ? ` and ${INTRINSICS.text(more)} more` : ''}`
+		return `${head}; ${claim}${
+			fault.key === undefined
+				? ''
+				: `; discriminator ${preview(fault.key)} expects ${renderList(
+						INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(fault.expected ?? []), [
+							(value: unknown) => preview(value),
+						]),
+					)}`
+		}; send it exactly as the schema declares${summary}`
 	}
-	const candidates =
+	const candidates: readonly unknown[] =
 		fault.expected === 'literal'
-			? extractForms(node).flatMap((form) => [
-					...((INTRINSICS.own(form, 'enum') ? form.enum : undefined) ?? []),
-					...(INTRINSICS.own(form, 'type') && form.type === 'null' ? [null] : []),
+			? INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(extractForms(node)), [
+					(form: JSONSchema) => {
+						const values = (INTRINSICS.own(form, 'enum') ? form.enum : undefined) ?? []
+						const nullable = INTRINSICS.own(form, 'type') && form.type === 'null'
+						return INTRINSICS.from(
+							iterateIndices(() => values.length + (nullable ? 1 : 0)),
+							(index) => (index < values.length ? values[index] : null),
+						)
+					},
 				])
 			: []
+	const seen = new INTRINSICS.set<unknown>()
+	const distinct: readonly unknown[] = INTRINSICS.reflect.apply(
+		INTRINSICS.select,
+		readIndexView(candidates),
+		[
+			(value: unknown) => {
+				if (matchesMember(seen, value)) return false
+				admitMember(seen, value)
+				return true
+			},
+		],
+	)
 	const description =
 		node !== undefined && INTRINSICS.own(node, 'description') ? node.description : undefined
 	const received =
@@ -3811,22 +4041,34 @@ export function describeFaultLine(fault: AuditFault, schema: JSONSchema): string
 	const shown =
 		received !== undefined &&
 		received.length <= PREVIEW_LIMIT &&
-		!/[\p{Cc}\p{Zl}\p{Zp}]/u.test(received)
+		!matchesPattern(/[\p{Cc}\p{Zl}\p{Zp}]/u, received)
 			? received
 			: preview(received)
-	return [
-		head,
-		`expected ${fault.expected}`,
-		...(received !== undefined ? [`received ${shown}`] : []),
-		...('constraint' in fault && INTRINSICS.own(fault, 'constraint')
-			? [`constraint ${fault.constraint}`]
-			: []),
-		...('limit' in fault && INTRINSICS.own(fault, 'limit') && fault.limit !== undefined
-			? [`limit ${preview(fault.limit)}`]
-			: []),
-		...(description === undefined ? [] : [`description ${preview(description)}`]),
-		...(candidates.length > 0
-			? [`send one of ${renderList(Array.from(new Set(candidates), (value) => preview(value)))}`]
-			: []),
-	].join('; ')
+	return INTRINSICS.reflect.apply(
+		INTRINSICS.join,
+		INTRINSICS.reflect.apply(
+			INTRINSICS.select,
+			readIndexView([
+				head,
+				`expected ${fault.expected}`,
+				received !== undefined ? `received ${shown}` : undefined,
+				'constraint' in fault && INTRINSICS.own(fault, 'constraint')
+					? `constraint ${fault.constraint}`
+					: undefined,
+				'limit' in fault && INTRINSICS.own(fault, 'limit') && fault.limit !== undefined
+					? `limit ${preview(fault.limit)}`
+					: undefined,
+				description === undefined ? undefined : `description ${preview(description)}`,
+				distinct.length > 0
+					? `send one of ${renderList(
+							INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(distinct), [
+								(value: unknown) => preview(value),
+							]),
+						)}`
+					: undefined,
+			]),
+			[(part: string | undefined) => part !== undefined],
+		),
+		['; '],
+	)
 }

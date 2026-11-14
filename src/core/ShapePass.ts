@@ -865,7 +865,8 @@ export class ShapePass {
 					key !== 'required' &&
 					key !== 'additionalProperties' &&
 					key !== 'anyOf' &&
-					key !== 'oneOf'
+					key !== 'oneOf' &&
+					key !== 'not'
 				) {
 					return this.#refuseSchema(
 						'validateShape: raw schema contains an unsupported keyword',
@@ -929,6 +930,19 @@ export class ShapePass {
 					first,
 					second,
 					'format',
+				)
+			}
+			// `not` stays the bottom alone, because the vocabulary models no other complement.
+			if (
+				INTRINSICS.own(schema, 'not') &&
+				(!isRecord(schema.not) || INTRINSICS.reflect.members(schema.not).length > 0)
+			) {
+				return this.#refuseSchema(
+					'validateShape: raw schema not must be the empty schema',
+					stack,
+					first,
+					second,
+					'not',
 				)
 			}
 			if (INTRINSICS.own(schema, 'pattern') && schema.pattern !== undefined) {
@@ -1489,6 +1503,7 @@ export class ShapePass {
 			case 'null':
 			case 'json':
 			case 'shape':
+			case 'function':
 			case 'raw':
 				break
 		}

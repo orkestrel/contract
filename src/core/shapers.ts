@@ -5,6 +5,8 @@ import type {
 	BooleanShape,
 	BooleanShapeOptions,
 	ContractShape,
+	FunctionShape,
+	FunctionShapeOptions,
 	JSONSchema,
 	JSONShape,
 	JSONShapeOptions,
@@ -778,6 +780,33 @@ export function shapeShape(options?: ShapeShapeOptions): ShapeShape {
 }
 
 /**
+ * Builds a {@link FunctionShape}.
+ *
+ * @remarks
+ * The guard accepts every callable and checks no arity: TypeScript admits a callback that
+ * declares fewer parameters than its type, and `Function.length` undercounts rest and
+ * defaulted parameters.
+ *
+ * @param options - Optional description
+ * @returns A function-valued declaration
+ *
+ * @example
+ * ```ts
+ * const options = objectShape({ upgrade: optionalShape(functionShape()) })
+ * ```
+ */
+export function functionShape(options?: FunctionShapeOptions): FunctionShape {
+	return contain(() => {
+		const safe = readOptions(options, ['description'], 'functionShape', 'function')
+		const shape: FunctionShape = {
+			category: 'function',
+			...(safe?.description === undefined ? {} : { description: safe.description }),
+		}
+		return ShapePass.seal(shape)
+	}, 'functionShape')
+}
+
+/**
  * Builds a {@link RawShape} from a supported JSON Schema fragment.
  *
  * @remarks
@@ -919,7 +948,8 @@ export function rawShape(schema: JSONSchema): RawShape {
  *
  * STRICT: `{ strict: true }` is the door for a foreign schema. It refuses, with
  * code `structure`, every node the lenient walk would widen, every keyword it
- * would ignore (`pattern`, every `format` but `'date'` on a string node, `nullable`,
+ * would ignore (`pattern`, every `format` but `'date'` on a string node and `'function'` in
+ * the function leaf, every `not` outside that leaf, `nullable`,
  * `patternProperties`, `propertyNames`, `prefixItems`, and anything else outside
  * {@link STRICT_SCHEMA_KEYWORDS}), a malformed keyword or annotation, a boolean schema, an `enum` entry
  * that is neither a finite primitive nor `null`, a contradictory bound, a date format whose
@@ -930,7 +960,9 @@ export function rawShape(schema: JSONSchema): RawShape {
  * every keyword that could keep two arms apart. Below a `oneOf` that object refuses
  * instead, since closing it could change which arms match. A strict conversion is the
  * one walk that asserts a `format`: it reads `format: 'date'` on a string node as a
- * date string shape, so a compiled {@link dateShape} round-trips.
+ * date string shape, so a compiled {@link dateShape} round-trips, and it reads the function
+ * leaf `{ not: {}, format: 'function' }` back as {@link functionShape}, so a compiled
+ * function shape round-trips too.
  *
  * @param schema - The JSON Schema value to convert
  * @param options - Optional `strict`, default `false`

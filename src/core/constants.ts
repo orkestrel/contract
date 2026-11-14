@@ -28,6 +28,7 @@ export const SHAPE_FIELDS: Readonly<Record<string, readonly string[]>> = Object.
 	json: Object.freeze(['description']),
 	raw: Object.freeze(['schema']),
 	shape: Object.freeze(['description']),
+	function: Object.freeze(['description']),
 } satisfies Record<ContractShape['category'], readonly string[]>)
 
 /**
@@ -336,16 +337,41 @@ export const JSON_SCHEMA_TYPES: readonly JSONSchemaType[] = Object.freeze([
 ])
 
 /**
+ * Lists the JSON Schema annotations a strict `schemaToShape` conversion admits on any node, frozen.
+ *
+ * @remarks
+ * Each asserts nothing about a value, so a converted shape drops it without loss, except
+ * `description`, which the shape keeps. A strict conversion admits them beside every
+ * keyword it reads, the function leaf `{ not: {}, format: 'function' }` included.
+ *
+ * @example
+ * ```ts
+ * SCHEMA_ANNOTATIONS.includes('title') // true
+ * SCHEMA_ANNOTATIONS.at(-1) // 'examples'
+ * ```
+ */
+export const SCHEMA_ANNOTATIONS = Object.freeze([
+	'title',
+	'description',
+	'$schema',
+	'$id',
+	'$comment',
+	'deprecated',
+	'readOnly',
+	'writeOnly',
+	'examples',
+] as const)
+
+/**
  * Lists the JSON Schema keywords a strict `schemaToShape` conversion reads, frozen.
  *
  * @remarks
- * The keywords a shape can honour, plus the annotations that assert nothing and so
- * lose nothing when a shape drops them: `title`, `$schema`, `$id`, `$comment`,
- * `examples`, `deprecated`, `readOnly`, and `writeOnly`. Every other keyword refuses.
- * `pattern` and `format` are absent because no compiled shape asserts them, so a
- * schema holding one would convert to a shape wider than the schema it came from. The
- * one exception is `format: 'date'` on a string node, which a strict conversion reads
- * as a date string shape.
+ * The keywords a shape can honour, plus {@link SCHEMA_ANNOTATIONS}. Every other keyword
+ * refuses. `pattern`, `format`, and `not` are absent because no compiled shape asserts
+ * them, so a schema holding one would convert to a shape wider than the schema it came
+ * from. The exceptions are `format: 'date'` on a string node, which a strict conversion
+ * reads as a date string shape, and the function leaf `{ not: {}, format: 'function' }`,
+ * which it reads as a function shape.
  *
  * @example
  * ```ts
@@ -355,15 +381,7 @@ export const JSON_SCHEMA_TYPES: readonly JSONSchemaType[] = Object.freeze([
  */
 export const STRICT_SCHEMA_KEYWORDS: readonly string[] = Object.freeze([
 	'type',
-	'title',
-	'description',
-	'$schema',
-	'$id',
-	'$comment',
-	'examples',
-	'deprecated',
-	'readOnly',
-	'writeOnly',
+	...SCHEMA_ANNOTATIONS,
 	'default',
 	'enum',
 	'minLength',
@@ -438,6 +456,7 @@ export const FAULT_KINDS: readonly FaultKind[] = Object.freeze([
 	'union',
 	'json',
 	'shape',
+	'function',
 ])
 
 /**
@@ -478,12 +497,14 @@ export const FAULT_CONSTRAINTS: readonly FaultConstraint[] = Object.freeze([
 export const FAULT_LIMIT = 64
 
 /**
- * Caps at `64` the character length of a {@link preview}-rendered string, frozen.
+ * Caps at `64` the length in UTF-16 code units of every {@link preview} result, frozen.
  *
  * @remarks
- * A previewed string longer than this is clipped with a trailing `…` so a
+ * The cap covers the whole preview, its quotes, its trailing `…`, and a
+ * bigint's `n` included, for every input. A longer rendering is clipped with `…`, so a
  * {@link Fault}'s `received` field never embeds an unbounded amount of
- * untrusted text.
+ * untrusted text, and the {@link describeFaultLine} function prints it as
+ * written.
  */
 export const PREVIEW_LIMIT = 64
 

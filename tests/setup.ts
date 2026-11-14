@@ -34,10 +34,63 @@ export const FAULT_TEXT_UNSAFE = [
 	'90\nFAKE: missing',
 	'90\rFAKE: missing',
 	'\u0000\t\u001b\u007f\u0085\u2028\u2029',
+	'a\u{2028}b',
+	'a\u{2029}b',
+	'a\u{0085}b',
 ] as const
+export const FAULT_TEXT_VALUES = [
+	['y'.repeat(100), `"${'y'.repeat(62)}…`],
+	['a\u2028b', '"a\\u2028b"'],
+	['a\u2029b', '"a\\u2029b"'],
+	['a\u0085b', '"a\\u0085b"'],
+	['a\u007fb', '"a\\u007fb"'],
+] as const
+export const FAULT_TEXT_ESCAPES = [
+	['delete', '\u007f', '\\u007f'],
+	['padding', '\u0080', '\\u0080'],
+	['next line', '\u0085', '\\u0085'],
+	['application program command', '\u009f', '\\u009f'],
+	['line separator', '\u2028', '\\u2028'],
+	['paragraph separator', '\u2029', '\\u2029'],
+] as const
+export const FAULT_TEXT_TOKENS = [
+	['null', '\u0000', '\\u0000'],
+	['control', '\u0001', '\\u0001'],
+	['high surrogate', '\ud800', '\\ud800'],
+	['low surrogate', '\udc00', '\\udc00'],
+	...FAULT_TEXT_ESCAPES,
+] as const
+export const FAULT_TEXT_TERMINATOR = /[\n\r\u0085\u2028\u2029]/u
 export const FAULT_TEXT_FIELDS = ['received', 'constraint', 'limit'] as const
 export const FAULT_TEXT_POLLUTION = ['FORGED', 42] as const
 export const SCHEMA_REFUSAL_KEYS = ['amount', 'line\nFAKE: missing', 'x'.repeat(5000)] as const
+
+/** Creates the objects that are neither an array nor a plain record: a class instance, a `Map`, a `Date`, and a revoked `Proxy`. */
+export function createFaultTextInstances(): readonly object[] {
+	return [new ObservationCounter(), new Map([['ignored', 1]]), new Date(0), createRevokedProxy()]
+}
+
+/** Creates one value of every kind a preview renders, each at the longest text its kind produces. */
+export function createFaultTextKinds(): readonly unknown[] {
+	return [
+		'\u{2028}'.repeat(1000),
+		Symbol('\u{0085}'.repeat(1000)),
+		10n ** 1000n,
+		-(10n ** 1000n),
+		-Number.MAX_VALUE,
+		-Number.MIN_VALUE,
+		Number.NaN,
+		Number.NEGATIVE_INFINITY,
+		false,
+		null,
+		undefined,
+		[1],
+		() => 1,
+		{ a: 1 },
+		Object.create(null),
+		...createFaultTextInstances(),
+	]
+}
 
 /** Implements the undefined-only domain admitted by ContractInterface but not by a root shape. */
 export function createUndefinedContract(): ContractInterface<undefined> {
@@ -139,6 +192,7 @@ import {
 	isString,
 	jsonShape,
 	shapeShape,
+	functionShape,
 	JSONCloner,
 	keyOf,
 	lazyOf,
@@ -3440,6 +3494,8 @@ export const SHAPE_SEPARATIONS: Readonly<Record<ContractShape['category'], Shape
 		// Both artifacts delegate to isJSONValue; the corpus supplements rather than proves coincidence.
 		json: Object.freeze({ shape: jsonShape() }),
 		shape: Object.freeze({ shape: shapeShape() }),
+		// Both artifacts delegate to isFunction; the corpus supplements rather than proves coincidence.
+		function: Object.freeze({ shape: functionShape() }),
 		// Both artifacts accept any defined value; the corpus supplements rather than proves coincidence.
 		raw: Object.freeze({ shape: rawShape({}) }),
 	})

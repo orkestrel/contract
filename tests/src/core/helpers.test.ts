@@ -38,9 +38,15 @@ import {
 	recordAdmission,
 } from '../../setup.js'
 import {
+	createFaultTextInstances,
+	createFaultTextKinds,
 	FAULT_TEXT_UNION_INPUTS,
 	FAULT_TEXT_PREVIEWS,
 	FAULT_TEXT_UNSAFE,
+	FAULT_TEXT_VALUES,
+	FAULT_TEXT_ESCAPES,
+	FAULT_TEXT_TOKENS,
+	FAULT_TEXT_TERMINATOR,
 	FAULT_TEXT_FIELDS,
 	FAULT_TEXT_POLLUTION,
 } from '../../setup.js'
@@ -564,6 +570,7 @@ import {
 	selectClosestFaults,
 	shapeToKind,
 	stringShape,
+	functionShape,
 	unionShape,
 	valueToSchema,
 	matchesExactKeys,
@@ -2062,7 +2069,7 @@ describe('sanitizeBudget', () => {
 		)
 
 		expect(objectError.context?.received).toBe('object')
-		expect(proxyError.context?.received).toBe('object')
+		expect(proxyError.context?.received).toBe('instance')
 		expect(coercions.value).toBe(0)
 	})
 
@@ -3122,60 +3129,58 @@ describe('preview', () => {
 		['tab', '\t', '\\t'],
 	])('keeps every %s token atomic at its short boundaries', (_label, character, token) => {
 		for (const remaining of Array.from({ length: token.length + 1 }).keys()) {
-			const stringPrefix = `"${'x'.repeat(63 - remaining)}`
-			const symbolPrefix = `Symbol(${'x'.repeat(57 - remaining)}`
+			const stringPrefix = `"${'x'.repeat(62 - remaining)}`
+			const symbolPrefix = `Symbol(${'x'.repeat(56 - remaining)}`
 			const suffix = remaining < token.length ? '…' : `${token}…`
 
-			expect(preview(`${'x'.repeat(63 - remaining)}${character}tail`)).toBe(
+			expect(preview(`${'x'.repeat(62 - remaining)}${character}tail`)).toBe(
 				`${stringPrefix}${suffix}`,
 			)
-			expect(preview(Symbol(`${'x'.repeat(57 - remaining)}${character}tail`))).toBe(
+			expect(preview(Symbol(`${'x'.repeat(56 - remaining)}${character}tail`))).toBe(
 				`${symbolPrefix}${suffix}`,
 			)
 		}
 	})
 
-	it.each([
-		['null', '\u0000', '\\u0000'],
-		['control', '\u0001', '\\u0001'],
-		['high surrogate', '\ud800', '\\ud800'],
-		['low surrogate', '\udc00', '\\udc00'],
-	])('keeps every %s token atomic at all unicode boundaries', (_label, character, token) => {
-		for (const remaining of Array.from({ length: token.length + 1 }).keys()) {
-			const stringPrefix = `"${'x'.repeat(63 - remaining)}`
-			const symbolPrefix = `Symbol(${'x'.repeat(57 - remaining)}`
-			const suffix = remaining < token.length ? '…' : `${token}…`
+	it.each(FAULT_TEXT_TOKENS)(
+		'keeps every %s token atomic at all unicode boundaries',
+		(_label, character, token) => {
+			for (const remaining of Array.from({ length: token.length + 1 }).keys()) {
+				const stringPrefix = `"${'x'.repeat(62 - remaining)}`
+				const symbolPrefix = `Symbol(${'x'.repeat(56 - remaining)}`
+				const suffix = remaining < token.length ? '…' : `${token}…`
 
-			expect(preview(`${'x'.repeat(63 - remaining)}${character}tail`)).toBe(
-				`${stringPrefix}${suffix}`,
-			)
-			expect(preview(Symbol(`${'x'.repeat(57 - remaining)}${character}tail`))).toBe(
-				`${symbolPrefix}${suffix}`,
-			)
-		}
-	})
+				expect(preview(`${'x'.repeat(62 - remaining)}${character}tail`)).toBe(
+					`${stringPrefix}${suffix}`,
+				)
+				expect(preview(Symbol(`${'x'.repeat(56 - remaining)}${character}tail`))).toBe(
+					`${symbolPrefix}${suffix}`,
+				)
+			}
+		},
+	)
 
 	it.each([
 		[
 			'omitted',
-			`${'x'.repeat(62)}${String.fromCodePoint(0x1f600)}`,
-			`"${'x'.repeat(62)}…`,
-			Symbol(`${'x'.repeat(56)}${String.fromCodePoint(0x1f600)}`),
-			`Symbol(${'x'.repeat(56)}…`,
+			`${'x'.repeat(61)}${String.fromCodePoint(0x1f600)}`,
+			`"${'x'.repeat(61)}…`,
+			Symbol(`${'x'.repeat(55)}${String.fromCodePoint(0x1f600)}`),
+			`Symbol(${'x'.repeat(55)}…`,
 		],
 		[
 			'exact-fit',
-			`${'x'.repeat(61)}${String.fromCodePoint(0x1f600)}`,
-			`"${'x'.repeat(61)}${String.fromCodePoint(0x1f600)}…`,
-			Symbol(`${'x'.repeat(55)}${String.fromCodePoint(0x1f600)}`),
-			`Symbol(${'x'.repeat(55)}${String.fromCodePoint(0x1f600)}…`,
+			`${'x'.repeat(60)}${String.fromCodePoint(0x1f600)}${String.fromCodePoint(0x1f600)}`,
+			`"${'x'.repeat(60)}${String.fromCodePoint(0x1f600)}…`,
+			Symbol(`${'x'.repeat(54)}${String.fromCodePoint(0x1f600)}`),
+			`Symbol(${'x'.repeat(54)}${String.fromCodePoint(0x1f600)}…`,
 		],
 		[
 			'one-under',
 			`${'x'.repeat(60)}${String.fromCodePoint(0x1f600)}`,
 			`"${'x'.repeat(60)}${String.fromCodePoint(0x1f600)}"`,
-			Symbol(`${'x'.repeat(54)}${String.fromCodePoint(0x1f600)}`),
-			`Symbol(${'x'.repeat(54)}${String.fromCodePoint(0x1f600)})`,
+			Symbol(`${'x'.repeat(53)}${String.fromCodePoint(0x1f600)}`),
+			`Symbol(${'x'.repeat(53)}${String.fromCodePoint(0x1f600)})`,
 		],
 	])(
 		'keeps adjacent astral pairs whole at the %s boundary',
@@ -3199,12 +3204,101 @@ describe('preview', () => {
 		expect(preview('hi')).toBe('"hi"')
 		const giant = preview('x'.repeat(200))
 		expect(giant.endsWith('…')).toBe(true)
-		expect(giant.length).toBeLessThanOrEqual(65)
+		expect(giant).toHaveLength(door.PREVIEW_LIMIT)
 	})
 
 	it('bounds 100,000-code-unit string and symbol inputs', () => {
-		expect(preview('x'.repeat(100_000))).toBe(`"${'x'.repeat(63)}…`)
-		expect(preview(Symbol('x'.repeat(100_000)))).toBe(`Symbol(${'x'.repeat(57)}…`)
+		expect(preview('x'.repeat(100_000))).toBe(`"${'x'.repeat(62)}…`)
+		expect(preview(Symbol('x'.repeat(100_000)))).toBe(`Symbol(${'x'.repeat(56)}…`)
+	})
+
+	it('honors PREVIEW_LIMIT in total for a long string and a long symbol', () => {
+		const string = preview('y'.repeat(100))
+		const symbol = preview(Symbol('x'.repeat(100)))
+
+		expect(string).toBe(`"${'y'.repeat(62)}…`)
+		expect(symbol).toBe(`Symbol(${'x'.repeat(56)}…`)
+		expect(string).toHaveLength(door.PREVIEW_LIMIT)
+		expect(symbol).toHaveLength(door.PREVIEW_LIMIT)
+	})
+
+	it('caps a positive and a negative bigint past PREVIEW_LIMIT with the mark before its n', () => {
+		const positive = preview(10n ** 100n)
+		const negative = preview(-(10n ** 100n))
+
+		expect(positive).toBe(`1${'0'.repeat(61)}…n`)
+		expect(negative).toBe(`-1${'0'.repeat(60)}…n`)
+		expect(positive).toHaveLength(door.PREVIEW_LIMIT)
+		expect(negative).toHaveLength(door.PREVIEW_LIMIT)
+	})
+
+	it('keeps a bigint whole at the PREVIEW_LIMIT boundary and caps it one digit past', () => {
+		expect(preview(10n ** 62n)).toBe(`1${'0'.repeat(62)}n`)
+		expect(preview(-(10n ** 61n))).toBe(`-1${'0'.repeat(61)}n`)
+		expect(preview(10n ** 63n)).toBe(`1${'0'.repeat(61)}…n`)
+		expect(preview(10n)).toBe('10n')
+	})
+
+	it('keeps every input kind within PREVIEW_LIMIT and free of control characters and line terminators', () => {
+		for (const value of createFaultTextKinds()) {
+			const rendered = preview(value)
+
+			expect(rendered.length).toBeLessThanOrEqual(door.PREVIEW_LIMIT)
+			expect(rendered).not.toMatch(/[\p{Cc}\p{Zl}\p{Zp}]/u)
+		}
+	})
+
+	it('encodes every code point from U+007F to U+009F as its own \\u00XX sequence', () => {
+		for (const code of Array.from({ length: 0x21 }, (_, offset) => 0x7f + offset)) {
+			const sequence = `\\u${code.toString(16).padStart(4, '0')}`
+
+			expect(preview(String.fromCharCode(code))).toBe(`"${sequence}"`)
+			expect(preview(Symbol(String.fromCharCode(code)))).toBe(`Symbol(${sequence})`)
+		}
+	})
+
+	it('encodes DEL, a C1 control, and U+2028 as on an honest host while Array.prototype.findIndex lies', () => {
+		const sources = ['a\u{007f}b', 'a\u{0085}b', 'a\u{2028}b']
+		const honest = sources.map((source) => preview(source))
+		const answers = replaceIntrinsic(Array.prototype, 'findIndex', throwReplacement, () => ({
+			control: attempt(() => [1].findIndex((entry) => entry === 1)).success,
+			previews: sources.map((source) => preview(source)),
+		}))
+
+		expect(answers).toEqual({ control: false, previews: honest })
+		expect(honest).toEqual(['"a\\u007fb"', '"a\\u0085b"', '"a\\u2028b"'])
+	})
+
+	it('encodes DEL, a C1 control, and U+2028 as on an honest host while RegExp.prototype.exec lies', () => {
+		const sources = ['a\u{007f}b', 'a\u{0085}b', 'a\u{2028}b']
+		const honest = sources.map((source) => preview(source))
+		const answers = replaceIntrinsic(RegExp.prototype, 'exec', throwReplacement, () => ({
+			control: attempt(() => /a/u.exec('a')).success,
+			previews: sources.map((source) => preview(source)),
+		}))
+
+		expect(answers).toEqual({ control: false, previews: honest })
+		expect(honest).toEqual(['"a\\u007fb"', '"a\\u0085b"', '"a\\u2028b"'])
+	})
+
+	it.each(FAULT_TEXT_ESCAPES)(
+		'encodes the %s character as a \\u sequence in a string and a symbol',
+		(_label, character, token) => {
+			expect(preview(`a${character}b`)).toBe(`"a${token}b"`)
+			expect(preview(Symbol(`a${character}b`))).toBe(`Symbol(a${token}b)`)
+		},
+	)
+
+	it('leaves the neighbors of the encoded characters as written', () => {
+		const neighbors = '~\u00a0\u2027\u202a'
+
+		expect(preview(neighbors)).toBe(`"${neighbors}"`)
+		expect(preview(Symbol(neighbors))).toBe(`Symbol(${neighbors})`)
+	})
+
+	it('closes with the quote when an encoded character fills the last of the width', () => {
+		expect(preview(`${'y'.repeat(56)}\u0085`)).toBe(`"${'y'.repeat(56)}\\u0085"`)
+		expect(preview(`${'y'.repeat(57)}\u0085`)).toBe(`"${'y'.repeat(57)}…`)
 	})
 
 	it('labels arrays without traversing other hosts', () => {
@@ -3213,15 +3307,50 @@ describe('preview', () => {
 		expect(preview(() => 1)).toBe('function')
 	})
 
+	it('previews a class instance, a Map, a Date, and a revoked Proxy as instance and a plain or null-prototype record as object', () => {
+		for (const value of createFaultTextInstances()) expect(preview(value)).toBe('instance')
+		expect(preview({ a: 1 })).toBe('object')
+		expect(preview(Object.create(null))).toBe('object')
+	})
+
+	it('runs a live Proxy object getPrototypeOf trap and no member trap', () => {
+		const calls: string[] = []
+		const record = new Proxy(
+			{ a: 1 },
+			{
+				getPrototypeOf(target) {
+					calls.push('getPrototypeOf')
+					return Reflect.getPrototypeOf(target)
+				},
+				get(target, key) {
+					calls.push('get')
+					return Reflect.get(target, key)
+				},
+				ownKeys(target) {
+					calls.push('ownKeys')
+					return Reflect.ownKeys(target)
+				},
+				getOwnPropertyDescriptor(target, key) {
+					calls.push('getOwnPropertyDescriptor')
+					return Reflect.getOwnPropertyDescriptor(target, key)
+				},
+			},
+		)
+
+		expect(preview(record)).toBe('object')
+		expect(calls).toEqual(['getPrototypeOf'])
+		expect(preview(createThrowingPrototype(new Error('prototype read')))).toBe('instance')
+	})
+
 	it('renders a string by its escaped length at, on, and past the clip boundary', () => {
 		// The ESCAPED inner length decides the answer, never the input length. At
 		// two under `PREVIEW_LIMIT` the render closes with the quote, and one
 		// character further it closes with the clip mark instead.
 		expect(preview('x'.repeat(62))).toBe(`"${'x'.repeat(62)}"`)
-		expect(preview('x'.repeat(63))).toBe(`"${'x'.repeat(63)}…`)
-		expect(preview('x'.repeat(64))).toBe(`"${'x'.repeat(63)}…`)
+		expect(preview('x'.repeat(63))).toBe(`"${'x'.repeat(62)}…`)
+		expect(preview('x'.repeat(64))).toBe(`"${'x'.repeat(62)}…`)
 		expect(preview('\n'.repeat(31))).toBe(`"${'\\n'.repeat(31)}"`)
-		expect(preview(`${'\n'.repeat(30)}xxx`)).toBe(`"${'\\n'.repeat(30)}xxx…`)
+		expect(preview(`${'\n'.repeat(30)}xxx`)).toBe(`"${'\\n'.repeat(30)}xx…`)
 		expect(preview('\n'.repeat(32))).toBe(`"${'\\n'.repeat(31)}…`)
 	})
 
@@ -3280,6 +3409,11 @@ describe('shapeToKind', () => {
 	it('projects optional/nullable through their inner shape, and raw to json', () => {
 		expect(shapeToKind(optionalShape(stringShape()))).toBe('string')
 		expect(shapeToKind(nullableShape(integerShape()))).toBe('integer')
+	})
+
+	it('projects a function shape to function, through an optional wrapper too', () => {
+		expect(shapeToKind(functionShape())).toBe('function')
+		expect(shapeToKind(optionalShape(functionShape()))).toBe('function')
 	})
 })
 
@@ -4620,6 +4754,12 @@ describe('indexed derivation helpers', () => {
 		expect(previewParts('😀', 0, 2, false)).toEqual(['😀'])
 	})
 
+	it('closes a quoted source with its quote when the last token fills the width', () => {
+		expect(previewParts('ab', 0, 2, true)).toEqual(['a', 'b', '"'])
+		expect(previewParts('a\u2028', 0, 7, true)).toEqual(['a', '\\u2028', '"'])
+		expect(previewParts('abc', 0, 2, true)).toEqual(['a', 'b', '…'])
+	})
+
 	it('uses own positions for duplicate and prototype-shaped names', () => {
 		const positions = buildPositions(['id', '__proto__', 'id'])
 		expect(Object.getPrototypeOf(positions)).toBeNull()
@@ -4957,6 +5097,23 @@ describe('extractForms', () => {
 		expect(extractForms(nullable)).toEqual([nullable, object, { type: 'null' }])
 		expect(extractForms(undefined)).toEqual([])
 	})
+
+	it('keeps the schema when its anyOf is not an array', () => {
+		const schema: JSONSchema = { enum: ['x'] }
+		Reflect.set(schema, 'anyOf', {})
+
+		expect(extractForms(schema)).toEqual([schema])
+		expect(
+			describeFaults([{ reason: 'missing', path: [], expected: 'literal' }], schema).split('\n')[0],
+		).toBe('value: missing; expected literal; send one of "x"')
+	})
+})
+
+describe('truncateFaultText', () => {
+	it('floors a fractional budget before it cuts', () => {
+		expect(door.truncateFaultText('abcdefgh', 4.5)).toBe('abc…')
+		expect(door.truncateFaultText('a\u{1F600}z', 3.5)).toBe('a…')
+	})
 })
 
 describe('extractSchema', () => {
@@ -5025,11 +5182,39 @@ describe('renderList', () => {
 })
 
 describe('renderForm', () => {
+	it('renders a node whose union field is not an array from its own members', () => {
+		const enumerated: JSONSchema = { enum: ['x'] }
+		Reflect.set(enumerated, 'anyOf', {})
+		const typed: JSONSchema = { type: 'string' }
+		Reflect.set(typed, 'oneOf', 'x')
+		const report = describeFaults(
+			[{ reason: 'missing', path: [], expected: 'literal' }],
+			enumerated,
+		)
+
+		expect([renderForm(enumerated), renderForm(typed)]).toEqual([
+			renderForm({ enum: ['x'] }),
+			renderForm({ type: 'string' }),
+		])
+		expect([renderForm(enumerated), renderForm(typed)]).toEqual(['"x"', 'string'])
+		expect(report).toBe('value: missing; expected literal; send one of "x"\nsend "x"')
+		expect(report.split('\n').filter((line) => line.endsWith('send '))).toEqual([])
+		expect([extractForms(enumerated), extractForms(typed)]).toEqual([[enumerated], [typed]])
+	})
+
 	it('names a leaf by its type, and a schema that says nothing as any', () => {
 		expect(renderForm({ type: 'string' })).toBe('string')
 		expect(renderForm({ type: 'integer' })).toBe('integer')
 		expect(renderForm({ type: 'null' })).toBe('null')
 		expect(renderForm({})).toBe('any')
+	})
+
+	it('names a schema with an own not as function when its format says so and never otherwise', () => {
+		expect(renderForm({ not: {}, format: 'function' })).toBe('function')
+		expect(renderForm({ not: {}, format: 'function', description: 'Runs it' })).toBe('function')
+		expect(renderForm({ not: {} })).toBe('never')
+		expect(renderForm({ not: {}, format: 'date' })).toBe('never')
+		expect(renderForm({ format: 'function' })).toBe('any (format "function")')
 	})
 
 	it('keeps the bounds a caller must meet', () => {
@@ -5124,6 +5309,15 @@ describe('renderForm', () => {
 })
 
 describe('describeFaultLine', () => {
+	it('lists each literal candidate once, as a Set keeps it', () => {
+		const schema: JSONSchema = { enum: ['x', 'x', 0] }
+		Reflect.set(schema, 'enum', [Number.NaN, 'x', Number.NaN, 'x', 0, -0])
+
+		expect(describeFaultLine({ reason: 'missing', path: [], expected: 'literal' }, schema)).toBe(
+			'value: missing; expected literal; send one of NaN, "x", 0',
+		)
+	})
+
 	it('withholds conflicting union corrections and leaves a usable send summary', () => {
 		const contract = door.createContract(
 			door.unionShape(
@@ -5208,8 +5402,35 @@ describe('describeFaultLine', () => {
 				{},
 			)
 			expect(line).toBe(`a: type; expected number; received ${door.preview(received)}`)
-			expect(line).not.toMatch(/[\r\n]/u)
+			expect(line).not.toMatch(FAULT_TEXT_TERMINATOR)
 		}
+	})
+
+	it('prints the preview of a long or line-separated value with one layer of quotes', () => {
+		const contract = door.createContract(door.integerShape())
+		for (const [value, received] of FAULT_TEXT_VALUES) {
+			const [fault] = contract.audit(value)
+			if (fault === undefined) throw new Error('The audit must report a type fault')
+			const line = describeFaultLine(fault, contract.schema)
+
+			expect(line).toBe(`value: type; expected integer; received ${received}`)
+			expect(line).not.toMatch(FAULT_TEXT_TERMINATOR)
+		}
+	})
+
+	it('encodes unsafe received text while RegExp exec is replaced', () => {
+		const line = replaceIntrinsic(
+			RegExp.prototype,
+			'exec',
+			() => null,
+			() =>
+				describeFaultLine(
+					{ reason: 'type', path: [], expected: 'number', received: '90\nFAKE: missing' },
+					{},
+				),
+		)
+
+		expect(line).toBe('value: type; expected number; received "90\\nFAKE: missing"')
 	})
 
 	it('ignores inherited fault detail fields', () => {
@@ -5445,6 +5666,18 @@ describe('describeFaultLine', () => {
 })
 
 describe('describeFaults', () => {
+	it('names a string sent for a function member and summarizes the member as function', () => {
+		const contract = createContract(
+			objectShape({ name: stringShape(), upgrade: optionalShape(functionShape()) }),
+		)
+		const faults = contract.audit({ name: 'app', upgrade: 'migrate' })
+
+		expect(describeFaults(faults, contract.schema).split('\n')).toEqual([
+			'upgrade: type; expected function; received "migrate"',
+			'send {"name": string, "upgrade"?: function}',
+		])
+	})
+
 	it('names one fault on one line, in the shape a reader corrects from', () => {
 		const faults: readonly AuditFault[] = [
 			{ reason: 'type', path: ['profile', 'age'], expected: 'number', received: '"invalid"' },

@@ -66,6 +66,7 @@ import {
 	isArray,
 	isBoolean,
 	isFiniteNumber,
+	isFunction,
 	isInteger,
 	isJSONValue,
 	isNull,
@@ -178,6 +179,8 @@ export class ContractCompiler<
 		(value: unknown, path: readonly string[]) => readonly Fault[]
 	> = []
 	static readonly #emptySeeds: Array<(random: RandomFunction) => unknown> = []
+	// One frozen function for every draw, so two seeds generate equal values.
+	static readonly #function: () => undefined = INTRINSICS.freeze(() => undefined)
 
 	static {
 		// Frozen in a statement of its own, and the result discarded: `Object.freeze`
@@ -853,6 +856,12 @@ export class ContractCompiler<
 				return INTRINSICS.freeze({
 					...(owned.description !== undefined ? { description: owned.description } : {}),
 				})
+			case 'function':
+				return INTRINSICS.freeze({
+					not: INTRINSICS.freeze({}),
+					format: 'function',
+					...(owned.description !== undefined ? { description: owned.description } : {}),
+				})
 			case 'literal': {
 				// Indexed, not spread: this list is published inside the emitted schema,
 				// and an array spread retrieves `Array.prototype[Symbol.iterator]` at the
@@ -1046,6 +1055,8 @@ export class ContractCompiler<
 				return isNull
 			case 'json':
 				return isJSONValue
+			case 'function':
+				return isFunction
 			case 'shape':
 				return (value): value is ContractShape => ContractCompiler.#acceptShape(value)
 			case 'literal':
@@ -1271,6 +1282,8 @@ export class ContractCompiler<
 				return (value) => (value === null ? null : undefined)
 			case 'json':
 				return parseJSONValue
+			case 'function':
+				return (value) => (isFunction(value) ? value : undefined)
 			case 'shape':
 				return (value) => (ContractCompiler.#acceptShape(value) ? value : undefined)
 			// The literal parser trims a matching string but never numeric-coerces —
@@ -1660,6 +1673,11 @@ export class ContractCompiler<
 					isJSONValue(value)
 						? []
 						: [{ reason: 'type', path, expected: 'json', received: preview(value) }]
+			case 'function':
+				return (value, path) =>
+					isFunction(value)
+						? []
+						: [{ reason: 'type', path, expected: 'function', received: preview(value) }]
 			case 'shape':
 				return (value, path) =>
 					ContractCompiler.#acceptShape(value)
@@ -1985,6 +2003,11 @@ export class ContractCompiler<
 					isJSONValue(value)
 						? []
 						: [{ reason: 'type', path, expected: 'json', received: preview(value) }]
+			case 'function':
+				return (value, path) =>
+					isFunction(value)
+						? []
+						: [{ reason: 'type', path, expected: 'function', received: preview(value) }]
 			case 'literal': {
 				const allowed = literalOf(owned.values)
 				return (value, path) =>
@@ -2341,6 +2364,8 @@ export class ContractCompiler<
 				return (random) => drawRandom(random, 'boolean') >= 0.5
 			case 'null':
 				return () => null
+			case 'function':
+				return () => ContractCompiler.#function
 			case 'shape':
 				return () => ({ category: 'object', properties: {}, additionalProperties: false })
 			case 'json':

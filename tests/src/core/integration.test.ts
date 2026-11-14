@@ -1077,7 +1077,7 @@ describe('no caller-reachable member decides a membership answer', () => {
 		expect(outcome.success).toBe(false)
 		expect(refusal).not.toBe(overflow)
 		expect(isContractError(refusal) ? refusal.message : 'not a ContractError').toBe(
-			'cloneJSONValue: cycle detected',
+			'cloneJSONValue: cycle detected at self',
 		)
 		expect(naiveOutcome.success).toBe(false)
 		expect(naiveRefusal).toBe(overflow)

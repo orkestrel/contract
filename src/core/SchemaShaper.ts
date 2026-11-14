@@ -13,6 +13,7 @@ import {
 	INFER_DEPTH_LIMIT,
 	INTRINSICS,
 	JSON_SCHEMA_TYPES,
+	SCHEMA_ANNOTATIONS,
 	STRICT_SCHEMA_KEYWORDS,
 } from './constants.js'
 import { ContractError } from './errors.js'
@@ -53,6 +54,7 @@ import { ShapeValidator } from './ShapeValidator.js'
 import {
 	arrayShape,
 	booleanShape,
+	functionShape,
 	integerShape,
 	literalShape,
 	nullableShape,
@@ -323,6 +325,10 @@ export class SchemaShaper {
 	// value, a keyword outside the vocabulary, a keyword the node's type never reads,
 	// and a pair of keywords only one of which the walk would keep.
 	#inspect(schema: JSONSchema): void {
+		if (INTRINSICS.own(schema, 'not')) {
+			this.#inspectFunction(schema)
+			return
+		}
 		const keys = INTRINSICS.keys(schema)
 		for (const index of iterateIndices(() => keys.length)) {
 			const key = keys[index]
@@ -370,34 +376,69 @@ export class SchemaShaper {
 		this.#inspectObject(schema)
 	}
 
+	// `not` converts only as the function leaf, so every other keyword beside it would be dropped.
+	#inspectFunction(schema: JSONSchema): void {
+		const operand: unknown = schema.not
+		if (
+			!isRecord(operand) ||
+			INTRINSICS.reflect.members(operand).length > 0 ||
+			!INTRINSICS.own(schema, 'format') ||
+			schema.format !== 'function'
+		) {
+			throw this.#refusal(
+				'a strict conversion reads not only as the empty schema beside format function',
+				'not',
+			)
+		}
+		const keys = INTRINSICS.keys(schema)
+		for (const index of iterateIndices(() => keys.length)) {
+			const key = keys[index]
+			if (key === undefined) continue
+			const known =
+				key === 'not' ||
+				key === 'format' ||
+				key === 'default' ||
+				INTRINSICS.reflect.apply(INTRINSICS.some, SCHEMA_ANNOTATIONS, [
+					(keyword: string) => keyword === key,
+				])
+			if (!known) throw this.#refusal('a function schema reads no assertion beside not', key)
+		}
+		this.#inspectAnnotations(schema)
+		if (INTRINSICS.own(schema, 'default') && !isJSONValue(schema.default)) {
+			throw this.#refusal('a default must be a JSON value', 'default')
+		}
+	}
+
+	// The `never` default makes an annotation added to `SCHEMA_ANNOTATIONS` fail to compile until it has a check.
 	#inspectAnnotations(schema: JSONSchema): void {
-		const texts = ['title', 'description', '$schema', '$id', '$comment']
-		for (const index of iterateIndices(() => texts.length)) {
-			const keyword = texts[index]
+		for (const index of iterateIndices(() => SCHEMA_ANNOTATIONS.length)) {
+			const keyword = SCHEMA_ANNOTATIONS[index]
 			if (keyword === undefined) continue
 			const value: unknown = INTRINSICS.own(schema, keyword)
 				? INTRINSICS.reflect.read(schema, keyword)
 				: undefined
-			if (value !== undefined && !isString(value)) {
-				throw this.#refusal(`${keyword} must be a string`, keyword)
+			if (value === undefined) continue
+			switch (keyword) {
+				case 'title':
+				case 'description':
+				case '$schema':
+				case '$id':
+				case '$comment':
+					if (!isString(value)) throw this.#refusal(`${keyword} must be a string`, keyword)
+					break
+				case 'deprecated':
+				case 'readOnly':
+				case 'writeOnly':
+					if (!isBoolean(value)) throw this.#refusal(`${keyword} must be a boolean`, keyword)
+					break
+				case 'examples':
+					if (!isArray(value)) throw this.#refusal('examples must be an array', keyword)
+					break
+				default: {
+					const unchecked: never = keyword
+					throw this.#refusal('an annotation has no value check', unchecked)
+				}
 			}
-		}
-		const flags = ['deprecated', 'readOnly', 'writeOnly']
-		for (const index of iterateIndices(() => flags.length)) {
-			const keyword = flags[index]
-			if (keyword === undefined) continue
-			const value: unknown = INTRINSICS.own(schema, keyword)
-				? INTRINSICS.reflect.read(schema, keyword)
-				: undefined
-			if (value !== undefined && !isBoolean(value)) {
-				throw this.#refusal(`${keyword} must be a boolean`, keyword)
-			}
-		}
-		const examples: unknown = INTRINSICS.own(schema, 'examples')
-			? INTRINSICS.reflect.read(schema, 'examples')
-			: undefined
-		if (examples !== undefined && !isArray(examples)) {
-			throw this.#refusal('examples must be an array', 'examples')
 		}
 	}
 
@@ -631,6 +672,11 @@ export class SchemaShaper {
 
 		if (INTRINSICS.own(schema, '$ref')) {
 			return this.#widen('a reference is not resolved', description, '$ref')
+		}
+
+		// A strict walk reaches `not` only through the function leaf `#inspect` admitted.
+		if (this.#strict && INTRINSICS.own(schema, 'not')) {
+			return functionShape(description === undefined ? undefined : { description })
 		}
 
 		if (INTRINSICS.own(schema, 'enum') && isArray(schema.enum)) {

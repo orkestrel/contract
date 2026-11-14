@@ -13,6 +13,7 @@ import {
 	cloneJSONValue,
 	cloneShape,
 	createContract,
+	functionShape,
 	integerShape,
 	isRecord,
 	jsonShape,
@@ -335,6 +336,7 @@ describe('ContractCompiler', () => {
 			[nullShape(), [null, undefined, 0]],
 			[literalShape(['a', 'b']), ['a', ' a ', 'c', 1]],
 			[jsonShape(), [{ a: 1 }, Number.NaN]],
+			[functionShape(), [Math.max, Map, 'migrate', null, undefined]],
 			[arrayShape(stringShape(), { min: 1 }), [[], ['a'], [1], 'a']],
 			[objectShape({ id: stringShape() }), [{ id: 'a' }, { id: 1 }, { id: 'a', x: 1 }, null]],
 			[recordShape(numberShape()), [{ a: 1 }, { a: 'x' }, {}]],
@@ -1141,5 +1143,60 @@ describe('ContractCompiler — a discriminated union', () => {
 		})
 
 		expect(wrong).toEqual([])
+	})
+})
+
+describe('ContractCompiler — function shape', () => {
+	it('emits the unsatisfiable leaf, with a description only when one is authored', () => {
+		const schema = compileSchema(functionShape())
+		expect(schema).toStrictEqual({ not: {}, format: 'function' })
+		expect(Object.hasOwn(schema, 'description')).toBe(false)
+		expect(Object.isFrozen(schema)).toBe(true)
+		expect(Object.isFrozen(schema.not)).toBe(true)
+		expect(compileSchema(functionShape({ description: 'Runs the schema migration' }))).toEqual({
+			not: {},
+			format: 'function',
+			description: 'Runs the schema migration',
+		})
+	})
+
+	it('accepts every callable by identity and reports a type fault for anything else', () => {
+		const contract = new ContractCompiler(functionShape()).contract
+		const callables: readonly unknown[] = [
+			Math.max,
+			Math.max.bind(Math),
+			Map,
+			Promise.resolve,
+			encodeURI,
+		]
+		for (const value of callables) {
+			expect(contract.is(value)).toBe(true)
+			expect(contract.parse(value)).toBe(value)
+			expect(contract.audit(value)).toEqual([])
+			expect(contract.explain(value)).toEqual([])
+		}
+		for (const value of ['migrate', null, undefined, {}, [], 0]) {
+			expect(contract.is(value)).toBe(false)
+			expect(contract.parse(value)).toBeUndefined()
+		}
+		expect(contract.audit('migrate')).toEqual([
+			{ reason: 'type', path: [], expected: 'function', received: '"migrate"' },
+		])
+		expect(contract.explain('migrate')).toEqual([
+			{ reason: 'type', path: [], expected: 'function', received: '"migrate"' },
+		])
+	})
+
+	it('generates one frozen function by identity under every seed', () => {
+		const first = compileGenerator(functionShape(), seededRandom(1))
+		const second = compileGenerator(functionShape(), seededRandom(2))
+		expect(first).toBeTypeOf('function')
+		expect(second).toBe(first)
+		expect(Object.isFrozen(first)).toBe(true)
+		expect(first()).toBeUndefined()
+		const options = createContract(objectShape({ name: stringShape(), upgrade: functionShape() }))
+		const generated = options.generate(seededRandom(3))
+		expect(options.is(generated)).toBe(true)
+		expect(options.generate(seededRandom(3))).toEqual(generated)
 	})
 })

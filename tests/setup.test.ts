@@ -1061,7 +1061,7 @@ describe('shape factories', () => {
 				.filter(([, row]) => row.witness === undefined)
 				.map(([kind]) => kind)
 				.sort(),
-		).toEqual(['json', 'null', 'raw', 'shape'])
+		).toEqual(['function', 'json', 'null', 'raw', 'shape'])
 	})
 })
 

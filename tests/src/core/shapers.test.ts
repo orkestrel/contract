@@ -39,6 +39,7 @@ import {
 	isRegExp,
 	jsonShape,
 	shapeShape,
+	functionShape,
 	literalShape,
 	nullableShape,
 	nullShape,
@@ -263,6 +264,13 @@ const BUILDER_CASES: readonly BuilderCase[] = [
 		positions: { 0: 'options' },
 		options: { 0: ['description'] },
 		run: (args) => Reflect.apply(shapeShape, undefined, [...args]),
+	},
+	{
+		name: 'functionShape',
+		valid: [[], [{ description: 'value' }]],
+		positions: { 0: 'options' },
+		options: { 0: ['description'] },
+		run: (args) => Reflect.apply(functionShape, undefined, [...args]),
 	},
 ]
 
@@ -2810,6 +2818,103 @@ describe('dateShape', () => {
 		expect(schemaToShape({ type: 'string', format: 'email' })).toEqual(stringShape())
 		expect(schemaToShape({ type: 'string', format: 'date', maxLength: 9 })).toEqual(
 			stringShape({ max: 9 }),
+		)
+	})
+})
+
+describe('functionShape', () => {
+	it('builds a frozen declaration that carries an authored description alone', () => {
+		expect(functionShape()).toEqual({ category: 'function' })
+		expect(Object.isFrozen(functionShape())).toBe(true)
+		expect(functionShape({ description: 'Runs the schema migration' })).toEqual({
+			category: 'function',
+			description: 'Runs the schema migration',
+		})
+	})
+
+	it('infers a function that takes a narrower parameter and admits no argument', () => {
+		const shape = functionShape()
+		const upgrade: Infer<typeof shape> = encodeURI
+		expectTypeOf<Infer<typeof shape>>().toEqualTypeOf<(...args: never[]) => unknown>()
+		expectTypeOf<Parameters<Infer<typeof shape>>>().toEqualTypeOf<never[]>()
+		expect(createContract(shape).is(upgrade)).toBe(true)
+	})
+
+	it('admits its own emitted schema as a raw shape and refuses every not but the empty schema', () => {
+		expect(rawShape(compileSchema(functionShape()))).toEqual({
+			category: 'raw',
+			schema: { not: {}, format: 'function' },
+		})
+		expect(rawShape({ not: {} })).toEqual({ category: 'raw', schema: { not: {} } })
+		const refusals: readonly unknown[] = [
+			{ type: 'string' },
+			{ not: {} },
+			{ format: 'function' },
+			[],
+			null,
+			true,
+			'function',
+		]
+		for (const not of refusals) {
+			const error = captureContractError(() => Reflect.apply(rawShape, undefined, [{ not }]))
+			expect(error.message).toBe('validateShape: raw schema not must be the empty schema')
+			expect(error.code).toBe('structure')
+			expect(error.context).toEqual({ path: ['schema', 'not'] })
+		}
+		expect(
+			captureContractError(() => rawShape({ not: { type: 'string' }, format: 'function' })).context,
+		).toEqual({ path: ['schema', 'not'] })
+	})
+
+	it('reads the function leaf back in a strict conversion and refuses every other not', () => {
+		expect(schemaToShape({ not: {}, format: 'function' }, { strict: true })).toEqual(
+			functionShape(),
+		)
+		const annotated: unknown = {
+			not: {},
+			format: 'function',
+			description: 'Runs the schema migration',
+			title: 'upgrade',
+		}
+		expect(Reflect.apply(schemaToShape, undefined, [annotated, { strict: true }])).toEqual(
+			functionShape({ description: 'Runs the schema migration' }),
+		)
+		const declaration = objectShape(
+			{ name: stringShape(), upgrade: optionalShape(functionShape()) },
+			{ additionalProperties: false },
+		)
+		expect(schemaToShape(compileSchema(declaration), { strict: true })).toEqual(declaration)
+		const refusals: ReadonlyArray<readonly [JSONSchema, string]> = [
+			[{ not: {} }, 'not'],
+			[{ not: { type: 'string' }, format: 'function' }, 'not'],
+			[{ format: 'function' }, 'format'],
+			[{ not: {}, format: 'date' }, 'not'],
+			[{ type: 'string', not: {}, format: 'function' }, 'type'],
+			[{ not: {}, format: 'function', enum: ['migrate'] }, 'enum'],
+			[{ not: {}, format: 'function', anyOf: [{ type: 'string' }] }, 'anyOf'],
+		]
+		for (const [schema, keyword] of refusals) {
+			const error = captureContractError(() => schemaToShape(schema, { strict: true }))
+			expect(error.code).toBe('structure')
+			expect(error.context).toEqual({ path: [keyword], shape: 'schema' })
+		}
+		expect(
+			captureContractError(() =>
+				schemaToShape(
+					{
+						type: 'object',
+						properties: { upgrade: { not: {}, format: 'function', default: 'migrate' } },
+					},
+					{ strict: true },
+				),
+			).context,
+		).toEqual({ path: ['properties', 'upgrade', 'default'], shape: 'schema' })
+	})
+
+	it('widens the function leaf in a lenient conversion, keeping its description', () => {
+		expect(schemaToShape({ not: {}, format: 'function' })).toEqual(rawShape({}))
+		expect(schemaToShape({ not: {}, format: 'function', description: 'Runs it' })).toEqual(
+			rawShape({ description: 'Runs it' }),
 		)
 	})
 })

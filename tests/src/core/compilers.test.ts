@@ -302,6 +302,7 @@ describe('shape-valued contracts', () => {
 			'json',
 			'raw',
 			'shape',
+			'function',
 		]
 		expect(Object.keys(SHAPE_FIELDS)).toEqual(categories)
 		expect(Object.isFrozen(SHAPE_FIELDS)).toBe(true)
@@ -421,6 +422,7 @@ describe('shape-valued contracts', () => {
 						'json',
 						'raw',
 						'shape',
+						'function',
 					],
 				},
 			},
@@ -588,6 +590,7 @@ const COMPLETE_SHAPES = {
 	nullable: { category: 'nullable', inner: { category: 'string' } },
 	json: { category: 'json', description: 'complete' },
 	shape: { category: 'shape', description: 'complete' },
+	function: { category: 'function', description: 'complete' },
 	raw: { category: 'raw', schema: COMPLETE_RAW_SCHEMA },
 } satisfies { readonly [T in ContractShape['category']]: CompleteShape<T> }
 
@@ -995,6 +998,8 @@ describe('validateShape', () => {
 			['json.description', 'alternate'],
 			['shape.category', 'boolean'],
 			['shape.description', 'alternate'],
+			['function.category', 'boolean'],
+			['function.description', 'alternate'],
 			['raw.category', 'boolean'],
 			['raw.schema', { type: 'number' }],
 		])
@@ -3916,7 +3921,7 @@ describe('compileAuditor — strict unions', () => {
 		expect(error.context).toEqual({ path: [], shape: 'object' })
 		expect(compileReporter(shape, hostile)).toEqual([
 			{ reason: 'variant', path: [], variants: 2 },
-			{ reason: 'type', path: [], expected: 'string', received: 'object' },
+			{ reason: 'type', path: [], expected: 'string', received: 'instance' },
 		])
 	})
 })
@@ -4586,7 +4591,7 @@ describe('compileReporter — hostile input containment', () => {
 		expect(faults.length).toBe(1)
 		const fault = faults[0]
 		expect(fault !== undefined && fault.reason === 'constraint').toBe(true)
-		expect(fault?.reason === 'constraint' && fault.received.length).toBeLessThanOrEqual(65) // PREVIEW_LIMIT + ellipsis
+		expect(fault?.reason === 'constraint' && fault.received).toBe(`"${'b'.repeat(62)}…`)
 	})
 
 	it('contains a throwing Proxy getter — returns faults, never throws', () => {
@@ -5347,6 +5352,7 @@ describe('shape separation registry', () => {
 		const refusals = observed.filter((outcome) => outcome.refusal).length
 		const uncoded = observed.filter((outcome) => outcome.uncoded).length
 		expect(separations.map((separation) => separation.shape.category).sort()).toEqual([
+			'function',
 			'json',
 			'null',
 			'raw',
@@ -5356,11 +5362,12 @@ describe('shape separation registry', () => {
 		expect(refusals).toBeGreaterThan(0)
 	})
 
-	it('validates and compiles representatives for all thirteen shape kinds', () => {
+	it('validates and compiles representatives for every shape kind', () => {
 		expect(Object.keys(SHAPE_SEPARATIONS).sort()).toEqual(
 			[
 				'array',
 				'boolean',
+				'function',
 				'json',
 				'literal',
 				'nullable',

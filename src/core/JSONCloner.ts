@@ -1,4 +1,10 @@
-import type { JSONClonerInterface, JSONRecord, JSONValue, Result } from './types.js'
+import type {
+	ContractErrorContext,
+	JSONClonerInterface,
+	JSONRecord,
+	JSONValue,
+	Result,
+} from './types.js'
 import { CLONE_NODE_LIMIT, INTRINSICS } from './constants.js'
 import { ContractError } from './errors.js'
 import {
@@ -13,6 +19,8 @@ import {
 	matchesVisited,
 	omitVisited,
 	pinMembers,
+	preview,
+	renderPath,
 } from './helpers.js'
 import { isObject, isRecord } from './validators.js'
 
@@ -115,7 +123,9 @@ export class JSONCloner implements JSONClonerInterface {
 			throw poison
 		}
 
-		this.#poison = this.#create('JSONCloner.clone: JSON cloning may not be reentered')
+		this.#poison = this.#create('JSONCloner.clone: JSON cloning may not be reentered', {
+			shape: 'json',
+		})
 		const outcome = attempt(() => this.#execute(budget))
 		const interruption = this.#terminal
 		if (interruption !== undefined) {
@@ -129,7 +139,7 @@ export class JSONCloner implements JSONClonerInterface {
 
 		const error = this.#owns(outcome.error)
 			? outcome.error
-			: this.#create('cloneJSONValue: failed to create an owned JSON snapshot')
+			: this.#create('cloneJSONValue: failed to create an owned JSON snapshot', { shape: 'json' })
 		this.#fail(error)
 	}
 
@@ -144,7 +154,9 @@ export class JSONCloner implements JSONClonerInterface {
 	}
 
 	#execute(budget: { left: number }): JSONValue {
-		if (!INTRINSICS.safe(budget.left)) this.#refuse('cloneJSONValue: invalid node budget')
+		if (!INTRINSICS.safe(budget.left)) {
+			this.#refuse('cloneJSONValue: invalid node budget', { shape: 'json' })
+		}
 		budget.left = INTRINSICS.min(budget.left, CLONE_NODE_LIMIT)
 		const root = this.#capture(this.#source, budget)
 		this.#drain(budget)
@@ -187,31 +199,32 @@ export class JSONCloner implements JSONClonerInterface {
 		// one unit of work and one unit of retained memory.
 		budget.left -= 1
 		if (budget.left < 0) {
-			this.#refuse(
-				`cloneJSONValue: snapshot exceeds the node limit ${CLONE_NODE_LIMIT}`,
-				CLONE_NODE_LIMIT,
-			)
+			this.#refuse(`cloneJSONValue: snapshot exceeds the node limit ${CLONE_NODE_LIMIT}`, {
+				shape: 'json',
+				limit: CLONE_NODE_LIMIT,
+			})
 		}
 		if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
 		if (typeof value === 'number') {
 			if (INTRINSICS.finite(value)) return value
-			this.#refuse('cloneJSONValue: number is not finite')
+			this.#refusePath('number is not finite', preview(value))
 		}
 		if (typeof value === 'object') return this.#captureObject(value)
-		this.#refuse(
-			this.#pending.length === 0
-				? 'cloneJSONValue: value is not JSON data'
-				: 'cloneJSONValue: property is not JSON data',
+		this.#refusePath(
+			this.#pending.length === 0 ? 'value is not JSON data' : 'property is not JSON data',
+			preview(value),
 		)
 	}
 
 	#captureObject(source: object): JSONValue[] | JSONRecord {
-		if (matchesVisited(this.#active, source)) this.#refuse('cloneJSONValue: cycle detected')
+		if (matchesVisited(this.#active, source)) this.#refusePath('cycle detected', preview(source))
 		const arrayOutcome = attempt(() => INTRINSICS.array(source))
-		if (isFailure(arrayOutcome)) this.#refuse('cloneJSONValue: value brand could not be inspected')
+		if (isFailure(arrayOutcome)) {
+			this.#refusePath('value brand could not be inspected', preview(source))
+		}
 		if (arrayOutcome.value) return this.#schedule(source, true)
 		if (isRecord(source)) return this.#schedule(source, false)
-		this.#refuse('cloneJSONValue: object is not a plain record')
+		this.#refusePath('object is not a plain record', preview(source))
 	}
 
 	#schedule(source: object, array: boolean): JSONValue[] | JSONRecord {
@@ -229,14 +242,15 @@ export class JSONCloner implements JSONClonerInterface {
 
 	#captureArray(source: object): ReadonlyArray<readonly [key: string, value: unknown]> {
 		const keysOutcome = attempt(() => INTRINSICS.reflect.members(source))
-		if (isFailure(keysOutcome)) this.#refuse('cloneJSONValue: own keys could not be inspected')
+		if (isFailure(keysOutcome)) this.#refusePath('own keys could not be inspected', preview(source))
 		const lengthOutcome = attempt(() => INTRINSICS.reflect.describe(source, 'length'))
-		if (isFailure(lengthOutcome))
-			this.#refuse('cloneJSONValue: array length could not be inspected')
+		if (isFailure(lengthOutcome)) {
+			this.#refusePath('array length could not be inspected', preview(source))
+		}
 		const lengthDescriptor = lengthOutcome.value
 		if (
 			lengthDescriptor === undefined ||
-			!('value' in lengthDescriptor) ||
+			!INTRINSICS.own(lengthDescriptor, 'value') ||
 			typeof lengthDescriptor.value !== 'number' ||
 			!INTRINSICS.integer(lengthDescriptor.value) ||
 			lengthDescriptor.value < 0 ||
@@ -244,7 +258,7 @@ export class JSONCloner implements JSONClonerInterface {
 			lengthDescriptor.enumerable !== false ||
 			lengthDescriptor.configurable !== false
 		) {
-			this.#refuse('cloneJSONValue: array is not intrinsic and dense')
+			this.#refusePath('array is not intrinsic and dense', preview(source))
 		}
 
 		// A collected vocabulary plus an exact count, not a shrinking `Set`:
@@ -256,29 +270,29 @@ export class JSONCloner implements JSONClonerInterface {
 		// matches".
 		const owned = collectMembers(keysOutcome.value)
 		if (!matchesMember(owned, 'length')) {
-			this.#refuse('cloneJSONValue: array own keys are not exact')
+			this.#refusePath('array own keys are not exact', preview(source))
 		}
 		if (keysOutcome.value.length !== lengthDescriptor.value + 1) {
-			this.#refuse('cloneJSONValue: array own keys are not exact')
+			this.#refusePath('array own keys are not exact', preview(source))
 		}
 		return INTRINSICS.from(
 			iterateIndices(() => lengthDescriptor.value),
 			(index): readonly [string, unknown] => {
 				const key = INTRINSICS.text(index)
 				if (!matchesMember(owned, key)) {
-					this.#refuse('cloneJSONValue: array own keys are not exact')
+					this.#refusePath('array own keys are not exact', preview(source))
 				}
 				const descriptorOutcome = attempt(() => INTRINSICS.reflect.describe(source, key))
 				if (isFailure(descriptorOutcome)) {
-					this.#refuse('cloneJSONValue: array index could not be inspected')
+					this.#refusePath('array index could not be inspected', 'threw', key)
 				}
 				const descriptor = descriptorOutcome.value
 				if (
 					descriptor === undefined ||
-					!('value' in descriptor) ||
+					!INTRINSICS.own(descriptor, 'value') ||
 					descriptor.enumerable !== true
 				) {
-					this.#refuse('cloneJSONValue: array index is not enumerable data')
+					this.#refuseMember('array index is not enumerable data', descriptor, key)
 				}
 				return [key, descriptor.value]
 			},
@@ -287,7 +301,7 @@ export class JSONCloner implements JSONClonerInterface {
 
 	#captureRecord(source: object): ReadonlyArray<readonly [key: string, value: unknown]> {
 		const keysOutcome = attempt(() => INTRINSICS.reflect.members(source))
-		if (isFailure(keysOutcome)) this.#refuse('cloneJSONValue: own keys could not be inspected')
+		if (isFailure(keysOutcome)) this.#refusePath('own keys could not be inspected', preview(source))
 		const names = keysOutcome.value
 		// Indexed, not iterated: this walk decides the published record's own-key
 		// population, and an iterator is a caller-writable member that can yield a
@@ -296,29 +310,29 @@ export class JSONCloner implements JSONClonerInterface {
 			iterateIndices(() => names.length),
 			(index): readonly [string, unknown] => {
 				const key = names[index]
-				if (typeof key !== 'string') this.#refuse('cloneJSONValue: record has a symbol property')
+				// Every string can be a key, so a symbol takes no segment and is named in the text.
+				if (typeof key !== 'string') {
+					this.#refusePath(`record has a symbol property ${preview(key)}`, preview(key))
+				}
 				const descriptorOutcome = attempt(() => INTRINSICS.reflect.describe(source, key))
 				if (isFailure(descriptorOutcome)) {
-					this.#refuse('cloneJSONValue: record property could not be inspected')
+					this.#refusePath('record property could not be inspected', 'threw', key)
 				}
 				const descriptor = descriptorOutcome.value
 				if (
 					descriptor === undefined ||
-					!('value' in descriptor) ||
+					!INTRINSICS.own(descriptor, 'value') ||
 					descriptor.enumerable !== true
 				) {
-					this.#refuse('cloneJSONValue: record property is not enumerable data')
+					this.#refuseMember('record property is not enumerable data', descriptor, key)
 				}
 				return [key, descriptor.value]
 			},
 		)
 	}
 
-	#create(message: string, limit?: number): ContractError {
-		const error = new ContractError(message, {
-			code: 'clone',
-			context: { shape: 'json', ...(limit === undefined ? {} : { limit }) },
-		})
+	#create(message: string, context: ContractErrorContext): ContractError {
+		const error = new ContractError(message, { code: 'clone', context })
 		admitVisited(this.#owned, error)
 		return error
 	}
@@ -327,10 +341,50 @@ export class JSONCloner implements JSONClonerInterface {
 		return isObject(error) && matchesVisited(this.#owned, error)
 	}
 
-	#refuse(message: string, limit?: number): never {
+	#refuse(message: string, context: ContractErrorContext): never {
 		const terminal = this.#terminal
 		if (terminal !== undefined && isFailure(terminal)) throw terminal.error
-		throw this.#create(message, limit)
+		throw this.#create(message, context)
+	}
+
+	// The root names no member, so its refusal carries the empty path and no suffix.
+	#refusePath(reason: string, received: string, key?: string): never {
+		const path = this.#trace(key)
+		this.#refuse(
+			path.length === 0
+				? `cloneJSONValue: ${reason}`
+				: `cloneJSONValue: ${reason} at ${renderPath(path)}`,
+			{ shape: 'json', path, received },
+		)
+	}
+
+	// Names what the descriptor holds instead of a value, and never runs an accessor.
+	#refuseMember(reason: string, descriptor: PropertyDescriptor | undefined, key: string): never {
+		this.#refusePath(
+			reason,
+			descriptor === undefined
+				? preview(undefined)
+				: INTRINSICS.own(descriptor, 'value')
+					? preview(descriptor.value)
+					: 'accessor',
+			key,
+		)
+	}
+
+	// Each frame below the top holds its current entry; a capture method's key stands in for the top's.
+	#trace(key: string | undefined): readonly string[] {
+		const pending = this.#pending
+		const top = pending[pending.length - 1]
+		const size =
+			top?.entries === undefined && key === undefined ? pending.length - 1 : pending.length
+		return INTRINSICS.from(
+			iterateIndices(() => size),
+			(index): string => {
+				const frame = pending[index]
+				const entry = frame?.entries?.[frame.index - 1]
+				return entry === undefined ? (key ?? '') : entry[0]
+			},
+		)
 	}
 
 	static {

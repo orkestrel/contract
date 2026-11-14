@@ -540,9 +540,11 @@ export type JSONSchemaType =
  *
  * @remarks
  * Intentionally lean (not the full ~50-keyword vocabulary): it carries only the
- * keywords {@link Infer}-driven `compileSchema` produces, plus `format` —
- * emitted by the {@link stringToFormat} / {@link samplesToFormat} inference
- * heuristics (`valueToSchema` / `samplesToSchema`), never by `compileSchema`.
+ * keywords `compileSchema` emits and the `format` the {@link stringToFormat} /
+ * {@link samplesToFormat} inference heuristics (`valueToSchema` / `samplesToSchema`)
+ * emit. `compileSchema` emits `format` for a date string (`'date'`) and a function
+ * shape (`'function'`), and `not` only as the empty schema `{}`, which no JSON
+ * instance satisfies; {@link RawShape} admits `not` in that form alone.
  * Recursive through `items` / `properties` / `additionalProperties` / `anyOf` /
  * `oneOf`. {@link createContract} owns and validates developer-authored shape
  * graphs; cycles and nesting past {@link COMPILE_DEPTH_LIMIT} fail with a coded
@@ -567,6 +569,7 @@ export interface JSONSchema {
 	readonly additionalProperties?: boolean | JSONSchema
 	readonly anyOf?: readonly JSONSchema[]
 	readonly oneOf?: readonly JSONSchema[]
+	readonly not?: JSONSchema
 }
 
 /**
@@ -673,6 +676,7 @@ export type ContractShape =
 	| NullableShape
 	| JSONShape
 	| ShapeShape
+	| FunctionShape
 	| RawShape
 
 /**
@@ -849,6 +853,42 @@ export interface ShapeShapeOptions {
 }
 
 /**
+ * Describes a callable value — accepts every function, a class constructor included.
+ *
+ * @remarks
+ * The compiled guard is `isFunction` and the parser returns the value by identity. JSON
+ * carries no function, so the emitted schema `{ not: {}, format: 'function' }` admits no
+ * JSON instance; `format` names the member for a reader, and `description` appears only
+ * when one is authored. The generator returns one frozen function that returns
+ * `undefined`. {@link Infer} resolves the shape to `(...args: never[]) => unknown`, which
+ * accepts every function and refuses a call that passes an argument; a call with no
+ * argument still typechecks.
+ *
+ * @example
+ * ```ts
+ * const declaration: FunctionShape = { category: 'function' }
+ * createContract(declaration).is(encodeURI) // true
+ * ```
+ */
+export interface FunctionShape {
+	readonly category: 'function'
+	readonly description?: string
+}
+
+/**
+ * Configures the description of a function-valued declaration.
+ *
+ * @example
+ * ```ts
+ * const options: FunctionShapeOptions = { description: 'Runs the schema migration' }
+ * functionShape(options).description // 'Runs the schema migration'
+ * ```
+ */
+export interface FunctionShapeOptions {
+	readonly description?: string
+}
+
+/**
  * Describes a validated raw JSON Schema passthrough — embeds a supported schema fragment directly.
  *
  * @remarks
@@ -898,43 +938,45 @@ export type Infer<S extends ContractShape> = [ContractShape] extends [S]
 	? unknown
 	: S extends ShapeShape
 		? ContractShape
-		: S extends StringShape
-			? string
-			: S extends NumberShape
-				? number
-				: S extends BooleanShape
-					? boolean
-					: S extends NullShape
-						? null
-						: S extends { readonly category: 'literal'; readonly values: infer V }
-							? V extends ReadonlyArray<infer L>
-								? L
-								: never
-							: S extends { readonly category: 'array'; readonly items: infer I }
-								? I extends ContractShape
-									? ReadonlyArray<Infer<I>>
+		: S extends FunctionShape
+			? (...args: never[]) => unknown
+			: S extends StringShape
+				? string
+				: S extends NumberShape
+					? number
+					: S extends BooleanShape
+						? boolean
+						: S extends NullShape
+							? null
+							: S extends { readonly category: 'literal'; readonly values: infer V }
+								? V extends ReadonlyArray<infer L>
+									? L
 									: never
-								: S extends ObjectShape<infer P, infer A>
-									? P extends Readonly<Record<string, ContractShape>>
-										? [A] extends [boolean | ContractShape]
-											? InferObject<P, A>
-											: never
+								: S extends { readonly category: 'array'; readonly items: infer I }
+									? I extends ContractShape
+										? ReadonlyArray<Infer<I>>
 										: never
-									: S extends { readonly category: 'union'; readonly variants: infer V }
-										? V extends readonly ContractShape[]
-											? InferUnion<V>
-											: never
-										: S extends { readonly category: 'optional'; readonly inner: infer I }
-											? I extends ContractShape
-												? Infer<I> | undefined
+									: S extends ObjectShape<infer P, infer A>
+										? P extends Readonly<Record<string, ContractShape>>
+											? [A] extends [boolean | ContractShape]
+												? InferObject<P, A>
 												: never
-											: S extends { readonly category: 'nullable'; readonly inner: infer I }
+											: never
+										: S extends { readonly category: 'union'; readonly variants: infer V }
+											? V extends readonly ContractShape[]
+												? InferUnion<V>
+												: never
+											: S extends { readonly category: 'optional'; readonly inner: infer I }
 												? I extends ContractShape
-													? Infer<I> | null
+													? Infer<I> | undefined
 													: never
-												: S extends JSONShape
-													? JSONValue
-													: unknown
+												: S extends { readonly category: 'nullable'; readonly inner: infer I }
+													? I extends ContractShape
+														? Infer<I> | null
+														: never
+													: S extends JSONShape
+														? JSONValue
+														: unknown
 
 /**
  * Resolves {@link Infer} of an object shape's `properties` — the required keys, plus the
@@ -1141,7 +1183,7 @@ export interface SchemaToShapeOptions {
  *
  * @remarks
  * The vocabulary is `'string'`, `'date'`, `'number'`, `'integer'`, `'boolean'`, `'null'`,
- * `'literal'`, `'array'`, `'object'`, `'union'`, `'json'`, and `'shape'`.
+ * `'literal'`, `'array'`, `'object'`, `'union'`, `'json'`, `'shape'`, and `'function'`.
  */
 export type FaultKind =
 	| 'string'
@@ -1156,6 +1198,7 @@ export type FaultKind =
 	| 'union'
 	| 'json'
 	| 'shape'
+	| 'function'
 
 /**
  * Names the refinement a {@link Fault} of reason `'constraint'` violates.

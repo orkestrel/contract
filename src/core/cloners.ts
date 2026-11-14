@@ -1,7 +1,7 @@
 import type { ContractShape, JSONRecord, JSONSchema, JSONValue, StringShape } from './types.js'
 import { CLONE_NODE_LIMIT, INTRINSICS } from './constants.js'
 import { ContractError, isContractError } from './errors.js'
-import { attempt, contain, holds, isFailure, isSuccess } from './helpers.js'
+import { attempt, contain, holds, isFailure, isSuccess, preview } from './helpers.js'
 import { isRecord } from './validators.js'
 import { JSONCloner } from './JSONCloner.js'
 import { SchemaCloner } from './SchemaCloner.js'
@@ -27,7 +27,10 @@ import { ShapeCloner } from './ShapeCloner.js'
  *
  * @param value - The unknown value to validate and snapshot
  * @returns The primitive unchanged, or a deeply cloned and frozen JSON graph
- * @throws {ContractError} When the value is not exact acyclic JSON data or traversal fails
+ * @throws {ContractError} When the value is not exact acyclic JSON data or traversal fails; a
+ * refusal that names a member or a container carries its `path` and `received`, and its message
+ * ends with ` at ` and the rendered path, except at the root, where the path is `[]` and the
+ * message has no suffix
  *
  * @example
  * ```ts
@@ -53,7 +56,9 @@ export function cloneJSONValue(value: unknown): JSONValue {
  *
  * @param value - The unknown record value to validate and snapshot
  * @returns A deeply cloned and frozen JSON record
- * @throws {ContractError} When the root is not a record, nested data is inexact, or traversal fails
+ * @throws {ContractError} When the root is not a record, nested data is inexact, or traversal
+ * fails; a nested refusal is the one {@link cloneJSONValue} raises, `cloneJSONValue:` prefix and path
+ * included
  *
  * @example
  * ```ts
@@ -65,7 +70,7 @@ export function cloneJSONRecord(value: unknown): JSONRecord {
 		if (!isRecord(value)) {
 			throw new ContractError('cloneJSONRecord: value is not a plain record', {
 				code: 'clone',
-				context: { shape: 'json' },
+				context: { shape: 'json', path: [], received: preview(value) },
 			})
 		}
 		const clone = cloneJSONValue(value)
