@@ -44,6 +44,7 @@ import {
 	computeMonthLength,
 	drawRandom,
 	enumerableKeys,
+	holds,
 	isFailure,
 	isSuccess,
 	limitEntries,
@@ -1122,46 +1123,41 @@ export class ContractCompiler<
 				const full = maskable ? readPresence(required, positions) : 0
 				return (value: unknown): value is unknown => {
 					if (!isRecord(value)) return false
-					const keys = enumerableKeys(value)
-					if (keys === undefined) return false
 					// Contain the whole key-enumeration + value-read walk — a hostile
 					// getter on `value`, or a replaced `globalThis.Set` reached by the
 					// presence view, must yield `false`, never throw, as
 					// `.claude/rules/patterns.md` § Validation and contracts requires.
-					const outcome = attempt(() => {
+					// The key list is this walk's own, so the captured array methods read
+					// it without reaching any caller member.
+					return holds(() => {
+						const keys: readonly string[] = INTRINSICS.keys(value)
 						if (maskable) {
-							const seen = readPresence(keys, positions)
-							if (seen !== full) return false
+							if (readPresence(keys, positions) !== full) return false
 						} else {
 							const present = collectMembers(keys)
-							for (const keyIndex of iterateIndices(() => required.length)) {
-								const key = required[keyIndex]
-								if (key === undefined) continue
-								if (!matchesMember(present, key)) return false
-							}
+							const missing: boolean = INTRINSICS.reflect.apply(INTRINSICS.some, required, [
+								(key: string) => !matchesMember(present, key),
+							])
+							if (missing) return false
 						}
-						for (const keyIndex of iterateIndices(() => keys.length)) {
-							const key = keys[keyIndex]
-							if (key === undefined) continue
-							const guard = INTRINSICS.own(map, key) ? map[key] : undefined
-							if (guard !== undefined) {
-								if (!guard(value[key])) return false
-								continue
-							}
-							if (closed) return false
-							// An open object declares an undeclared key UNCONSTRAINED, not
-							// UNOBSERVED. The compiled parser copies every one of them into
-							// its result, so a guard that skipped the read certified a value
-							// its own parser then refused as unreadable — `is` true, `audit`
-							// and `explain` empty, `parse` throwing, on one input. The read is
-							// the advertised read of the open-object domain; its RESULT is
-							// only tested when a tail shape constrains it.
-							const observed: unknown = value[key]
-							if (additional !== undefined && !additional(observed)) return false
-						}
-						return true
+						const refused: boolean = INTRINSICS.reflect.apply(INTRINSICS.some, keys, [
+							(key: string) => {
+								const guard = INTRINSICS.own(map, key) ? map[key] : undefined
+								if (guard !== undefined) return !guard(value[key])
+								if (closed) return true
+								// An open object declares an undeclared key UNCONSTRAINED, not
+								// UNOBSERVED. The compiled parser copies every one of them into
+								// its result, so a guard that skipped the read certified a value
+								// its own parser then refused as unreadable — `is` true, `audit`
+								// and `explain` empty, `parse` throwing, on one input. The read is
+								// the advertised read of the open-object domain; its RESULT is
+								// only tested when a tail shape constrains it.
+								const observed: unknown = value[key]
+								return additional !== undefined && !additional(observed)
+							},
+						])
+						return !refused
 					})
-					return isSuccess(outcome) && outcome.value
 				}
 			}
 			case 'union': {
@@ -1188,7 +1184,17 @@ export class ContractCompiler<
 				}
 				// `Reflect.apply` reads its argument list by index (CreateListFromArrayLike),
 				// where `unionOf(...guards)` would spread through the array iterator.
-				return INTRINSICS.reflect.apply(unionOf, undefined, guards)
+				const union: Guard<unknown> = INTRINSICS.reflect.apply(unionOf, undefined, guards)
+				const discriminated = this.#discriminate(owned)
+				if (discriminated === undefined) return union
+				// The arm a value's discriminant names is asked first, because its acceptance
+				// alone settles an any-of verdict. A refusal there falls back to every arm in
+				// declaration order, so no verdict depends on the discriminant being honest.
+				return (value: unknown): value is unknown => {
+					const arm = discriminated.select(value)
+					const named = arm === undefined ? undefined : guards[arm]
+					return (named !== undefined && holds(() => named(value))) || union(value)
+				}
 			}
 			case 'optional':
 				return orOf(isUndefined, this.#guardAt(owned.inner))
@@ -1408,42 +1414,49 @@ export class ContractCompiler<
 						// literally named '__proto__' lands as an own data key instead of
 						// mutating the prototype (same pattern as `pickOf`).
 						const selected: Array<readonly [string, unknown]> = []
-						for (const entryIndex of iterateIndices(() => entries.length)) {
-							const entry = entries[entryIndex]
-							if (entry === undefined) continue
-							const absent =
-								present === undefined
-									? (seen & (1 << entryIndex)) === 0
-									: !matchesMember(present, entry.key)
-							const raw = absent ? undefined : record[entry.key]
-							if (raw === undefined) {
-								if (!entry.optional) return undefined
-								// A container parses from a fresh copy, so nested defaults apply and no
-								// two results share a tree, whichever parser the inner shape holds.
-								if (entry.fill !== undefined) {
-									const fill = isObject(entry.fill) ? cloneJSONValue(entry.fill) : entry.fill
-									selected[selected.length] = [entry.key, entry.parse(fill)]
+						// The entry list is this compiler's own and the key list this walk's own,
+						// so the captured method reads each in order and reaches no caller member.
+						// A step answers `true` to refuse the whole record.
+						const refused: boolean = INTRINSICS.reflect.apply(INTRINSICS.some, entries, [
+							(entry: (typeof entries)[number], entryIndex: number) => {
+								const absent =
+									present === undefined
+										? (seen & (1 << entryIndex)) === 0
+										: !matchesMember(present, entry.key)
+								const raw = absent ? undefined : record[entry.key]
+								if (raw === undefined) {
+									if (!entry.optional) return true
+									// A container parses from a fresh copy, so nested defaults apply and no
+									// two results share a tree, whichever parser the inner shape holds.
+									if (entry.fill !== undefined) {
+										const fill = isObject(entry.fill) ? cloneJSONValue(entry.fill) : entry.fill
+										selected[selected.length] = [entry.key, entry.parse(fill)]
+									}
+									return false
 								}
-								continue
-							}
-							const parsed = entry.parse(raw)
-							if (parsed === undefined) return undefined
-							selected[selected.length] = [entry.key, parsed]
-						}
-						if (open) {
-							for (const keyIndex of iterateIndices(() => keys.length)) {
-								const key = keys[keyIndex]
-								if (key === undefined) continue
-								if (matchesMember(known, key)) continue
-								if (additional === undefined) {
-									selected[selected.length] = [key, record[key]]
-								} else {
+								const parsed = entry.parse(raw)
+								if (parsed === undefined) return true
+								selected[selected.length] = [entry.key, parsed]
+								return false
+							},
+						])
+						if (refused) return undefined
+						const extras: boolean =
+							open &&
+							INTRINSICS.reflect.apply(INTRINSICS.some, keys, [
+								(key: string) => {
+									if (matchesMember(known, key)) return false
+									if (additional === undefined) {
+										selected[selected.length] = [key, record[key]]
+										return false
+									}
 									const parsed = additional(record[key])
-									if (parsed === undefined) return undefined
+									if (parsed === undefined) return true
 									selected[selected.length] = [key, parsed]
-								}
-							}
-						}
+									return false
+								},
+							])
+						if (extras) return undefined
 						return INTRINSICS.rebase(
 							INTRINSICS.record<unknown>({
 								[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [

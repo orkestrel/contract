@@ -91,6 +91,21 @@ describe('element combinators', () => {
 		expect(actual).toBe(false)
 	})
 
+	it('decides an array on the one read of each element its snapshot takes', () => {
+		const reads: number[] = []
+		const drifting = Object.defineProperty([0], '0', {
+			enumerable: true,
+			configurable: true,
+			get() {
+				reads.push(reads.length)
+				return reads.length === 1 ? 1 : 'drifted'
+			},
+		})
+
+		expect(arrayOf(isNumber)(drifting)).toBe(true)
+		expect(reads).toEqual([0])
+	})
+
 	it('validates arrays and tuples', () => {
 		const strings = arrayOf(isString)
 		expect(strings(['a', 'b'])).toBe(true)

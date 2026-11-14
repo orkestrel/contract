@@ -11,14 +11,12 @@ import {
 } from './validators.js'
 import {
 	attempt,
-	collectMembers,
 	contain,
 	holds,
 	isFailure,
 	isSuccess,
 	iterateIndices,
 	matchesJSONValue,
-	matchesMember,
 	readArrayEntries,
 	readValue,
 	resolveField,
@@ -296,9 +294,11 @@ export function parseJSONValue(value: unknown): JSONValue | undefined {
  * `parseEnum ↔ literalOf(...allowed)` pairing covers every literal primitive
  * (string, number, or boolean), not only strings. Matching is identity, never
  * cross-type coercion: `parseEnum('1', [1])` stays `undefined`. The allowed
- * values are captured through their dense own-index view and copied into an
- * owned `Set`; caller-defined iteration is ignored and unreadability returns
- * `undefined` rather than escaping.
+ * values are captured through their dense own-index view into a frozen snapshot
+ * that one SameValueZero pass reads; caller-defined iteration is ignored and
+ * unreadability returns `undefined` rather than escaping. A call costs one
+ * snapshot and one pass over it, so a vocabulary checked often is cheaper
+ * through a `literalOf` guard built once.
  *
  * @param value - The value to parse
  * @param allowed - The permitted literal values
@@ -324,13 +324,19 @@ export function parseEnum(
 ): LiteralValue | undefined {
 	const outcome = readArrayEntries(allowed)
 	if (isFailure(outcome) || !outcome.value.dense) return undefined
-	// A parser answers `undefined`, never throws, so the vocabulary is built and
-	// consulted inside the never-throw boundary — and the membership question is
-	// asked through a module binding rather than any property, because a coercer
+	// A parser answers `undefined`, never throws, so the vocabulary is consulted inside
+	// the never-throw boundary — and the membership question is asked of the frozen
+	// snapshot through a captured method rather than any property, because a coercer
 	// that returns a value outside its own allowed list is the same silent lie the
 	// paired guard was answering: `Set.prototype.has = () => true` made
-	// `parseEnum('zzz', ['a', 'b'])` answer `'zzz'`.
-	if (!holds(() => matchesMember(collectMembers(outcome.value.entries), value))) return undefined
+	// `parseEnum('zzz', ['a', 'b'])` answer `'zzz'`. One SameValueZero pass over the
+	// snapshot answers what a collected `Set` would, without building one per call.
+	const member = holds(() =>
+		INTRINSICS.reflect.apply(INTRINSICS.some, outcome.value.entries, [
+			(entry: unknown) => entry === value || INTRINSICS.same(entry, value),
+		]),
+	)
+	if (!member) return undefined
 	return isLiteralValue(value) ? value : undefined
 }
 

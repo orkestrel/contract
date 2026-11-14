@@ -766,14 +766,13 @@ export function collectEntries(target: unknown[][]): EntryCollectorFunction {
  */
 export function readSetEntries(value: ReadonlySet<unknown>): Result<readonly unknown[]> {
 	return attempt(() => {
-		const collected: unknown[][] = []
-		INTRINSICS.reflect.apply(INTRINSICS.sweep, value, [collectEntries(collected)])
-		const entries: readonly unknown[] = INTRINSICS.reflect.apply(
-			INTRINSICS.project,
-			readIndexView(collected),
-			[(pair: readonly unknown[]) => pair[1]],
-		)
-		return INTRINSICS.freeze(entries)
+		const collected: unknown[] = []
+		INTRINSICS.reflect.apply(INTRINSICS.sweep, value, [
+			(entry: unknown) => {
+				collected[collected.length] = entry
+			},
+		])
+		return INTRINSICS.freeze(collected)
 	})
 }
 
@@ -1630,16 +1629,16 @@ export function readArrayEntries<T>(value: readonly T[]): Result<ArrayRead<T>> {
 				(key: PropertyKey, index: number) => index < length && key !== INTRINSICS.text(index),
 			])
 		if (canonical) {
-			const packed = INTRINSICS.from(
-				iterateIndices(() => length),
-				(index) => {
-					const key = members[index]
-					if (key === undefined || !INTRINSICS.own(value, key)) {
-						throw new INTRINSICS.error('Array index views disagree')
-					}
-					return value[index]
-				},
-			)
+			// An array-like with no prototype reaches no iterator and no caller member, and
+			// hands the mapper each index once, in order.
+			const indices = { __proto__: null, length }
+			const packed = INTRINSICS.from(indices, (_entry: unknown, index: number) => {
+				const key = members[index]
+				if (key === undefined || !INTRINSICS.own(value, key)) {
+					throw new INTRINSICS.error('Array index views disagree')
+				}
+				return value[index]
+			})
 			return INTRINSICS.freeze({ entries: INTRINSICS.freeze(packed), dense: true })
 		}
 		const selected: ReadonlyArray<{ readonly index: number; readonly key: string }> =
@@ -1990,9 +1989,14 @@ export function drawRandom(random: RandomFunction, shape: string): number {
  * ```
  */
 export function resolveField(record: Readonly<Record<string, unknown>>, path: FieldPath): unknown {
+	// One boundary contains the brand read and the walk, so a throw in either answers
+	// `undefined`. A one-key path is the walk's first step and nothing more.
 	const outcome = attempt(() => {
-		if (!isRecord(record)) return undefined
-		const keys = isString(path) ? [path] : path
+		if (!matchesRecordBrand(record)) return undefined
+		if (isString(path)) {
+			return INTRINSICS.own(record, path) ? INTRINSICS.reflect.read(record, path) : undefined
+		}
+		const keys = path
 		const indices = iterateIndices(() => keys.length)
 		return INTRINSICS.reflect.apply(INTRINSICS.reduce, indices, [
 			(current: unknown, index: number): unknown => {
@@ -3452,6 +3456,11 @@ export function buildPositions(names: readonly string[]): Readonly<Record<string
 /**
  * Derives the bit mask of names present in an indexed lookup.
  *
+ * @remarks
+ * Takes `names` as the array it declares and reads each present index once, in order,
+ * through the captured fold, so a hole adds no bit. An array-like that is not an array
+ * is outside this contract.
+ *
  * @param names - Names to observe in order
  * @param positions - The bit position of each declared name
  * @returns The combined signed 32-bit mask
@@ -3465,19 +3474,16 @@ export function readPresence(
 	names: readonly string[],
 	positions: Readonly<Record<string, number>>,
 ): number {
-	return INTRINSICS.reflect.apply(
-		INTRINSICS.reduce,
-		iterateIndices(() => names.length),
-		[
-			(mask: number, index: number) => {
-				const name = names[index]
-				if (name === undefined || !INTRINSICS.own(positions, name)) return mask
-				const position = positions[name]
-				return position === undefined ? mask : mask | (1 << position)
-			},
-			0,
-		],
-	)
+	// The captured fold reads each present index once, in order, and creates no array, so
+	// neither an iterator nor a species constructor takes part in the walk.
+	return INTRINSICS.reflect.apply(INTRINSICS.fold, names, [
+		(mask: number, name: string | undefined) => {
+			if (name === undefined || !INTRINSICS.own(positions, name)) return mask
+			const position = positions[name]
+			return position === undefined ? mask : mask | (1 << position)
+		},
+		0,
+	])
 }
 
 // Pin the iterator protocol before any caller can reach these exported generators.

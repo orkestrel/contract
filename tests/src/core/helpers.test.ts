@@ -2288,6 +2288,20 @@ describe('resolveField', () => {
 		expect(resolveField(hostile, 'value')).toBeUndefined()
 	})
 
+	it('reads a one-key path as an own member of a record root alone', () => {
+		const bare: Record<string, unknown> = Object.create(null)
+		bare.id = 'a'
+		const listed = Object.create(Array.prototype)
+		listed['0'] = 'a'
+		const reason = new Error('prototype read')
+
+		expect(resolveField(bare, 'id')).toBe('a')
+		expect(resolveField({}, 'constructor')).toBeUndefined()
+		expect(resolveField(listed, '0')).toBeUndefined()
+		expect(() => resolveField(Object.create(createThrowingPrototype(reason)), 'b')).not.toThrow()
+		expect(resolveField(Object.create(createThrowingPrototype(reason)), 'b')).toBeUndefined()
+	})
+
 	it('returns undefined against a hostile getter mid-path without throwing', () => {
 		const hostile = { user: createThrowingGetter() }
 		expect(() => resolveField(hostile, ['user', 'value'])).not.toThrow()
@@ -4612,6 +4626,22 @@ describe('indexed derivation helpers', () => {
 		expect(positions).toEqual({ id: 2, ['__proto__']: 1 })
 		expect(readPresence(['id', '__proto__', 'missing'], positions)).toBe(6)
 		expect(readPresence(['inherited'], Object.create({ inherited: 0 }))).toBe(0)
+	})
+
+	it('reads presence through captured dispatch while the array fold and iterator lie', () => {
+		const positions = buildPositions(['id', 'name'])
+		const sparse: string[] = []
+		sparse[2] = 'name'
+		const sentinel = Object.freeze({ stage: 'presence' })
+		const masks = replaceIntrinsic(Array.prototype, 'reduce', throwSentinel(sentinel), () =>
+			replaceIntrinsic(Array.prototype, Symbol.iterator, throwSentinel(sentinel), () => [
+				readPresence(['name', 'extra', 'id'], positions),
+				readPresence(sparse, positions),
+				readPresence([], positions),
+			]),
+		)
+
+		expect(masks).toEqual([3, 2, 0])
 	})
 })
 

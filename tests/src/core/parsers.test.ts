@@ -239,6 +239,18 @@ describe('structural parsers', () => {
 		expect(parseEnumField({ value: 'iterated' }, 'value', allowed)).toBeUndefined()
 	})
 
+	it('parseEnum asks membership of its own snapshot while the array members lie', () => {
+		const answers = replaceIntrinsic(Array.prototype, 'includes', acceptRecognition, () =>
+			replaceIntrinsic(Array.prototype, 'some', acceptRecognition, () => [
+				parseEnum('zzz', ['a', 'b']),
+				parseEnum('b', ['a', 'b']),
+				parseEnum(0, [-0]),
+			]),
+		)
+
+		expect(answers).toEqual([undefined, 'b', 0])
+	})
+
 	it('parseEnum refuses an impossible reported length without caller iteration', () => {
 		const iterated = ['iterated']
 		const allowed = new Proxy(['indexed'], {

@@ -3688,6 +3688,44 @@ describe('compileGuard', () => {
 		expect(Object.hasOwn(generated, '__proto__')).toBe(true)
 		expect(guard(generated)).toBe(true)
 	})
+
+	it('reads a closed object through its own enumerable string keys alone', () => {
+		const guard = compileGuard(objectShape({ id: stringShape() }))
+		const marked = Object.defineProperty({ id: 'a', [Symbol('marker')]: 1 }, 'hidden', {
+			value: 1,
+			enumerable: false,
+		})
+
+		expect(guard(marked)).toBe(true)
+		expect(guard(createNonEnumerableRecord('id', 'a'))).toBe(false)
+		expect(compileGuard(objectShape({ constructor: rawShape({}) }))({})).toBe(false)
+	})
+
+	it('answers a discriminated union from every arm when the arm its discriminant names refuses', () => {
+		const guard = compileGuard(
+			unionShape(
+				objectShape({ operation: literalShape(['count']), limit: integerShape() }),
+				objectShape({ operation: literalShape(['find']), text: stringShape() }),
+			),
+		)
+		// The own descriptor names `count`, while a read of the member yields `find`.
+		const divergent = new Proxy(
+			{ operation: 'find', text: 'needle' },
+			{
+				getOwnPropertyDescriptor(target, key) {
+					const descriptor = Reflect.getOwnPropertyDescriptor(target, key)
+					return key === 'operation' && descriptor !== undefined
+						? { ...descriptor, value: 'count' }
+						: descriptor
+				},
+			},
+		)
+
+		expect(guard({ operation: 'count', limit: 3 })).toBe(true)
+		expect(guard({ operation: 'find', text: 'needle' })).toBe(true)
+		expect(guard({ operation: 'count', text: 'needle' })).toBe(false)
+		expect(guard(divergent)).toBe(true)
+	})
 })
 
 describe('compileAuditor — strict soundness matrix', () => {

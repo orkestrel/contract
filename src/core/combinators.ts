@@ -87,13 +87,15 @@ export function arrayOf(elementGuard: (value: unknown) => boolean): Guard<readon
 export function arrayOf(elementGuard: (value: unknown) => boolean): Guard<readonly unknown[]> {
 	return (value: unknown): value is readonly unknown[] =>
 		holds(() => {
-			if (!isArray(value)) return false
+			if (!INTRINSICS.array(value)) return false
 			const entries = readArrayEntries(value)
 			if (isFailure(entries) || !entries.value.dense) return false
-			for (const index of iterateIndices(() => entries.value.entries.length)) {
-				if (!elementGuard(entries.value.entries[index])) return false
-			}
-			return true
+			// The snapshot is this package's frozen dense copy, so the captured method reads
+			// every entry in order and reaches no caller member.
+			const refused: boolean = INTRINSICS.reflect.apply(INTRINSICS.some, entries.value.entries, [
+				(entry: unknown) => !elementGuard(entry),
+			])
+			return !refused
 		})
 }
 
@@ -883,13 +885,13 @@ export function unionOf(...guards: ReadonlyArray<(value: unknown) => boolean>): 
 	// Per-member containment, exactly as its declared twin `orOf`: one `holds`
 	// around the whole loop made a throwing member erase every later passing one,
 	// so `unionOf(a, b)` and `unionOf(b, a)` answered differently for one value.
-	return (value: unknown): value is unknown => {
-		for (const index of iterateIndices(() => guards.length)) {
-			const guard = guards[index]
-			if (guard !== undefined && holds(() => guard(value))) return true
-		}
-		return false
-	}
+	// The rest list is this call's own array, so the captured method reads it in order
+	// and reaches no caller member.
+	return (value: unknown): value is unknown =>
+		INTRINSICS.reflect.apply(INTRINSICS.some, guards, [
+			(guard: ((value: unknown) => boolean) | undefined) =>
+				guard !== undefined && holds(() => guard(value)),
+		])
 }
 
 /**

@@ -227,6 +227,93 @@ export const VALIDATION_BENCH_OBJECT: ContractShape = Object.freeze({
 	}),
 })
 
+// The database's per-row and query-door loads: its bench table's six columns, and its
+// query input, whose conditions are a union of five object arms keyed on `operator`.
+export const ROW_BENCH_SHAPE: ContractShape = objectShape({
+	id: stringShape(),
+	organization: stringShape(),
+	rank: integerShape(),
+	body: stringShape(),
+	active: booleanShape(),
+	note: optionalShape(stringShape()),
+})
+export const ROW_BENCH_VALUE: Readonly<Record<string, unknown>> = Object.freeze({
+	id: 'k1',
+	organization: 'o1',
+	rank: 1,
+	body: 'x'.repeat(24),
+	active: false,
+	note: 'n',
+})
+export const COLUMN_BENCH_SHAPE: ContractShape = unionShape(
+	stringShape(),
+	arrayShape(stringShape(), { min: 1 }),
+)
+export const CONDITION_BENCH_SHAPE: ContractShape = unionShape(
+	objectShape({
+		column: COLUMN_BENCH_SHAPE,
+		operator: literalShape(['absent', 'present']),
+		values: arrayShape(rawShape({}), { max: 0 }),
+		connector: literalShape(['and', 'or']),
+	}),
+	objectShape({
+		column: COLUMN_BENCH_SHAPE,
+		operator: literalShape(['equals', 'not', 'above', 'below', 'from', 'to']),
+		values: arrayShape(rawShape({}), { min: 1, max: 1 }),
+		connector: literalShape(['and', 'or']),
+	}),
+	objectShape({
+		column: COLUMN_BENCH_SHAPE,
+		operator: literalShape(['like', 'glob', 'starts', 'ends']),
+		values: arrayShape(stringShape(), { min: 1, max: 1 }),
+		connector: literalShape(['and', 'or']),
+	}),
+	objectShape({
+		column: COLUMN_BENCH_SHAPE,
+		operator: literalShape(['between']),
+		values: arrayShape(rawShape({}), { min: 2, max: 2 }),
+		connector: literalShape(['and', 'or']),
+	}),
+	objectShape({
+		column: COLUMN_BENCH_SHAPE,
+		operator: literalShape(['any', 'none']),
+		values: arrayShape(rawShape({})),
+		connector: literalShape(['and', 'or']),
+	}),
+)
+export const QUERY_BENCH_SHAPE: ContractShape = objectShape({
+	conditions: optionalShape(arrayShape(CONDITION_BENCH_SHAPE)),
+	order: optionalShape(
+		arrayShape(
+			objectShape({
+				column: COLUMN_BENCH_SHAPE,
+				direction: literalShape(['ascending', 'descending']),
+			}),
+		),
+	),
+	limit: optionalShape(integerShape({ min: 0 })),
+	offset: optionalShape(integerShape({ min: 0 })),
+})
+export const CONDITION_BENCH_VALUE: Readonly<Record<string, unknown>> = Object.freeze({
+	column: 'rank',
+	operator: 'equals',
+	values: Object.freeze([5]),
+	connector: 'and',
+})
+export const QUERY_BENCH_ONE: Readonly<Record<string, unknown>> = Object.freeze({
+	conditions: Object.freeze([CONDITION_BENCH_VALUE]),
+})
+export const QUERY_BENCH_TEN: Readonly<Record<string, unknown>> = Object.freeze({
+	conditions: Object.freeze(
+		Array.from({ length: 10 }, (_, index) =>
+			Object.freeze({ ...CONDITION_BENCH_VALUE, values: Object.freeze([index]) }),
+		),
+	),
+})
+export const ENUM_BENCH_CODES: readonly string[] = Object.freeze(
+	Array.from({ length: 14 }, (_, index) => `CODE_${String(index)}`),
+)
+
 /**
  * Runs an operation expected to throw a {@link ContractError} and returns that
  * error, already narrowed.

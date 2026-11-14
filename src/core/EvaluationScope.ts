@@ -25,7 +25,9 @@ export class EvaluationScope {
 		const scope = new EvaluationScope()
 		INTRINSICS.reflect.apply(INTRINSICS.admit, EvaluationScope.#active, [scope])
 		try {
-			return scope.#evaluate(plan, value, path, clean)
+			// The opening answer is stored only after its walk returns, and the scope settles
+			// right after, so no read could recall it: the opening call asks the plan alone.
+			return plan(value, path)
 		} finally {
 			INTRINSICS.reflect.apply(INTRINSICS.remove, EvaluationScope.#active, [scope])
 		}
