@@ -49,7 +49,9 @@ import {
 	isSuccess,
 	limitEntries,
 	matchesCalendarDate,
+	matchesEnumerableKeys,
 	matchesMember,
+	matchesStepGuard,
 	ownPattern,
 	pathOf,
 	pinMembers,
@@ -92,6 +94,7 @@ import { cloneJSONValue, cloneSchema, ownShape } from './cloners.js'
 import { ShapePass } from './ShapePass.js'
 import { ShapeValidator } from './ShapeValidator.js'
 import { EvaluationScope } from './EvaluationScope.js'
+import { KeyPlanCache } from './KeyPlanCache.js'
 import { seededRandom } from './seeders.js'
 
 /**
@@ -1132,6 +1135,7 @@ export class ContractCompiler<
 				const maskable = required.length <= PRESENCE_MASK_LIMIT
 				const positions = buildPositions(maskable ? required : [])
 				const full = maskable ? readPresence(required, positions) : 0
+				const plans = closed ? new KeyPlanCache(map) : undefined
 				return (value: unknown): value is unknown => {
 					if (!isRecord(value)) return false
 					// Contain the whole key-enumeration + value-read walk — a hostile
@@ -1142,6 +1146,11 @@ export class ContractCompiler<
 					// it without reaching any caller member.
 					return holds(() => {
 						const keys: readonly string[] = INTRINSICS.keys(value)
+						if (extra !== true && !matchesEnumerableKeys(value, keys)) return false
+						const plan = plans?.recall(keys)
+						if (plan !== undefined) {
+							return INTRINSICS.reflect.apply(INTRINSICS.every, plan, [matchesStepGuard, value])
+						}
 						if (maskable) {
 							if (readPresence(keys, positions) !== full) return false
 						} else {
@@ -1167,7 +1176,9 @@ export class ContractCompiler<
 								return additional !== undefined && !additional(observed)
 							},
 						])
-						return !refused
+						if (refused) return false
+						plans?.retain(keys)
+						return true
 					})
 				}
 			}
@@ -1799,6 +1810,19 @@ export class ContractCompiler<
 						const present = maskable ? undefined : collectMembers(keys)
 						const vocabulary = declared ?? collectMembers(declaredKeys)
 						const seen = present === undefined ? readPresence(keys, positions) : 0
+						// The own names outside the enumerable view, read once and classified
+						// by membership alone: no descriptor and no member value is read, so a
+						// key a `Proxy` lists with no descriptor is still named.
+						const listed = present ?? collectMembers(keys)
+						const outside: readonly string[] =
+							extra === true
+								? []
+								: INTRINSICS.reflect.apply(
+										INTRINSICS.select,
+										readIndexView(INTRINSICS.names(record)),
+										[(name: string) => !matchesMember(listed, name)],
+									)
+						const concealed = collectMembers(outside)
 						for (const entryIndex of iterateIndices(() => entries.length)) {
 							const entry = entries[entryIndex]
 							if (entry === undefined) continue
@@ -1808,7 +1832,9 @@ export class ContractCompiler<
 									? (seen & (1 << entryIndex)) === 0
 									: !matchesMember(present, entry.key)
 							if (absent) {
-								if (!entry.optional) {
+								if (matchesMember(concealed, entry.key)) {
+									faults[faults.length] = { reason: 'hidden', path: pathOf(path, entry.key) }
+								} else if (!entry.optional) {
 									faults[faults.length] = {
 										reason: 'missing',
 										path: pathOf(path, entry.key),
@@ -1834,6 +1860,24 @@ export class ContractCompiler<
 							const observed: unknown = record[key]
 							if (additional !== undefined) {
 								appendEntries(faults, additional(observed, pathOf(path, key)))
+							}
+						}
+						for (const nameIndex of iterateIndices(() => outside.length)) {
+							const name = outside[nameIndex]
+							if (name === undefined || matchesMember(vocabulary, name)) continue
+							if (faults.length >= FAULT_LIMIT) return
+							faults[faults.length] = {
+								reason: closed ? 'extra' : 'hidden',
+								path: pathOf(path, name),
+							}
+						}
+						const symbols = extra === true ? [] : INTRINSICS.symbols(record)
+						for (const symbolIndex of iterateIndices(() => symbols.length)) {
+							if (faults.length >= FAULT_LIMIT) return
+							faults[faults.length] = {
+								reason: 'extra',
+								path,
+								symbol: preview(symbols[symbolIndex]),
 							}
 						}
 					})

@@ -1031,6 +1031,41 @@ describe('samplesToSchema — truncation opens the schema for record samples (C3
 	})
 })
 
+describe('valueToSchema / samplesToSchema — a member outside the enumerable view opens the schema', () => {
+	const hidden = Object.defineProperty({ a: 1 }, 'b', { value: 2 })
+	const symbol = { a: 1, [Symbol('tag')]: 2 }
+
+	it('opens a record holding a non-enumerable string key or a symbol key', () => {
+		for (const value of [hidden, symbol]) {
+			for (const schema of [
+				valueToSchema(value),
+				samplesToSchema([value]),
+				samplesToSchema([{ a: 3 }, value]),
+			]) {
+				expect(Object.keys(schema.properties ?? {})).toEqual(['a'])
+				expect(schema.required).toEqual(['a'])
+				expect(schema.additionalProperties).toBe(true)
+				expect(compileGuard(schemaToShape(schema))(value)).toBe(true)
+			}
+		}
+	})
+
+	it('opens only the record that holds one', () => {
+		const schema = valueToSchema({ outer: hidden, plain: { a: 1 } })
+		expect(schema.additionalProperties).toBe(false)
+		expect(schema.properties?.outer?.additionalProperties).toBe(true)
+		expect(schema.properties?.plain?.additionalProperties).toBe(false)
+		const rows = samplesToSchema([{ outer: { a: 1 } }, { outer: symbol }])
+		expect(rows.additionalProperties).toBe(false)
+		expect(rows.properties?.outer?.additionalProperties).toBe(true)
+	})
+
+	it('keeps a record of enumerable string keys closed', () => {
+		expect(valueToSchema({ a: 1 }).additionalProperties).toBe(false)
+		expect(samplesToSchema([{ a: 1 }, { a: 2 }]).additionalProperties).toBe(false)
+	})
+})
+
 describe('valueToSchema — shared-subtree DAG (C4)', () => {
 	it('resolves a depth-24 diamond DAG quickly with a deterministic schema', () => {
 		const node = Array.from({ length: 24 }).reduce<unknown>((child) => ({ a: child, b: child }), {

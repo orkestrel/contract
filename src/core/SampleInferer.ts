@@ -8,6 +8,7 @@ import {
 	enumerableKeys,
 	isFailure,
 	limitEntries,
+	matchesEnumerableKeys,
 	readSampleMemo,
 	sortValues,
 } from './helpers.js'
@@ -125,8 +126,9 @@ export class SampleInferer {
 	// format and enum gating applies per key.
 	//
 	// `additionalProperties` is forced to `true` regardless of the closed flag when
-	// the key union exceeds `#breadth`, or a readable row carries a key as an own
-	// property holding `undefined`. A hostile getter or failed KEY walk reaches the
+	// the key union exceeds `#breadth`, a readable row carries a key as an own
+	// property holding `undefined`, or a row owns a non-enumerable string key or a
+	// symbol key. A hostile getter or failed KEY walk reaches the
 	// door's boundary instead of dropping a key or widening the whole slot.
 	//
 	// The memo is keyed by the slot's ORDERED row identities, not by a single row.
@@ -158,19 +160,24 @@ export class SampleInferer {
 		const signature = `${depth}|${this.#breadth}|${this.#closed}|${this.#format}|${this.#enumerated}`
 		const cached = INTRINSICS.reflect.apply(INTRINSICS.fetch, node.schemas, [signature])
 		if (cached !== undefined) return cached
-		const keyPairs = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(samples), [
-			(sample: Record<string, unknown> | undefined) => {
-				if (sample === undefined) {
-					throw new INTRINSICS.error('samplesToSchema: every sample must be a record')
-				}
-				const sampleKeys = enumerableKeys(sample)
-				if (sampleKeys === undefined) {
-					throw new INTRINSICS.error('samplesToSchema: property enumeration failed')
-				}
-				return INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(sampleKeys), [
+		const listings: ReadonlyArray<{ readonly keys: readonly string[]; readonly hidden: boolean }> =
+			INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(samples), [
+				(sample: Record<string, unknown> | undefined) => {
+					if (sample === undefined) {
+						throw new INTRINSICS.error('samplesToSchema: every sample must be a record')
+					}
+					const sampleKeys = enumerableKeys(sample)
+					if (sampleKeys === undefined) {
+						throw new INTRINSICS.error('samplesToSchema: property enumeration failed')
+					}
+					return { keys: sampleKeys, hidden: !matchesEnumerableKeys(sample, sampleKeys) }
+				},
+			])
+		const keyPairs = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(listings), [
+			(listing: { readonly keys: readonly string[] }) =>
+				INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(listing.keys), [
 					(key: string) => [key, true],
-				])
-			},
+				]),
 		])
 		const keySet = INTRINSICS.record<boolean>({
 			[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [keyPairs]),
@@ -242,6 +249,9 @@ export class SampleInferer {
 			truncated ||
 			INTRINSICS.reflect.apply(INTRINSICS.some, columns, [
 				(column: { readonly dropped: boolean }) => column.dropped,
+			]) ||
+			INTRINSICS.reflect.apply(INTRINSICS.some, listings, [
+				(listing: { readonly hidden: boolean }) => listing.hidden,
 			])
 		const schema: JSONSchema = {
 			type: 'object',

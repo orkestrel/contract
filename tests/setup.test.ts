@@ -126,8 +126,13 @@ import {
 	throwHostileAccess,
 	throwSentinel,
 	validSamplesFor,
+	buildReportingRecord,
+	createAlternatingRecord,
+	ROW_BENCH_ORDERS,
+	ROW_BENCH_VALUE,
 } from './setup.js'
 import type { Equal, Expect, TerminalIntrinsic } from './setup.js'
+import { createRecorder } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 
 describe('error capture', () => {
@@ -1502,5 +1507,48 @@ describe('combinator bench fixtures', () => {
 			'objectOf accept',
 		])
 		expect(Object.isFrozen(COMBINATOR_WALKS)).toBe(true)
+	})
+})
+
+describe('key plan fixtures', () => {
+	it('defines each reporting member in order and reports every read key', () => {
+		const reads = createRecorder<[key: string]>()
+		const record = buildReportingRecord(
+			[
+				['rank', 1],
+				['id', 'a'],
+			],
+			reads.handler,
+		)
+		expect(Object.keys(record)).toEqual(['rank', 'id'])
+		expect(reads.calls).toEqual([])
+		expect(record.id).toBe('a')
+		expect(record.rank).toBe(1)
+		expect(record.id).toBe('a')
+		expect(reads.calls).toEqual([['id'], ['rank'], ['id']])
+		const descriptor = Object.getOwnPropertyDescriptor(record, 'id')
+		expect(descriptor?.enumerable).toBe(true)
+		expect(typeof descriptor?.get).toBe('function')
+	})
+
+	it('alternates the id member between a string and a number on each read', () => {
+		const record = createAlternatingRecord()
+		expect(Object.keys(record)).toEqual(['id', 'rank'])
+		expect([record.id, record.id, record.id, record.id]).toEqual(['a', 7, 'a', 7])
+		expect(record.rank).toBe(1)
+		expect(createAlternatingRecord().id).toBe('a')
+	})
+
+	it('lists the bench row in more distinct frozen key orders than a guard keeps plans for', () => {
+		expect(ROW_BENCH_ORDERS).toHaveLength(core.KEY_PLAN_LIMIT * 2)
+		expect(ROW_BENCH_ORDERS.length).toBeGreaterThan(core.KEY_PLAN_LIMIT)
+		expect(Object.isFrozen(ROW_BENCH_ORDERS)).toBe(true)
+		expect(new Set(ROW_BENCH_ORDERS.map((row) => Object.keys(row).join())).size).toBe(
+			core.KEY_PLAN_LIMIT * 2,
+		)
+		for (const row of ROW_BENCH_ORDERS) {
+			expect(Object.isFrozen(row)).toBe(true)
+			expect(row).toEqual(ROW_BENCH_VALUE)
+		}
 	})
 })

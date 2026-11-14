@@ -1385,6 +1385,33 @@ describe('isFault and isAuditFault', () => {
 	})
 
 	it.each<readonly [string, unknown]>([
+		['a hidden member', { reason: 'hidden', path: ['note'] }],
+		['a hidden member at a string path', { reason: 'hidden', path: 'note' }],
+		['an undeclared symbol key', { reason: 'extra', path: [], symbol: 'Symbol(tag)' }],
+		['an undeclared symbol key under a member', { reason: 'extra', path: ['row'], symbol: '' }],
+	])('accepts %s at the audit guard alone', (_label, value) => {
+		expect(isAuditFault(value)).toBe(true)
+		expect(isFault(value)).toBe(false)
+	})
+
+	it.each<readonly [string, unknown]>([
+		['a hidden fault with no path', { reason: 'hidden' }],
+		['a hidden fault with a numeric path', { reason: 'hidden', path: 5 }],
+		['a hidden fault with a symbol', { reason: 'hidden', path: [], symbol: 'Symbol(tag)' }],
+		['a hidden fault with a stray field', { reason: 'hidden', path: [], note: 'x' }],
+		['a numeric symbol', { reason: 'extra', path: [], symbol: 1 }],
+		['a symbol present as undefined', { reason: 'extra', path: [], symbol: undefined }],
+		['a symbol beside a stray field', { reason: 'extra', path: [], symbol: 's', note: 'x' }],
+		[
+			'a symbol under another reason',
+			{ reason: 'missing', path: [], expected: 'string', symbol: 's' },
+		],
+	])('refuses %s at both', (_label, value) => {
+		expect(isFault(value)).toBe(false)
+		expect(isAuditFault(value)).toBe(false)
+	})
+
+	it.each<readonly [string, unknown]>([
 		['an empty record', {}],
 		['null', null],
 		['a string', 'type'],

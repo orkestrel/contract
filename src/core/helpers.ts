@@ -20,6 +20,7 @@ import type {
 	GuardsShape,
 	JSONSchema,
 	JSONValue,
+	KeyStep,
 	LengthReader,
 	NumberShape,
 	RandomFunction,
@@ -1847,6 +1848,124 @@ export function enumerableKeys(value: object): readonly string[] | undefined {
 	// guard and parser layered on it.
 	const outcome = attempt(() => INTRINSICS.freeze(INTRINSICS.keys(value)))
 	return isSuccess(outcome) ? outcome.value : undefined
+}
+
+/**
+ * Checks whether an object owns no key outside the enumerable string keys already read from it.
+ *
+ * @remarks
+ * Counts the own string keys, enumerable or not, against the key list and requires no own
+ * symbol key. A key a `Proxy` lists among its own keys with no descriptor counts as own.
+ * Thrown when the object's own-key reflection throws, so call it inside a boundary.
+ *
+ * @param value - The object whose own keys to count
+ * @param keys - The object's own enumerable string keys, as `Object.keys` returned them
+ * @returns True if the object owns no other key; false otherwise
+ *
+ * @example
+ * ```ts
+ * const value = { id: 'a' }
+ * matchesEnumerableKeys(value, Object.keys(value)) // true
+ * matchesEnumerableKeys(Object.defineProperty(value, 'secret', { value: 1 }), ['id']) // false
+ * ```
+ */
+export function matchesEnumerableKeys(value: object, keys: readonly string[]): boolean {
+	return INTRINSICS.names(value).length === keys.length && INTRINSICS.symbols(value).length === 0
+}
+
+/**
+ * Builds the key plan that answers one key order from the declared member guards.
+ *
+ * @remarks
+ * One {@link KeyStep} per key, in the order given, each holding the key and its declared guard.
+ * The plan and its steps are fresh and unfrozen.
+ *
+ * @param keys - The key order the plan answers
+ * @param guards - The declared member guards, keyed by own string key
+ * @returns The plan, or `undefined` when any key is undeclared
+ *
+ * @example
+ * ```ts
+ * buildKeyPlan(['id'], { id: isString })    // [{ key: 'id', guard: isString }]
+ * buildKeyPlan(['other'], { id: isString }) // undefined
+ * ```
+ */
+export function buildKeyPlan(
+	keys: readonly string[],
+	guards: Readonly<Record<string, Guard<unknown> | undefined>>,
+): readonly KeyStep[] | undefined {
+	const plan: readonly KeyStep[] = INTRINSICS.reflect.apply(
+		INTRINSICS.expand,
+		readIndexView(keys),
+		[
+			(key: string) => {
+				const guard = INTRINSICS.own(guards, key) ? guards[key] : undefined
+				return guard === undefined ? [] : [{ key, guard }]
+			},
+		],
+	)
+	return plan.length === keys.length ? plan : undefined
+}
+
+/**
+ * Checks whether a key plan answers the key list bound as `this`.
+ *
+ * @remarks
+ * Passed with the key list as the `thisArg` argument to the captured `findIndex` member over a list of
+ * plans. A plan answers a key list holding the same keys in the same order, so a prefix and a
+ * reordering both miss.
+ *
+ * @param plan - The key plan to compare
+ * @returns True if the plan's keys equal the bound list in order; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesKeyPlan.call(['id'], [{ key: 'id', guard: isString }]) // true
+ * ```
+ */
+export function matchesKeyPlan(this: readonly string[], plan: readonly KeyStep[]): boolean {
+	return (
+		plan.length === this.length &&
+		INTRINSICS.reflect.apply(INTRINSICS.every, plan, [matchesStepKey, this])
+	)
+}
+
+/**
+ * Checks whether a key-plan step names the key at its index in the list bound as `this`.
+ *
+ * @remarks
+ * Passed with the key list as the `thisArg` argument to the captured `every` member over a key plan.
+ *
+ * @param step - The step to compare
+ * @param index - The step's position in its plan
+ * @returns True if the step's key equals the bound list's key at that index; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesStepKey.call(['id'], { key: 'id', guard: isString }, 0) // true
+ * ```
+ */
+export function matchesStepKey(this: readonly string[], step: KeyStep, index: number): boolean {
+	return step.key === this[index]
+}
+
+/**
+ * Checks whether the member of the record bound as `this` passes a key-plan step's guard.
+ *
+ * @remarks
+ * Passed with the record as the `thisArg` argument to the captured `every` member over a key plan, so the
+ * walk reads each member once, in the plan's order, and stops at the first refusal.
+ *
+ * @param step - The step whose member to read and guard
+ * @returns True if the member under the step's key passes its guard; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesStepGuard.call({ id: 'a' }, { key: 'id', guard: isString }) // true
+ * ```
+ */
+export function matchesStepGuard(this: Readonly<Record<string, unknown>>, step: KeyStep): boolean {
+	return step.guard(this[step.key])
 }
 
 /**
@@ -3910,8 +4029,10 @@ export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT
  * says.
  *
  * @remarks
- * Each line opens with the fault's path (or `value` at the root) and reason. An `extra` fault lists
- * its parent's keys only when the declaring arms agree. A literal names candidates only where
+ * Each line opens with the fault's path (or `value` at the root) and reason. A `hidden` fault says
+ * the member is not enumerable and to send it as a plain data member. An `extra` fault carrying
+ * `symbol` names the symbol key and lists no declared key; another `extra` fault lists its
+ * parent's keys only when the declaring arms agree. A literal names candidates only where
  * the declarations agree; lists are deduplicated and bounded. A received preview stays as written
  * within PREVIEW_LIMIT and without control or line-separator characters; otherwise it is encoded
  * through preview. Received, constraint, and limit details read only own fields. A `variant` or
@@ -3933,6 +4054,24 @@ export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT
 export function describeFaultLine(fault: AuditFault, schema: JSONSchema): string {
 	const path = extractPath(fault)
 	const head = `${renderPath(path) || 'value'}: ${fault.reason}`
+	if (fault.reason === 'hidden') {
+		return `${head}; this member is not enumerable, send it as a plain data member`
+	}
+	const detail =
+		'received' in fault && INTRINSICS.own(fault, 'received')
+			? fault.received
+			: 'symbol' in fault && INTRINSICS.own(fault, 'symbol')
+				? fault.symbol
+				: undefined
+	const encoded =
+		detail !== undefined &&
+		detail.length <= PREVIEW_LIMIT &&
+		!matchesPattern(/[\p{Cc}\p{Zl}\p{Zp}]/u, detail)
+			? detail
+			: preview(detail)
+	if (fault.reason === 'extra' && detail !== undefined) {
+		return `${head}; symbol key ${encoded} is not declared, remove it`
+	}
 	if (fault.reason === 'extra') {
 		const parent = INTRINSICS.from(
 			iterateIndices(() => path.length - 1),
@@ -4036,14 +4175,6 @@ export function describeFaultLine(fault: AuditFault, schema: JSONSchema): string
 	)
 	const description =
 		node !== undefined && INTRINSICS.own(node, 'description') ? node.description : undefined
-	const received =
-		'received' in fault && INTRINSICS.own(fault, 'received') ? fault.received : undefined
-	const shown =
-		received !== undefined &&
-		received.length <= PREVIEW_LIMIT &&
-		!matchesPattern(/[\p{Cc}\p{Zl}\p{Zp}]/u, received)
-			? received
-			: preview(received)
 	return INTRINSICS.reflect.apply(
 		INTRINSICS.join,
 		INTRINSICS.reflect.apply(
@@ -4051,7 +4182,7 @@ export function describeFaultLine(fault: AuditFault, schema: JSONSchema): string
 			readIndexView([
 				head,
 				`expected ${fault.expected}`,
-				received !== undefined ? `received ${shown}` : undefined,
+				detail !== undefined ? `received ${encoded}` : undefined,
 				'constraint' in fault && INTRINSICS.own(fault, 'constraint')
 					? `constraint ${fault.constraint}`
 					: undefined,

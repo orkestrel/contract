@@ -119,7 +119,12 @@ export function compileSchema(shape: ContractShape): JSONSchema {
  * observe own enumerable string keys through {@link enumerableKeys}, the same
  * key view their parser, reporter, auditor, and inference use for both open and
  * closed objects — the view is shared, the verdict on an undeclared key is not
- * (this guard rejects the object; the parser drops the key).
+ * (this guard rejects the object; the parser drops the key). A closed or
+ * tail-shaped object also refuses an own member outside that view, a
+ * non-enumerable string key or a symbol key. An object with
+ * `additionalProperties: true` runs no own-key count: it admits an undeclared
+ * non-enumerable or symbol member, while a declared member outside the enumerable
+ * view still reads as absent.
  * Like every guard it is total — it never throws, as `.claude/rules/patterns.md`
  * § Validation and contracts requires. It requests
  * exactly the `guard` root of a fresh {@link ContractCompiler}, which owns the

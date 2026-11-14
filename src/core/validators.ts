@@ -758,15 +758,19 @@ export function isFault(value: unknown): value is Fault {
  * Determines whether a value is exactly one {@link AuditFault}.
  *
  * @remarks
- * Every {@link Fault}, and the undeclared-key fault an audit adds.
+ * Every {@link Fault}, and the undeclared-key and hidden-key faults an audit adds: `extra` with
+ * exactly `reason` and `path`, or with a string `symbol` beside them, and `hidden` with exactly
+ * `reason` and `path`.
  *
  * @param value - The value to inspect
  * @returns True if the value is a well-formed audit fault; false otherwise
  *
  * @example
  * ```ts
- * isAuditFault({ reason: 'extra', path: ['a'] }) // true
- * isAuditFault({})                               // false
+ * isAuditFault({ reason: 'extra', path: ['a'] })                   // true
+ * isAuditFault({ reason: 'extra', path: [], symbol: 'Symbol(tag)' }) // true
+ * isAuditFault({ reason: 'hidden', path: ['note'] })               // true
+ * isAuditFault({})                                                 // false
  * ```
  */
 export function isAuditFault(value: unknown): value is AuditFault {
@@ -774,9 +778,11 @@ export function isAuditFault(value: unknown): value is AuditFault {
 	return holds(
 		() =>
 			isRecord(value) &&
-			value.reason === 'extra' &&
 			isFaultPath(value.path) &&
-			matchesExactKeys(value, ['reason', 'path']),
+			((value.reason === 'hidden' && matchesExactKeys(value, ['reason', 'path'])) ||
+				(value.reason === 'extra' &&
+					(matchesExactKeys(value, ['reason', 'path']) ||
+						(isString(value.symbol) && matchesExactKeys(value, ['reason', 'path', 'symbol']))))),
 	)
 }
 

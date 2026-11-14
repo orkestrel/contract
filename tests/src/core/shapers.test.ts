@@ -2599,6 +2599,24 @@ describe('auditFaultShape() parity', () => {
 		expect(createContract(auditFaultShape()).is(fault)).toBe(accepted)
 	})
 
+	it('agrees with isAuditFault on hidden faults and symbol-carrying extra faults', () => {
+		const contract = createContract(auditFaultShape())
+		for (const [fault, accepted] of [
+			[{ reason: 'hidden', path: ['note'] }, true],
+			[{ reason: 'hidden', path: 'note' }, true],
+			[{ reason: 'extra', path: [], symbol: 'Symbol(tag)' }, true],
+			[{ reason: 'extra', path: ['row'], symbol: '' }, true],
+			[{ reason: 'hidden', path: [], symbol: 'Symbol(tag)' }, false],
+			[{ reason: 'hidden', path: [5] }, false],
+			[{ reason: 'extra', path: [], symbol: 1 }, false],
+			[{ reason: 'extra', path: [], symbol: undefined }, false],
+			[{ reason: 'extra', path: [], symbol: 's', note: 'x' }, false],
+		] as const) {
+			expect(isAuditFault(fault)).toBe(accepted)
+			expect(contract.is(fault)).toBe(accepted)
+		}
+	})
+
 	it('admits the dependency vocabulary for type, missing, and constraint faults', () => {
 		const contract = createContract(auditFaultShape())
 		for (const expected of FAULT_KINDS) {

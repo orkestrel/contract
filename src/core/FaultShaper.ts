@@ -69,6 +69,8 @@ export class FaultShaper {
 				expected: hints,
 			}),
 			objectShape({ reason: literalShape(['extra']), path }),
+			objectShape({ reason: literalShape(['extra']), path, symbol: stringShape() }),
+			objectShape({ reason: literalShape(['hidden']), path }),
 		)
 	}
 

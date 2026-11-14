@@ -8,6 +8,7 @@ import {
 	enumerableKeys,
 	isFailure,
 	limitEntries,
+	matchesEnumerableKeys,
 	matchesVisited,
 	omitVisited,
 	readArrayEntries,
@@ -200,8 +201,9 @@ export class ValueInferer {
 	// Emits `additionalProperties: false` when closed, `true` otherwise —
 	// mirroring `compileSchema`'s object-emission convention — EXCEPT when the
 	// sampled key list no longer describes every key `value` actually carries,
-	// which happens when the own-key list exceeds `#breadth` (truncation), or when
-	// a key was dropped for holding `undefined`. Either way `additionalProperties`
+	// which happens when the own-key list exceeds `#breadth` (truncation), when
+	// a key was dropped for holding `undefined`, or when `value` owns a
+	// non-enumerable string key or a symbol key. Each way `additionalProperties`
 	// is forced to `true` regardless of the flag, because a CLOSED schema built
 	// from an incomplete key list would reject the very object it was inferred
 	// from (`recordOf` rejects any own key the shape does not declare).
@@ -263,7 +265,8 @@ export class ValueInferer {
 			const dropped: boolean = INTRINSICS.reflect.apply(INTRINSICS.some, observed, [
 				(entry: (typeof observed)[number]) => entry.key !== undefined && entry.schema === undefined,
 			])
-			return { properties, required, partial: truncated || dropped }
+			const hidden = !matchesEnumerableKeys(value, snapshot)
+			return { properties, required, partial: truncated || dropped || hidden }
 		})
 		omitVisited(this.#visited, value)
 		if (isFailure(outcome)) throw outcome.error

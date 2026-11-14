@@ -138,6 +138,8 @@ export const INTRINSICS = Object.freeze({
 	prototype: Object.getPrototypeOf,
 	/** Captures `Object.getOwnPropertySymbols` — the own-symbol population. */
 	symbols: Object.getOwnPropertySymbols,
+	/** Captures `Object.getOwnPropertyNames` — the own string-key population, enumerable or not. */
+	names: Object.getOwnPropertyNames,
 	/** Captures `Object.prototype` — the realm-local plain-record prototype identity. */
 	base: Object.prototype,
 	/**
@@ -225,6 +227,8 @@ export const INTRINSICS = Object.freeze({
 	order: Array.prototype.sort,
 	/** Captures `Array.prototype.some` for short-circuit membership checks. */
 	some: Array.prototype.some,
+	/** Captures `Array.prototype.every` for short-circuit checks that every entry passes. */
+	every: Array.prototype.every,
 	/** Captures `Array.prototype.findIndex`, including reads of sparse positions. */
 	find: Array.prototype.findIndex,
 	/** Captures `Array.prototype.forEach` for indexed visits of owned arrays. */
@@ -604,6 +608,26 @@ export const COMPILE_NODE_LIMIT = 16_384
  * ```
  */
 export const PRESENCE_MASK_LIMIT = 31
+
+/**
+ * Caps at `4` the number of key plans one compiled closed-object guard keeps, frozen.
+ *
+ * @remarks
+ * A compiled closed-object guard answers a value through the full key walk and,
+ * after a walk that accepts, keeps that value's key order as a plan: one
+ * {@link KeyStep} entry per key, in order. A later value whose own enumerable keys
+ * arrive in a kept order is answered by asking each step's guard in turn, with
+ * no presence or vocabulary question. The guard learns only from an accepted
+ * walk, never evicts, and stops learning at this count, so the plans it keeps
+ * are those of the earliest accepted key orders. Every other key order takes the
+ * full walk. Both paths answer identically; only the cost differs.
+ *
+ * @example
+ * ```ts
+ * KEY_PLAN_LIMIT // 4
+ * ```
+ */
+export const KEY_PLAN_LIMIT = 4
 
 /**
  * Caps at `262144` the number of nodes one JSON snapshot may produce, frozen.

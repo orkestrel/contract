@@ -281,6 +281,22 @@ export type GuardType<G> = G extends Guard<infer T> ? T : never
  */
 export type GuardsShape = Readonly<Record<string, Guard<unknown>>>
 
+/**
+ * Represents one step of a key plan: a declared key and the compiled guard its member answers to.
+ *
+ * @remarks
+ * A compiled closed-object guard keeps one plan per accepted key order, one step per key in that
+ * order, and answers a later value in the same order by asking each step's guard.
+ *
+ * {@link buildKeyPlan} returns a plan of these.
+ */
+export interface KeyStep {
+	/** Holds the declared key the step reads. */
+	readonly key: string
+	/** Holds the compiled guard the member under the key must satisfy. */
+	readonly guard: Guard<unknown>
+}
+
 /** Resolves a {@link GuardsShape} to a readonly object type of its guarded property types. */
 export type FromGuards<G extends GuardsShape> = Readonly<{ [K in keyof G]: GuardType<G[K]> }>
 
@@ -750,6 +766,18 @@ export interface ArrayShape<S extends ContractShape = ContractShape> {
  * `additionalProperties: false` — while the compiled parser drops the key and
  * the compiled reporter stays silent, mirroring that parser. `true` accepts
  * unknown keys as-is, and a `ContractShape` validates them, in every artifact.
+ *
+ * A closed object, and one whose `additionalProperties` is a `ContractShape`, also
+ * refuses an own member outside the enumerable view: a non-enumerable string key or
+ * a symbol key. The guard answers `false`; the auditor reports a declared such member
+ * as `'hidden'` in place of `'missing'`, an undeclared one as `'extra'` when closed and
+ * `'hidden'` under a tail shape, and each symbol key as `'extra'` at the object with
+ * its preview in `symbol`. The parser and the reporter keep the enumerable view, so
+ * `explain` reports `'missing'` where `audit` reports `'hidden'`. An object with
+ * `additionalProperties: true` runs no own-key count: it admits an undeclared
+ * non-enumerable or symbol member, while a declared member outside the enumerable
+ * view still reads as absent, so `is` answers `false` for a required one and `audit`
+ * and `explain` report it `'missing'`.
  *
  * The `A` parameter carries the open-value shape into {@link Infer}, so a constrained
  * tail keeps its type in the inferred index signature.
@@ -1263,16 +1291,32 @@ export type Fault =
  * Represents a key present on a value that its closed object shape does not declare.
  *
  * @remarks
- * The final path segment is the offending key, and no value is read or carried — an
- * undeclared key faults on its presence alone.
+ * The final path segment is the offending key, or `symbol` names it: a symbol key adds no
+ * segment, so its fault sits at the object and `symbol` holds the key's preview. No value is
+ * read or carried — an undeclared key faults on its presence alone.
  */
 export interface ExtraFault {
 	readonly reason: 'extra'
 	readonly path: FieldPath
+	readonly symbol?: string
 }
 
-/** Covers every fault an audit reports — the parse faults plus undeclared keys. */
-export type AuditFault = Fault | ExtraFault
+/**
+ * Represents an own member outside the enumerable view that a closed or tail-shaped object
+ * refuses.
+ *
+ * @remarks
+ * The final path segment is the non-enumerable string key. A declared member reports this
+ * fault in place of `missing`, and a tail-shaped object reports it for an undeclared one. The
+ * correction is always to send the member as plain data; no value is read or carried.
+ */
+export interface HiddenFault {
+	readonly reason: 'hidden'
+	readonly path: FieldPath
+}
+
+/** Covers every fault an audit reports — the parse faults plus undeclared and hidden keys. */
+export type AuditFault = Fault | ExtraFault | HiddenFault
 
 // === Contract compilation
 
@@ -1431,7 +1475,10 @@ export interface ContractInterface<T> {
 	 * stable across calls (see the read-stability precondition on
 	 * {@link ContractInterface}). It is the report for the stricter of the two
 	 * domains, so a coercible leaf and a closed object's undeclared key both
-	 * fault here and neither faults in `explain`.
+	 * fault here and neither faults in `explain`. An own member outside the
+	 * enumerable view of a closed or tail-shaped object faults here as `'hidden'`
+	 * or `'extra'`, while `explain` reads the enumerable view and reports a
+	 * declared such member as `'missing'`.
 	 *
 	 * @param value - The value to check
 	 * @returns The faults found, empty when the value is strictly valid

@@ -7,6 +7,7 @@ import {
 	QUERY_BENCH_ONE,
 	QUERY_BENCH_SHAPE,
 	QUERY_BENCH_TEN,
+	ROW_BENCH_ORDERS,
 	ROW_BENCH_SHAPE,
 	ROW_BENCH_VALUE,
 } from '../../setup.js'
@@ -23,6 +24,21 @@ it('checks a six-column row', async ({ bench }) => {
 	const result = await bench('checks a six-column row', {}, () => {
 		row.is(ROW_BENCH_VALUE)
 	}).run({ time: 1000 })
+	expect(result.state).toBe('completed')
+})
+
+it('checks a six-column row in more key orders than the guard keeps plans for', async ({
+	bench,
+}) => {
+	const orders = createContract(ROW_BENCH_SHAPE)
+	expect(ROW_BENCH_ORDERS.every((value) => orders.is(value))).toBe(true)
+	const result = await bench(
+		'checks a six-column row in more key orders than the guard keeps plans for',
+		{},
+		() => {
+			for (const value of ROW_BENCH_ORDERS) orders.is(value)
+		},
+	).run({ time: 1000 })
 	expect(result.state).toBe('completed')
 })
 

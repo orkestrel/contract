@@ -26,6 +26,7 @@ import {
 	FAULT_LIMIT,
 	integerShape,
 	isContractError,
+	KEY_PLAN_LIMIT,
 	isFault,
 	isRecord,
 	isRegExp,
@@ -59,6 +60,8 @@ import {
 	DATE_REFUSED,
 	DATE_SEEDS,
 	buildSurrogateText,
+	buildReportingRecord,
+	createAlternatingRecord,
 	denyValue,
 	createMarker,
 	createEmptyFaults,
@@ -108,6 +111,7 @@ import {
 	createForeignStringShape,
 } from '../../setupServer.js'
 import * as core from '@src/core'
+import { createRecorder } from '@orkestrel/test'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 
 describe('shape-valued contracts', () => {
@@ -205,17 +209,21 @@ describe('shape-valued contracts', () => {
 		const contract = createContract(
 			oneOfShape(objectShape({ a: numberShape(), b: numberShape() }), booleanShape()),
 		)
-		const symbol = Symbol('retained')
-		const input = Object.assign(Object.create(null), { b: 2, a: 1, [symbol]: 'symbol' })
-		Object.defineProperty(input, 'hidden', { value: 'hidden' })
+		const input = Object.assign(Object.create(null), { b: 2, a: 1 })
 		const output = contract.parse(input)
 		expect(output).toBe(input)
 		expect(Object.keys(output ?? {})).toEqual(['b', 'a'])
 		expect(Object.getPrototypeOf(output)).toBeNull()
-		expect(Object.getOwnPropertyDescriptor(output, 'hidden')?.value).toBe('hidden')
-		expect(Object.getOwnPropertyDescriptor(output, symbol)?.value).toBe('symbol')
 		if (isRecord(output)) Reflect.set(output, 'a', 3)
 		expect(input.a).toBe(3)
+		const marked = Object.assign(Object.create(null), {
+			b: 2,
+			a: 1,
+			[Symbol('retained')]: 'symbol',
+		})
+		Object.defineProperty(marked, 'hidden', { value: 'hidden' })
+		expect(contract.is(marked)).toBe(false)
+		expect(contract.parse(marked)).toBeUndefined()
 		const frozen = Object.freeze({ a: 1, b: 2 })
 		expect(contract.parse(frozen)).toBe(frozen)
 		expect(Object.isFrozen(contract.parse(frozen))).toBe(true)
@@ -374,23 +382,38 @@ describe('shape-valued contracts', () => {
 			'Over-approximates declarations whose JSON projection preserves their own enumerable data; values without that projection are outside this schema. is decides whether the complete shape is valid.',
 		)
 	})
-	it('preserves oneOf identity for hidden and accessor declarations in either arm order', () => {
-		for (const value of [
-			Object.defineProperty({ category: 'number' }, 'min', { value: 'low' }),
-			Object.defineProperty({}, 'category', { enumerable: true, get: () => 'number' }),
-		]) {
-			for (const additionalProperties of [false, true]) {
-				const sibling = objectShape({ category: stringShape() }, { additionalProperties })
-				for (const declaration of [
-					oneOfShape(shapeShape(), sibling),
-					oneOfShape(sibling, shapeShape()),
-				]) {
-					const contract = createContract(declaration)
-					expect(contract.is(value)).toBe(true)
-					expect(contract.parse(value)).toBe(value)
-					expect(contract.is(contract.parse(value))).toBe(true)
-				}
+	it('keeps oneOf identity for accessor declarations, and for hidden declarations beside an open sibling, in either arm order', () => {
+		const hidden = Object.defineProperty({ category: 'number' }, 'min', { value: 'low' })
+		const accessor = Object.defineProperty({}, 'category', {
+			enumerable: true,
+			get: () => 'number',
+		})
+		const closed = objectShape({ category: stringShape() })
+		const open = objectShape({ category: stringShape() }, { additionalProperties: true })
+		for (const sibling of [closed, open]) {
+			for (const declaration of [
+				oneOfShape(shapeShape(), sibling),
+				oneOfShape(sibling, shapeShape()),
+			]) {
+				const contract = createContract(declaration)
+				expect(contract.is(accessor)).toBe(true)
+				expect(contract.parse(accessor)).toBe(accessor)
+				expect(contract.is(contract.parse(accessor))).toBe(true)
 			}
+		}
+		for (const declaration of [oneOfShape(shapeShape(), open), oneOfShape(open, shapeShape())]) {
+			const contract = createContract(declaration)
+			expect(contract.is(hidden)).toBe(true)
+			expect(contract.parse(hidden)).toBe(hidden)
+			expect(contract.is(contract.parse(hidden))).toBe(true)
+		}
+		for (const declaration of [
+			oneOfShape(shapeShape(), closed),
+			oneOfShape(closed, shapeShape()),
+		]) {
+			const contract = createContract(declaration)
+			expect(contract.is(hidden)).toBe(false)
+			expect(contract.parse(hidden)).toBeUndefined()
 		}
 	})
 	it('reports a shape type fault at the containing field', () => {
@@ -3694,14 +3717,14 @@ describe('compileGuard', () => {
 		expect(guard(generated)).toBe(true)
 	})
 
-	it('reads a closed object through its own enumerable string keys alone', () => {
+	it('refuses a closed object that holds a non-enumerable or symbol member', () => {
 		const guard = compileGuard(objectShape({ id: stringShape() }))
 		const marked = Object.defineProperty({ id: 'a', [Symbol('marker')]: 1 }, 'hidden', {
 			value: 1,
 			enumerable: false,
 		})
 
-		expect(guard(marked)).toBe(true)
+		expect(guard(marked)).toBe(false)
 		expect(guard(createNonEnumerableRecord('id', 'a'))).toBe(false)
 		expect(compileGuard(objectShape({ constructor: rawShape({}) }))({})).toBe(false)
 	})
@@ -3730,6 +3753,249 @@ describe('compileGuard', () => {
 		expect(guard({ operation: 'find', text: 'needle' })).toBe(true)
 		expect(guard({ operation: 'count', text: 'needle' })).toBe(false)
 		expect(guard(divergent)).toBe(true)
+	})
+})
+
+describe('compiled objects — members outside the enumerable view', () => {
+	const shape = objectShape({
+		id: stringShape(),
+		rank: integerShape(),
+		note: optionalShape(stringShape()),
+	})
+
+	it('refuses a closed object by every own member, enumerable or not', () => {
+		const guard = compileGuard(shape)
+		expect(guard({ id: 'a', rank: 1, note: 'n' })).toBe(true)
+		expect(guard(Object.defineProperty({ id: 'a', rank: 1 }, 'secret', { value: 1 }))).toBe(false)
+		expect(guard(Object.defineProperty({ id: 'a', rank: 1 }, 'note', { value: 'n' }))).toBe(false)
+		expect(guard(Object.defineProperty({ rank: 1 }, 'id', { value: 'a' }))).toBe(false)
+		expect(guard({ id: 'a', rank: 1, [Symbol('tag')]: 1 })).toBe(false)
+		expect(guard({ id: 'a', rank: 1 })).toBe(true)
+	})
+
+	it('refuses a hidden or symbol member under a tail shape and admits both under an open one', () => {
+		const tail = createContract(recordShape(integerShape()))
+		const open = createContract(objectShape({ a: integerShape() }, { additionalProperties: true }))
+		for (const value of [
+			Object.defineProperty({ a: 1 }, 'b', { value: 2 }),
+			{ a: 1, [Symbol('tag')]: 2 },
+		]) {
+			expect(tail.is(value)).toBe(false)
+			expect(open.is(value)).toBe(true)
+			expect(open.audit(value)).toEqual([])
+		}
+		expect(tail.is({ a: 1, b: 2 })).toBe(true)
+	})
+
+	it('refuses a key a Proxy lists with no descriptor and reports it as extra', () => {
+		const contract = createContract(shape)
+		const ghost = new Proxy({ id: 'a', rank: 1 }, { ownKeys: () => ['id', 'rank', 'ghost'] })
+		expect(contract.is(ghost)).toBe(false)
+		expect(contract.audit(ghost)).toEqual([{ reason: 'extra', path: ['ghost'] }])
+	})
+
+	it('admits a hidden member through the open arm of a oneOf', () => {
+		const contract = createContract(
+			oneOfShape(
+				objectShape({ id: stringShape() }),
+				objectShape({ id: stringShape() }, { additionalProperties: true }),
+			),
+		)
+		const value = Object.defineProperty({ id: 'a' }, 'h', { value: 1 })
+		expect(contract.is(value)).toBe(true)
+		expect(contract.parse(value)).toBe(value)
+		expect(contract.audit(value)).toEqual([])
+	})
+
+	it('reports an undeclared hidden member as extra and a declared one as hidden alone', () => {
+		const contract = createContract(shape)
+		expect(
+			contract.audit(Object.defineProperty({ id: 'a', rank: 1 }, 'secret', { value: 1 })),
+		).toEqual([{ reason: 'extra', path: ['secret'] }])
+		expect(
+			contract.audit(Object.defineProperty({ id: 'a', rank: 1 }, 'note', { value: 'n' })),
+		).toEqual([{ reason: 'hidden', path: ['note'] }])
+		expect(contract.audit(Object.defineProperty({ rank: 1 }, 'id', { value: 7 }))).toEqual([
+			{ reason: 'hidden', path: ['id'] },
+		])
+		expect(contract.explain(Object.defineProperty({ rank: 1 }, 'id', { value: 7 }))).toEqual([
+			{ reason: 'missing', path: ['id'], expected: 'string' },
+		])
+	})
+
+	it('reports each symbol key at the object with its preview', () => {
+		const contract = createContract(shape)
+		expect(contract.audit({ id: 'a', rank: 1, [Symbol('tag')]: 1 })).toEqual([
+			{ reason: 'extra', path: [], symbol: 'Symbol(tag)' },
+		])
+		expect(contract.audit({ id: 'a', rank: 1, [Symbol('tag')]: 1, [Symbol('tag')]: 2 })).toEqual([
+			{ reason: 'extra', path: [], symbol: 'Symbol(tag)' },
+			{ reason: 'extra', path: [], symbol: 'Symbol(tag)' },
+		])
+		expect(contract.audit({ id: 'a', rank: 1, 'Symbol(tag)': 1 })).toEqual([
+			{ reason: 'extra', path: ['Symbol(tag)'] },
+		])
+		expect(
+			createContract(objectShape({ row: shape })).audit({
+				row: { id: 'a', rank: 1, [Symbol('tag')]: 1 },
+			}),
+		).toEqual([{ reason: 'extra', path: ['row'], symbol: 'Symbol(tag)' }])
+	})
+
+	it('reports a hidden member under a tail shape without reading it', () => {
+		const contract = createContract(recordShape(integerShape()))
+		expect(contract.audit(Object.defineProperty({ a: 1 }, 'b', { value: 2 }))).toEqual([
+			{ reason: 'hidden', path: ['b'] },
+		])
+		const reads = createRecorder<[key: string]>()
+		const accessor = Object.defineProperty({ a: 1 }, 'b', {
+			get: () => {
+				reads.handler('b')
+				return 2
+			},
+		})
+		expect(contract.audit(accessor)).toEqual([{ reason: 'hidden', path: ['b'] }])
+		expect(contract.is(accessor)).toBe(false)
+		expect(reads.calls).toEqual([])
+	})
+
+	it('keeps audit empty exactly where the guard accepts', () => {
+		const tail = recordShape(integerShape())
+		for (const [declaration, value] of [
+			[shape, { id: 'a', rank: 1 }],
+			[shape, Object.defineProperty({ id: 'a', rank: 1 }, 'secret', { value: 1 })],
+			[shape, Object.defineProperty({ rank: 1 }, 'id', { value: 'a' })],
+			[shape, { id: 'a', rank: 1, [Symbol('tag')]: 1 }],
+			[tail, Object.defineProperty({ a: 1 }, 'b', { value: 2 })],
+			[tail, { a: 1, [Symbol('tag')]: 2 }],
+			[tail, { a: 1 }],
+		] as const) {
+			const contract = createContract(declaration)
+			expect(contract.audit(value).length === 0).toBe(contract.is(value))
+		}
+	})
+})
+
+describe('compiled closed objects — key plans', () => {
+	const shape = objectShape({ id: stringShape(), rank: integerShape() })
+
+	it('reads a learned order in its own order', () => {
+		const contract = createContract(shape)
+		expect(contract.is({ id: 'a', rank: 1 })).toBe(true)
+		const reads = createRecorder<[key: string]>()
+		const value = buildReportingRecord(
+			[
+				['rank', 1],
+				['id', 'a'],
+			],
+			reads.handler,
+		)
+		expect(contract.is(value)).toBe(true)
+		expect(contract.is(value)).toBe(true)
+		expect(reads.calls).toEqual([['rank'], ['id'], ['rank'], ['id']])
+	})
+
+	it('learns nothing from a refused call', () => {
+		const guard = compileGuard(shape)
+		expect(guard({ id: 'a' })).toBe(false)
+		expect(guard({ id: 'a' })).toBe(false)
+		expect(guard({ id: 'a', rank: 'x' })).toBe(false)
+		expect(guard({ id: 'a', rank: 'x' })).toBe(false)
+	})
+
+	it('reads the same members on a hit as on the first walk, and none past an undeclared key', () => {
+		const contract = createContract(
+			objectShape({ id: stringShape(), rank: integerShape(), note: optionalShape(stringShape()) }),
+		)
+		const entries: ReadonlyArray<readonly [string, unknown]> = [
+			['id', 'a'],
+			['rank', 1],
+		]
+		const first = createRecorder<[key: string]>()
+		expect(contract.is(buildReportingRecord(entries, first.handler))).toBe(true)
+		const second = createRecorder<[key: string]>()
+		expect(contract.is(buildReportingRecord(entries, second.handler))).toBe(true)
+		expect(first.calls).toEqual([['id'], ['rank']])
+		expect(second.calls).toEqual(first.calls)
+		const refused = createRecorder<[key: string]>()
+		const undeclared = buildReportingRecord(
+			[
+				['id', 'a'],
+				['extra', 1],
+				['rank', 1],
+			],
+			refused.handler,
+		)
+		expect(contract.is(undeclared)).toBe(false)
+		expect(refused.calls).toEqual([['id']])
+	})
+
+	it('refuses a non-enumerable member beside a learned key order', () => {
+		const guard = compileGuard(shape)
+		expect(guard({ id: 'a', rank: 1 })).toBe(true)
+		const hidden = Object.defineProperty({ id: 'a', rank: 1 }, 'secret', { value: 1 })
+		expect(Object.keys(hidden)).toEqual(['id', 'rank'])
+		expect(guard(hidden)).toBe(false)
+	})
+
+	it('refuses a symbol member beside a learned key order', () => {
+		const guard = compileGuard(shape)
+		expect(guard({ id: 'a', rank: 1 })).toBe(true)
+		const symbol = { id: 'a', rank: 1, [Symbol('tag')]: 1 }
+		expect(Object.keys(symbol)).toEqual(['id', 'rank'])
+		expect(guard(symbol)).toBe(false)
+	})
+
+	it('answers a learned key order through captured array members alone', () => {
+		const guard = compileGuard(shape)
+		expect(guard({ id: 'a', rank: 1 })).toBe(true)
+		const answers = replaceIntrinsic(Array.prototype, 'every', acceptRecognition, () =>
+			replaceIntrinsic(Array.prototype, 'findIndex', acceptRecognition, () =>
+				replaceIntrinsic(Array.prototype, 'some', acceptRecognition, () => ({
+					wrong: guard({ id: 7, rank: 1 }),
+					clean: guard({ id: 'a', rank: 1 }),
+				})),
+			),
+		)
+		expect(answers).toEqual({ wrong: false, clean: true })
+	})
+
+	it('answers each call from its own reads under a learned order', () => {
+		const contract = createContract(shape)
+		expect(contract.is({ id: 'a', rank: 1 })).toBe(true)
+		expect(contract.is({ id: 7, rank: 1 })).toBe(false)
+		expect(contract.is({ id: 'a', rank: 'x' })).toBe(false)
+		const alternating = createAlternatingRecord()
+		expect([contract.is(alternating), contract.is(alternating), contract.is(alternating)]).toEqual([
+			true,
+			false,
+			true,
+		])
+	})
+
+	it('answers every key order past KEY_PLAN_LIMIT through the full walk', () => {
+		const guard = compileGuard(
+			objectShape({
+				a: integerShape(),
+				b: integerShape(),
+				c: integerShape(),
+				d: optionalShape(integerShape()),
+			}),
+		)
+		const orders = [
+			['a', 'b', 'c'],
+			['b', 'a', 'c'],
+			['c', 'b', 'a'],
+			['a', 'c', 'b'],
+			['b', 'c', 'a'],
+			['c', 'a', 'b'],
+			['d', 'a', 'b', 'c'],
+		]
+		expect(orders.length).toBeGreaterThan(KEY_PLAN_LIMIT)
+		for (const order of [...orders, ...orders]) {
+			expect(guard(Object.fromEntries(order.map((key) => [key, 1])))).toBe(true)
+			expect(guard(Object.fromEntries(order.map((key) => [key, 'x'])))).toBe(false)
+		}
 	})
 })
 

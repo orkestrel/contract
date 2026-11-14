@@ -291,6 +291,30 @@ export const ROW_BENCH_SHAPE: ContractShape = objectShape({
 	active: booleanShape(),
 	note: optionalShape(stringShape()),
 })
+// The bench row in more distinct key orders than a compiled guard keeps plans for: each a
+// rotation of the row's keys, the later half reversed, so the guard misses on most calls.
+export const ROW_BENCH_ORDERS: ReadonlyArray<Readonly<Record<string, unknown>>> = Object.freeze(
+	Array.from({ length: core.KEY_PLAN_LIMIT * 2 }, (_entry, order) => {
+		const keys = ['id', 'organization', 'rank', 'body', 'active', 'note']
+		const rotated = [...keys.slice(order % 6), ...keys.slice(0, order % 6)]
+		const values: Readonly<Record<string, unknown>> = {
+			id: 'k1',
+			organization: 'o1',
+			rank: 1,
+			body: 'x'.repeat(24),
+			active: false,
+			note: 'n',
+		}
+		return Object.freeze(
+			Object.fromEntries(
+				(order >= core.KEY_PLAN_LIMIT ? rotated.toReversed() : rotated).map((key) => [
+					key,
+					values[key],
+				]),
+			),
+		)
+	}),
+)
 export const ROW_BENCH_VALUE: Readonly<Record<string, unknown>> = Object.freeze({
 	id: 'k1',
 	organization: 'o1',
@@ -2788,6 +2812,67 @@ export function createStatefulGetter(): Readonly<Record<string, unknown>> {
 		},
 		enumerable: true,
 	})
+}
+
+/**
+ * Builds a record whose members are enumerable getters that report each read key.
+ *
+ * @remarks
+ * The members are defined in the order given, so `Object.keys` lists them in that order. Each
+ * read hands its key to `report` before it answers the member's value.
+ *
+ * @param entries - The member keys and values, in key order
+ * @param report - Receives the key of every member read
+ * @returns A record that reports each member read
+ *
+ * @example
+ * ```ts
+ * const reads = createRecorder<[key: string]>()
+ * const record = buildReportingRecord([['id', 'a']], reads.handler)
+ * record.id // 'a', and reads.calls is [['id']]
+ * ```
+ */
+export function buildReportingRecord(
+	entries: ReadonlyArray<readonly [string, unknown]>,
+	report: (key: string) => void,
+): Readonly<Record<string, unknown>> {
+	const record: Record<string, unknown> = {}
+	for (const [key, value] of entries) {
+		Object.defineProperty(record, key, {
+			get: () => {
+				report(key)
+				return value
+			},
+			enumerable: true,
+		})
+	}
+	return record
+}
+
+/**
+ * Creates an `{ id, rank }` record whose `id` getter answers a string, then a number, in turn.
+ *
+ * @returns A record whose `id` reads `'a'` on odd reads and `7` on even reads
+ *
+ * @example
+ * ```ts
+ * const record = createAlternatingRecord()
+ * record.id // 'a'
+ * record.id // 7
+ * ```
+ */
+export function createAlternatingRecord(): Readonly<Record<string, unknown>> {
+	const reads = new ObservationCounter()
+	return Object.defineProperties(
+		{},
+		{
+			id: {
+				get: () => (reads.increment() % 2 === 1 ? 'a' : 7),
+				enumerable: true,
+			},
+			rank: { value: 1, enumerable: true },
+		},
+	)
 }
 
 /**

@@ -31,12 +31,14 @@ import type {
 } from '@src/core'
 import * as door from '@src/core'
 import {
+	buildReportingRecord,
 	createUndefinedContract,
 	DATE_ADMITTED,
 	DATE_REFUSED,
 	pollutePrototypeData,
 	recordAdmission,
 } from '../../setup.js'
+import { createRecorder } from '@orkestrel/test'
 import {
 	createFaultTextInstances,
 	createFaultTextKinds,
@@ -5662,6 +5664,138 @@ describe('describeFaultLine', () => {
 		expect(describeFaultLine({ reason: 'variant', path: ['gone'], variants: 2 }, {})).toBe(
 			'gone: variant; the value matches none of the 2 declared forms; send it exactly as the schema declares',
 		)
+	})
+
+	it('tells a hidden member to arrive as plain data', () => {
+		const schema: JSONSchema = { type: 'object', properties: { note: { type: 'string' } } }
+		expect(describeFaultLine({ reason: 'hidden', path: ['note'] }, schema)).toBe(
+			'note: hidden; this member is not enumerable, send it as a plain data member',
+		)
+		expect(describeFaultLine({ reason: 'hidden', path: [] }, {})).toBe(
+			'value: hidden; this member is not enumerable, send it as a plain data member',
+		)
+	})
+
+	it('names an undeclared symbol key and lists no declared key beside it', () => {
+		const schema: JSONSchema = { type: 'object', properties: { id: { type: 'string' } } }
+		expect(describeFaultLine({ reason: 'extra', path: [], symbol: 'Symbol(tag)' }, schema)).toBe(
+			'value: extra; symbol key Symbol(tag) is not declared, remove it',
+		)
+		expect(describeFaultLine({ reason: 'extra', path: ['Symbol(tag)'] }, schema)).toBe(
+			'"Symbol(tag)": extra; this key is not declared, remove it or use a declared key: id',
+		)
+	})
+
+	it('passes a symbol preview through the received gate', () => {
+		const line = describeFaultLine({ reason: 'extra', path: [], symbol: 'a\nb' }, {})
+		expect(line).not.toMatch(FAULT_TEXT_TERMINATOR)
+		expect(line).toBe(`value: extra; symbol key ${door.preview('a\nb')} is not declared, remove it`)
+		for (const symbol of FAULT_TEXT_UNSAFE) {
+			const unsafe = describeFaultLine({ reason: 'extra', path: ['a'], symbol }, {})
+			expect(unsafe).toBe(`a: extra; symbol key ${door.preview(symbol)} is not declared, remove it`)
+			expect(unsafe).not.toMatch(FAULT_TEXT_TERMINATOR)
+		}
+	})
+
+	it('renders the hidden and symbol lines an audit reports', () => {
+		const contract = door.createContract(
+			door.objectShape({ id: door.stringShape(), note: door.optionalShape(door.stringShape()) }),
+		)
+		const value = Object.defineProperty({ id: 'a', [Symbol('tag')]: 1 }, 'note', { value: 'n' })
+		expect(describeFaults(contract.audit(value), contract.schema).split('\n').slice(0, 2)).toEqual([
+			'note: hidden; this member is not enumerable, send it as a plain data member',
+			'value: extra; symbol key Symbol(tag) is not declared, remove it',
+		])
+	})
+})
+
+describe('matchesEnumerableKeys', () => {
+	it('answers true when the enumerable string keys are every own key', () => {
+		const value = { id: 'a', rank: 1 }
+		expect(door.matchesEnumerableKeys(value, Object.keys(value))).toBe(true)
+		expect(door.matchesEnumerableKeys({}, [])).toBe(true)
+		expect(door.matchesEnumerableKeys(Object.create(null), [])).toBe(true)
+	})
+
+	it('answers false for a non-enumerable string key, a symbol key, or a key with no descriptor', () => {
+		const hidden = Object.defineProperty({ id: 'a' }, 'secret', { value: 1 })
+		const symbol = { id: 'a', [Symbol('tag')]: 1 }
+		const concealed = Object.defineProperty({ id: 'a' }, Symbol('tag'), { value: 1 })
+		const ghost = new Proxy({ id: 'a' }, { ownKeys: () => ['id', 'ghost'] })
+		for (const value of [hidden, symbol, concealed, ghost]) {
+			expect(door.matchesEnumerableKeys(value, Object.keys(value))).toBe(false)
+		}
+	})
+
+	it('throws where own-key reflection throws', () => {
+		expect(door.matchesEnumerableKeys).toBeTypeOf('function')
+		expect(() => door.matchesEnumerableKeys(createRevokedProxy(), [])).toThrow(TypeError)
+	})
+})
+
+describe('buildKeyPlan', () => {
+	it('builds one fresh unfrozen step per key, in the order given', () => {
+		const guards = { id: door.isString, rank: door.isInteger }
+		const plan = door.buildKeyPlan(['rank', 'id'], guards)
+		expect(plan).toEqual([
+			{ key: 'rank', guard: door.isInteger },
+			{ key: 'id', guard: door.isString },
+		])
+		expect(Object.isFrozen(plan)).toBe(false)
+		expect(Object.isFrozen(plan?.[0])).toBe(false)
+		expect(door.buildKeyPlan(['rank', 'id'], guards)).not.toBe(plan)
+		expect(door.buildKeyPlan([], guards)).toEqual([])
+	})
+
+	it('returns undefined when any key is undeclared or only inherited', () => {
+		const guards = { id: door.isString }
+		expect(door.buildKeyPlan(['id', 'secret'], guards)).toBeUndefined()
+		expect(door.buildKeyPlan(['toString'], guards)).toBeUndefined()
+		expect(door.buildKeyPlan(['id'], Object.create({ id: door.isString }))).toBeUndefined()
+	})
+
+	it('builds under polluted array construction', () => {
+		const plan = polluteArrayConstruction(() => door.buildKeyPlan(['id'], { id: door.isString }))
+		expect(plan).toEqual([{ key: 'id', guard: door.isString }])
+	})
+})
+
+describe('key plan dispatch helpers', () => {
+	const plan = [
+		{ key: 'id', guard: door.isString },
+		{ key: 'rank', guard: door.isInteger },
+	]
+
+	it('matches a plan only to the same keys in the same order', () => {
+		expect(Reflect.apply(door.matchesKeyPlan, ['id', 'rank'], [plan])).toBe(true)
+		expect(Reflect.apply(door.matchesKeyPlan, ['rank', 'id'], [plan])).toBe(false)
+		expect(Reflect.apply(door.matchesKeyPlan, ['id'], [plan])).toBe(false)
+		expect(Reflect.apply(door.matchesKeyPlan, ['id', 'rank', 'note'], [plan])).toBe(false)
+	})
+
+	it('matches a step whose key equals the bound list at its index', () => {
+		expect(Reflect.apply(door.matchesStepKey, ['id', 'rank'], [plan[1], 1])).toBe(true)
+		expect(Reflect.apply(door.matchesStepKey, ['rank', 'id'], [plan[1], 1])).toBe(false)
+		expect(Reflect.apply(door.matchesStepKey, ['id'], [plan[1], 1])).toBe(false)
+	})
+
+	it('matches a step whose member passes its guard on the bound record', () => {
+		expect(Reflect.apply(door.matchesStepGuard, { id: 'a' }, [plan[0]])).toBe(true)
+		expect(Reflect.apply(door.matchesStepGuard, { id: 7 }, [plan[0]])).toBe(false)
+		expect(Reflect.apply(door.matchesStepGuard, {}, [plan[0]])).toBe(false)
+	})
+
+	it('stops the plan walk at the first member that fails its guard', () => {
+		const reads = createRecorder<[key: string]>()
+		const record = buildReportingRecord(
+			[
+				['id', 7],
+				['rank', 1],
+			],
+			reads.handler,
+		)
+		expect(Reflect.apply(Array.prototype.every, plan, [door.matchesStepGuard, record])).toBe(false)
+		expect(reads.calls).toEqual([['id']])
 	})
 })
 

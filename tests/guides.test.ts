@@ -26,6 +26,7 @@ const MODULES = Object.freeze({ '@orkestrel/contract': 'src/core', '@src/core': 
 const INTERNAL: readonly string[] = Object.freeze([
 	'class EvaluationScope',
 	'class FaultShaper',
+	'class KeyPlanCache',
 	'class LazyContract',
 	'class LazyGuard',
 	'class RandomSource',

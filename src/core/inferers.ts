@@ -335,7 +335,11 @@ export function inferPrimitiveEnum(
  * throws a `structure`
  * {@link ContractError}; it never becomes `{}` or another permissive schema. Nested
  * objects close to unknown keys (`additionalProperties: false`) by default;
- * pass `closed: false` to open them. `format` (default `false`) opts a
+ * pass `closed: false` to open them. A record whose sampled keys are not every
+ * key it owns stays open whatever `closed` says: one truncated by the breadth
+ * budget, one holding a member that is `undefined`, and one holding a
+ * non-enumerable string key or a symbol key, because a closed schema would refuse
+ * the record it was inferred from. `format` (default `false`) opts a
  * string/`Date` leaf into the `format` keyword. Structurally-equal inputs
  * infer byte-identical schemas (object keys and `anyOf` members are sorted).
  *
@@ -411,7 +415,10 @@ export function valueToSchema(value: unknown, options?: ValueToSchemaOptions): J
  * An empty `samples` array infers the empty accept-anything schema `{}`.
  * When every sample is a plain record, properties/required are unified
  * per-key across all samples — a key
- * required iff present and non-`undefined` in every sample. Otherwise the
+ * required iff present and non-`undefined` in every sample. The unified object
+ * stays open whatever `closed` says when the key union is truncated, or when any
+ * sample holds a member that is `undefined`, a non-enumerable string key, or a
+ * symbol key. When any sample is not a plain record, the
  * slot is inferred one value at a time (independent {@link valueToSchema}
  * per sample, unified with {@link unifySchemas} — the same de-duplication and
  * `anyOf` ordering an array's element schemas receive). `format`
