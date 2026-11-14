@@ -38,17 +38,17 @@ export interface Failure<E> {
 export type Result<T, E = unknown> = Success<T> | Failure<E>
 
 /**
- * Carries an admitted value and the lossless repairs made while parsing it.
+ * Carries a repaired value and the lossless repairs made while parsing it.
  *
  * @remarks
  * The value keeps the parser's ownership: a union may return the caller's input by identity.
  *
  * @example
  * ```ts
- * const admitted: ContractAdmission<number> = { value: 3, repairs: [] }
+ * const repaired: ContractRepair<number> = { value: 3, repairs: [] }
  * ```
  */
-export interface ContractAdmission<T> {
+export interface ContractRepair<T> {
 	readonly value: T
 	readonly repairs: readonly AuditFault[]
 }
@@ -203,17 +203,20 @@ export interface ContainOptions {
  * Represents the owned result of reading one array through its reflected own-index lens.
  *
  * @remarks
- * {@link entries} is a frozen native array with actual holes: reading a hole
+ * {@link entries} is a native array with actual holes: reading a hole
  * yields `undefined`, while own membership remains absent. A length-driven
  * consumer must first require {@link dense} or carry an independent work bound.
  *
- * {@link readArrayEntries} returns it.
+ * {@link collectArrayEntries} returns a fresh unfrozen read on every call, and
+ * {@link readArrayEntries} freezes the read and its entries.
  */
 export interface ArrayRead<T = unknown> {
-	/** Holds the frozen native entries in index order, retaining sparse positions as holes. */
+	/** Holds the native entries in index order, retaining sparse positions as holes. */
 	readonly entries: ReadonlyArray<T | undefined>
 	/** Reports whether every index from zero through length minus one was reflected. */
 	readonly dense: boolean
+	/** Reports whether every own key is a canonical index or `length`, symbols included. */
+	readonly exact: boolean
 }
 
 /**
@@ -798,7 +801,10 @@ export interface ObjectShape<
  * @remarks
  * `mode` selects the emitted JSON Schema keyword and runtime matching rule:
  * `'anyOf'` (default) accepts the first matching variant, while `'oneOf'`
- * requires exactly one variant to match.
+ * requires exactly one variant to match. When every variant is an object
+ * declaring one required literal property and a value's own data property
+ * equals a literal only one variant holds, that variant answers alone in both
+ * modes, at the guard as at the parser, the auditor, and the reporter.
  */
 export interface UnionShape<V extends readonly ContractShape[] = readonly ContractShape[]> {
 	readonly category: 'union'
@@ -1288,11 +1294,12 @@ export type Fault =
 	  }
 
 /**
- * Represents a key present on a value that its closed object shape does not declare.
+ * Represents a key present on a value that its closed object shape does not declare, or an own
+ * key other than an index or `length` on a value its array shape describes.
  *
  * @remarks
  * The final path segment is the offending key, or `symbol` names it: a symbol key adds no
- * segment, so its fault sits at the object and `symbol` holds the key's preview. No value is
+ * segment, so its fault sits at the object or the array and `symbol` holds the key's preview. No value is
  * read or carried — an undeclared key faults on its presence alone.
  */
 export interface ExtraFault {

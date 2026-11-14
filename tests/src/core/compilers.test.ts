@@ -104,6 +104,7 @@ import {
 	StringDeclaration,
 	TERMINAL_CONSTRUCTORS,
 	throwHostileAccess,
+	readPick,
 } from '../../setup.js'
 import {
 	createForeignPrototype,
@@ -3728,31 +3729,113 @@ describe('compileGuard', () => {
 		expect(guard(createNonEnumerableRecord('id', 'a'))).toBe(false)
 		expect(compileGuard(objectShape({ constructor: rawShape({}) }))({})).toBe(false)
 	})
+})
 
-	it('answers a discriminated union from every arm when the arm its discriminant names refuses', () => {
-		const guard = compileGuard(
-			unionShape(
-				objectShape({ operation: literalShape(['count']), limit: integerShape() }),
-				objectShape({ operation: literalShape(['find']), text: stringShape() }),
-			),
-		)
-		// The own descriptor names `count`, while a read of the member yields `find`.
-		const divergent = new Proxy(
-			{ operation: 'find', text: 'needle' },
-			{
-				getOwnPropertyDescriptor(target, key) {
-					const descriptor = Reflect.getOwnPropertyDescriptor(target, key)
-					return key === 'operation' && descriptor !== undefined
-						? { ...descriptor, value: 'count' }
-						: descriptor
-				},
+describe('compileGuard — a discriminated union', () => {
+	const count = objectShape({ operation: literalShape(['count']), limit: integerShape() })
+	const find = objectShape({ operation: literalShape(['find']), text: stringShape() })
+	// The own descriptor names `count`, while a read of the member yields `find`.
+	const divergent = new Proxy(
+		{ operation: 'find', text: 'needle' },
+		{
+			getOwnPropertyDescriptor(target, key) {
+				const descriptor = Reflect.getOwnPropertyDescriptor(target, key)
+				return key === 'operation' && descriptor !== undefined
+					? { ...descriptor, value: 'count' }
+					: descriptor
 			},
-		)
+		},
+	)
+
+	it('answers a discriminated union from the arm its discriminant names', () => {
+		const guard = compileGuard(unionShape(count, find))
 
 		expect(guard({ operation: 'count', limit: 3 })).toBe(true)
 		expect(guard({ operation: 'find', text: 'needle' })).toBe(true)
 		expect(guard({ operation: 'count', text: 'needle' })).toBe(false)
-		expect(guard(divergent)).toBe(true)
+		expect(guard(divergent)).toBe(false)
+	})
+
+	it('agrees on every door for a unionShape value whose discriminant descriptor and read differ', () => {
+		const contract = createContract(unionShape(count, find))
+		const named = createContract(count)
+
+		expect(contract.is(divergent)).toBe(false)
+		expect(contract.parse(divergent)).toBeUndefined()
+		expect(contract.audit(divergent)).not.toEqual([])
+		expect(contract.audit(divergent)).toEqual(named.audit(divergent))
+		expect(contract.explain(divergent)).not.toEqual([])
+		expect(contract.explain(divergent)).toEqual(named.explain(divergent))
+	})
+
+	it('agrees on every door for a oneOfShape value whose discriminant descriptor and read differ', () => {
+		const contract = createContract(oneOfShape(count, find))
+		const named = createContract(count)
+
+		expect(contract.is(divergent)).toBe(false)
+		expect(contract.parse(divergent)).toBeUndefined()
+		expect(contract.audit(divergent)).not.toEqual([])
+		expect(contract.audit(divergent)).toEqual(named.audit(divergent))
+		expect(contract.explain(divergent)).not.toEqual([])
+		expect(contract.explain(divergent)).toEqual(named.explain(divergent))
+	})
+
+	it('answers as every arm in declaration order over data, accessor, and throwing discriminants', () => {
+		const random = seededRandom(17)
+		const operations = ['count', 'find', 'other']
+		const arms = [compileGuard(count), compileGuard(find)]
+		const anyOf = compileGuard(unionShape(count, find))
+		const oneOf = compileGuard(oneOfShape(count, find))
+		// Each maker builds a fresh record per call, because an accessor discriminant counts its reads.
+		const makers = Array.from({ length: 256 }, (_entry, index) => {
+			const named = operations[readPick(random, operations.length)]
+			const later = operations[readPick(random, operations.length)]
+			const members = {
+				...(random() < 0.6 ? { limit: random() < 0.5 ? 3 : 'many' } : {}),
+				...(random() < 0.6 ? { text: random() < 0.5 ? 'needle' : 7 } : {}),
+			}
+			const thrown = random() < 0.5 ? 'limit' : 'text'
+			const form = index % 4
+			return () => {
+				const reads = new ObservationCounter()
+				if (form === 0) return { operation: named, ...members }
+				if (form === 1) {
+					return Object.defineProperties(
+						{ ...members },
+						{
+							operation: {
+								get: () => (reads.increment() === 1 ? named : later),
+								enumerable: true,
+							},
+						},
+					)
+				}
+				if (form === 2) {
+					return Object.defineProperties(
+						{ ...members },
+						{ operation: { get: throwHostileAccess, enumerable: true } },
+					)
+				}
+				return Object.defineProperties(
+					{ operation: named, ...members },
+					{ [thrown]: { get: throwHostileAccess, enumerable: true } },
+				)
+			}
+		})
+		const rows = makers.map((make) => {
+			const [union, every, exclusive, exactly] = Array.from({ length: 4 }, make)
+			return {
+				union: anyOf(union),
+				every: arms.some((guard) => guard(every)),
+				exclusive: oneOf(exclusive),
+				exactly: arms.filter((guard) => guard(exactly)).length === 1,
+			}
+		})
+
+		expect(rows.map(({ union }) => union)).toEqual(rows.map(({ every }) => every))
+		expect(rows.map(({ exclusive }) => exclusive)).toEqual(rows.map(({ exactly }) => exactly))
+		expect(new Set(rows.map(({ union }) => union))).toEqual(new Set([true, false]))
+		expect(new Set(rows.map(({ exclusive }) => exclusive))).toEqual(new Set([true, false]))
 	})
 })
 
@@ -3873,6 +3956,99 @@ describe('compiled objects — members outside the enumerable view', () => {
 			const contract = createContract(declaration)
 			expect(contract.audit(value).length === 0).toBe(contract.is(value))
 		}
+	})
+})
+
+describe('compiled arrays — own keys outside the index view', () => {
+	it('refuses an array that carries an own key other than an index or length', () => {
+		const guard = compileGuard(arrayShape(stringShape()))
+		const bounded = compileGuard(arrayShape(stringShape(), { min: 1, max: 2 }))
+		for (const value of [
+			Object.assign(['a'], { then: () => {} }),
+			Object.defineProperty(['a'], 'note', { value: 'n' }),
+			Object.assign(['a'], { [Symbol('s')]: 1 }),
+		]) {
+			expect(guard(value)).toBe(false)
+			expect(bounded(value)).toBe(false)
+		}
+		expect(guard(['a'])).toBe(true)
+		expect(bounded(['a'])).toBe(true)
+	})
+
+	it('audits each such string key as extra at that key and a symbol key as extra at the array', () => {
+		const contract = createContract(arrayShape(stringShape()))
+		expect(contract.audit(Object.assign(['a'], { then: () => {} }))).toEqual([
+			{ reason: 'extra', path: ['then'] },
+		])
+		expect(contract.audit(Object.defineProperty(['a'], 'note', { value: 'n' }))).toEqual([
+			{ reason: 'extra', path: ['note'] },
+		])
+		expect(contract.audit(Object.assign(['a'], { [Symbol('s')]: 1 }))).toEqual([
+			{ reason: 'extra', path: [], symbol: 'Symbol(s)' },
+		])
+		expect(contract.audit(['a'])).toEqual([])
+		const nested = createContract(objectShape({ tags: arrayShape(stringShape()) }))
+		expect(nested.audit({ tags: Object.assign(['a', 1], { note: 'n' }) })).toEqual([
+			{ reason: 'type', path: ['tags', '1'], expected: 'string', received: '1' },
+			{ reason: 'extra', path: ['tags', 'note'] },
+		])
+	})
+
+	it('reports an empty audit exactly when the guard holds', () => {
+		const contract = createContract(arrayShape(stringShape()))
+		const sparse = ['a', 'b', 'c']
+		Reflect.deleteProperty(sparse, '1')
+		const reads: string[] = []
+		const observed = Object.defineProperties(['a', 'b'], {
+			0: {
+				get: () => {
+					reads[reads.length] = '0'
+					return 'a'
+				},
+				enumerable: true,
+			},
+			1: {
+				get: () => {
+					reads[reads.length] = '1'
+					return 'b'
+				},
+				enumerable: true,
+			},
+		})
+		for (const value of [
+			['a'],
+			Object.assign(['a'], { then: () => {} }),
+			Object.defineProperty(['a'], 'note', { value: 'n' }),
+			Object.assign(['a'], { [Symbol('s')]: 1 }),
+			sparse,
+		]) {
+			expect(contract.audit(value).length === 0).toBe(contract.is(value))
+		}
+		expect(contract.is(observed)).toBe(true)
+		expect(reads).toEqual(['0', '1'])
+		expect(contract.audit(observed)).toEqual([])
+		expect(reads).toEqual(['0', '1', '0', '1'])
+		const throwing = Object.defineProperty(['a'], '0', {
+			get: throwHostileAccess,
+			enumerable: true,
+		})
+		expect(contract.is(throwing)).toBe(false)
+		expect(captureContractError(() => contract.audit(throwing)).code).toBe('structure')
+	})
+
+	it('bounds an array by the length its one read observed', () => {
+		const guard = compileGuard(arrayShape(stringShape(), { max: 1 }))
+		const reads: number[] = []
+		const drifting = new Proxy(['a'], {
+			get(target, key, receiver) {
+				if (key !== 'length') return Reflect.get(target, key, receiver)
+				reads[reads.length] = reads.length
+				return reads.length === 1 ? 1 : 5
+			},
+		})
+
+		expect(guard(drifting)).toBe(true)
+		expect(reads).toEqual([0])
 	})
 })
 
@@ -4312,7 +4488,7 @@ describe('compileParser', () => {
 		}
 	})
 
-	it('parses array indices consistently with is, audit, and explain', () => {
+	it('parses array indices without iteration, while is and audit refuse an own iterator key', () => {
 		const iteratorThrow = [1, 2]
 		Object.defineProperty(iteratorThrow, Symbol.iterator, {
 			value() {
@@ -4325,10 +4501,13 @@ describe('compileParser', () => {
 		})
 		const contract = createContract(arrayShape(numberShape()))
 
-		expect(contract.is(iteratorThrow)).toBe(true)
+		expect(contract.is(iteratorThrow)).toBe(false)
 		expect(contract.parse(iteratorThrow)).toEqual([1, 2])
-		expect(contract.audit(iteratorThrow)).toEqual([])
+		expect(contract.audit(iteratorThrow)).toEqual([
+			{ reason: 'extra', path: [], symbol: 'Symbol(Symbol.iterator)' },
+		])
 		expect(contract.explain(iteratorThrow)).toEqual([])
+		expect(contract.is([1, 2])).toBe(true)
 		expect(contract.parse(divergent)).toEqual([1, 2, 3])
 		expect(contract.explain(divergent)).toEqual([])
 	})

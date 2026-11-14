@@ -32,6 +32,7 @@ import type {
 import * as door from '@src/core'
 import {
 	buildReportingRecord,
+	createNonEnumerableRecord,
 	createUndefinedContract,
 	DATE_ADMITTED,
 	DATE_REFUSED,
@@ -55,19 +56,267 @@ import {
 
 describe('admitValue', () => {
 	it.each([
+		{ input: 3, calls: ['is', 'parse'] },
+		{ input: '3', calls: ['is', 'audit'] },
+		{ input: 'bad', calls: ['is', 'audit'] },
+	])('schedules artifacts for $input', ({ input, calls }) => {
+		const recorded = recordAdmission(door.createContract(door.numberShape()))
+		door.admitValue(recorded.contract, input)
+		expect(recorded.calls.calls.map(([name]) => name)).toEqual(calls)
+	})
+
+	it.each([
+		{ input: '3', shape: door.numberShape() },
+		{ input: ' 3 ', shape: door.integerShape() },
+		{ input: '3.0', shape: door.numberShape() },
+		{ input: 'true', shape: door.booleanShape() },
+		{ input: ' fast ', shape: door.literalShape(['fast']) },
+		{ input: 3, shape: door.stringShape() },
+		{ input: 3, shape: door.numberShape() },
+		{ input: 'ok', shape: door.stringShape() },
+		{ input: true, shape: door.booleanShape() },
+		{ input: 1, shape: door.booleanShape() },
+	])('answers as is does for $input', ({ input, shape }) => {
+		const contract = door.createContract(shape)
+		const result = door.admitValue(contract, input)
+		expect(result.success).toBe(contract.is(input))
+		expect(result.success ? result.value : contract.parse(input)).toEqual(contract.parse(input))
+	})
+
+	it('returns the default parse fills for a guard-valid optional field', () => {
+		const contract = door.createContract(
+			door.objectShape({ licensed: door.optionalShape(door.booleanShape(), { default: false }) }),
+		)
+		expect(contract.is({})).toBe(true)
+		expect(door.admitValue(contract, {})).toEqual({ success: true, value: { licensed: false } })
+	})
+
+	it('returns the object parse rebuilt, never the input', () => {
+		const contract = door.createContract(door.objectShape({ amount: door.numberShape() }))
+		const value = { amount: 3 }
+		const result = door.admitValue(contract, value)
+		if (!result.success) throw new Error('Expected admission')
+		expect(result.value).toEqual(value)
+		expect(result.value).not.toBe(value)
+	})
+
+	it('returns parse value as the success value, with no repairs record', () => {
+		const contract = door.createContract(door.objectShape({ amount: door.numberShape() }))
+		expect(door.admitValue(contract, { amount: 3 })).toEqual({
+			success: true,
+			value: { amount: 3 },
+		})
+		expect(door.admitValue(contract, { amount: '3' }).success).toBe(false)
+	})
+
+	it('accepts a valid undefined result on the fast path', () => {
+		expect(door.admitValue(createUndefinedContract(), undefined)).toEqual({
+			success: true,
+			value: undefined,
+		})
+	})
+
+	it('refuses with no fault when the getter answers a string, then an object', () => {
+		const values = ['a', {}].values()
+		const value = Object.defineProperty({}, 'amount', {
+			enumerable: true,
+			get: () => values.next().value,
+		})
+		const contract = door.createContract(door.objectShape({ amount: door.stringShape() }))
+		expect(door.admitValue(contract, value)).toEqual({ success: false, error: { faults: [] } })
+	})
+
+	it('refuses with both the min and the pattern fault at one path', () => {
+		const contract = door.createContract(door.stringShape({ min: 5, pattern: /^[0-9]+$/ }))
+		const result = door.admitValue(contract, 'ab')
+		if (result.success) throw new Error('Expected refusal')
+		expect(result.error.faults.map((fault) => fault.reason)).toEqual(['constraint', 'constraint'])
+		expect(result.error.faults).toEqual(contract.audit('ab'))
+	})
+
+	it('refuses an undiscriminated union with the variant fault and the symbol extra fault', () => {
+		const contract = door.createContract(
+			door.unionShape(
+				door.objectShape({ a: door.literalShape(['x']), b: door.numberShape() }),
+				door.objectShape({ c: door.stringShape() }),
+			),
+		)
+		const tag = Symbol('t')
+		const result = door.admitValue(contract, { a: 'x', [tag]: 1 })
+		expect(result).toEqual({
+			success: false,
+			error: {
+				faults: [
+					{ reason: 'variant', path: [], variants: 2 },
+					{ reason: 'extra', path: [], symbol: 'Symbol(t)' },
+				],
+			},
+		})
+	})
+
+	it('refuses two symbol keys of one description with two faults', () => {
+		const contract = door.createContract(door.objectShape({}))
+		const value = { [Symbol('t')]: 1, [Symbol('t')]: 2 }
+		const faults = [
+			{ reason: 'extra', path: [], symbol: 'Symbol(t)' },
+			{ reason: 'extra', path: [], symbol: 'Symbol(t)' },
+		]
+		expect(contract.audit(value)).toEqual(faults)
+		expect(door.admitValue(contract, value)).toEqual({ success: false, error: { faults } })
+		expect(door.repairValue(contract, value)).toEqual({ success: false, error: { faults } })
+	})
+
+	it('refuses a member outside the enumerable view with every fault the audit holds', () => {
+		const closed = door.createContract(door.objectShape({}))
+		expect(door.admitValue(closed, createNonEnumerableRecord('hidden', 'value'))).toEqual({
+			success: false,
+			error: { faults: [{ reason: 'extra', path: ['hidden'] }] },
+		})
+		const required = door.createContract(door.objectShape({ note: door.stringShape() }))
+		expect(door.admitValue(required, createNonEnumerableRecord('note', 'value'))).toEqual({
+			success: false,
+			error: { faults: [{ reason: 'hidden', path: ['note'] }] },
+		})
+	})
+
+	it('refuses an undefined optional field and a lossy repair the way audit reports them', () => {
+		const note = door.createContract(door.objectShape({ note: door.stringShape() }))
+		expect(door.admitValue(note, { note: undefined })).toEqual({
+			success: false,
+			error: { faults: note.audit({ note: undefined }) },
+		})
+		const amount = door.createContract(door.objectShape({ amount: door.numberShape() }))
+		expect(door.admitValue(amount, { amount: '3' })).toEqual({
+			success: false,
+			error: { faults: amount.audit({ amount: '3' }) },
+		})
+	})
+
+	it('keeps the constraint fault beside the type fault at one path', () => {
+		const contract = door.createContract(door.objectShape({ amount: door.numberShape({ min: 2 }) }))
+		const result = door.admitValue(contract, { amount: '1' })
+		if (result.success) throw new Error('Expected refusal')
+		expect(result.error.faults).toEqual(contract.audit({ amount: '1' }))
+	})
+
+	it('refuses an unresolved union with the variant fault alone', () => {
+		const contract = door.createContract(
+			door.unionShape(
+				door.objectShape({ left: door.numberShape() }),
+				door.objectShape({ right: door.numberShape() }),
+			),
+		)
+		expect(door.admitValue(contract, { right: '3' })).toEqual({
+			success: false,
+			error: { faults: [{ reason: 'variant', path: [], variants: 2 }] },
+		})
+	})
+
+	it('bounds the refusal at FAULT_LIMIT faults', () => {
+		const contract = door.createContract(door.arrayShape(door.numberShape()))
+		const result = door.admitValue(
+			contract,
+			Array.from({ length: door.FAULT_LIMIT + 1 }, () => 'x'),
+		)
+		if (result.success) throw new Error('Expected refusal')
+		expect(result.error.faults).toHaveLength(door.FAULT_LIMIT)
+	})
+
+	it('returns the cause of a throwing member as a refusal', () => {
+		const cause = new Error('read failed')
+		const value = Object.defineProperty({}, 'note', {
+			enumerable: true,
+			get() {
+				throw cause
+			},
+		})
+		const contract = door.createContract(door.objectShape({ note: door.stringShape() }))
+		const result = door.admitValue(contract, value)
+		if (result.success) throw new Error('Expected refusal')
+		expect(result.error.cause).toMatchObject({ cause })
+	})
+
+	it('refuses a refused date', () => {
+		const contract = door.createContract(door.objectShape({ arrival: door.dateShape() }))
+		expect(door.admitValue(contract, { arrival: '2026-02-30' }).success).toBe(false)
+		expect(door.admitValue(contract, { arrival: '2026-11-10' })).toEqual({
+			success: true,
+			value: { arrival: '2026-11-10' },
+		})
+	})
+})
+
+describe('admitValue nested unions', () => {
+	it('keeps the fault of each union node when two sit at one path', () => {
+		const contract = door.createContract(
+			door.oneOfShape(door.oneOfShape(door.integerShape(), door.numberShape()), door.stringShape()),
+		)
+		expect(contract.audit(3)).toEqual([
+			{ reason: 'oneOf', path: [], matched: 0 },
+			{ reason: 'oneOf', path: [], matched: 2 },
+		])
+		expect(door.admitValue(contract, 3)).toEqual({
+			success: false,
+			error: { faults: contract.audit(3) },
+		})
+	})
+})
+
+describe('buildPathKey', () => {
+	it('quotes each segment so no two paths share a key', () => {
+		expect(door.buildPathKey([])).toBe('')
+		expect(door.buildPathKey(['a', 'b'])).toBe('"a","b"')
+		expect(door.buildPathKey(['a', 'b'], 1)).toBe('"a"')
+		expect(door.buildPathKey(['a,b'])).not.toBe(door.buildPathKey(['a', 'b']))
+		expect(door.buildPathKey([''])).not.toBe(door.buildPathKey([]))
+	})
+})
+
+describe('filterUncoveredFaults', () => {
+	it('prunes a fault under a variant or oneOf cover and keeps the cover', () => {
+		const faults: readonly AuditFault[] = [
+			{ reason: 'variant', path: ['a'], variants: 2 },
+			{ reason: 'type', path: ['a', 'b'], expected: 'number', received: '"x"' },
+			{ reason: 'type', path: ['c'], expected: 'number', received: '"x"' },
+			{ reason: 'oneOf', path: ['c', 'd'], matched: 2 },
+		]
+		expect(door.filterUncoveredFaults(faults)).toEqual([
+			{ reason: 'variant', path: ['a'], variants: 2 },
+			{ reason: 'type', path: ['c'], expected: 'number', received: '"x"' },
+			{ reason: 'oneOf', path: ['c', 'd'], matched: 2 },
+		])
+	})
+
+	it('keeps every hidden fault and every symbol extra fault under a cover at its path', () => {
+		const faults: readonly AuditFault[] = [
+			{ reason: 'variant', path: [], variants: 2 },
+			{ reason: 'hidden', path: ['note'] },
+			{ reason: 'extra', path: [], symbol: 'Symbol(t)' },
+			{ reason: 'extra', path: ['typo'] },
+		]
+		expect(door.filterUncoveredFaults(faults)).toEqual(faults.slice(0, 3))
+	})
+
+	it('returns an empty list for no fault', () => {
+		expect(door.filterUncoveredFaults([])).toEqual([])
+	})
+})
+
+describe('repairValue', () => {
+	it.each([
 		{ input: 3, success: true, calls: ['is', 'parse'] },
 		{ input: '3', success: true, calls: ['is', 'audit', 'parse'] },
 		{ input: 'bad', success: false, calls: ['is', 'audit', 'parse', 'explain'] },
 	])('schedules artifacts for $input', ({ input, success, calls }) => {
 		const recorded = recordAdmission(door.createContract(door.numberShape()))
-		expect(door.admitValue(recorded.contract, input).success).toBe(success)
+		expect(door.repairValue(recorded.contract, input).success).toBe(success)
 		expect(recorded.calls.calls.map(([name]) => name)).toEqual(calls)
 	})
 
 	it('accepts a valid undefined result on the fast path', () => {
 		const contract = createUndefinedContract()
 		expect(contract.is(undefined)).toBe(true)
-		expect(door.admitValue(contract, undefined)).toEqual({
+		expect(door.repairValue(contract, undefined)).toEqual({
 			success: true,
 			value: { value: undefined, repairs: [] },
 		})
@@ -80,19 +329,19 @@ describe('admitValue', () => {
 			get: () => values.next().value,
 		})
 		const contract = door.createContract(door.objectShape({ amount: door.numberShape() }))
-		expect(door.admitValue(contract, value)).toEqual({ success: false, error: { faults: [] } })
+		expect(door.repairValue(contract, value)).toEqual({ success: false, error: { faults: [] } })
 	})
 
 	it('omits an own optional undefined without reporting it as a repair', () => {
 		const contract = door.createContract(
 			door.objectShape({ note: door.optionalShape(door.stringShape()) }),
 		)
-		expect(door.admitValue(contract, { note: undefined })).toEqual({
+		expect(door.repairValue(contract, { note: undefined })).toEqual({
 			success: true,
 			value: { value: {}, repairs: [] },
 		})
 		expect(
-			door.admitValue(door.createContract(door.objectShape({ note: door.stringShape() })), {
+			door.repairValue(door.createContract(door.objectShape({ note: door.stringShape() })), {
 				note: undefined,
 			}).success,
 		).toBe(false)
@@ -109,7 +358,7 @@ describe('admitValue', () => {
 		const contract = door.createContract(
 			door.objectShape({ note: door.optionalShape(door.stringShape()) }),
 		)
-		const result = door.admitValue(contract, value)
+		const result = door.repairValue(contract, value)
 		expect(result.success).toBe(false)
 		if (result.success) throw new Error('Expected refusal')
 		expect(result.error.cause).toMatchObject({ cause })
@@ -171,11 +420,11 @@ describe('admitValue', () => {
 			expect(contract.audit(input)).toEqual([
 				{ reason: 'type', path, expected: 'boolean', received: 'undefined' },
 			])
-			expect(door.admitValue(contract, absent)).toEqual({
+			expect(door.repairValue(contract, absent)).toEqual({
 				success: true,
 				value: { value: filled, repairs: [] },
 			})
-			expect(door.admitValue(contract, input)).toEqual({
+			expect(door.repairValue(contract, input)).toEqual({
 				success: true,
 				value: { value: filled, repairs: [] },
 			})
@@ -196,15 +445,15 @@ describe('admitValue', () => {
 		]) {
 			const contract = door.createContract(shape)
 			expect(contract.parse(value)).toBeUndefined()
-			expect(door.admitValue(contract, value).success).toBe(false)
+			expect(door.repairValue(contract, value).success).toBe(false)
 		}
 	})
 
 	it('preserves parser ownership for objects and oneOf input identity', () => {
 		const value = { amount: 3 }
 		const shape = door.objectShape({ amount: door.numberShape() })
-		const rebuilt = door.admitValue(door.createContract(shape), value)
-		const aliased = door.admitValue(
+		const rebuilt = door.repairValue(door.createContract(shape), value)
+		const aliased = door.repairValue(
 			door.createContract(door.oneOfShape(shape, door.stringShape())),
 			value,
 		)
@@ -221,7 +470,7 @@ describe('admitValue', () => {
 				door.objectShape({ right: door.numberShape() }),
 			),
 		)
-		const result = door.admitValue(contract, { right: '3' })
+		const result = door.repairValue(contract, { right: '3' })
 		expect(result).toEqual({
 			success: false,
 			error: { faults: [{ reason: 'variant', path: [], variants: 2 }] },
@@ -235,14 +484,14 @@ describe('admitValue', () => {
 				door.objectShape({ tag: door.literalShape(['text']), text: door.stringShape() }),
 			),
 		)
-		expect(door.admitValue(contract, { tag: 'amount', amount: '3' })).toMatchObject({
+		expect(door.repairValue(contract, { tag: 'amount', amount: '3' })).toMatchObject({
 			success: true,
 			value: {
 				value: { tag: 'amount', amount: 3 },
 				repairs: [{ path: ['amount'], reason: 'type' }],
 			},
 		})
-		expect(door.admitValue(contract, { tag: 'amount', amount: 'bad' })).toMatchObject({
+		expect(door.repairValue(contract, { tag: 'amount', amount: 'bad' })).toMatchObject({
 			success: false,
 			error: { faults: [{ path: ['amount'], reason: 'type' }] },
 		})
@@ -251,12 +500,12 @@ describe('admitValue', () => {
 	it('refuses capped audits even when every visible repair is lossless', () => {
 		const contract = door.createContract(door.arrayShape(door.numberShape()))
 		expect(
-			door.admitValue(
+			door.repairValue(
 				contract,
 				Array.from({ length: door.FAULT_LIMIT - 1 }, () => '3'),
 			).success,
 		).toBe(true)
-		const result = door.admitValue(
+		const result = door.repairValue(
 			contract,
 			Array.from({ length: door.FAULT_LIMIT + 1 }, () => '3'),
 		)
@@ -277,17 +526,18 @@ describe('admitValue', () => {
 		{ input: '3.0', shape: door.literalShape([3]), accepted: false },
 		{ input: 3, shape: door.stringShape(), accepted: true },
 		{ input: Infinity, shape: door.stringShape(), accepted: false },
+		{ input: -0, shape: door.stringShape(), accepted: false },
 	])('applies lossless admission to $input', ({ input, shape, accepted }) => {
-		expect(door.admitValue(door.createContract(shape), input).success).toBe(accepted)
+		expect(door.repairValue(door.createContract(shape), input).success).toBe(accepted)
 	})
 
 	it('refuses undeclared keys and failed constraints', () => {
 		const contract = door.createContract(door.objectShape({ amount: door.numberShape({ min: 2 }) }))
-		expect(door.admitValue(contract, { amount: 3, extra: 1 })).toMatchObject({
+		expect(door.repairValue(contract, { amount: 3, extra: 1 })).toMatchObject({
 			success: false,
 			error: { faults: [{ reason: 'extra', path: ['extra'] }] },
 		})
-		expect(door.admitValue(contract, { amount: '1' })).toMatchObject({
+		expect(door.repairValue(contract, { amount: '1' })).toMatchObject({
 			success: false,
 			error: {
 				faults: expect.arrayContaining([
@@ -302,6 +552,118 @@ describe('admitValue', () => {
 				]),
 			},
 		})
+	})
+})
+
+describe('admitValue and repairValue replaced members', () => {
+	const amount = door.createContract(door.objectShape({ amount: door.numberShape({ min: 2 }) }))
+	const union = door.createContract(
+		door.unionShape(
+			door.objectShape({ tag: door.literalShape(['amount']), amount: door.numberShape() }),
+			door.objectShape({ tag: door.literalShape(['text']), text: door.stringShape() }),
+		),
+	)
+	const closed = door.createContract(door.objectShape({}))
+	const symbols = { [Symbol('t')]: 1, [Symbol('t')]: 2 }
+	const defaulted = door.createContract(
+		door.objectShape({
+			person: door.objectShape({
+				licensed: door.optionalShape(door.booleanShape(), { default: false }),
+			}),
+		}),
+	)
+
+	it.each([
+		{ door: 'admitValue', contract: amount, value: { amount: 3 } },
+		{ door: 'admitValue', contract: amount, value: { amount: '1' } },
+		{ door: 'admitValue', contract: closed, value: symbols },
+		{ door: 'repairValue', contract: union, value: { tag: 'amount', amount: '3' } },
+		{ door: 'repairValue', contract: union, value: { tag: 'amount', amount: 'bad' } },
+		{ door: 'repairValue', contract: amount, value: { amount: '1' } },
+		{ door: 'repairValue', contract: closed, value: symbols },
+		{ door: 'repairValue', contract: defaulted, value: { person: { licensed: undefined } } },
+	])(
+		'answers $door as on an honest host while filter, includes, some, map, slice, reduce, at, the array iterator, and the Map get and set are replaced',
+		({ door: name, contract, value }) => {
+			const call = name === 'admitValue' ? door.admitValue : door.repairValue
+			const honest = call(contract, value)
+			const replaced = replaceIntrinsic(Array.prototype, 'filter', throwReplacement, () =>
+				replaceIntrinsic(Array.prototype, 'includes', throwReplacement, () =>
+					replaceIntrinsic(Array.prototype, 'some', throwReplacement, () =>
+						replaceIntrinsic(Array.prototype, 'map', throwReplacement, () =>
+							replaceIntrinsic(Array.prototype, Symbol.iterator, throwReplacement, () =>
+								replaceIntrinsic(Map.prototype, 'get', throwReplacement, () =>
+									replaceIntrinsic(Map.prototype, 'set', throwReplacement, () =>
+										replaceIntrinsic(Array.prototype, 'slice', throwReplacement, () =>
+											replaceIntrinsic(Array.prototype, 'reduce', throwReplacement, () =>
+												replaceIntrinsic(Array.prototype, 'at', throwReplacement, () =>
+													replaceIntrinsic(Set.prototype, 'add', throwReplacement, () =>
+														replaceIntrinsic(Set.prototype, 'has', throwReplacement, () =>
+															call(contract, value),
+														),
+													),
+												),
+											),
+										),
+									),
+								),
+							),
+						),
+					),
+				),
+			)
+			expect(replaced).toEqual(honest)
+		},
+	)
+
+	it('prunes through captured members while the same members are replaced', () => {
+		const faults: readonly AuditFault[] = [
+			{ reason: 'variant', path: [], variants: 2 },
+			{ reason: 'extra', path: ['x'] },
+			{ reason: 'extra', path: [], symbol: 'Symbol(t)' },
+		]
+		const replaced = replaceIntrinsic(Array.prototype, 'filter', throwReplacement, () =>
+			replaceIntrinsic(Array.prototype, 'some', throwReplacement, () =>
+				replaceIntrinsic(Array.prototype, 'includes', throwReplacement, () =>
+					replaceIntrinsic(Set.prototype, 'add', throwReplacement, () =>
+						replaceIntrinsic(Set.prototype, 'has', throwReplacement, () =>
+							door.filterUncoveredFaults(faults),
+						),
+					),
+				),
+			),
+		)
+		expect(replaced).toEqual([faults[0], faults[2]])
+	})
+
+	it('answers as on an honest host while Array.prototype.toJSON is installed', () => {
+		const contract = door.createContract(
+			door.objectShape({
+				u: door.unionShape(
+					door.objectShape({ left: door.numberShape() }),
+					door.objectShape({ right: door.numberShape() }),
+				),
+			}),
+		)
+		const value = { u: { right: '3' } }
+		const honest = [door.admitValue(contract, value), door.repairValue(contract, value)]
+		const outcomes: unknown[] = []
+		Reflect.defineProperty(Array.prototype, 'toJSON', {
+			value: () => 'k',
+			configurable: true,
+			writable: true,
+		})
+		try {
+			outcomes[0] = [door.admitValue(contract, value), door.repairValue(contract, value)]
+		} finally {
+			Reflect.deleteProperty(Array.prototype, 'toJSON')
+		}
+		expect(outcomes[0]).toEqual(honest)
+		expect(honest[0]).toEqual({
+			success: false,
+			error: { faults: [{ reason: 'variant', path: ['u'], variants: 2 }] },
+		})
+		expect(honest[1]).toEqual(honest[0])
 	})
 })
 
@@ -559,6 +921,7 @@ import {
 	optionalShape,
 	INFER_DEPTH_LIMIT,
 	preview,
+	collectArrayEntries,
 	readArrayEntries,
 	readGuardShape,
 	readOptions,
@@ -1414,7 +1777,7 @@ describe('readArrayEntries', () => {
 		if (!dense.success) throw dense.error
 		expectTypeOf(dense.value.entries).toEqualTypeOf<ReadonlyArray<number | undefined>>()
 		expectTypeOf<ArrayRead['entries']>().toEqualTypeOf<readonly unknown[]>()
-		expect(dense).toEqual({ success: true, value: { entries: [1, 2], dense: true } })
+		expect(dense).toEqual({ success: true, value: { entries: [1, 2], dense: true, exact: true } })
 		expect(Object.isFrozen(dense.value)).toBe(true)
 		expect(Object.isFrozen(dense.value.entries)).toBe(true)
 
@@ -1426,7 +1789,7 @@ describe('readArrayEntries', () => {
 		expectTypeOf(sparse.value.entries).toEqualTypeOf<ReadonlyArray<number | undefined>>()
 		expect(sparse).toEqual({
 			success: true,
-			value: { entries: [undefined, 2, undefined], dense: false },
+			value: { entries: [undefined, 2, undefined], dense: false, exact: true },
 		})
 		expect(sparse.value.entries[0]).toBeUndefined()
 		expect(sparse.value.entries[2]).toBeUndefined()
@@ -1483,6 +1846,8 @@ describe('readArrayEntries', () => {
 		expect(outcome.value.dense).toBe(plain.value.dense)
 		expect(outcome.value.dense).toBe(true)
 		expect(Reflect.ownKeys(outcome.value.entries)).toEqual(['0', '1', 'length'])
+		expect(outcome.value.exact).toBe(false)
+		expect(plain.value.exact).toBe(true)
 	})
 
 	it('snapshots an array carrying an own symbol key like a plain array', () => {
@@ -1499,6 +1864,7 @@ describe('readArrayEntries', () => {
 		expect(outcome.value.dense).toBe(plain.value.dense)
 		expect(outcome.value.dense).toBe(true)
 		expect(Object.getOwnPropertySymbols(outcome.value.entries)).toEqual([])
+		expect(outcome.value.exact).toBe(false)
 	})
 
 	it('refuses a canonical population that disowns its last index', () => {
@@ -1598,7 +1964,7 @@ describe('readArrayEntries', () => {
 		Object.defineProperty(value, '4294967295', { value: 'metadata', enumerable: true })
 		const snapshot = readArrayEntries(value)
 
-		expect(snapshot).toEqual({ success: true, value: { entries: [], dense: true } })
+		expect(snapshot).toEqual({ success: true, value: { entries: [], dense: true, exact: false } })
 	})
 
 	it('preserves the exact reason from hostile reflection', () => {
@@ -1642,6 +2008,74 @@ describe('readArrayEntries', () => {
 		const value = readArrayEntries(hostileValue)
 		expect(value.success).toBe(false)
 		expect(!value.success && value.error).toBe(valueReason)
+	})
+
+	it('freezes the read the core walk returns', () => {
+		const sparse = ['a', 'b', 'c']
+		Reflect.deleteProperty(sparse, '1')
+		for (const source of [['a'], sparse, Object.assign(['a'], { [Symbol('s')]: 1 })]) {
+			const outcome = readArrayEntries(source)
+			if (!outcome.success) throw outcome.error
+			expect(outcome.value).toEqual(collectArrayEntries(source))
+			expect(Object.isFrozen(outcome.value)).toBe(true)
+			expect(Object.isFrozen(outcome.value.entries)).toBe(true)
+		}
+	})
+})
+
+describe('collectArrayEntries', () => {
+	it('returns a fresh unfrozen read on every call', () => {
+		const source = ['a', 'b']
+		const first = collectArrayEntries(source)
+		const second = collectArrayEntries(source)
+
+		expect(first).toEqual({ entries: ['a', 'b'], dense: true, exact: true })
+		expect(second).toEqual(first)
+		expect(second).not.toBe(first)
+		expect(second.entries).not.toBe(first.entries)
+		expect(first.entries).not.toBe(source)
+		expect(Object.isFrozen(first)).toBe(false)
+		expect(Object.isFrozen(first.entries)).toBe(false)
+
+		const sparse = ['a', 'b', 'c']
+		Reflect.deleteProperty(sparse, '1')
+		const holes = collectArrayEntries(sparse)
+		expect(holes).toEqual({ entries: ['a', undefined, 'c'], dense: false, exact: true })
+		expect(Object.hasOwn(holes.entries, 1)).toBe(false)
+		expect(Object.isFrozen(holes.entries)).toBe(false)
+	})
+
+	it('reports exact only when every own key is a canonical index or length', () => {
+		const sparse = ['a', 'b', 'c']
+		Reflect.deleteProperty(sparse, '1')
+		const decorated = ['a', 'b', 'c']
+		Reflect.deleteProperty(decorated, '1')
+		for (const source of [[], ['a'], sparse]) {
+			expect(collectArrayEntries(source).exact).toBe(true)
+		}
+		for (const source of [
+			Object.assign(['a'], { then: () => {} }),
+			Object.defineProperty(['a'], 'note', { value: 'n' }),
+			Object.assign(['a'], { [Symbol('s')]: 1 }),
+			Object.defineProperty(['a'], Symbol('s'), { value: 1 }),
+			Object.defineProperty(['a'], '01', { value: 'n', enumerable: true }),
+			Object.defineProperty([], '4294967295', { value: 'n', enumerable: true }),
+			Object.defineProperty(decorated, Symbol('s'), { value: 1 }),
+		]) {
+			expect(collectArrayEntries(source).exact).toBe(false)
+		}
+	})
+
+	it('throws the exact reason an unreadable array raises', () => {
+		const reason = Object.freeze({ operation: 'keys' })
+		const hostile = new Proxy([], {
+			ownKeys() {
+				throw reason
+			},
+		})
+
+		expect(attempt(() => collectArrayEntries(hostile))).toEqual({ success: false, error: reason })
+		expect(readArrayEntries(hostile)).toEqual({ success: false, error: reason })
 	})
 })
 
@@ -4977,6 +5411,7 @@ describe('matchesLosslessRepair', () => {
 	it.each<readonly [unknown, boolean]>([
 		[5, true],
 		[1.5, true],
+		[-0, false],
 		[true, false],
 		[null, false],
 		[Number.NaN, false],
@@ -5686,6 +6121,27 @@ describe('describeFaultLine', () => {
 		)
 	})
 
+	it('lists no declared key for an extra fault under a union of an object form and an array form', () => {
+		const schema = door.compileSchema(
+			door.unionShape(
+				door.objectShape({ id: door.stringShape() }),
+				door.arrayShape(door.stringShape()),
+			),
+		)
+		expect(describeFaultLine({ reason: 'extra', path: ['then'] }, schema)).toBe(
+			'then: extra; this key is not declared, remove it',
+		)
+		const objects = door.compileSchema(
+			door.unionShape(
+				door.objectShape({ id: door.stringShape() }),
+				door.objectShape({ id: door.integerShape() }),
+			),
+		)
+		expect(describeFaultLine({ reason: 'extra', path: ['then'] }, objects)).toBe(
+			'then: extra; this key is not declared, remove it or use a declared key: id',
+		)
+	})
+
 	it('passes a symbol preview through the received gate', () => {
 		const line = describeFaultLine({ reason: 'extra', path: [], symbol: 'a\nb' }, {})
 		expect(line).not.toMatch(FAULT_TEXT_TERMINATOR)
@@ -5964,7 +6420,7 @@ describe('calendar dates', () => {
 		const contract = door.createContract(door.objectShape({ arrival: door.dateShape() }))
 		const text = door.createContract(door.objectShape({ arrival: door.stringShape() }))
 
-		expect(door.admitValue(contract, { arrival: '2026-02-30' })).toEqual({
+		expect(door.repairValue(contract, { arrival: '2026-02-30' })).toEqual({
 			success: false,
 			error: {
 				faults: [
@@ -5978,9 +6434,9 @@ describe('calendar dates', () => {
 				],
 			},
 		})
-		expect(door.admitValue(contract, { arrival: 20260110 }).success).toBe(false)
-		expect(door.admitValue(text, { arrival: 20260110 }).success).toBe(true)
-		expect(door.admitValue(contract, { arrival: '2026-11-10' })).toEqual({
+		expect(door.repairValue(contract, { arrival: 20260110 }).success).toBe(false)
+		expect(door.repairValue(text, { arrival: 20260110 }).success).toBe(true)
+		expect(door.repairValue(contract, { arrival: '2026-11-10' })).toEqual({
 			success: true,
 			value: { value: { arrival: '2026-11-10' }, repairs: [] },
 		})

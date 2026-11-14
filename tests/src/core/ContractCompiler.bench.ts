@@ -18,6 +18,8 @@ const query = createContract(QUERY_BENCH_SHAPE)
 const isOperands = compileGuard(arrayShape(rawShape({})))
 const isCondition = compileGuard(CONDITION_BENCH_SHAPE)
 const OPERANDS = Object.freeze([5])
+// The `equals` arm the operator names requires one operand, so the guard reaches its refusal path.
+const REFUSED = Object.freeze({ ...CONDITION_BENCH_VALUE, values: Object.freeze([]) })
 
 it('checks a six-column row', async ({ bench }) => {
 	expect(row.is(ROW_BENCH_VALUE)).toBe(true)
@@ -54,6 +56,14 @@ it('checks one condition against its five-arm union', async ({ bench }) => {
 	expect(isCondition(CONDITION_BENCH_VALUE)).toBe(true)
 	const result = await bench('checks one condition against its five-arm union', {}, () => {
 		isCondition(CONDITION_BENCH_VALUE)
+	}).run({ time: 1000 })
+	expect(result.state).toBe('completed')
+})
+
+it('refuses one condition its named arm refuses', async ({ bench }) => {
+	expect(isCondition(REFUSED)).toBe(false)
+	const result = await bench('refuses one condition its named arm refuses', {}, () => {
+		isCondition(REFUSED)
 	}).run({ time: 1000 })
 	expect(result.state).toBe('completed')
 })

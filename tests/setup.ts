@@ -2879,9 +2879,10 @@ export function createAlternatingRecord(): Readonly<Record<string, unknown>> {
  * Creates an array whose own `slice` reports elements it does not hold.
  *
  * @remarks
- * The caller-defined method is outside the shared own-index lens. This fixture
- * proves array inference and compiled artifacts agree on the real indices even
- * when an unrelated reader advertises different values.
+ * The caller-defined method is an own key other than an index or `length`, so
+ * the compiled array guard refuses this array and array inference widens it.
+ * This fixture proves the guard compiled from the inferred schema still accepts
+ * the array, whatever an unrelated reader advertises.
  *
  * @returns An array of numbers whose `slice` yields strings
  *

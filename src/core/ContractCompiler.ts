@@ -35,6 +35,7 @@ import {
 	appendEntries,
 	attempt,
 	iterateIndices,
+	collectArrayEntries,
 	collectMembers,
 	contain,
 	buildArrayFaults,
@@ -78,7 +79,6 @@ import {
 	isUndefined,
 } from './validators.js'
 import {
-	arrayOf,
 	boundsOf,
 	intersectionOf,
 	literalOf,
@@ -1068,10 +1068,23 @@ export class ContractCompiler<
 				// could carry.
 				return literalOf(owned.values)
 			case 'array': {
-				const base = arrayOf(this.#guardAt(owned.items))
-				if (owned.min === undefined && owned.max === undefined) return base
-				const withinLength = boundsOf(owned.min, owned.max)
-				return whereOf(base, (value) => withinLength(value.length))
+				const element = this.#guardAt(owned.items)
+				const withinLength =
+					owned.min === undefined && owned.max === undefined
+						? undefined
+						: boundsOf(owned.min, owned.max)
+				// One boundary over the private unfrozen read: the bound takes the read's length, so
+				// the walk observes `length` once.
+				return (value: unknown): value is unknown =>
+					holds(() => {
+						if (!INTRINSICS.array(value)) return false
+						const read = collectArrayEntries(value)
+						if (!read.dense || !read.exact) return false
+						const refused: boolean = INTRINSICS.reflect.apply(INTRINSICS.some, read.entries, [
+							(entry: unknown) => !element(entry),
+						])
+						return !refused && (withinLength === undefined || withinLength(read.entries.length))
+					})
 			}
 			case 'object': {
 				// Honest typing: a null-prototype accumulator so a property literally
@@ -1191,12 +1204,18 @@ export class ContractCompiler<
 							variant === undefined ? [] : [this.#guardAt(variant)],
 					],
 				)
+				// The arm a value's discriminant names answers alone in both modes, as it does at
+				// every other door; a value that names none takes the every-arm rule.
+				const discriminated = this.#discriminate(owned)
 				// A `oneOf`-mode union matches the emitted JSON Schema `oneOf` keyword —
 				// EXACTLY one variant must guard-accept the value, not "at least one"
 				// (unionOf's anyOf semantics). A value matching two-or-more variants is
 				// rejected, since it would violate the compiled schema.
 				if (owned.mode === 'oneOf') {
 					return (value: unknown): value is unknown => {
+						const arm = discriminated?.select(value)
+						const named = arm === undefined ? undefined : guards[arm]
+						if (named !== undefined) return holds(() => named(value))
 						const matched: number = INTRINSICS.reflect.apply(INTRINSICS.fold, guards, [
 							(total: number, guard: Guard<unknown>) => total + (guard(value) ? 1 : 0),
 							0,
@@ -1207,15 +1226,11 @@ export class ContractCompiler<
 				// `Reflect.apply` reads its argument list by index (CreateListFromArrayLike),
 				// where `unionOf(...guards)` would spread through the array iterator.
 				const union: Guard<unknown> = INTRINSICS.reflect.apply(unionOf, undefined, guards)
-				const discriminated = this.#discriminate(owned)
 				if (discriminated === undefined) return union
-				// The arm a value's discriminant names is asked first, because its acceptance
-				// alone settles an any-of verdict. A refusal there falls back to every arm in
-				// declaration order, so no verdict depends on the discriminant being honest.
 				return (value: unknown): value is unknown => {
 					const arm = discriminated.select(value)
 					const named = arm === undefined ? undefined : guards[arm]
-					return (named !== undefined && holds(() => named(value))) || union(value)
+					return named !== undefined ? holds(() => named(value)) : union(value)
 				}
 			}
 			case 'optional':
@@ -1733,6 +1748,25 @@ export class ContractCompiler<
 						)
 					}
 					appendEntries(faults, buildArrayFaults(node, entries.value.entries.length, path))
+					if (entries.value.exact) return limitEntries(faults, FAULT_LIMIT)
+					// The own keys the snapshot holds no index for, read once on this diagnostic path
+					// and classified by membership alone: no descriptor and no member value is read.
+					const snapshot = entries.value.entries
+					const members = readValue(() => INTRINSICS.reflect.members(value), 'compileAuditor', {
+						subject: 'array',
+						context: { path, shape: 'array' },
+					})
+					for (const memberIndex of iterateIndices(() => members.length)) {
+						const member = members[memberIndex]
+						if (faults.length >= FAULT_LIMIT) break
+						if (isString(member)) {
+							if (!INTRINSICS.own(snapshot, member)) {
+								faults[faults.length] = { reason: 'extra', path: pathOf(path, member) }
+							}
+						} else if (member !== undefined) {
+							faults[faults.length] = { reason: 'extra', path, symbol: preview(member) }
+						}
+					}
 					return limitEntries(faults, FAULT_LIMIT)
 				}
 			}

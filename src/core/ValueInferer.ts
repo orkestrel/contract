@@ -134,6 +134,8 @@ export class ValueInferer {
 	// `Map` and a `Set` receive — it is not read as a list of present `undefined`
 	// leaves, because the array schema that reading produced was rejected by its
 	// own compiled guard, which is the one direction the round-trip law forbids.
+	// An array holding an own key other than an index or `length` widens to `{}`
+	// for the same reason.
 	//
 	// ALL reads of `value` — including its `length` — happen inside `attempt`, and
 	// the ancestor set is restored before the captured failure is rethrown, so a
@@ -167,7 +169,7 @@ export class ValueInferer {
 			// JSON expression, so it widens to `{}` alongside `NaN`, a function, a
 			// symbol, a `Map` and a `Set` — which restores the round-trip law
 			// rather than adding a fourth exception to it.
-			if (!snapshot.value.dense) return undefined
+			if (!snapshot.value.dense || !snapshot.value.exact) return undefined
 			const entries = snapshot.value.entries
 			const length = INTRINSICS.ceil(INTRINSICS.min(entries.length, this.#breadth))
 			return INTRINSICS.from(

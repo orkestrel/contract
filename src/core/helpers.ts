@@ -5,7 +5,7 @@ import type {
 	BoundsRead,
 	ContainOptions,
 	ContractCode,
-	ContractAdmission,
+	ContractRepair,
 	ContractRefusal,
 	ContractInterface,
 	FaultTextOptions,
@@ -64,27 +64,63 @@ import {
 } from './validators.js'
 
 /**
- * Admits a stable readable value with only lossless repairs and returns the parser's value.
+ * Admits a readable value exactly where `is` holds and returns the parser's value.
  *
  * @remarks
- * Reads must remain stable across artifacts. Guard-valid input skips both reports and parses
- * once. Repairs use audit, parse once, and explain only on parse failure. Unresolved unions,
- * extras, lossy repairs, and a capped audit refuse. An own optional undefined field omitted or
- * filled by its declared default is not a repair. The result preserves parser ownership, including union input identity.
- * A read failure returns its cause rather than throwing.
- * Snapshot a foreign object before admission, as Tool.execute does. A getter changing between
- * is and parse can publish a value that no recorded repair describes. A shallow snapshot only
- * stabilizes its own level; nested foreign values must also provide stable reads.
+ * Guard-valid input parses once. Any other input refuses with every fault `audit` reports
+ * after {@link filterUncoveredFaults} prunes the faults a union fault covers, bounded at
+ * {@link FAULT_LIMIT}. A parse that returns `undefined` for a value other than `undefined`
+ * refuses with no fault, and a read failure refuses with its cause rather than throwing.
+ * Repair a lossless leaf through {@link repairValue}.
  *
  * @example
  * ```ts
- * admitValue(createContract(numberShape()), '3') // success carrying 3 and its type repair
+ * admitValue(createContract(numberShape()), 3) // success carrying 3
+ * admitValue(createContract(numberShape()), '3') // refusal carrying the type fault
  * ```
  */
 export function admitValue<T>(
 	contract: ContractInterface<T>,
 	value: unknown,
-): Result<ContractAdmission<T>, ContractRefusal> {
+): Result<T, ContractRefusal> {
+	try {
+		if (contract.is(value)) {
+			const parsed = contract.parse(value)
+			if (parsed === undefined && value !== undefined) return failure({ faults: [] })
+			return success(parsed === undefined ? value : parsed)
+		}
+		return failure({
+			faults: limitEntries(filterUncoveredFaults(contract.audit(value)), FAULT_LIMIT),
+		})
+	} catch (cause) {
+		return failure({ faults: [], cause })
+	}
+}
+
+/**
+ * Repairs a stable readable value with only lossless repairs and returns the parser's value.
+ *
+ * @remarks
+ * Reads must remain stable across artifacts. Guard-valid input skips both reports and parses
+ * once. Repairs use audit, parse once, and explain only on parse failure. Unresolved unions,
+ * extras, lossy repairs, and a capped audit refuse. An own optional undefined field omitted or
+ * filled by its declared default is not a repair. The merge of explain and audit faults keys on
+ * reason and path, and keeps every `extra` fault carrying `symbol`, so two symbol keys of
+ * one description stay two faults. The result preserves parser ownership, including union input identity.
+ * A read failure returns its cause rather than throwing.
+ * Snapshot a foreign object before repair, as Tool.execute does. A getter changing between
+ * is and parse can publish a value that no recorded repair describes. A shallow snapshot only
+ * stabilizes its own level; nested foreign values must also provide stable reads.
+ *
+ * @example
+ * ```ts
+ * repairValue(createContract(numberShape()), '3') // success carrying 3 and its type repair
+ * ```
+ */
+export function repairValue<T>(
+	contract: ContractInterface<T>,
+	value: unknown,
+): Result<ContractRepair<T>, ContractRefusal> {
 	try {
 		if (contract.is(value)) {
 			const parsed = contract.parse(value)
@@ -94,28 +130,32 @@ export function admitValue<T>(
 		const audited = contract.audit(value)
 		const parsed = contract.parse(value)
 		const explained = parsed === undefined ? contract.explain(value) : []
-		const repairs = audited.filter((fault) => matchesLosslessRepair(fault, value, parsed))
-		const refused = audited.filter(
-			(fault) => !repairs.includes(fault) && !matchesUndefinedField(fault, value, parsed),
-		)
-		const merged = [...explained, ...refused]
-		const faults = [
-			...new Map(
-				merged.map((fault) => [JSON.stringify([fault.reason, extractPath(fault)]), fault]),
-			).values(),
-		]
-		const covers = faults
-			.filter((fault) => fault.reason === 'variant' || fault.reason === 'oneOf')
-			.map((fault) => extractPath(fault))
-		const uncovered = faults.filter((fault) => {
-			const path = extractPath(fault)
-			const room = fault.reason === 'variant' || fault.reason === 'oneOf' ? 1 : 0
-			return !covers.some(
-				(cover) =>
-					cover.length + room <= path.length &&
-					cover.every((segment, index) => segment === path[index]),
-			)
-		})
+		const repairs: AuditFault[] = []
+		const merged: AuditFault[] = []
+		appendEntries(merged, explained)
+		for (const index of iterateIndices(() => audited.length)) {
+			const fault = audited[index]
+			if (fault === undefined) continue
+			if (matchesLosslessRepair(fault, value, parsed)) repairs[repairs.length] = fault
+			else if (!matchesUndefinedField(fault, value, parsed)) merged[merged.length] = fault
+		}
+		const faults: AuditFault[] = []
+		const seen = new INTRINSICS.map<string, number>()
+		for (const index of iterateIndices(() => merged.length)) {
+			const fault = merged[index]
+			if (fault === undefined) continue
+			if (fault.reason === 'extra' && fault.symbol !== undefined) {
+				faults[faults.length] = fault
+				continue
+			}
+			const key: string = `${INTRINSICS.stringify(fault.reason)}|${buildPathKey(extractPath(fault))}`
+			const slot: number | undefined = INTRINSICS.reflect.apply(INTRINSICS.fetch, seen, [key])
+			if (slot === undefined) {
+				INTRINSICS.reflect.apply(INTRINSICS.store, seen, [key, faults.length])
+				faults[faults.length] = fault
+			} else faults[slot] = fault
+		}
+		const uncovered = filterUncoveredFaults(faults)
 		if (uncovered.length > 0) return failure({ faults: limitEntries(uncovered, FAULT_LIMIT) })
 		if (audited.length >= FAULT_LIMIT)
 			return failure({ faults: limitEntries(audited, FAULT_LIMIT) })
@@ -124,6 +164,74 @@ export function admitValue<T>(
 	} catch (cause) {
 		return failure({ faults: [], cause })
 	}
+}
+
+/**
+ * Builds a map key from the leading segments of a path, without dispatching through array serialization.
+ *
+ * @remarks
+ * Each segment is encoded as a quoted string and the encodings are joined by a captured `join`,
+ * so a caller-installed `Array.prototype.toJSON` cannot reach the key and two paths never share one.
+ *
+ * @param path - The path whose leading segments form the key
+ * @param length - The number of leading segments to keep; default: every segment
+ * @returns The key text, empty for no segment
+ *
+ * @example
+ * ```ts
+ * buildPathKey(['a', 'b'], 1) // '"a"'
+ * ```
+ */
+export function buildPathKey(path: readonly string[], length: number = path.length): string {
+	const parts = INTRINSICS.from(
+		iterateIndices(() => length),
+		(index) => INTRINSICS.stringify(path[index]),
+	)
+	return INTRINSICS.reflect.apply(INTRINSICS.join, parts, [','])
+}
+
+/**
+ * Filters out the faults a union fault covers, keeping every fault that states a fact no form shows.
+ *
+ * @remarks
+ * A `variant` or `oneOf` fault covers every fault beneath its path and every non-union fault at
+ * its path, and never itself. A `hidden` fault and an `extra` fault carrying `symbol` are kept
+ * whatever covers them, because each reports a member outside the enumerable view that no
+ * form summary names.
+ *
+ * @param faults - The faults an audit reported
+ * @returns The faults no cover prunes, in their order
+ *
+ * @example
+ * ```ts
+ * filterUncoveredFaults([
+ * 	{ reason: 'variant', path: [], variants: 2 },
+ * 	{ reason: 'extra', path: ['typo'] },
+ * ]) // [{ reason: 'variant', path: [], variants: 2 }]
+ * ```
+ */
+export function filterUncoveredFaults(faults: readonly AuditFault[]): readonly AuditFault[] {
+	const covers = new INTRINSICS.set<string>()
+	for (const index of iterateIndices(() => faults.length)) {
+		const fault = faults[index]
+		if (fault !== undefined && (fault.reason === 'variant' || fault.reason === 'oneOf'))
+			INTRINSICS.reflect.apply(INTRINSICS.admit, covers, [buildPathKey(extractPath(fault))])
+	}
+	const kept: AuditFault[] = []
+	pruning: for (const index of iterateIndices(() => faults.length)) {
+		const fault = faults[index]
+		if (fault === undefined) continue
+		if (fault.reason !== 'hidden' && !(fault.reason === 'extra' && fault.symbol !== undefined)) {
+			const path = extractPath(fault)
+			const room = fault.reason === 'variant' || fault.reason === 'oneOf' ? 1 : 0
+			for (const length of iterateIndices(() => path.length - room + 1)) {
+				const prefix = buildPathKey(path, length)
+				if (INTRINSICS.reflect.apply(INTRINSICS.member, covers, [prefix])) continue pruning
+			}
+		}
+		kept[kept.length] = fault
+	}
+	return kept
 }
 
 /**
@@ -142,22 +250,23 @@ export function admitValue<T>(
 export function matchesUndefinedField(fault: AuditFault, value: unknown, parsed: unknown): boolean {
 	if (fault.reason !== 'type' || parsed === undefined) return false
 	const path = extractPath(fault)
-	const key = path.at(-1)
+	const key = path[path.length - 1]
 	if (key === undefined) return false
-	const parents = path
-		.slice(0, -1)
-		.reduce<readonly [unknown, unknown]>(
-			([raw, result], segment) => [
-				isObject(raw) && INTRINSICS.own(raw, segment)
-					? INTRINSICS.reflect.read(raw, segment)
-					: undefined,
-				isObject(result) && INTRINSICS.own(result, segment)
-					? INTRINSICS.reflect.read(result, segment)
-					: undefined,
-			],
-			[value, parsed],
-		)
-	const [raw, result] = parents
+	const cursor: { raw: unknown; result: unknown } = { raw: value, result: parsed }
+	for (const index of iterateIndices(() => path.length - 1)) {
+		const segment = path[index]
+		if (segment === undefined) return false
+		const { raw, result } = cursor
+		cursor.raw =
+			isObject(raw) && INTRINSICS.own(raw, segment)
+				? INTRINSICS.reflect.read(raw, segment)
+				: undefined
+		cursor.result =
+			isObject(result) && INTRINSICS.own(result, segment)
+				? INTRINSICS.reflect.read(result, segment)
+				: undefined
+	}
+	const { raw, result } = cursor
 	return (
 		isObject(raw) &&
 		INTRINSICS.own(raw, key) &&
@@ -1627,117 +1736,147 @@ export function matchesRecordBrand(value: unknown): boolean {
 }
 
 /**
- * Snapshots an array through its reflected own-index population.
+ * Collects an array's entries through its reflected own-index population.
  *
  * @remarks
  * Reads `length` once and one reflected own-key population, then corroborates
  * and reads only those reflected canonical indices in ascending order. The
- * frozen native snapshot retains actual holes: reading one yields `undefined`,
- * while own membership remains absent. Its work is proportional to the
- * reflected population, so a length-driven consumer must require `dense` or
- * carry an independent bound. A population that is exactly the canonical
- * indices in ascending order followed by `length` is copied straight by index
- * under the same per-index corroboration, and answers with the same entries,
- * the same `dense` fact, and the same refusals as the walk. Caller-defined
- * iteration is ignored. A descriptor-only index omitted from reflection is
- * deliberately outside this lens and remains a hole. Failure retains the exact
- * thrown value when length, reflection, membership, or indexed value
- * observation throws; a non-native length or view disagreement is also
- * failure. `4294967295` is metadata rather than an array index.
+ * native entries retain actual holes: reading one yields `undefined`, while
+ * own membership remains absent. Its work is proportional to the reflected
+ * population, so a length-driven consumer must require `dense` or carry an
+ * independent bound. `exact` is false when the population holds any key other
+ * than a canonical index or `length`, a symbol key included. A population that
+ * is exactly the canonical indices in ascending order followed by `length` is
+ * copied straight by index under the same per-index corroboration, and answers
+ * with the same entries, the same `dense` and `exact` facts, and the same
+ * refusals as the walk. Caller-defined iteration is ignored. A descriptor-only
+ * index omitted from reflection is deliberately outside this lens and remains a
+ * hole. `4294967295` is metadata rather than an array index. Every call returns
+ * a fresh unfrozen read; {@link readArrayEntries} freezes it.
  *
- * @param value - The array whose reflected indexed entries to read
- * @returns A successful frozen entry snapshot with its dense fact, or a
- *          failure carrying the exact thrown value as `unknown`
+ * @param value - The array whose reflected indexed entries to collect
+ * @returns The entries with their `dense` and `exact` facts
+ * @throws The exact thrown value when length, reflection, membership, or
+ *         indexed value observation throws, and an `Error` on a non-native
+ *         length or a view disagreement
  *
  * @example
  * ```ts
- * readArrayEntries([1, 2]) // { success: true, value: { entries: [1, 2], dense: true } }
+ * collectArrayEntries([1, 2]) // { entries: [1, 2], dense: true, exact: true }
+ * ```
+ */
+export function collectArrayEntries<T>(value: readonly T[]): ArrayRead<T> {
+	const length = value.length
+	if (!INTRINSICS.safe(length) || length < 0 || length > 2 ** 32 - 1) {
+		throw new INTRINSICS.error('Array length is outside the native array domain')
+	}
+	const members = INTRINSICS.reflect.members(value)
+	// One canonicality question, asked once: the reported population is the
+	// ascending index texts and `length`, and nothing else. The scan stops at
+	// the first disagreement, so a population that fails the question pays for
+	// the prefix it shares with a canonical one before it walks.
+	const canonical =
+		members.length === length + 1 &&
+		members[length] === 'length' &&
+		!INTRINSICS.reflect.apply(INTRINSICS.some, members, [
+			(key: PropertyKey, index: number) => index < length && key !== INTRINSICS.text(index),
+		])
+	if (canonical) {
+		// An array-like with no prototype reaches no iterator and no caller member, and
+		// hands the mapper each index once, in order.
+		const indices = { __proto__: null, length }
+		const packed = INTRINSICS.from(indices, (_entry: unknown, index: number) => {
+			const key = members[index]
+			if (key === undefined || !INTRINSICS.own(value, key)) {
+				throw new INTRINSICS.error('Array index views disagree')
+			}
+			return value[index]
+		})
+		return { entries: packed, dense: true, exact: true }
+	}
+	const selected: ReadonlyArray<{ readonly index: number; readonly key: string }> =
+		INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(members), [
+			(key: PropertyKey) => {
+				if (!isString(key)) return []
+				const index = INTRINSICS.numeric(key)
+				if (
+					!INTRINSICS.integer(index) ||
+					index < 0 ||
+					index >= 2 ** 32 - 1 ||
+					INTRINSICS.text(index) !== key
+				) {
+					return []
+				}
+				if (index >= length) throw new INTRINSICS.error('Array index views disagree')
+				return [{ index, key }]
+			},
+		])
+	const collected: readonly number[] = INTRINSICS.reflect.apply(
+		INTRINSICS.project,
+		readIndexView(selected),
+		[(entry: { readonly index: number }) => entry.index],
+	)
+	const keys: readonly string[] = INTRINSICS.reflect.apply(
+		INTRINSICS.project,
+		readIndexView(selected),
+		[(entry: { readonly key: string }) => entry.key],
+	)
+	const ascending = !INTRINSICS.reflect.apply(INTRINSICS.some, collected, [
+		(index: number, position: number) => index <= (collected[position - 1] ?? -1),
+	])
+	// Ordered on arrival, not by default: a caller-defined key view may deliver
+	// the canonical indices in any order, so the sort answers that view alone
+	// and the parallel key list carries the string already proven canonical
+	// against its index, which the ordered arrival then never re-derives.
+	const indices = ascending ? collected : sortValues(collected)
+	const pairs = INTRINSICS.from(
+		iterateIndices(() => indices.length),
+		(position) => {
+			const index = indices[position]
+			const key = ascending ? keys[position] : INTRINSICS.text(index)
+			if (index === undefined || key === undefined || !INTRINSICS.own(value, key)) {
+				throw new INTRINSICS.error('Array index views disagree')
+			}
+			return [key, { value: value[index], enumerable: true, configurable: true, writable: true }]
+		},
+	)
+	const descriptors = INTRINSICS.record<PropertyDescriptor>({
+		[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [pairs]),
+	})
+	const entries = INTRINSICS.definitions(new INTRINSICS.list<T | undefined>(length), descriptors)
+	// `ownKeys` reports no duplicate and always lists an array's non-configurable `length`, so
+	// one key beyond the selected indices is `length` itself.
+	return {
+		entries,
+		dense: indices.length === length,
+		exact: members.length === selected.length + 1,
+	}
+}
+
+/**
+ * Snapshots an array through its reflected own-index population.
+ *
+ * @remarks
+ * Answers what {@link collectArrayEntries} answers, as a frozen read whose
+ * entries are frozen too. Failure retains the exact thrown value when length,
+ * reflection, membership, or indexed value observation throws; a non-native
+ * length or view disagreement is also failure.
+ *
+ * @param value - The array whose reflected indexed entries to read
+ * @returns A successful frozen entry snapshot with its `dense` and `exact`
+ *          facts, or a failure carrying the exact thrown value as `unknown`
+ *
+ * @example
+ * ```ts
+ * readArrayEntries([1, 2]) // { success: true, value: { entries: [1, 2], dense: true, exact: true } }
  * ```
  */
 export function readArrayEntries<T>(value: readonly T[]): Result<ArrayRead<T>> {
 	return attempt(() => {
-		const length = value.length
-		if (!INTRINSICS.safe(length) || length < 0 || length > 2 ** 32 - 1) {
-			throw new INTRINSICS.error('Array length is outside the native array domain')
-		}
-		const members = INTRINSICS.reflect.members(value)
-		// One canonicality question, asked once: the reported population is the
-		// ascending index texts and `length`, and nothing else. The scan stops at
-		// the first disagreement, so a population that fails the question pays for
-		// the prefix it shares with a canonical one before it walks.
-		const canonical =
-			members.length === length + 1 &&
-			members[length] === 'length' &&
-			!INTRINSICS.reflect.apply(INTRINSICS.some, members, [
-				(key: PropertyKey, index: number) => index < length && key !== INTRINSICS.text(index),
-			])
-		if (canonical) {
-			// An array-like with no prototype reaches no iterator and no caller member, and
-			// hands the mapper each index once, in order.
-			const indices = { __proto__: null, length }
-			const packed = INTRINSICS.from(indices, (_entry: unknown, index: number) => {
-				const key = members[index]
-				if (key === undefined || !INTRINSICS.own(value, key)) {
-					throw new INTRINSICS.error('Array index views disagree')
-				}
-				return value[index]
-			})
-			return INTRINSICS.freeze({ entries: INTRINSICS.freeze(packed), dense: true })
-		}
-		const selected: ReadonlyArray<{ readonly index: number; readonly key: string }> =
-			INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(members), [
-				(key: PropertyKey) => {
-					if (!isString(key)) return []
-					const index = INTRINSICS.numeric(key)
-					if (
-						!INTRINSICS.integer(index) ||
-						index < 0 ||
-						index >= 2 ** 32 - 1 ||
-						INTRINSICS.text(index) !== key
-					) {
-						return []
-					}
-					if (index >= length) throw new INTRINSICS.error('Array index views disagree')
-					return [{ index, key }]
-				},
-			])
-		const collected: readonly number[] = INTRINSICS.reflect.apply(
-			INTRINSICS.project,
-			readIndexView(selected),
-			[(entry: { readonly index: number }) => entry.index],
-		)
-		const keys: readonly string[] = INTRINSICS.reflect.apply(
-			INTRINSICS.project,
-			readIndexView(selected),
-			[(entry: { readonly key: string }) => entry.key],
-		)
-		const ascending = !INTRINSICS.reflect.apply(INTRINSICS.some, collected, [
-			(index: number, position: number) => index <= (collected[position - 1] ?? -1),
-		])
-		// Ordered on arrival, not by default: a caller-defined key view may deliver
-		// the canonical indices in any order, so the sort answers that view alone
-		// and the parallel key list carries the string already proven canonical
-		// against its index, which the ordered arrival then never re-derives.
-		const indices = ascending ? collected : sortValues(collected)
-		const pairs = INTRINSICS.from(
-			iterateIndices(() => indices.length),
-			(position) => {
-				const index = indices[position]
-				const key = ascending ? keys[position] : INTRINSICS.text(index)
-				if (index === undefined || key === undefined || !INTRINSICS.own(value, key)) {
-					throw new INTRINSICS.error('Array index views disagree')
-				}
-				return [key, { value: value[index], enumerable: true, configurable: true, writable: true }]
-			},
-		)
-		const descriptors = INTRINSICS.record<PropertyDescriptor>({
-			[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [pairs]),
-		})
-		const entries = INTRINSICS.definitions(new INTRINSICS.list<T | undefined>(length), descriptors)
-		return INTRINSICS.freeze({
-			entries: INTRINSICS.freeze(entries),
-			dense: indices.length === length,
-		})
+		// The read is fresh and no other holder reaches it, so it freezes in place.
+		const read = collectArrayEntries(value)
+		INTRINSICS.freeze(read.entries)
+		return INTRINSICS.freeze(read)
 	})
 }
 
@@ -2222,7 +2361,7 @@ export function matchesExactKeys(
  * Only a `type` fault is a repair. A number needs a string whose trim is the number's own
  * text, so `'30'` and `' 30 '` pass while `'30.0'`, `'007'`, `'0x10'`, `'1e3'`, `'+5'`,
  * `'.5'`, `'-0'`, and `'9007199254740993'` do not. A boolean needs `'true'` or `'false'`,
- * a literal its trimmed text, and a string a finite number. Anything else refuses.
+ * a literal its trimmed text, and a string a finite number other than `-0`. Anything else refuses.
  *
  * @param fault - A fault `audit` reported
  * @param input - The value as it arrived
@@ -2258,7 +2397,7 @@ export function matchesLosslessRepair(fault: AuditFault, input: unknown, parsed:
 		case 'boolean':
 			return raw === 'true' || raw === 'false'
 		case 'string':
-			return isFiniteNumber(raw)
+			return isFiniteNumber(raw) && !INTRINSICS.same(raw, -0)
 		default:
 			return false
 	}
@@ -4032,7 +4171,7 @@ export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT
  * Each line opens with the fault's path (or `value` at the root) and reason. A `hidden` fault says
  * the member is not enumerable and to send it as a plain data member. An `extra` fault carrying
  * `symbol` names the symbol key and lists no declared key; another `extra` fault lists its
- * parent's keys only when the declaring arms agree. A literal names candidates only where
+ * parent's keys only when no array form sits at the parent and the declaring arms agree. A literal names candidates only where
  * the declarations agree; lists are deduplicated and bounded. A received preview stays as written
  * within PREVIEW_LIMIT and without control or line-separator characters; otherwise it is encoded
  * through preview. Received, constraint, and limit details read only own fields. A `variant` or
@@ -4077,20 +4216,24 @@ export function describeFaultLine(fault: AuditFault, schema: JSONSchema): string
 			iterateIndices(() => path.length - 1),
 			(index) => path[index] ?? '',
 		)
-		const declarations: ReadonlyArray<readonly string[]> = INTRINSICS.reflect.apply(
-			INTRINSICS.project,
-			readIndexView(
-				INTRINSICS.reflect.apply(
-					INTRINSICS.select,
-					readIndexView(extractForms(extractSchema(schema, parent))),
-					[
-						(form: JSONSchema) =>
-							INTRINSICS.own(form, 'properties') && form.properties !== undefined,
-					],
-				),
-			),
-			[(form: JSONSchema) => INTRINSICS.keys(form.properties ?? {})],
-		)
+		const forms = extractForms(extractSchema(schema, parent))
+		// An array form reports its own keys as `extra` too, and no object form declares those.
+		const arrays = INTRINSICS.reflect.apply(INTRINSICS.some, forms, [
+			(form: JSONSchema) =>
+				INTRINSICS.own(form, 'items') || (INTRINSICS.own(form, 'type') && form.type === 'array'),
+		])
+		const declarations: ReadonlyArray<readonly string[]> = arrays
+			? []
+			: INTRINSICS.reflect.apply(
+					INTRINSICS.project,
+					readIndexView(
+						INTRINSICS.reflect.apply(INTRINSICS.select, readIndexView(forms), [
+							(form: JSONSchema) =>
+								INTRINSICS.own(form, 'properties') && form.properties !== undefined,
+						]),
+					),
+					[(form: JSONSchema) => INTRINSICS.keys(form.properties ?? {})],
+				)
 		const first = declarations[0] ?? []
 		const keys = INTRINSICS.reflect.apply(INTRINSICS.some, declarations, [
 			(declared: readonly string[]) =>

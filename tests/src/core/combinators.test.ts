@@ -118,6 +118,18 @@ describe('element combinators', () => {
 		expect(pair(['a'])).toBe(false)
 	})
 
+	it('arrayOf admits an array that carries an own key other than an index or length', () => {
+		const strings = arrayOf(isString)
+		for (const value of [
+			Object.assign(['a'], { then: () => {} }),
+			Object.defineProperty(['a'], 'note', { value: 'n' }),
+			Object.assign(['a'], { [Symbol('s')]: 1 }),
+			['a'],
+		]) {
+			expect(strings(value)).toBe(true)
+		}
+	})
+
 	it('arrayOf and tupleOf reject sparse arrays even when their guards allow undefined', () => {
 		const sparse = buildSparseArray()
 		expect(arrayOf(optionalOf(isString))(sparse)).toBe(false)

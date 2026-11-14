@@ -581,9 +581,9 @@ export function recordShape<S extends ContractShape>(
  * @remarks
  * When every arm is an object declaring one required literal property, and a value's
  * own property exactly equals a literal only one arm holds, that arm answers: `explain`
- * and `audit` report its faults at their real paths, and `parse` repairs through it
- * alone. Any other value reports `variant`, with `key` and `expected` saying what would
- * have named an arm. `is` does not change.
+ * and `audit` report its faults at their real paths, `parse` repairs through it
+ * alone, and `is` answers from it alone. Any other value reports `variant`, with `key`
+ * and `expected` saying what would have named an arm.
  *
  * @param variants - The candidate shapes; the first match wins at runtime
  * @returns A union shape whose `Infer` is the union of the variants
@@ -612,7 +612,8 @@ export function unionShape<V extends readonly ContractShape[]>(
  * - **Guard**: accepts the value only when exactly one variant's guard
  *   accepts it. A value matching two-or-more variants — which would violate
  *   the emitted `oneOf` schema — is rejected, even though it would pass
- *   {@link unionShape}'s guard.
+ *   {@link unionShape}'s guard. A value that names one arm through a required
+ *   literal is answered by that arm's guard alone.
  * - **Parser**: judged on the RAW input's guard matches only, with NO
  *   coercion fallback for an ambiguous input. When exactly one variant's
  *   guard accepts the raw value, the input itself is returned. Zero matches or
