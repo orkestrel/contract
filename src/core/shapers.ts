@@ -29,6 +29,8 @@ import type {
 	ShapeShapeOptions,
 	StringShape,
 	StringShapeOptions,
+	UndefinedShape,
+	UndefinedShapeOptions,
 	UnionShape,
 } from './types.js'
 import { cloneJSONValue, cloneSchema, cloneShape } from './cloners.js'
@@ -810,6 +812,34 @@ export function functionShape(options?: FunctionShapeOptions): FunctionShape {
 }
 
 /**
+ * Builds an {@link UndefinedShape}.
+ *
+ * @remarks
+ * Compose it as a union arm to declare a member that may be `undefined`: an object property
+ * present as `undefined` keeps its key, while `optionalShape` keeps declaring a property that may
+ * be absent.
+ *
+ * @param options - Optional description
+ * @returns An `undefined`-valued declaration
+ *
+ * @example
+ * ```ts
+ * const limits = objectShape({ max: unionShape(numberShape(), undefinedShape()) })
+ * ```
+ */
+export function undefinedShape(options?: UndefinedShapeOptions): UndefinedShape {
+	return contain(() => {
+		const safe = readOptions(options, ['description'], 'undefinedShape', 'undefined')
+		refuseOptionKeys(options, ['description'], 'undefinedShape', 'undefined')
+		const shape: UndefinedShape = {
+			category: 'undefined',
+			...(safe?.description === undefined ? {} : { description: safe.description }),
+		}
+		return ShapePass.seal(shape)
+	}, 'undefinedShape')
+}
+
+/**
  * Builds a {@link RawShape} from a supported JSON Schema fragment.
  *
  * @remarks
@@ -951,8 +981,8 @@ export function rawShape(schema: JSONSchema): RawShape {
  *
  * STRICT: `{ strict: true }` is the door for a foreign schema. It refuses, with
  * code `structure`, every node the lenient walk would widen, every keyword it
- * would ignore (`pattern`, every `format` but `'date'` on a string node and `'function'` in
- * the function leaf, every `not` outside that leaf, `nullable`,
+ * would ignore (`pattern`, every `format` but `'date'` on a string node and `'function'` or
+ * `'undefined'` in its leaf, every `not` outside those two leaves, `nullable`,
  * `patternProperties`, `propertyNames`, `prefixItems`, and anything else outside
  * {@link STRICT_SCHEMA_KEYWORDS}), a malformed keyword or annotation, a boolean schema, an `enum` entry
  * that is neither a finite primitive nor `null`, a contradictory bound, a date format whose
@@ -964,8 +994,9 @@ export function rawShape(schema: JSONSchema): RawShape {
  * instead, since closing it could change which arms match. A strict conversion is the
  * one walk that asserts a `format`: it reads `format: 'date'` on a string node as a
  * date string shape, so a compiled {@link dateShape} round-trips, and it reads the function
- * leaf `{ not: {}, format: 'function' }` back as {@link functionShape}, so a compiled
- * function shape round-trips too.
+ * leaf `{ not: {}, format: 'function' }` back as {@link functionShape} and the undefined
+ * leaf `{ not: {}, format: 'undefined' }` back as {@link undefinedShape}, so a compiled
+ * function or undefined shape round-trips too.
  *
  * @param schema - The JSON Schema value to convert
  * @param options - Optional `strict`, default `false`

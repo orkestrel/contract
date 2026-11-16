@@ -718,6 +718,7 @@ export type ContractShape =
 	| JSONShape
 	| ShapeShape
 	| FunctionShape
+	| UndefinedShape
 	| RawShape
 
 /**
@@ -851,7 +852,8 @@ export interface UnionShape<V extends readonly ContractShape[] = readonly Contra
  * `default` holds the JSON value the compiled parser fills when the property is
  * absent or `undefined`. It leaves `is`, `audit`, `explain`, and `generate`
  * unchanged, because an absent optional stays canonical. It must satisfy `inner`,
- * and it may sit only on a property of a closed object with no union ancestor.
+ * and it may sit only on a property of a closed object with no union ancestor, over
+ * an `inner` that refuses `undefined`.
  */
 export interface OptionalShape<S extends ContractShape = ContractShape> {
 	readonly category: 'optional'
@@ -954,6 +956,40 @@ export interface FunctionShapeOptions {
 }
 
 /**
+ * Describes the `undefined` value — accepts only `undefined`.
+ *
+ * @remarks
+ * The compiled guard is `isUndefined`. A container keeps a present `undefined` member wherever
+ * its child admits `undefined`: this leaf, a union with such an arm, or a nullable over such an
+ * inner. An object property present as `undefined` keeps its key in the parsed record, and an
+ * absent one stays absent. JSON carries no `undefined`, so the emitted schema
+ * `{ not: {}, format: 'undefined' }` admits no JSON instance. The generator returns `undefined`.
+ *
+ * @example
+ * ```ts
+ * const declaration: UndefinedShape = { category: 'undefined' }
+ * createContract(declaration).is(undefined) // true
+ * ```
+ */
+export interface UndefinedShape {
+	readonly category: 'undefined'
+	readonly description?: string
+}
+
+/**
+ * Configures the description of an `undefined`-valued declaration.
+ *
+ * @example
+ * ```ts
+ * const options: UndefinedShapeOptions = { description: 'No limit set' }
+ * undefinedShape(options).description // 'No limit set'
+ * ```
+ */
+export interface UndefinedShapeOptions {
+	readonly description?: string
+}
+
+/**
  * Describes a validated raw JSON Schema passthrough — embeds a supported schema fragment directly.
  *
  * @remarks
@@ -1041,7 +1077,9 @@ export type Infer<S extends ContractShape> = [ContractShape] extends [S]
 														: never
 													: S extends JSONShape
 														? JSONValue
-														: unknown
+														: S extends UndefinedShape
+															? undefined
+															: unknown
 
 /**
  * Resolves {@link Infer} of an object shape's `properties` — the required keys, plus the
@@ -1256,7 +1294,8 @@ export interface SchemaToShapeOptions {
  *
  * @remarks
  * The vocabulary is `'string'`, `'date'`, `'number'`, `'integer'`, `'boolean'`, `'null'`,
- * `'literal'`, `'array'`, `'object'`, `'union'`, `'json'`, `'shape'`, and `'function'`.
+ * `'literal'`, `'array'`, `'object'`, `'union'`, `'json'`, `'shape'`, `'function'`, and
+ * `'undefined'`.
  */
 export type FaultKind =
 	| 'string'
@@ -1272,6 +1311,7 @@ export type FaultKind =
 	| 'json'
 	| 'shape'
 	| 'function'
+	| 'undefined'
 
 /**
  * Names the refinement a {@link Fault} of reason `'constraint'` violates.
@@ -1288,7 +1328,8 @@ export type FaultConstraint = 'min' | 'over' | 'max' | 'under' | 'pattern' | 'da
  * @remarks
  * A discriminated union on `reason`:
  * - `'type'` — the value could not coerce to `expected` at all.
- * - `'missing'` — a required object property was absent.
+ * - `'missing'` — a required object property was absent, or an array held a hole
+ *   where its element shape admits `undefined`.
  * - `'constraint'` — the value coerced to `expected` but violated one
  *   refinement (`min` / `max` / `pattern` / `date` / `integer`); `limit` carries the
  *   violated bound/pattern when applicable.
@@ -1539,7 +1580,8 @@ export interface ContractInterface<T> {
 	 * value whose reads are stable across calls (see the read-stability
 	 * precondition on {@link ContractInterface}) — explain mirrors `parse`'s
 	 * coercion, not the stricter `is`, and `audit` is the report that mirrors
-	 * `is`. Faults are listed in stable pre-order (declared key/index order).
+	 * `is`. An `undefined` that `is` admits parses to itself, so its report is
+	 * empty. Faults are listed in stable pre-order (declared key/index order).
 	 *
 	 * @param value - The value to check
 	 * @returns The faults found, empty when the value parses successfully

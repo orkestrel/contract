@@ -29,6 +29,7 @@ export const SHAPE_FIELDS: Readonly<Record<string, readonly string[]>> = Object.
 	raw: Object.freeze(['schema']),
 	shape: Object.freeze(['description']),
 	function: Object.freeze(['description']),
+	undefined: Object.freeze(['description']),
 } satisfies Record<ContractShape['category'], readonly string[]>)
 
 /**
@@ -348,7 +349,8 @@ export const JSON_SCHEMA_TYPES: readonly JSONSchemaType[] = Object.freeze([
  * @remarks
  * Each asserts nothing about a value, so a converted shape drops it without loss, except
  * `description`, which the shape keeps. A strict conversion admits them beside every
- * keyword it reads, the function leaf `{ not: {}, format: 'function' }` included.
+ * keyword it reads, the function leaf `{ not: {}, format: 'function' }` and the undefined
+ * leaf `{ not: {}, format: 'undefined' }` included.
  *
  * @example
  * ```ts
@@ -376,8 +378,9 @@ export const SCHEMA_ANNOTATIONS = Object.freeze([
  * refuses. `pattern`, `format`, and `not` are absent because no compiled shape asserts
  * them, so a schema holding one would convert to a shape wider than the schema it came
  * from. The exceptions are `format: 'date'` on a string node, which a strict conversion
- * reads as a date string shape, and the function leaf `{ not: {}, format: 'function' }`,
- * which it reads as a function shape.
+ * reads as a date string shape, the function leaf `{ not: {}, format: 'function' }`,
+ * which it reads as a function shape, and the undefined leaf
+ * `{ not: {}, format: 'undefined' }`, which it reads as an undefined shape.
  *
  * @example
  * ```ts
@@ -465,6 +468,7 @@ export const FAULT_KINDS: readonly FaultKind[] = Object.freeze([
 	'json',
 	'shape',
 	'function',
+	'undefined',
 ])
 
 /**

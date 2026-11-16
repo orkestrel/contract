@@ -28,9 +28,15 @@ import {
 	recordShape,
 	seededRandom,
 	stringShape,
+	undefinedShape,
 	unionShape,
 } from '@src/core'
 import {
+	buildHoledArray,
+	buildUndefinedCorpus,
+	findUndefinedLawViolations,
+	UNDEFINED_LAW_SHAPES,
+	UNDEFINED_ROWS,
 	polluteArrayConstruction,
 	measureAllocations,
 	buildCountedGraph,
@@ -1198,5 +1204,156 @@ describe('ContractCompiler — function shape', () => {
 		const generated = options.generate(seededRandom(3))
 		expect(options.is(generated)).toBe(true)
 		expect(options.generate(seededRandom(3))).toEqual(generated)
+	})
+})
+
+describe('ContractCompiler — the undefined leaf', () => {
+	it('emits the unsatisfiable leaf, with a description only when one is authored', () => {
+		const schema = compileSchema(undefinedShape())
+		expect(schema).toStrictEqual({ not: {}, format: 'undefined' })
+		expect(Object.isFrozen(schema)).toBe(true)
+		expect(Object.isFrozen(schema.not)).toBe(true)
+		expect(compileSchema(undefinedShape({ description: 'No limit set' }))).toEqual({
+			not: {},
+			format: 'undefined',
+			description: 'No limit set',
+		})
+	})
+
+	it('accepts only undefined at the root and reports a type fault for anything else', () => {
+		const contract = new ContractCompiler(undefinedShape()).contract
+		expect(contract.is(undefined)).toBe(true)
+		expect(contract.parse(undefined)).toBeUndefined()
+		expect(contract.audit(undefined)).toEqual([])
+		expect(contract.explain(undefined)).toEqual([])
+		expect(contract.generate(seededRandom(1))).toBeUndefined()
+		for (const value of [null, 0, '', false, Number.NaN, {}, [], encodeURI]) {
+			expect(contract.is(value)).toBe(false)
+			expect(contract.parse(value)).toBeUndefined()
+			expect(contract.explain(value).length).toBe(1)
+		}
+		expect(contract.audit(null)).toEqual([
+			{ reason: 'type', path: [], expected: 'undefined', received: 'null' },
+		])
+		expect(contract.explain('')).toEqual([
+			{ reason: 'type', path: [], expected: 'undefined', received: '""' },
+		])
+	})
+
+	it.each(UNDEFINED_ROWS)('keeps a present undefined at $name', ({ shape, value, keys }) => {
+		const contract = createContract(shape)
+		expect(contract.is(value)).toBe(true)
+		expect(contract.audit(value)).toEqual([])
+		expect(contract.explain(value)).toEqual([])
+		const parsed = contract.parse(value)
+		expect(contract.is(parsed)).toBe(true)
+		expect(isRecord(parsed) || Array.isArray(parsed) ? Object.keys(parsed) : parsed).toEqual(keys)
+		expect(isRecord(parsed) || Array.isArray(parsed) ? Object.values(parsed) : []).toEqual(
+			(keys ?? []).map(() => undefined),
+		)
+		for (const seed of [1, 2, 3, 4]) {
+			expect(contract.is(contract.generate(seededRandom(seed)))).toBe(true)
+		}
+	})
+
+	it('holds the sound pair on { limit: undefined } for a required member', () => {
+		const contract = createContract(objectShape({ limit: undefinedShape() }))
+		const value = { limit: undefined }
+		const parsed = contract.parse(value)
+		expect(contract.is(value)).toBe(true)
+		expect(parsed).toBeDefined()
+		expect(contract.is(parsed)).toBe(true)
+		expect(isRecord(parsed) && Object.hasOwn(parsed, 'limit')).toBe(true)
+	})
+
+	it('tells a present undefined from an absent member', () => {
+		const required = createContract(objectShape({ limit: undefinedShape() }))
+		const missing = [{ reason: 'missing', path: ['limit'], expected: 'undefined' }]
+		expect(required.is({})).toBe(false)
+		expect(required.parse({})).toBeUndefined()
+		expect(required.audit({})).toEqual(missing)
+		expect(required.explain({})).toEqual(missing)
+		const optional = createContract(objectShape({ limit: optionalShape(undefinedShape()) }))
+		const absent = optional.parse({})
+		expect(optional.is({})).toBe(true)
+		expect(isRecord(absent) && Object.keys(absent)).toEqual([])
+	})
+
+	it('admits undefined through a oneOf union only when exactly one arm does', () => {
+		const both = createContract(
+			objectShape({ limit: oneOfShape(undefinedShape(), nullableShape(undefinedShape())) }),
+		)
+		const value = { limit: undefined }
+		expect(both.is(value)).toBe(false)
+		expect(both.parse(value)).toBeUndefined()
+		expect(both.audit(value)).toEqual([{ reason: 'oneOf', path: ['limit'], matched: 2 }])
+		expect(both.explain(value).length).toBeGreaterThan(0)
+		const one = createContract(objectShape({ limit: oneOfShape(undefinedShape(), stringShape()) }))
+		const kept = one.parse(value)
+		expect(one.is(value)).toBe(true)
+		expect(isRecord(kept) && Object.keys(kept)).toEqual(['limit'])
+	})
+
+	it('coerces through a union arm and keeps the undefined arm for undefined alone', () => {
+		const contract = createContract(unionShape(integerShape(), undefinedShape()))
+		expect(contract.parse('3')).toBe(3)
+		expect(contract.is(undefined)).toBe(true)
+		expect(contract.parse(undefined)).toBeUndefined()
+		expect(contract.explain(undefined)).toEqual([])
+		expect(contract.parse('x')).toBeUndefined()
+		expect(contract.explain('x').length).toBeGreaterThan(0)
+		const member = createContract(
+			objectShape({ limit: unionShape(integerShape(), undefinedShape()) }),
+		)
+		expect(member.parse({ limit: '3' })).toEqual({ limit: 3 })
+	})
+
+	it('refuses an array hole where the element admits undefined, as a missing element', () => {
+		const contract = createContract(arrayShape(undefinedShape()))
+		const holed = buildHoledArray([undefined, undefined], 0)
+		const missing = [{ reason: 'missing', path: ['0'], expected: 'undefined' }]
+		expect(contract.is(holed)).toBe(false)
+		expect(contract.parse(holed)).toBeUndefined()
+		expect(contract.audit(holed)).toEqual(missing)
+		expect(contract.explain(holed)).toEqual(missing)
+	})
+
+	it('leaves the adjacent refusals where 0.0.24 answers them', () => {
+		const optional = createContract(objectShape({ limit: optionalShape(numberShape()) }))
+		const value = { limit: undefined }
+		const typed = [{ reason: 'type', path: ['limit'], expected: 'number', received: 'undefined' }]
+		expect(optional.is(value)).toBe(false)
+		expect(optional.audit(value)).toEqual(typed)
+		expect(optional.explain(value)).toEqual([])
+		const dropped = optional.parse(value)
+		expect(isRecord(dropped) && Object.keys(dropped)).toEqual([])
+		const raw = createContract(rawShape({}))
+		expect(raw.is(undefined)).toBe(false)
+		expect(raw.parse(undefined)).toBeUndefined()
+		expect(raw.audit(undefined)).toEqual([
+			{ reason: 'type', path: [], expected: 'json', received: 'undefined' },
+		])
+		const numbers = createContract(arrayShape(numberShape()))
+		const holed = buildHoledArray([1, 2, 3], 1)
+		const hole = [{ reason: 'type', path: ['1'], expected: 'number', received: 'undefined' }]
+		expect(numbers.is(holed)).toBe(false)
+		expect(numbers.parse(holed)).toBeUndefined()
+		expect(numbers.audit(holed)).toEqual(hole)
+		expect(numbers.explain(holed)).toEqual(hole)
+	})
+
+	it.each(UNDEFINED_LAW_SHAPES.map((shape, index) => [index, shape] as const))(
+		'holds every law over the seeded corpus of law shape %i',
+		(_index, shape) => {
+			expect(findUndefinedLawViolations(shape, 16)).toEqual([])
+		},
+	)
+
+	it('draws a corpus that holds undefined members, admitted values, and refused values', () => {
+		const contract = createContract(objectShape({ limit: undefinedShape() }))
+		const corpus = buildUndefinedCorpus(contract, 4)
+		expect(corpus.some((value) => isRecord(value) && Object.hasOwn(value, 'limit'))).toBe(true)
+		expect(corpus.some((value) => contract.is(value))).toBe(true)
+		expect(corpus.some((value) => isRecord(value) && !contract.is(value))).toBe(true)
 	})
 })

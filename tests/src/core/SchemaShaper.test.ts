@@ -1104,6 +1104,19 @@ describe('SchemaShaper — strict', () => {
 		},
 	)
 
+	it.each(STRICT_SCHEMA_ANNOTATIONS)(
+		'accepts the annotation %s beside an undefined leaf',
+		(keyword, value) => {
+			const schema: Readonly<Record<string, unknown>> = {
+				not: {},
+				format: 'undefined',
+				[keyword]: value,
+			}
+
+			expect(schemaToShape(schema, { strict: true }).category).toBe('undefined')
+		},
+	)
+
 	it('converts the annotated object a schema generator emits', () => {
 		const schema: Readonly<Record<string, unknown>> = {
 			$schema: 'https://json-schema.org/draft/2020-12/schema',

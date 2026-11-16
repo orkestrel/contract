@@ -54,6 +54,7 @@ import {
 	schemaToShape,
 	seededRandom,
 	stringShape,
+	undefinedShape,
 	unionShape,
 	validateShape,
 	valueToSchema,
@@ -278,6 +279,13 @@ const BUILDER_CASES: readonly BuilderCase[] = [
 		positions: { 0: 'options' },
 		options: { 0: ['description'] },
 		run: (args) => Reflect.apply(functionShape, undefined, [...args]),
+	},
+	{
+		name: 'undefinedShape',
+		valid: [[], [{ description: 'value' }]],
+		positions: { 0: 'options' },
+		options: { 0: ['description'] },
+		run: (args) => Reflect.apply(undefinedShape, undefined, [...args]),
 	},
 ]
 
@@ -2943,6 +2951,69 @@ describe('functionShape', () => {
 		expect(schemaToShape({ not: {}, format: 'function', description: 'Runs it' })).toEqual(
 			rawShape({ description: 'Runs it' }),
 		)
+	})
+})
+
+describe('undefinedShape', () => {
+	it('builds a frozen declaration that carries an authored description alone', () => {
+		expect(undefinedShape()).toEqual({ category: 'undefined' })
+		expect(Object.isFrozen(undefinedShape())).toBe(true)
+		expect(undefinedShape({ description: 'No limit set' })).toEqual({
+			category: 'undefined',
+			description: 'No limit set',
+		})
+	})
+
+	it('infers undefined alone, and undefined beside a union arm', () => {
+		const shape = undefinedShape()
+		const limits = objectShape({ max: unionShape(numberShape(), undefinedShape()) })
+		expectTypeOf<Infer<typeof shape>>().toEqualTypeOf<undefined>()
+		expectTypeOf<Infer<typeof limits>['max']>().toEqualTypeOf<number | undefined>()
+		expect(createContract(limits).is({ max: undefined })).toBe(true)
+	})
+
+	it('reads the undefined leaf back in a strict conversion and widens it in a lenient one', () => {
+		expect(schemaToShape({ not: {}, format: 'undefined' }, { strict: true })).toEqual(
+			undefinedShape(),
+		)
+		expect(
+			schemaToShape(
+				{ not: {}, format: 'undefined', description: 'No limit set' },
+				{ strict: true },
+			),
+		).toEqual(undefinedShape({ description: 'No limit set' }))
+		const declaration = objectShape(
+			{ max: unionShape(numberShape(), undefinedShape()), note: optionalShape(undefinedShape()) },
+			{ additionalProperties: false },
+		)
+		expect(schemaToShape(compileSchema(declaration), { strict: true })).toEqual(declaration)
+		expect(schemaToShape({ not: {}, format: 'undefined' })).toEqual(rawShape({}))
+		const refusal = captureContractError(() =>
+			schemaToShape({ not: {}, format: 'never' }, { strict: true }),
+		)
+		expect(refusal.context).toEqual({ path: ['not'], shape: 'schema' })
+		const defaulted = captureContractError(() =>
+			schemaToShape(
+				{
+					type: 'object',
+					properties: {
+						max: { anyOf: [{ type: 'number' }, { not: {}, format: 'undefined' }], default: 3 },
+					},
+				},
+				{ strict: true },
+			),
+		)
+		expect([defaulted.code, defaulted.context]).toEqual([
+			'placement',
+			{ path: ['properties', 'max', 'default'], shape: 'schema' },
+		])
+	})
+
+	it('admits its own emitted schema as a raw shape', () => {
+		expect(rawShape(compileSchema(undefinedShape()))).toEqual({
+			category: 'raw',
+			schema: { not: {}, format: 'undefined' },
+		})
 	})
 })
 

@@ -465,6 +465,10 @@ describe('ShapeCloner', () => {
 				fields: ['category', 'description'],
 			},
 			{
+				source: { category: 'undefined', description: 'undefined' },
+				fields: ['category', 'description'],
+			},
+			{
 				source: { category: 'string' },
 				fields: ['category'],
 				absent: ['min', 'max', 'pattern', 'description'],
@@ -486,6 +490,7 @@ describe('ShapeCloner', () => {
 			'raw',
 			'shape',
 			'function',
+			'undefined',
 			'string',
 		])
 		for (const row of rows) {
@@ -1363,6 +1368,19 @@ describe('ShapeCloner — function shape', () => {
 		expect(Object.isFrozen(clone)).toBe(true)
 		const error = captureContractError(() =>
 			Reflect.apply(cloneShape, undefined, [{ category: 'function', description: 42 }]),
+		)
+		expect(error.message).toBe('validateShape: description must be a string')
+		expect(error.context).toEqual({ path: ['description'] })
+	})
+})
+
+describe('ShapeCloner — undefined shape', () => {
+	it('captures an undefined declaration and refuses a description that is not a string', () => {
+		const clone = cloneShape({ category: 'undefined', description: 'No limit set' })
+		expect(clone).toEqual({ category: 'undefined', description: 'No limit set' })
+		expect(Object.isFrozen(clone)).toBe(true)
+		const error = captureContractError(() =>
+			Reflect.apply(cloneShape, undefined, [{ category: 'undefined', description: 42 }]),
 		)
 		expect(error.message).toBe('validateShape: description must be a string')
 		expect(error.context).toEqual({ path: ['description'] })

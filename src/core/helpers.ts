@@ -3515,6 +3515,43 @@ export function matchesEmptyRange(bounds: NumberShapeOptions): boolean {
 }
 
 /**
+ * Checks whether a shape node admits `undefined`, from its category, its union mode, and its
+ * children's answers.
+ *
+ * @remarks
+ * The `undefined` leaf admits it. A nullable node admits it when its inner shape does, an
+ * `anyOf` union when an arm does, and a `oneOf` union when exactly one arm does. Every other
+ * node refuses it. For a node a contract compiles at its root, the answer equals what that
+ * contract's `is` answers for `undefined`.
+ *
+ * @param category - The node's category
+ * @param mode - The node's union mode, `'oneOf'` or anything else for `anyOf`
+ * @param children - Each structural child's answer, in slot order
+ * @returns True if the node admits `undefined`; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesUndefinedNode('undefined', undefined, []) // true
+ * matchesUndefinedNode('union', 'anyOf', [false, true]) // true
+ * matchesUndefinedNode('union', 'oneOf', [true, true]) // false
+ * ```
+ */
+export function matchesUndefinedNode(
+	category: unknown,
+	mode: unknown,
+	children: readonly boolean[],
+): boolean {
+	if (category === 'undefined') return true
+	if (category === 'nullable') return children[0] === true
+	if (category !== 'union') return false
+	const admitted: number = INTRINSICS.reflect.apply(INTRINSICS.fold, children, [
+		(total: number, answer: boolean) => total + (answer ? 1 : 0),
+		0,
+	])
+	return mode === 'oneOf' ? admitted === 1 : admitted > 0
+}
+
+/**
  * Builds the length faults an array has against an {@link ArrayShape}.
  *
  * @remarks
@@ -3629,7 +3666,7 @@ export function selectClosestFaults<T extends AuditFault>(
  * `'date'` when `date: true`, else `'string'`); `optionalShape` /
  * `nullableShape` project through to their inner shape's kind, and `rawShape`
  * (an arbitrary embedded schema with no fixed kind) projects to `'json'`.
- * `functionShape` projects to `'function'`.
+ * `functionShape` projects to `'function'` and `undefinedShape` to `'undefined'`.
  *
  * A hand-authored node carrying an unrecognized discriminant is REFUSED rather
  * than answered out of type, which keeps the declared non-optional
@@ -3673,6 +3710,8 @@ export function shapeToKind(shape: ContractShape): FaultKind {
 					return 'shape'
 				case 'function':
 					return 'function'
+				case 'undefined':
+					return 'undefined'
 				case 'optional':
 					return shapeToKind(shape.inner)
 				case 'nullable':
@@ -4097,8 +4136,8 @@ export function renderList(entries: readonly string[]): string {
  * and a schema that says nothing reads `any`. Each nested form takes half the room of its parent, and
  * below 16 characters a form stops at its type, so a schema that holds itself still ends. Text past
  * `room` is cut and closes with `…`. A type word outside JSON Schema's vocabulary is encoded.
- * A schema with an own `not` reads `function` when its `format` is `'function'` and `never`
- * otherwise.
+ * A schema with an own `not` reads `function` when its `format` is `'function'`, `undefined`
+ * when its `format` is `'undefined'`, and `never` otherwise.
  *
  * @param schema - The schema to summarize
  * @param room - The characters the summary can take. Default: `FAULT_SCHEMA_LIMIT`
@@ -4128,7 +4167,7 @@ export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT
 		? schema.additionalProperties
 		: undefined
 	const negated = INTRINSICS.own(schema, 'not')
-	const callable = INTRINSICS.own(schema, 'format') && schema.format === 'function'
+	const format = INTRINSICS.own(schema, 'format') ? schema.format : undefined
 	const ordered: readonly string[] = deep
 		? INTRINSICS.reflect.apply(
 				INTRINSICS.order,
@@ -4196,8 +4235,8 @@ export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT
 				? INTRINSICS.text(type)
 				: preview(type)
 	const text: string = negated
-		? callable
-			? 'function'
+		? format === 'function' || format === 'undefined'
+			? format
 			: 'never'
 		: forms !== undefined
 			? deep

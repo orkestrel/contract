@@ -21,6 +21,7 @@ import {
 	matchesEmptyRange,
 	matchesMember,
 	matchesJSONValue,
+	matchesUndefinedNode,
 	matchesVisited,
 	omitVisited,
 	pathOf,
@@ -64,8 +65,8 @@ export class ShapePass {
 	// whose children are all sealed, so a mutable node, a node frozen by a caller, and a
 	// node with an accessor are never recorded and take the whole walk. `reach` is the
 	// deepest level the subtree occupies, a raw node's embedded schema included, `count`
-	// is the expansion, `defaulted` is a default on this node, and `held` is one
-	// anywhere in the subtree.
+	// is the expansion, `defaulted` is a default on this node, `held` is one
+	// anywhere in the subtree, and `admits` is whether the node admits `undefined`.
 	static readonly #seals = new ShapePass.#weakMap<
 		ContractShape,
 		{
@@ -74,6 +75,7 @@ export class ShapePass {
 			readonly count: number
 			readonly defaulted: boolean
 			readonly held: boolean
+			readonly admits: boolean
 		}
 	>()
 	readonly #source: unknown
@@ -112,6 +114,7 @@ export class ShapePass {
 		readonly raw: number
 		readonly defaulted: boolean
 		readonly open: boolean
+		readonly mode: unknown
 	}> = []
 	// Discovery postorder: children finish before parents, so reading it forwards
 	// solves any bottom-up fact in one pass and reading it backwards solves any
@@ -141,6 +144,9 @@ export class ShapePass {
 	#raw = 0
 	#defaulted = false
 	#open = false
+	#mode: unknown
+	// Whether each captured node admits `undefined`, solved children first when a default needs it.
+	#admitted: boolean[] = []
 	#structure: ContractError | undefined
 	#cycle: ContractError | undefined
 	#domain: ContractError | undefined
@@ -284,7 +290,18 @@ export class ShapePass {
 			seal.held ||= known.held
 		}
 		if (seal.reach + lift > COMPILE_DEPTH_LIMIT) return false
-		INTRINSICS.reflect.apply(INTRINSICS.retain, ShapePass.#seals, [shape, seal])
+		const answers: readonly boolean[] = INTRINSICS.reflect.apply(
+			INTRINSICS.project,
+			readIndexView(this.#children),
+			[
+				(child: { readonly shape: unknown }) =>
+					INTRINSICS.reflect.apply(INTRINSICS.recall, ShapePass.#seals, [child.shape])?.admits ===
+					true,
+			],
+		)
+		if (this.#defaulted && answers[0] === true) return false
+		const admits = matchesUndefinedNode(shape.category, shape.mode, answers)
+		INTRINSICS.reflect.apply(INTRINSICS.retain, ShapePass.#seals, [shape, { ...seal, admits }])
 		return true
 	}
 
@@ -365,6 +382,7 @@ export class ShapePass {
 		this.#raw = 0
 		this.#defaulted = false
 		this.#open = false
+		this.#mode = undefined
 		const outcome = attempt(() => this.#observe(current, frame.depth))
 		this.#spend(0)
 		if (isFailure(outcome) || !outcome.value) {
@@ -1326,6 +1344,7 @@ export class ShapePass {
 				break
 			}
 			case 'union': {
+				this.#mode = current.mode
 				if (!INTRINSICS.array(current.variants)) {
 					return this.#refuse('validateShape: variants must be a finite array', 'variants')
 				}
@@ -1509,6 +1528,7 @@ export class ShapePass {
 			case 'json':
 			case 'shape':
 			case 'function':
+			case 'undefined':
 			case 'raw':
 				break
 		}
@@ -1574,6 +1594,7 @@ export class ShapePass {
 			raw: this.#raw,
 			defaulted: this.#defaulted,
 			open: this.#open,
+			mode: this.#mode,
 		}
 		INTRINSICS.reflect.apply(INTRINSICS.retain, this.#index, [shape, index])
 		return index
@@ -1680,6 +1701,7 @@ export class ShapePass {
 			(capture: { readonly defaulted: boolean }) => capture.defaulted,
 		])
 		if (!carried) return
+		this.#admit()
 		for (const offset of iterateIndices(() => this.#post.length)) {
 			const index = this.#post[this.#post.length - 1 - offset]
 			if (index === undefined) continue
@@ -1739,7 +1761,46 @@ export class ShapePass {
 						},
 					)
 				}
+				const filled = this.#captures[located]?.children[0]
+				const inner = filled === undefined ? undefined : this.#locate(filled.shape)
+				if (inner !== undefined && this.#admitted[inner] === true) {
+					this.#domain ??= new ContractError(
+						'validateShape: a default may not sit on an optional whose inner shape admits undefined, where a present undefined keeps its key unfilled; remove the default or the undefined arm',
+						{
+							code: 'placement',
+							context: {
+								path: pathOf(
+									this.#ascend(index),
+									child.first,
+									INTRINSICS.own(child, 'second') ? child.second : undefined,
+								),
+								shape: 'optional',
+							},
+						},
+					)
+				}
 			}
+		}
+	}
+
+	// Postorder forwards, so each node's children are answered before the node itself.
+	#admit(): void {
+		for (const step of iterateIndices(() => this.#post.length)) {
+			const index = this.#post[step]
+			if (index === undefined) continue
+			const capture = this.#captures[index]
+			if (capture === undefined) continue
+			const answers: readonly boolean[] = INTRINSICS.reflect.apply(
+				INTRINSICS.project,
+				readIndexView(capture.children),
+				[
+					(child: { readonly shape: unknown }) => {
+						const located = this.#locate(child.shape)
+						return located !== undefined && this.#admitted[located] === true
+					},
+				],
+			)
+			this.#admitted[index] = matchesUndefinedNode(capture.category, capture.mode, answers)
 		}
 	}
 

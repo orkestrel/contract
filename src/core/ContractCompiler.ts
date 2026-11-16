@@ -53,6 +53,7 @@ import {
 	matchesEnumerableKeys,
 	matchesMember,
 	matchesStepGuard,
+	matchesUndefinedNode,
 	ownPattern,
 	pathOf,
 	pinMembers,
@@ -182,6 +183,7 @@ export class ContractCompiler<
 		(value: unknown, path: readonly string[]) => readonly Fault[]
 	> = []
 	static readonly #emptySeeds: Array<(random: RandomFunction) => unknown> = []
+	static readonly #emptyAdmitted: boolean[] = []
 	// One frozen function for every draw, so two seeds generate equal values.
 	static readonly #function: () => undefined = INTRINSICS.freeze(() => undefined)
 
@@ -198,6 +200,7 @@ export class ContractCompiler<
 		INTRINSICS.freeze(ContractCompiler.#emptyAudits)
 		INTRINSICS.freeze(ContractCompiler.#emptyReports)
 		INTRINSICS.freeze(ContractCompiler.#emptySeeds)
+		INTRINSICS.freeze(ContractCompiler.#emptyAdmitted)
 	}
 
 	#source: ContractShape | undefined
@@ -231,6 +234,8 @@ export class ContractCompiler<
 	#audits: Array<(value: unknown, path: readonly string[]) => readonly AuditFault[]>
 	#reports: Array<(value: unknown, path: readonly string[]) => readonly Fault[]>
 	#seeds: Array<(random: RandomFunction) => unknown>
+	// The one static fact the container families share: whether each node admits `undefined`.
+	#admitted: boolean[]
 	#schema: JSONSchema | undefined
 	#guard: Guard<unknown> | undefined
 	#parser: Parser<unknown> | undefined
@@ -257,6 +262,7 @@ export class ContractCompiler<
 		this.#audits = []
 		this.#reports = []
 		this.#seeds = []
+		this.#admitted = []
 		this.#schema = undefined
 		this.#guard = undefined
 		this.#parser = undefined
@@ -415,6 +421,7 @@ export class ContractCompiler<
 		this.#audits = ContractCompiler.#emptyAudits
 		this.#reports = ContractCompiler.#emptyReports
 		this.#seeds = ContractCompiler.#emptySeeds
+		this.#admitted = ContractCompiler.#emptyAdmitted
 	}
 
 	// === Preparation
@@ -649,6 +656,37 @@ export class ContractCompiler<
 		}
 	}
 
+	// Solved one time per compiler, children first, by whichever container family asks first.
+	#admit(): void {
+		if (this.#admitted.length > 0) return
+		for (const step of iterateIndices(() => this.#order.length)) {
+			const index = this.#order[step]
+			if (index === undefined) continue
+			const owned = this.#node(index)
+			const children: readonly ContractShape[] =
+				owned.category === 'union'
+					? owned.variants
+					: owned.category === 'nullable'
+						? [owned.inner]
+						: []
+			const answers: readonly boolean[] = INTRINSICS.reflect.apply(
+				INTRINSICS.project,
+				readIndexView(children),
+				[(child: ContractShape) => this.#admitted[this.#locate(child)] === true],
+			)
+			this.#admitted[index] = matchesUndefinedNode(
+				owned.category,
+				owned.category === 'union' ? owned.mode : undefined,
+				answers,
+			)
+		}
+	}
+
+	#admits(shape: ContractShape): boolean {
+		this.#admit()
+		return this.#admitted[this.#locate(shape)] === true
+	}
+
 	// Each root evaluation owns the answers for its active synchronous walk.
 	// Shared objects reuse one answer per compiled node; the scope is removed
 	// in finally so later calls always observe the caller's current value.
@@ -867,6 +905,12 @@ export class ContractCompiler<
 					format: 'function',
 					...(owned.description !== undefined ? { description: owned.description } : {}),
 				})
+			case 'undefined':
+				return INTRINSICS.freeze({
+					not: INTRINSICS.freeze({}),
+					format: 'undefined',
+					...(owned.description !== undefined ? { description: owned.description } : {}),
+				})
 			case 'literal': {
 				// Indexed, not spread: this list is published inside the emitted schema,
 				// and an array spread retrieves `Array.prototype[Symbol.iterator]` at the
@@ -1072,6 +1116,8 @@ export class ContractCompiler<
 				return isJSONValue
 			case 'function':
 				return isFunction
+			case 'undefined':
+				return isUndefined
 			case 'shape':
 				return (value): value is ContractShape => ContractCompiler.#acceptShape(value)
 			case 'literal':
@@ -1322,6 +1368,10 @@ export class ContractCompiler<
 				return parseJSONValue
 			case 'function':
 				return (value) => (isFunction(value) ? value : undefined)
+			// Every answer is `undefined`, the value on success and the sentinel on failure, so a
+			// container reads the raw value and `#admits`, never this result.
+			case 'undefined':
+				return () => undefined
 			case 'shape':
 				return (value) => (ContractCompiler.#acceptShape(value) ? value : undefined)
 			// The literal parser trims a matching string but never numeric-coerces —
@@ -1342,6 +1392,7 @@ export class ContractCompiler<
 			}
 			case 'array': {
 				const item = this.#parserAt(owned.items)
+				const admitted = this.#admits(owned.items)
 				const unbounded = owned.min === undefined && owned.max === undefined
 				const withinLength = boundsOf(owned.min, owned.max)
 				return (value) => {
@@ -1365,10 +1416,15 @@ export class ContractCompiler<
 					if (!entries.value.dense) return undefined
 					const result: unknown[] = []
 					for (const entryIndex of iterateIndices(() => entries.value.entries.length)) {
-						// Indexed rather than iterated, and read in place: a hole and a
-						// present `undefined` are the same observation to the item parser,
-						// so neither is silently dropped from the assembled result.
-						const parsed = item(entries.value.entries[entryIndex])
+						// Indexed rather than iterated, and read in place, so no element is
+						// silently dropped from the assembled result.
+						const entry = entries.value.entries[entryIndex]
+						// The read is dense, so this `undefined` is present, and an element that admits it keeps it.
+						if (entry === undefined && admitted) {
+							result[result.length] = undefined
+							continue
+						}
+						const parsed = item(entry)
 						if (parsed === undefined) return undefined
 						result[result.length] = parsed
 					}
@@ -1393,6 +1449,7 @@ export class ContractCompiler<
 					readonly parse: Parser<unknown>
 					readonly optional: boolean
 					readonly fill: JSONValue | undefined
+					readonly admits: boolean
 				}> = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(keyList), [
 					(key: string) => {
 						const child = owned.properties[key]
@@ -1405,6 +1462,7 @@ export class ContractCompiler<
 								parse: this.#parserAt(inner),
 								optional,
 								fill: optional && INTRINSICS.own(child, 'default') ? child.default : undefined,
+								admits: this.#admits(inner),
 							},
 						]
 					},
@@ -1440,6 +1498,8 @@ export class ContractCompiler<
 					extra === undefined || extra === false || extra === true
 						? undefined
 						: this.#parserAt(extra)
+				const admitted =
+					extra === undefined || extra === false || extra === true ? false : this.#admits(extra)
 				const open = extra === true || additional !== undefined
 				return (value) => {
 					// A brand check, not `parseRecord`: that door's eager whole-record
@@ -1476,6 +1536,11 @@ export class ContractCompiler<
 										: !matchesMember(present, entry.key)
 								const raw = absent ? undefined : record[entry.key]
 								if (raw === undefined) {
+									// A present `undefined` its child admits is the member's value, so its key stays.
+									if (!absent && entry.admits) {
+										selected[selected.length] = [entry.key, undefined]
+										return false
+									}
 									if (!entry.optional) return true
 									// A container parses from a fresh copy, so nested defaults apply and no
 									// two results share a tree, whichever parser the inner shape holds.
@@ -1501,7 +1566,12 @@ export class ContractCompiler<
 										selected[selected.length] = [key, record[key]]
 										return false
 									}
-									const parsed = additional(record[key])
+									const observed: unknown = record[key]
+									if (observed === undefined && admitted) {
+										selected[selected.length] = [key, undefined]
+										return false
+									}
+									const parsed = additional(observed)
 									if (parsed === undefined) return true
 									selected[selected.length] = [key, parsed]
 									return false
@@ -1721,6 +1791,11 @@ export class ContractCompiler<
 					isFunction(value)
 						? []
 						: [{ reason: 'type', path, expected: 'function', received: preview(value) }]
+			case 'undefined':
+				return (value, path) =>
+					value === undefined
+						? []
+						: [{ reason: 'type', path, expected: 'undefined', received: preview(value) }]
 			case 'shape':
 				return (value, path) =>
 					ContractCompiler.#acceptShape(value)
@@ -1736,6 +1811,8 @@ export class ContractCompiler<
 			case 'array': {
 				const node: ArrayShape = owned
 				const item = this.#auditAt(owned.items)
+				const admitted = this.#admits(owned.items)
+				const kind = shapeToKind(owned.items)
 				return (value, path) => {
 					if (isObject(value)) {
 						readValue(() => INTRINSICS.array(value), 'compileAuditor', {
@@ -1759,10 +1836,13 @@ export class ContractCompiler<
 					const faults: AuditFault[] = []
 					for (const entryIndex of iterateIndices(() => entries.value.entries.length)) {
 						if (faults.length >= FAULT_LIMIT) break
-						appendEntries(
-							faults,
-							item(entries.value.entries[entryIndex], pathOf(path, INTRINSICS.text(entryIndex))),
-						)
+						const at = INTRINSICS.text(entryIndex)
+						// A hole is an absent element, which an element that admits `undefined` reads as clean.
+						if (admitted && !entries.value.dense && !INTRINSICS.own(entries.value.entries, at)) {
+							faults[faults.length] = { reason: 'missing', path: pathOf(path, at), expected: kind }
+							continue
+						}
+						appendEntries(faults, item(entries.value.entries[entryIndex], pathOf(path, at)))
 					}
 					appendEntries(faults, buildArrayFaults(node, entries.value.entries.length, path))
 					if (entries.value.exact) return limitEntries(faults, FAULT_LIMIT)
@@ -2108,6 +2188,11 @@ export class ContractCompiler<
 					isFunction(value)
 						? []
 						: [{ reason: 'type', path, expected: 'function', received: preview(value) }]
+			case 'undefined':
+				return (value, path) =>
+					value === undefined
+						? []
+						: [{ reason: 'type', path, expected: 'undefined', received: preview(value) }]
 			case 'literal': {
 				const allowed = literalOf(owned.values)
 				return (value, path) =>
@@ -2123,6 +2208,8 @@ export class ContractCompiler<
 			case 'array': {
 				const node: ArrayShape = owned
 				const item = this.#reportAt(owned.items)
+				const admitted = this.#admits(owned.items)
+				const kind = shapeToKind(owned.items)
 				return (value, path) => {
 					if (!isArray(value)) {
 						return [{ reason: 'type', path, expected: 'array', received: preview(value) }]
@@ -2134,10 +2221,13 @@ export class ContractCompiler<
 					const faults: Fault[] = []
 					for (const entryIndex of iterateIndices(() => entries.value.entries.length)) {
 						if (faults.length >= FAULT_LIMIT) break
-						appendEntries(
-							faults,
-							item(entries.value.entries[entryIndex], pathOf(path, INTRINSICS.text(entryIndex))),
-						)
+						const at = INTRINSICS.text(entryIndex)
+						// The parser refuses a hole, so the report names it where the element reads it as clean.
+						if (admitted && !entries.value.dense && !INTRINSICS.own(entries.value.entries, at)) {
+							faults[faults.length] = { reason: 'missing', path: pathOf(path, at), expected: kind }
+							continue
+						}
+						appendEntries(faults, item(entries.value.entries[entryIndex], pathOf(path, at)))
 					}
 					appendEntries(faults, buildArrayFaults(node, entries.value.entries.length, path))
 					return limitEntries(faults, FAULT_LIMIT)
@@ -2150,6 +2240,7 @@ export class ContractCompiler<
 					readonly report: (value: unknown, path: readonly string[]) => readonly Fault[]
 					readonly optional: boolean
 					readonly kind: FaultKind
+					readonly admits: boolean
 				}> = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(keyList), [
 					(key: string) => {
 						const child = owned.properties[key]
@@ -2162,6 +2253,7 @@ export class ContractCompiler<
 								report: this.#reportAt(inner),
 								optional,
 								kind: shapeToKind(inner),
+								admits: this.#admits(inner),
 							},
 						]
 					},
@@ -2225,8 +2317,8 @@ export class ContractCompiler<
 							if (faults.length >= FAULT_LIMIT) return
 							// Mirror the parser's presence gate exactly: only an own
 							// enumerable string key is present. A present key with an
-							// explicit `undefined` value is still treated like absence, so
-							// `explain` never faults where `parse` silently skips it.
+							// explicit `undefined` value is treated like absence unless its
+							// child admits `undefined`, as `parse` treats it.
 							const absent =
 								present === undefined
 									? (seen & (1 << entryIndex)) === 0
@@ -2242,7 +2334,7 @@ export class ContractCompiler<
 								continue
 							}
 							const raw = record[entry.key]
-							if (raw === undefined) {
+							if (raw === undefined && !entry.admits) {
 								if (!entry.optional) {
 									faults[faults.length] = {
 										reason: 'missing',
@@ -2496,6 +2588,8 @@ export class ContractCompiler<
 				return () => null
 			case 'function':
 				return () => ContractCompiler.#function
+			case 'undefined':
+				return () => undefined
 			case 'shape':
 				return () => ({ category: 'object', properties: {}, additionalProperties: false })
 			case 'json':

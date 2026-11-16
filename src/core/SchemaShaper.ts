@@ -66,6 +66,7 @@ import {
 	optionalShape,
 	rawShape,
 	stringShape,
+	undefinedShape,
 	unionShape,
 } from './shapers.js'
 
@@ -327,7 +328,7 @@ export class SchemaShaper {
 	// and a pair of keywords only one of which the walk would keep.
 	#inspect(schema: JSONSchema): void {
 		if (INTRINSICS.own(schema, 'not')) {
-			this.#inspectFunction(schema)
+			this.#inspectLeaf(schema)
 			return
 		}
 		const keys = INTRINSICS.keys(schema)
@@ -381,17 +382,18 @@ export class SchemaShaper {
 		this.#inspectObject(schema)
 	}
 
-	// `not` converts only as the function leaf, so every other keyword beside it would be dropped.
-	#inspectFunction(schema: JSONSchema): void {
+	// `not` converts only as the function or the undefined leaf, so every other keyword beside it
+	// would be dropped.
+	#inspectLeaf(schema: JSONSchema): void {
 		const operand: unknown = schema.not
+		const format = INTRINSICS.own(schema, 'format') ? schema.format : undefined
 		if (
 			!isRecord(operand) ||
 			INTRINSICS.reflect.members(operand).length > 0 ||
-			!INTRINSICS.own(schema, 'format') ||
-			schema.format !== 'function'
+			(format !== 'function' && format !== 'undefined')
 		) {
 			throw this.#refusal(
-				'a strict conversion reads not only as the empty schema beside format function',
+				'a strict conversion reads not only as the empty schema beside format function or undefined',
 				'not',
 			)
 		}
@@ -406,7 +408,7 @@ export class SchemaShaper {
 				INTRINSICS.reflect.apply(INTRINSICS.some, SCHEMA_ANNOTATIONS, [
 					(keyword: string) => keyword === key,
 				])
-			if (!known) throw this.#refusal('a function schema reads no assertion beside not', key)
+			if (!known) throw this.#refusal(`a ${format} schema reads no assertion beside not`, key)
 		}
 		this.#inspectAnnotations(schema)
 		if (INTRINSICS.own(schema, 'default') && !isJSONValue(schema.default)) {
@@ -702,9 +704,12 @@ export class SchemaShaper {
 			return this.#widen('a reference is not resolved', description, '$ref')
 		}
 
-		// A strict walk reaches `not` only through the function leaf `#inspect` admitted.
+		// A strict walk reaches `not` only through the function or undefined leaf `#inspect` admitted.
 		if (this.#strict && INTRINSICS.own(schema, 'not')) {
-			return functionShape(description === undefined ? undefined : { description })
+			const options = description === undefined ? undefined : { description }
+			return INTRINSICS.own(schema, 'format') && schema.format === 'undefined'
+				? undefinedShape(options)
+				: functionShape(options)
 		}
 
 		if (INTRINSICS.own(schema, 'enum') && isArray(schema.enum)) {
@@ -1116,7 +1121,18 @@ export class SchemaShaper {
 					},
 				)
 			}
-			if (new ContractCompiler(shape).guard(value)) return optionalShape(shape, { default: value })
+			const guard = new ContractCompiler(shape).guard
+			// A schema that admits `undefined` keeps a present `undefined` unfilled, so it takes no default.
+			if (guard(undefined)) {
+				throw new ContractError(
+					'schemaToShape: a default cannot fill a property whose schema admits undefined; remove the default or the undefined arm',
+					{
+						code: 'placement',
+						context: { path: pathOf(this.#path, 'properties', key, 'default'), shape: 'schema' },
+					},
+				)
+			}
+			if (guard(value)) return optionalShape(shape, { default: value })
 			throw this.#refusal('a default must satisfy its schema', 'properties', key, 'default')
 		}
 		const leaf =

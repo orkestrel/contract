@@ -44,6 +44,11 @@ import {
 	buildDeepShape,
 	buildSharedDagShape,
 	buildSparseArray,
+	buildHoledArray,
+	buildUndefinedCorpus,
+	varyMembers,
+	UNDEFINED_LAW_SHAPES,
+	UNDEFINED_ROWS,
 	buildJudgmentPool,
 	buildRecordPool,
 	buildStringArray,
@@ -1066,7 +1071,45 @@ describe('shape factories', () => {
 				.filter(([, row]) => row.witness === undefined)
 				.map(([kind]) => kind)
 				.sort(),
-		).toEqual(['function', 'json', 'null', 'raw', 'shape'])
+		).toEqual(['function', 'json', 'null', 'raw', 'shape', 'undefined'])
+	})
+})
+
+describe('undefined member fixtures', () => {
+	it('copies an array with one hole and leaves the source dense', () => {
+		const source = ['a', undefined, 'c']
+		const holed = buildHoledArray(source, 1)
+
+		expect(holed).toHaveLength(3)
+		expect([0, 1, 2].map((index) => Object.hasOwn(holed, index))).toEqual([true, false, true])
+		expect([0, 1, 2].map((index) => Object.hasOwn(source, index))).toEqual([true, true, true])
+	})
+
+	it('varies each member of a record and each element of an array one at a time', () => {
+		expect(varyMembers({ limit: 1 })).toEqual([{}, { limit: undefined }, { limit: 'x' }])
+		expect(Object.hasOwn(varyMembers({ limit: 1 })[1] ?? {}, 'limit')).toBe(true)
+		const varied = varyMembers([1])
+		expect(varied).toHaveLength(4)
+		expect(varied.slice(0, 3)).toEqual([[1, undefined], [undefined], ['x']])
+		expect(Object.hasOwn(varied[3] ?? [], 0)).toBe(false)
+		expect(varyMembers('limit')).toEqual([])
+	})
+
+	it('keeps the table, the law shapes, and the corpus in the positions they name', () => {
+		expect(UNDEFINED_ROWS.map((row) => row.name)).toEqual([
+			'the leaf at the root',
+			'a required property',
+			'an optional property',
+			'an array element',
+			'a record value',
+			'under nullableShape',
+			'a union arm',
+		])
+		expect(UNDEFINED_LAW_SHAPES.slice(0, UNDEFINED_ROWS.length)).toEqual(
+			UNDEFINED_ROWS.map((row) => row.shape),
+		)
+		const corpus = buildUndefinedCorpus(core.createContract(core.undefinedShape()), 2)
+		expect(corpus.length).toBe(2 + SOUNDNESS_SAMPLE.length)
 	})
 })
 

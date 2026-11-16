@@ -12,8 +12,11 @@ import {
 	compileSchema,
 	optionalShape,
 	jsonShape,
+	numberShape,
 	objectShape,
 	stringShape,
+	undefinedShape,
+	unionShape,
 	ContractError,
 	createContract,
 	isContractError,
@@ -1929,6 +1932,60 @@ describe('ShapeValidator — optional defaults', () => {
 
 		expect(error.code).toBe('placement')
 		expect(error.context?.path).toEqual(['properties', 'loose', 'properties', 'a'])
+	})
+
+	it('refuses a default on an optional whose inner shape admits undefined, with placement', () => {
+		const inners: readonly ContractShape[] = [
+			{ category: 'undefined' },
+			{ category: 'union', variants: [{ category: 'number' }, { category: 'undefined' }] },
+			{ category: 'nullable', inner: { category: 'undefined' } },
+			{
+				category: 'union',
+				variants: [{ category: 'nullable', inner: { category: 'undefined' } }],
+				mode: 'oneOf',
+			},
+		]
+		const refusals = inners.map((inner) => {
+			const shape: ContractShape = {
+				category: 'object',
+				properties: { a: { category: 'optional', inner, default: 3 } },
+			}
+			const error = captureContractError(() => validateShape(shape))
+			return [error.code, error.context?.path, error.message]
+		})
+		const message =
+			'validateShape: a default may not sit on an optional whose inner shape admits undefined, where a present undefined keeps its key unfilled; remove the default or the undefined arm'
+
+		expect(refusals).toEqual(inners.map(() => ['placement', ['properties', 'a'], message]))
+		const built = captureContractError(() =>
+			optionalShape(unionShape(numberShape(), undefinedShape()), { default: 3 }),
+		)
+		expect([built.code, built.message]).toEqual(['placement', message])
+	})
+
+	it('keeps a default legal where the inner shape refuses undefined', () => {
+		const inners: readonly ContractShape[] = [
+			{ category: 'number' },
+			{
+				category: 'union',
+				variants: [
+					{ category: 'undefined' },
+					{ category: 'nullable', inner: { category: 'undefined' } },
+				],
+				mode: 'oneOf',
+			},
+			{ category: 'array', items: { category: 'undefined' } },
+		]
+
+		for (const inner of inners) {
+			const shape: ContractShape = {
+				category: 'object',
+				properties: { a: { category: 'optional', inner, default: [] } },
+			}
+			expect(attempt(() => validateShape(shape)).success).toBe(true)
+		}
+		expect(() => optionalShape(numberShape(), { default: 3 })).not.toThrow()
+		expect(() => objectShape({ a: optionalShape(undefinedShape()) })).not.toThrow()
 	})
 
 	it('leaves a bare optional legal in every position a default refuses', () => {

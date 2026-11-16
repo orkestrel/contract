@@ -34,10 +34,10 @@ import type {
 	StringGuardOptions,
 	StringShape,
 	StringShapeOptions,
+	UndefinedShapeOptions,
 	ValueToSchemaOptions,
 } from '@src/core'
 import { createRecorder } from '@orkestrel/test'
-import { isUndefined } from '@src/core'
 
 export const FAULT_TEXT_UNION_INPUTS = [
 	{ kind: 'bank', speed: 'fast', iban: 'DE123' },
@@ -105,24 +105,6 @@ export function createFaultTextKinds(): readonly unknown[] {
 		Object.create(null),
 		...createFaultTextInstances(),
 	]
-}
-
-/** Implements the undefined-only domain admitted by ContractInterface but not by a root shape. */
-export function createUndefinedContract(): ContractInterface<undefined> {
-	return {
-		schema: {},
-		is: isUndefined,
-		parse: () => undefined,
-		audit: (value) =>
-			isUndefined(value)
-				? []
-				: [{ reason: 'type', path: [], expected: 'json', received: preview(value) }],
-		explain: (value) =>
-			isUndefined(value)
-				? []
-				: [{ reason: 'type', path: [], expected: 'json', received: preview(value) }],
-		generate: () => undefined,
-	}
 }
 
 /** Records artifact invocations while every answer comes from the real compiled contract. */
@@ -270,6 +252,7 @@ import {
 	stringToFormat,
 	transformOf,
 	tupleOf,
+	undefinedShape,
 	unifySchemas,
 	unionOf,
 	unionShape,
@@ -3597,6 +3580,8 @@ export const SHAPE_SEPARATIONS: Readonly<Record<ContractShape['category'], Shape
 		shape: Object.freeze({ shape: shapeShape() }),
 		// Both artifacts delegate to isFunction; the corpus supplements rather than proves coincidence.
 		function: Object.freeze({ shape: functionShape() }),
+		// Both artifacts accept only undefined; the corpus supplements rather than proves coincidence.
+		undefined: Object.freeze({ shape: undefinedShape() }),
 		// Both artifacts accept any defined value; the corpus supplements rather than proves coincidence.
 		raw: Object.freeze({ shape: rawShape({}) }),
 	})
@@ -6565,6 +6550,12 @@ export const OPTION_DOORS: Readonly<Record<string, OptionDoor>> = Object.freeze(
 		options: { description: 'Upgrade callback' } satisfies Required<FunctionShapeOptions>,
 		shape: 'function',
 	},
+	undefinedShape: {
+		args: [undefined],
+		position: 0,
+		options: { description: 'No limit set' } satisfies Required<UndefinedShapeOptions>,
+		shape: 'undefined',
+	},
 	schemaToShape: {
 		args: [{ type: 'string' }, undefined],
 		position: 1,
@@ -6712,3 +6703,179 @@ export const ADJACENT_NUMBER_RANGES: ReadonlyArray<readonly [string, NumberShape
 		['over below max by one step', { over: 1 - Number.EPSILON / 2, max: 1 }, 1],
 		['an integer over 0 under 2', { over: 0, under: 2, integer: true }, 1],
 	])
+
+// === The undefined leaf
+
+/** Declares one position an `undefined` member takes and the own keys its parsed value keeps. */
+export interface UndefinedRow {
+	/** Names the position. */
+	readonly name: string
+	/** Holds a declaration whose child at that position admits `undefined`. */
+	readonly shape: ContractShape
+	/** Holds `undefined` present at that position. */
+	readonly value: unknown
+	/** Lists the own keys the parsed value keeps, or `undefined` for the root. */
+	readonly keys: readonly string[] | undefined
+}
+
+/** Lists every position the undefined leaf's table names, each holding a present `undefined`. */
+export const UNDEFINED_ROWS: readonly UndefinedRow[] = Object.freeze([
+	{ name: 'the leaf at the root', shape: undefinedShape(), value: undefined, keys: undefined },
+	{
+		name: 'a required property',
+		shape: objectShape({ limit: undefinedShape() }),
+		value: { limit: undefined },
+		keys: ['limit'],
+	},
+	{
+		name: 'an optional property',
+		shape: objectShape({ limit: optionalShape(undefinedShape()) }),
+		value: { limit: undefined },
+		keys: ['limit'],
+	},
+	{
+		name: 'an array element',
+		shape: arrayShape(undefinedShape()),
+		value: [undefined],
+		keys: ['0'],
+	},
+	{
+		name: 'a record value',
+		shape: recordShape(undefinedShape()),
+		value: { limit: undefined },
+		keys: ['limit'],
+	},
+	{
+		name: 'under nullableShape',
+		shape: objectShape({ limit: nullableShape(undefinedShape()) }),
+		value: { limit: undefined },
+		keys: ['limit'],
+	},
+	{
+		name: 'a union arm',
+		shape: objectShape({ limit: unionShape(integerShape(), undefinedShape()) }),
+		value: { limit: undefined },
+		keys: ['limit'],
+	},
+])
+
+/**
+ * Lists the declarations the `undefined` laws run over.
+ *
+ * @remarks
+ * Each table row's declaration, a closed object mixing a required, a union, and an optional
+ * member, an array of objects, a record of union values, and a `oneOf` union whose two arms both
+ * admit `undefined`, which therefore admits none.
+ */
+export const UNDEFINED_LAW_SHAPES: readonly ContractShape[] = Object.freeze([
+	...UNDEFINED_ROWS.map((row) => row.shape),
+	objectShape({
+		name: stringShape(),
+		limit: unionShape(integerShape({ min: 0 }), undefinedShape()),
+		note: optionalShape(unionShape(stringShape(), undefinedShape())),
+	}),
+	arrayShape(objectShape({ limit: nullableShape(undefinedShape()) })),
+	recordShape(unionShape(booleanShape(), undefinedShape())),
+	objectShape({ limit: oneOfShape(undefinedShape(), nullableShape(undefinedShape())) }),
+])
+
+/**
+ * Copies an array with a hole at one index.
+ *
+ * @param value - The array to copy
+ * @param index - The index left empty
+ * @returns A fresh sparse array of the same length
+ */
+export function buildHoledArray(value: readonly unknown[], index: number): readonly unknown[] {
+	const holed: unknown[] = []
+	holed.length = value.length
+	for (const [at, entry] of value.entries()) if (at !== index) holed[at] = entry
+	return holed
+}
+
+/**
+ * Lists the one-member variations of a generated value.
+ *
+ * @remarks
+ * An array gains a trailing `undefined`, and each element is set to `undefined`, replaced with a
+ * string, and left as a hole. A record has each member removed, set to `undefined`, and replaced
+ * with a string. Any other value has none.
+ *
+ * @param value - The generated value to vary
+ * @returns The variations, each a fresh value
+ */
+export function varyMembers(value: unknown): readonly unknown[] {
+	if (Array.isArray(value)) {
+		return [
+			[...value, undefined],
+			...value.flatMap((_entry: unknown, index: number) => [
+				value.map((entry: unknown, at: number) => (at === index ? undefined : entry)),
+				value.map((entry: unknown, at: number) => (at === index ? 'x' : entry)),
+				buildHoledArray(value, index),
+			]),
+		]
+	}
+	if (!isRecord(value)) return []
+	return Object.keys(value).flatMap((key) => [
+		Object.fromEntries(Object.entries(value).filter(([name]) => name !== key)),
+		{ ...value, [key]: undefined },
+		{ ...value, [key]: 'x' },
+	])
+}
+
+/**
+ * Builds a seeded corpus for one contract: each generated value, its one-member variations, and
+ * {@link SOUNDNESS_SAMPLE}.
+ *
+ * @remarks
+ * A seed whose draw the generator refuses contributes nothing.
+ *
+ * @param contract - The contract whose generator seeds the corpus
+ * @param seeds - The number of seeds, drawn from `0`
+ * @returns The corpus values
+ */
+export function buildUndefinedCorpus(
+	contract: ContractInterface<unknown>,
+	seeds: number,
+): readonly unknown[] {
+	const generated = Array.from({ length: seeds }, (_entry, seed) =>
+		attempt(() => contract.generate(seededRandom(seed))),
+	).flatMap((outcome) => (outcome.success ? [outcome.value] : []))
+	return [...generated, ...generated.flatMap((value) => varyMembers(value)), ...SOUNDNESS_SAMPLE]
+}
+
+/**
+ * Lists where one contract breaks a law over its {@link buildUndefinedCorpus} corpus.
+ *
+ * @remarks
+ * A value parses when `parse` returns a value, or returns `undefined` for an `undefined` the
+ * contract's `is` admits. The laws: every parsed result satisfies `is`, every value `is` admits
+ * parses, `audit` is empty exactly where `is` holds, and `explain` is empty exactly where the
+ * value parses. A value whose read throws a `ContractError` is skipped, and any other throw is
+ * a violation.
+ *
+ * @param shape - The declaration to compile
+ * @param seeds - The number of seeds the corpus draws
+ * @returns Violation tags (`<law>@<index>`); empty when every law holds
+ */
+export function findUndefinedLawViolations(shape: ContractShape, seeds: number): readonly string[] {
+	const contract: ContractInterface<unknown> = createContract(shape)
+	const admits = contract.is(undefined)
+	return buildUndefinedCorpus(contract, seeds).flatMap((value, index) => {
+		const outcome = attempt(() => ({
+			valid: contract.is(value),
+			parsed: contract.parse(value),
+			audited: contract.audit(value).length === 0,
+			explained: contract.explain(value).length === 0,
+		}))
+		if (!outcome.success) return isContractError(outcome.error) ? [] : [`throw@${index}`]
+		const { valid, parsed, audited, explained } = outcome.value
+		const read = parsed !== undefined || (value === undefined && admits)
+		return [
+			...(read && !contract.is(parsed) ? [`parsed@${index}`] : []),
+			...(valid && !read ? [`refused@${index}`] : []),
+			...(audited !== valid ? [`audit@${index}`] : []),
+			...(explained !== read ? [`explain@${index}`] : []),
+		]
+	})
+}

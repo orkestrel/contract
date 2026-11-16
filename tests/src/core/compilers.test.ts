@@ -321,6 +321,7 @@ describe('shape-valued contracts', () => {
 			'raw',
 			'shape',
 			'function',
+			'undefined',
 		]
 		expect(Object.keys(SHAPE_FIELDS)).toEqual(categories)
 		expect(Object.isFrozen(SHAPE_FIELDS)).toBe(true)
@@ -456,6 +457,7 @@ describe('shape-valued contracts', () => {
 						'raw',
 						'shape',
 						'function',
+						'undefined',
 					],
 				},
 			},
@@ -634,6 +636,7 @@ const COMPLETE_SHAPES = {
 	json: { category: 'json', description: 'complete' },
 	shape: { category: 'shape', description: 'complete' },
 	function: { category: 'function', description: 'complete' },
+	undefined: { category: 'undefined', description: 'complete' },
 	raw: { category: 'raw', schema: COMPLETE_RAW_SCHEMA },
 } satisfies { readonly [T in ContractShape['category']]: CompleteShape<T> }
 
@@ -791,7 +794,7 @@ describe('validateShape', () => {
 			['createContract', (shape: ContractShape) => createContract(shape), true],
 		]),
 	)(
-		'%s applies descriptor-first accessor policy across all 44 node fields',
+		'%s applies descriptor-first accessor policy across all 46 node fields',
 		(_name, entry, ownership) => {
 			const cases = Object.values(COMPLETE_SHAPES).flatMap((source) =>
 				Object.keys(source).map((field) => ({ source, field })),
@@ -1045,6 +1048,8 @@ describe('validateShape', () => {
 			['shape.description', 'alternate'],
 			['function.category', 'boolean'],
 			['function.description', 'alternate'],
+			['undefined.category', 'boolean'],
+			['undefined.description', 'alternate'],
 			['raw.category', 'boolean'],
 			['raw.schema', { type: 'number' }],
 		])
@@ -5823,6 +5828,7 @@ describe('shape separation registry', () => {
 			'null',
 			'raw',
 			'shape',
+			'undefined',
 		])
 		expect(uncoded).toBe(0)
 		expect(refusals).toBeGreaterThan(0)
@@ -5844,6 +5850,7 @@ describe('shape separation registry', () => {
 				'raw',
 				'shape',
 				'string',
+				'undefined',
 				'union',
 			].sort(),
 		)
@@ -5870,7 +5877,9 @@ describe('shape separation registry', () => {
 		const error = captureContractError(() => compileGenerator(raw.shape, seededRandom(7)))
 		expect(error.code).toBe('generate')
 
-		const generatedEntries = Object.entries(SHAPE_SEPARATIONS).filter(([type]) => type !== 'raw')
+		const generatedEntries = Object.entries(SHAPE_SEPARATIONS).filter(
+			([type]) => type !== 'raw' && type !== 'undefined',
+		)
 		for (const [, separation] of generatedEntries) {
 			const guard = compileGuard(separation.shape)
 			const parse = compileParser(separation.shape)
@@ -5881,6 +5890,12 @@ describe('shape separation registry', () => {
 			expect(compileAuditor(separation.shape, generated)).toHaveLength(0)
 			expect(compileReporter(separation.shape, generated)).toHaveLength(0)
 		}
+
+		const leaf = SHAPE_SEPARATIONS.undefined.shape
+		expect(compileGenerator(leaf, seededRandom(7))).toBeUndefined()
+		expect(compileGuard(leaf)(undefined)).toBe(true)
+		expect(compileAuditor(leaf, undefined)).toHaveLength(0)
+		expect(compileReporter(leaf, undefined)).toHaveLength(0)
 	})
 })
 

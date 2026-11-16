@@ -18,6 +18,7 @@ import type {
 	ShapeProperty,
 	ShapeShape,
 	StringShape,
+	UndefinedShape,
 	UnionShape,
 } from './types.js'
 import { CLONE_NODE_LIMIT, COMPILE_DEPTH_LIMIT, INTRINSICS } from './constants.js'
@@ -297,6 +298,8 @@ export class ShapeCloner implements ShapeClonerInterface {
 				return this.#captureSimple(source, path, 'shape')
 			case 'function':
 				return this.#captureSimple(source, path, 'function')
+			case 'undefined':
+				return this.#captureSimple(source, path, 'undefined')
 			case 'raw':
 				return this.#captureRaw(source, path, budget)
 			default:
@@ -503,10 +506,10 @@ export class ShapeCloner implements ShapeClonerInterface {
 	}
 
 	#captureSimple(
-		source: BooleanShape | NullShape | JSONShape | ShapeShape | FunctionShape,
+		source: BooleanShape | NullShape | JSONShape | ShapeShape | FunctionShape | UndefinedShape,
 		path: readonly string[],
-		category: 'boolean' | 'null' | 'json' | 'shape' | 'function',
-	): BooleanShape | NullShape | JSONShape | ShapeShape | FunctionShape {
+		category: 'boolean' | 'null' | 'json' | 'shape' | 'function' | 'undefined',
+	): BooleanShape | NullShape | JSONShape | ShapeShape | FunctionShape | UndefinedShape {
 		const description = this.#captureField(source, 'description', path)
 		if (category === 'boolean') {
 			return { category: 'boolean', ...(description === undefined ? {} : { description }) }
@@ -519,6 +522,9 @@ export class ShapeCloner implements ShapeClonerInterface {
 		}
 		if (category === 'function') {
 			return { category: 'function', ...(description === undefined ? {} : { description }) }
+		}
+		if (category === 'undefined') {
+			return { category: 'undefined', ...(description === undefined ? {} : { description }) }
 		}
 		return { category: 'json', ...(description === undefined ? {} : { description }) }
 	}

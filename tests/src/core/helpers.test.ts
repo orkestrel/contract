@@ -33,7 +33,6 @@ import * as door from '@src/core'
 import {
 	buildReportingRecord,
 	createNonEnumerableRecord,
-	createUndefinedContract,
 	DATE_ADMITTED,
 	DATE_REFUSED,
 	pollutePrototypeData,
@@ -110,7 +109,7 @@ describe('admitValue', () => {
 	})
 
 	it('accepts a valid undefined result on the fast path', () => {
-		expect(door.admitValue(createUndefinedContract(), undefined)).toEqual({
+		expect(door.admitValue(door.createContract(door.undefinedShape()), undefined)).toEqual({
 			success: true,
 			value: undefined,
 		})
@@ -314,7 +313,7 @@ describe('repairValue', () => {
 	})
 
 	it('accepts a valid undefined result on the fast path', () => {
-		const contract = createUndefinedContract()
+		const contract = door.createContract(door.undefinedShape())
 		expect(contract.is(undefined)).toBe(true)
 		expect(door.repairValue(contract, undefined)).toEqual({
 			success: true,
@@ -936,10 +935,12 @@ import {
 	shapeToKind,
 	stringShape,
 	functionShape,
+	undefinedShape,
 	unionShape,
 	valueToSchema,
 	matchesExactKeys,
 	matchesLosslessRepair,
+	matchesUndefinedNode,
 	numberShape,
 	booleanShape,
 	literalShape,
@@ -3851,6 +3852,70 @@ describe('shapeToKind', () => {
 		expect(shapeToKind(functionShape())).toBe('function')
 		expect(shapeToKind(optionalShape(functionShape()))).toBe('function')
 	})
+
+	it('projects an undefined shape to undefined, through an optional wrapper too', () => {
+		expect(shapeToKind(undefinedShape())).toBe('undefined')
+		expect(shapeToKind(optionalShape(undefinedShape()))).toBe('undefined')
+	})
+})
+
+describe('matchesUndefinedNode', () => {
+	it('admits undefined at the leaf, through a nullable, and through a union arm', () => {
+		expect(matchesUndefinedNode('undefined', undefined, [])).toBe(true)
+		expect(matchesUndefinedNode('nullable', undefined, [true])).toBe(true)
+		expect(matchesUndefinedNode('nullable', undefined, [false])).toBe(false)
+		expect(matchesUndefinedNode('union', undefined, [false, true])).toBe(true)
+		expect(matchesUndefinedNode('union', 'anyOf', [true, true])).toBe(true)
+		expect(matchesUndefinedNode('union', 'anyOf', [false, false])).toBe(false)
+	})
+
+	it('admits undefined through a oneOf union only when exactly one arm does', () => {
+		expect(matchesUndefinedNode('union', 'oneOf', [false, true])).toBe(true)
+		expect(matchesUndefinedNode('union', 'oneOf', [true, true])).toBe(false)
+		expect(matchesUndefinedNode('union', 'oneOf', [false, false])).toBe(false)
+	})
+
+	it('refuses undefined for every other category, whatever its children answer', () => {
+		const categories = Object.keys(door.SHAPE_FIELDS).filter(
+			(category) => !['undefined', 'nullable', 'union'].includes(category),
+		)
+		expect(categories).toContain('optional')
+		for (const category of categories) {
+			expect(matchesUndefinedNode(category, 'oneOf', [true])).toBe(false)
+		}
+		expect(matchesUndefinedNode('wrong', undefined, [true])).toBe(false)
+	})
+
+	it('equals what a compiled root answers for undefined', () => {
+		const shapes: readonly ContractShape[] = [
+			undefinedShape(),
+			nullableShape(undefinedShape()),
+			unionShape(numberShape(), undefinedShape()),
+			door.oneOfShape(undefinedShape(), nullableShape(undefinedShape())),
+			door.oneOfShape(undefinedShape(), stringShape()),
+			nullableShape(numberShape()),
+			door.rawShape({}),
+			door.jsonShape(),
+		]
+		const expected = [true, true, true, false, true, false, false, false]
+
+		expect(shapes.map((shape) => door.createContract(shape).is(undefined))).toEqual(expected)
+		expect(
+			shapes.map((shape) => {
+				const children =
+					shape.category === 'union'
+						? shape.variants.map((variant) => door.createContract(variant).is(undefined))
+						: shape.category === 'nullable'
+							? [door.createContract(shape.inner).is(undefined)]
+							: []
+				return matchesUndefinedNode(
+					shape.category,
+					shape.category === 'union' ? shape.mode : undefined,
+					children,
+				)
+			}),
+		).toEqual(expected)
+	})
 })
 
 describe('contain', () => {
@@ -5646,9 +5711,14 @@ describe('renderForm', () => {
 		expect(renderForm({})).toBe('any')
 	})
 
-	it('names a schema with an own not as function when its format says so and never otherwise', () => {
+	it('names a schema with an own not by a function or undefined format, and never otherwise', () => {
 		expect(renderForm({ not: {}, format: 'function' })).toBe('function')
 		expect(renderForm({ not: {}, format: 'function', description: 'Runs it' })).toBe('function')
+		expect(renderForm({ not: {}, format: 'undefined' })).toBe('undefined')
+		expect(renderForm({ anyOf: [{ type: 'number' }, { not: {}, format: 'undefined' }] })).toBe(
+			'number | undefined',
+		)
+		expect(renderForm({ format: 'undefined' })).toBe('any (format "undefined")')
 		expect(renderForm({ not: {} })).toBe('never')
 		expect(renderForm({ not: {}, format: 'date' })).toBe('never')
 		expect(renderForm({ format: 'function' })).toBe('any (format "function")')
