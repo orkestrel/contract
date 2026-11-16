@@ -16,7 +16,7 @@ import type {
  */
 export const SHAPE_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freeze({
 	string: Object.freeze(['min', 'max', 'pattern', 'date', 'description']),
-	number: Object.freeze(['integer', 'min', 'max', 'description']),
+	number: Object.freeze(['integer', 'min', 'over', 'max', 'under', 'description']),
 	boolean: Object.freeze(['description']),
 	null: Object.freeze(['description']),
 	literal: Object.freeze(['values', 'description']),
@@ -394,6 +394,8 @@ export const STRICT_SCHEMA_KEYWORDS: readonly string[] = Object.freeze([
 	'maxLength',
 	'minimum',
 	'maximum',
+	'exclusiveMinimum',
+	'exclusiveMaximum',
 	'minItems',
 	'maxItems',
 	'items',

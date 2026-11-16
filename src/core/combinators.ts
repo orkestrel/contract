@@ -46,6 +46,7 @@ import {
 	readPattern,
 	readSetEntries,
 	readValue,
+	refuseOptionKeys,
 } from './helpers.js'
 
 // Every combinator returns a `Guard<T>` — a total function, as
@@ -1141,6 +1142,7 @@ export function matchOf(pattern: RegExp): Guard<string> {
 export function stringOf(options?: StringGuardOptions): Guard<string> {
 	return contain(() => {
 		const safe = readOptions(options, ['min', 'max', 'pattern'], 'stringOf', 'string')
+		refuseOptionKeys(options, ['min', 'max', 'pattern'], 'stringOf', 'string')
 		// Own reads, because the snapshot's prototype is `Object.prototype`, and a field
 		// these options leave out must not answer from there.
 		const min = safe !== undefined && INTRINSICS.own(safe, 'min') ? safe.min : undefined

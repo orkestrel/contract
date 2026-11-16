@@ -1,4 +1,4 @@
-import type { ContractShape } from './types.js'
+import type { ContractShape, NumberShapeOptions } from './types.js'
 import {
 	CLONE_NODE_LIMIT,
 	COMPILE_DEPTH_LIMIT,
@@ -18,6 +18,7 @@ import {
 	holds,
 	isFailure,
 	isSuccess,
+	matchesEmptyRange,
 	matchesMember,
 	matchesJSONValue,
 	matchesVisited,
@@ -45,7 +46,9 @@ export class ShapePass {
 	// to it. A required field is own on every node that recognizes it.
 	static readonly #fields = [
 		'min',
+		'over',
 		'max',
+		'under',
 		'pattern',
 		'date',
 		'description',
@@ -532,71 +535,71 @@ export class ShapePass {
 			}
 		}
 		if (current.category === 'number') {
-			if (current.min !== undefined && typeof current.min !== 'number') {
-				return this.#refuse('validateShape: number min must be a number', 'min')
-			}
-			if (current.max !== undefined && typeof current.max !== 'number') {
-				return this.#refuse('validateShape: number max must be a number', 'max')
+			const bounds = ['min', 'over', 'max', 'under'] as const
+			for (const index of iterateIndices(() => bounds.length)) {
+				const field = bounds[index]
+				if (field === undefined) continue
+				if (current[field] !== undefined && typeof current[field] !== 'number') {
+					return this.#refuse(`validateShape: number ${field} must be a number`, field)
+				}
 			}
 			if (current.integer !== undefined && typeof current.integer !== 'boolean') {
 				return this.#refuse('validateShape: number integer must be a boolean', 'integer')
 			}
 			const shape = current.integer === true ? 'integer' : 'number'
-			if (
-				this.#domain === undefined &&
-				current.min !== undefined &&
-				!INTRINSICS.finite(current.min)
-			) {
-				this.#domain = new ContractError('validateShape: a number shape min must be finite', {
-					code: 'bound',
-					context: {
-						path: pathOf(this.#path),
-						shape,
-						limit: 'finite number',
-						received: INTRINSICS.text(current.min),
-					},
-				})
+			for (const index of iterateIndices(() => bounds.length)) {
+				const field = bounds[index]
+				const value = field === undefined ? undefined : current[field]
+				if (this.#domain === undefined && typeof value === 'number' && !INTRINSICS.finite(value)) {
+					this.#domain = new ContractError(
+						`validateShape: a number shape ${field} must be finite`,
+						{
+							code: 'bound',
+							context: {
+								path: pathOf(this.#path),
+								shape,
+								limit: 'finite number',
+								received: INTRINSICS.text(value),
+							},
+						},
+					)
+				}
+			}
+			const range: NumberShapeOptions = {
+				...(typeof current.min === 'number' ? { min: current.min } : {}),
+				...(typeof current.over === 'number' ? { over: current.over } : {}),
+				...(typeof current.max === 'number' ? { max: current.max } : {}),
+				...(typeof current.under === 'number' ? { under: current.under } : {}),
 			}
 			if (
 				this.#domain === undefined &&
-				current.max !== undefined &&
-				!INTRINSICS.finite(current.max)
-			) {
-				this.#domain = new ContractError('validateShape: a number shape max must be finite', {
-					code: 'bound',
-					context: {
-						path: pathOf(this.#path),
-						shape,
-						limit: 'finite number',
-						received: INTRINSICS.text(current.max),
-					},
-				})
-			}
-			if (
-				this.#domain === undefined &&
-				current.min !== undefined &&
-				current.max !== undefined &&
-				typeof current.min === 'number' &&
-				typeof current.max === 'number' &&
-				current.min > current.max
+				range.min !== undefined &&
+				range.max !== undefined &&
+				range.min > range.max
 			) {
 				this.#domain = new ContractError('validateShape: a number shape has min greater than max', {
 					code: 'range',
 					context: { path: pathOf(this.#path), shape },
 				})
 			}
-			if (this.#domain === undefined && current.integer === true) {
-				const lo = INTRINSICS.ceil(current.min ?? Number.NEGATIVE_INFINITY)
-				const hi = INTRINSICS.floor(current.max ?? Number.POSITIVE_INFINITY)
-				if (lo > hi) {
-					this.#domain = new ContractError(
-						'validateShape: an integer number shape has an empty integer range',
-						{
-							code: 'range',
-							context: { path: pathOf(this.#path), shape: 'integer' },
-						},
-					)
-				}
+			if (this.#domain === undefined && matchesEmptyRange(range)) {
+				this.#domain = new ContractError('validateShape: a number shape has an empty range', {
+					code: 'range',
+					context: { path: pathOf(this.#path), shape },
+				})
+			}
+			if (
+				this.#domain === undefined &&
+				current.integer === true &&
+				matchesEmptyRange({ ...range, integer: true })
+			) {
+				this.#domain = new ContractError(
+					'validateShape: an integer number shape has an empty integer range',
+					{
+						code: 'range',
+						context: { path: pathOf(this.#path), shape: 'integer' },
+					},
+				)
 			}
 		}
 		if (
@@ -858,6 +861,8 @@ export class ShapePass {
 					key !== 'format' &&
 					key !== 'minimum' &&
 					key !== 'maximum' &&
+					key !== 'exclusiveMinimum' &&
+					key !== 'exclusiveMaximum' &&
 					key !== 'minItems' &&
 					key !== 'maxItems' &&
 					key !== 'items' &&
@@ -987,7 +992,7 @@ export class ShapePass {
 					)
 				}
 			}
-			const rangeList = ['minimum', 'maximum']
+			const rangeList = ['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum']
 			for (const rangeIndex of iterateIndices(() => rangeList.length)) {
 				const key = rangeList[rangeIndex]
 				if (key === undefined) continue

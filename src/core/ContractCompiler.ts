@@ -842,7 +842,9 @@ export class ContractCompiler<
 				return INTRINSICS.freeze({
 					type: owned.integer === true ? 'integer' : 'number',
 					...(owned.min !== undefined ? { minimum: owned.min } : {}),
+					...(owned.over !== undefined ? { exclusiveMinimum: owned.over } : {}),
 					...(owned.max !== undefined ? { maximum: owned.max } : {}),
+					...(owned.under !== undefined ? { exclusiveMaximum: owned.under } : {}),
 					...(owned.description !== undefined ? { description: owned.description } : {}),
 				})
 			case 'boolean':
@@ -1028,6 +1030,18 @@ export class ContractCompiler<
 		return owned.date === true ? whereOf(guard, matchesCalendarDate) : guard
 	}
 
+	// The finite-number range a number node declares, or `undefined` when it declares no bound.
+	#rangeOf(owned: NumberShape): Guard<number> | undefined {
+		const { min, over, max, under } = owned
+		if (over === undefined && under === undefined) {
+			return min === undefined && max === undefined ? undefined : boundsOf(min, max)
+		}
+		return whereOf(
+			boundsOf(min, max),
+			(value) => (over === undefined || value > over) && (under === undefined || value < under),
+		)
+	}
+
 	static #acceptShape(value: unknown): boolean {
 		return isSuccess(
 			attempt(() => {
@@ -1044,13 +1058,11 @@ export class ContractCompiler<
 			case 'string':
 				return this.#stringGuard(owned)
 			case 'number': {
-				const base = owned.integer === true ? isInteger : isFiniteNumber
-				if (owned.min === undefined && owned.max === undefined) return base
-				// `boundsOf` already refines `isFiniteNumber`; intersect with `isInteger`
+				const within = this.#rangeOf(owned)
+				if (within === undefined) return owned.integer === true ? isInteger : isFiniteNumber
+				// The range already refines `isFiniteNumber`; intersect with `isInteger`
 				// when the leaf is an integer so both the integrality and the bounds hold.
-				return owned.integer === true
-					? intersectionOf(isInteger, boundsOf(owned.min, owned.max))
-					: boundsOf(owned.min, owned.max)
+				return owned.integer === true ? intersectionOf(isInteger, within) : within
 			}
 			case 'boolean':
 				return isBoolean
@@ -1293,10 +1305,10 @@ export class ContractCompiler<
 			}
 			case 'number': {
 				const base = owned.integer === true ? parseInteger : parseNumber
-				if (owned.min === undefined && owned.max === undefined) return base
-				// The same bound check the guard applies (integrality is already enforced by
+				// The same range the guard applies (integrality is already enforced by
 				// `parseInteger`, so only the bounds need re-checking after coercion).
-				const within = boundsOf(owned.min, owned.max)
+				const within = this.#rangeOf(owned)
+				if (within === undefined) return base
 				return (value) => {
 					const parsed = base(value)
 					return parsed !== undefined && within(parsed) ? parsed : undefined
@@ -1676,7 +1688,12 @@ export class ContractCompiler<
 			case 'number': {
 				const node: NumberShape = owned
 				const kind: FaultKind = owned.integer === true ? 'integer' : 'number'
-				const refined = owned.integer === true || owned.min !== undefined || owned.max !== undefined
+				const refined =
+					owned.integer === true ||
+					owned.min !== undefined ||
+					owned.over !== undefined ||
+					owned.max !== undefined ||
+					owned.under !== undefined
 				return (value, path) => {
 					if (!isFiniteNumber(value)) {
 						return [{ reason: 'type', path, expected: kind, received: preview(value) }]
@@ -2057,7 +2074,12 @@ export class ContractCompiler<
 			case 'number': {
 				const node: NumberShape = owned
 				const kind: FaultKind = owned.integer === true ? 'integer' : 'number'
-				const refined = owned.integer === true || owned.min !== undefined || owned.max !== undefined
+				const refined =
+					owned.integer === true ||
+					owned.min !== undefined ||
+					owned.over !== undefined ||
+					owned.max !== undefined ||
+					owned.under !== undefined
 				return (value, path) => {
 					const parsed = parseNumber(value)
 					if (parsed === undefined) {
@@ -2424,18 +2446,48 @@ export class ContractCompiler<
 			}
 			case 'number': {
 				const whole = owned.integer === true
-				const minimum = owned.min
-				const maximum = owned.max
+				const inside = this.#rangeOf(owned)
+				// An integer node narrows an exclusive bound to the nearest whole number inside it.
+				const above =
+					owned.over === undefined
+						? undefined
+						: whole
+							? INTRINSICS.floor(owned.over) + 1
+							: owned.over
+				const below =
+					owned.under === undefined
+						? undefined
+						: whole
+							? INTRINSICS.ceil(owned.under) - 1
+							: owned.under
+				const minimum =
+					owned.min === undefined || above === undefined
+						? (owned.min ?? above)
+						: INTRINSICS.max(owned.min, above)
+				const maximum =
+					owned.max === undefined || below === undefined
+						? (owned.max ?? below)
+						: INTRINSICS.min(owned.max, below)
 				return (random) => {
 					const sample = drawRandom(random, whole ? 'integer' : 'number')
-					if (whole) {
-						const lo = INTRINSICS.ceil(minimum ?? (maximum === undefined ? -100 : maximum - 100))
-						const hi = INTRINSICS.floor(maximum ?? (minimum === undefined ? 100 : minimum + 100))
-						return lo === hi ? lo : INTRINSICS.floor(lo * (1 - sample) + hi * sample)
-					}
-					const lo = minimum ?? (maximum === undefined ? -100 : maximum - 100)
-					const hi = maximum ?? (minimum === undefined ? 100 : minimum + 100)
-					return lo === hi ? lo : lo * (1 - sample) + hi * sample
+					const low = minimum ?? (maximum === undefined ? -100 : maximum - 100)
+					const high = maximum ?? (minimum === undefined ? 100 : minimum + 100)
+					const lo = whole ? INTRINSICS.ceil(low) : low
+					const hi = whole ? INTRINSICS.floor(high) : high
+					const drawn =
+						lo === hi
+							? lo
+							: whole
+								? INTRINSICS.floor(lo * (1 - sample) + hi * sample)
+								: lo * (1 - sample) + hi * sample
+					if (inside === undefined || inside(drawn)) return drawn
+					// A draw can land on an exclusive bound or round past a bound, so the midpoint is the second candidate.
+					const middle = whole ? INTRINSICS.floor(lo / 2 + hi / 2) : lo / 2 + hi / 2
+					if (inside(middle)) return middle
+					throw new ContractError(
+						'compileGenerator: no number lies inside the number shape bounds — supply values another way',
+						{ code: 'generate', context: { shape: whole ? 'integer' : 'number' } },
+					)
 				}
 			}
 			case 'boolean':

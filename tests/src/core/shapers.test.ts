@@ -58,8 +58,15 @@ import {
 	validateShape,
 	valueToSchema,
 } from '@src/core'
+import * as core from '@src/core'
 import type { Equal, Expect } from '../../setup.js'
 import {
+	ADJACENT_NUMBER_RANGES,
+	callOptionDoor,
+	EMPTY_NUMBER_RANGES,
+	OPTION_DOORS,
+	OPTION_FUNCTIONS,
+	OPTIONLESS_SHAPE_DOORS,
 	buildNonJSONValues,
 	polluteArrayConstruction,
 	buildCycle,
@@ -2374,7 +2381,9 @@ describe('shape builders — a built child answers as a walked one does', () => 
 
 	it.each([
 		'min',
+		'over',
 		'max',
+		'under',
 		'pattern',
 		'description',
 		'integer',
@@ -2934,5 +2943,152 @@ describe('functionShape', () => {
 		expect(schemaToShape({ not: {}, format: 'function', description: 'Runs it' })).toEqual(
 			rawShape({ description: 'Runs it' }),
 		)
+	})
+})
+
+describe('option doors — an unread key', () => {
+	it("derives the door population from the barrel's shape functions and the option functions", () => {
+		const shapes = Object.entries(core)
+			.filter(([name, value]) => name.endsWith('Shape') && typeof value === 'function')
+			.map(([name]) => name)
+
+		expect(shapes).toEqual(expect.arrayContaining(['stringShape', 'numberShape', 'rawShape']))
+		expect([...Object.keys(OPTION_DOORS), ...OPTIONLESS_SHAPE_DOORS].sort()).toEqual(
+			[...shapes, ...OPTION_FUNCTIONS].sort(),
+		)
+	})
+
+	it.each(Object.keys(OPTION_DOORS))(
+		'%s refuses an own enumerable key it does not read',
+		(name) => {
+			const door = OPTION_DOORS[name]
+			if (door === undefined) throw new Error(`No option door is declared for ${name}`)
+			const known = Object.keys(door.options).join(', ')
+
+			for (const stray of ['nickname', 'mininum']) {
+				for (const value of ['Ada', undefined]) {
+					const error = captureContractError(() =>
+						callOptionDoor(name, { ...door.options, [stray]: value }),
+					)
+					expect(error.code).toBe('structure')
+					expect(error.message).toBe(`${name}: unknown option "${stray}"; the options are ${known}`)
+					expect(error.context).toEqual({ path: [stray], shape: door.shape })
+				}
+			}
+		},
+	)
+
+	it.each(Object.keys(OPTION_DOORS))('%s reads every key its options type declares', (name) => {
+		const door = OPTION_DOORS[name]
+		if (door === undefined) throw new Error(`No option door is declared for ${name}`)
+
+		expect(attempt(() => callOptionDoor(name, door.options)).success).toBe(true)
+		for (const [key, value] of Object.entries(door.options)) {
+			expect(attempt(() => callOptionDoor(name, { [key]: value })).success, `${name}.${key}`).toBe(
+				true,
+			)
+		}
+	})
+
+	it.each(Object.keys(OPTION_DOORS))(
+		'%s builds past an inherited, a symbol, and a non-enumerable key',
+		(name) => {
+			const plain = callOptionDoor(name, {})
+			const hidden = Object.defineProperty({}, 'nickname', { value: 'Ada', enumerable: false })
+
+			expect(pollutePrototypeData('nickname', 'Ada', () => callOptionDoor(name, {}))).toEqual(plain)
+			expect(callOptionDoor(name, { [Symbol('nickname')]: 'Ada' })).toEqual(plain)
+			expect(callOptionDoor(name, hidden)).toEqual(plain)
+		},
+	)
+
+	it('refuses an unread key after the plain-record check and before a value check', () => {
+		const instance = Object.assign(createClassInstance(), { nickname: 'Ada' })
+		const record = captureContractError(() => Reflect.apply(numberShape, undefined, [instance]))
+		const value = captureContractError(() =>
+			Reflect.apply(numberShape, undefined, [{ min: Number.NaN, nickname: 'Ada' }]),
+		)
+
+		expect(record.message).toBe('numberShape: options must be a plain record')
+		expect(value.message).toBe(
+			'numberShape: unknown option "nickname"; the options are min, over, max, under, integer, description',
+		)
+		expect(captureContractError(() => numberShape({ min: Number.NaN })).code).toBe('bound')
+	})
+})
+
+describe('numberShape — exclusive bounds', () => {
+	it('carries over and under beside min and max', () => {
+		const shape = numberShape({ min: 0, over: -1, max: 120, under: 121 })
+
+		expect(shape).toEqual({ category: 'number', min: 0, over: -1, max: 120, under: 121 })
+		expect(Object.keys(shape)).toEqual(['category', 'min', 'over', 'max', 'under'])
+		expect(Object.isFrozen(shape)).toBe(true)
+		expect(integerShape({ over: 0, under: 3 })).toEqual({
+			category: 'number',
+			over: 0,
+			under: 3,
+			integer: true,
+		})
+	})
+
+	it('refuses a bound that is not finite with code bound', () => {
+		for (const bound of ['over', 'under'] as const) {
+			for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, '1']) {
+				for (const [run, shape] of [
+					[numberShape, 'number'],
+					[integerShape, 'integer'],
+				] as const) {
+					const error = captureContractError(() =>
+						Reflect.apply(run, undefined, [{ [bound]: value }]),
+					)
+					expect(error.code).toBe('bound')
+					expect(error.message).toBe(`numberShape: ${bound} must be finite`)
+					expect(error.context).toMatchObject({ shape, limit: 'finite number' })
+				}
+				const authored = captureContractError(() =>
+					validateShape({ category: 'number', [bound]: value }),
+				)
+				expect(authored.code).toBe(typeof value === 'number' ? 'bound' : 'structure')
+				expect(authored.context?.path).toEqual(typeof value === 'number' ? [] : [bound])
+			}
+		}
+	})
+
+	it.each(EMPTY_NUMBER_RANGES)('refuses %s with code range', (_label, options, message) => {
+		const built = captureContractError(() => numberShape(options))
+		const authored = captureContractError(() => validateShape({ category: 'number', ...options }))
+
+		for (const error of [built, authored]) {
+			expect(error.code).toBe('range')
+			expect(error.message).toBe(`validateShape: ${message}`)
+			expect(error.context?.path).toEqual([])
+		}
+	})
+
+	it.each(ADJACENT_NUMBER_RANGES)(
+		'builds %s and admits its witness',
+		(_label, options, witness) => {
+			expect(createContract(numberShape(options)).is(witness)).toBe(true)
+			expect(() => validateShape({ category: 'number', ...options })).not.toThrow()
+		},
+	)
+
+	it('lets rawShape embed exclusiveMinimum and exclusiveMaximum as finite numbers', () => {
+		const schema: JSONSchema = { type: 'number', exclusiveMinimum: 0, exclusiveMaximum: 1 }
+
+		expect(rawShape(schema).schema).toEqual(schema)
+		for (const keyword of ['exclusiveMinimum', 'exclusiveMaximum']) {
+			for (const value of [Number.NaN, Number.POSITIVE_INFINITY, '1', true]) {
+				const error = captureContractError(() =>
+					Reflect.apply(rawShape, undefined, [{ type: 'number', [keyword]: value }]),
+				)
+				expect(error.code).toBe('structure')
+				expect(error.message).toBe(
+					'validateShape: raw schema numeric bounds must be finite numbers',
+				)
+				expect(error.context?.path).toEqual(['schema', keyword])
+			}
+		}
 	})
 })

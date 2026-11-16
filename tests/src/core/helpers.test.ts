@@ -5661,6 +5661,9 @@ describe('renderForm', () => {
 		expect(renderForm({ type: 'number', minimum: 0, maximum: 1 })).toBe(
 			'number (minimum 0, maximum 1)',
 		)
+		expect(renderForm({ type: 'integer', exclusiveMinimum: 0, exclusiveMaximum: 10 })).toBe(
+			'integer (exclusiveMinimum 0, exclusiveMaximum 10)',
+		)
 		expect(renderForm({ type: 'array', items: { type: 'string' }, minItems: 1 })).toBe(
 			'array of string (minItems 1)',
 		)

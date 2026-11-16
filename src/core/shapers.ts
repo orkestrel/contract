@@ -105,12 +105,9 @@ export function auditFaultShape(): AuditFaultShape {
  */
 export function stringShape(options?: StringShapeOptions): StringShape {
 	return contain(() => {
-		const safe = readOptions(
-			options,
-			['min', 'max', 'pattern', 'date', 'description'],
-			'stringShape',
-			'string',
-		)
+		const keys = ['min', 'max', 'pattern', 'date', 'description'] as const
+		const safe = readOptions(options, keys, 'stringShape', 'string')
+		refuseOptionKeys(options, keys, 'stringShape', 'string')
 		const pattern = safe?.pattern
 		if (safe?.min !== undefined && (!INTRINSICS.safe(safe.min) || safe.min < 0)) {
 			throw new ContractError('stringShape: min must be a non-negative safe integer', {
@@ -190,13 +187,13 @@ export function stringShape(options?: StringShapeOptions): StringShape {
  * Builds a numeric {@link NumberShape}.
  *
  * @remarks
- * A present `min` or `max` must be finite. `NaN` and `±Infinity` throw a `bound` {@link
- * ContractError} at construction, because no finite value satisfies them and no JSON
- * Schema keyword expresses them.
+ * `min` and `max` are inclusive; `over` and `under` are exclusive. A present bound must be
+ * finite. `NaN` and `±Infinity` throw a `bound` {@link ContractError} at construction,
+ * because no finite value satisfies them and no JSON Schema keyword expresses them.
  *
- * @param options - Optional bounds (`min` / `max`), `integer`, and `description`
+ * @param options - Optional bounds (`min` / `over` / `max` / `under`), `integer`, and `description`
  * @returns A number shape
- * @throws {ContractError} When a present bound is not finite
+ * @throws {ContractError} When an option key is unknown, a present bound is not finite, or no number satisfies the bounds
  *
  * @example
  * ```ts
@@ -205,29 +202,27 @@ export function stringShape(options?: StringShapeOptions): StringShape {
  */
 export function numberShape(options?: NumberShapeOptions): NumberShape {
 	return contain(() => {
-		const safe = readOptions(
-			options,
-			['min', 'max', 'integer', 'description'],
-			'numberShape',
-			'number',
-		)
+		const keys = ['min', 'over', 'max', 'under', 'integer', 'description'] as const
+		const safe = readOptions(options, keys, 'numberShape', 'number')
+		refuseOptionKeys(options, keys, 'numberShape', 'number')
 		const shape = safe?.integer === true ? 'integer' : 'number'
-		if (safe?.min !== undefined && !INTRINSICS.finite(safe.min)) {
-			throw new ContractError('numberShape: min must be finite', {
-				code: 'bound',
-				context: { shape, limit: 'finite number', received: preview(safe.min) },
-			})
-		}
-		if (safe?.max !== undefined && !INTRINSICS.finite(safe.max)) {
-			throw new ContractError('numberShape: max must be finite', {
-				code: 'bound',
-				context: { shape, limit: 'finite number', received: preview(safe.max) },
-			})
+		const bounds = ['min', 'over', 'max', 'under'] as const
+		for (const index of iterateIndices(() => bounds.length)) {
+			const bound = bounds[index]
+			const value = bound === undefined ? undefined : safe?.[bound]
+			if (value !== undefined && !INTRINSICS.finite(value)) {
+				throw new ContractError(`numberShape: ${bound} must be finite`, {
+					code: 'bound',
+					context: { shape, limit: 'finite number', received: preview(value) },
+				})
+			}
 		}
 		const result: NumberShape = {
 			category: 'number',
 			...(safe?.min === undefined ? {} : { min: safe.min }),
+			...(safe?.over === undefined ? {} : { over: safe.over }),
 			...(safe?.max === undefined ? {} : { max: safe.max }),
+			...(safe?.under === undefined ? {} : { under: safe.under }),
 			...(safe?.integer === undefined ? {} : { integer: safe.integer }),
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
@@ -244,11 +239,13 @@ export function numberShape(options?: NumberShapeOptions): NumberShape {
  *
  * @param options - Optional bounds and `description` (no `integer` key)
  * @returns An integer number shape
- * @throws {ContractError} When a present bound is not finite
+ * @throws {ContractError} When an option key is unknown, a present bound is not finite, or no whole number satisfies the bounds
  */
 export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): NumberShape {
 	return contain(() => {
-		const safe = readOptions(options, ['min', 'max', 'description'], 'integerShape', 'integer')
+		const keys = ['min', 'over', 'max', 'under', 'description'] as const
+		const safe = readOptions(options, keys, 'integerShape', 'integer')
+		refuseOptionKeys(options, keys, 'integerShape', 'integer')
 		return numberShape({ ...safe, integer: true })
 	}, 'integerShape')
 }
@@ -293,6 +290,7 @@ export function dateShape(options?: Omit<StringShapeOptions, 'date' | 'pattern'>
 export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
 	return contain(() => {
 		const safe = readOptions(options, ['description'], 'booleanShape', 'boolean')
+		refuseOptionKeys(options, ['description'], 'booleanShape', 'boolean')
 		const shape: BooleanShape = {
 			category: 'boolean',
 			...(safe?.description === undefined ? {} : { description: safe.description }),
@@ -315,6 +313,7 @@ export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
 export function nullShape(options?: NullShapeOptions): NullShape {
 	return contain(() => {
 		const safe = readOptions(options, ['description'], 'nullShape', 'null')
+		refuseOptionKeys(options, ['description'], 'nullShape', 'null')
 		const shape: NullShape = {
 			category: 'null',
 			...(safe?.description === undefined ? {} : { description: safe.description }),
@@ -357,6 +356,7 @@ export function literalShape(
 			})
 		}
 		const safe = readOptions(options, ['description'], 'literalShape', 'literal')
+		refuseOptionKeys(options, ['description'], 'literalShape', 'literal')
 		const snapshot = readArrayEntries(values)
 		if (isFailure(snapshot)) {
 			throw new ContractError('literalShape: values could not be copied', {
@@ -418,6 +418,7 @@ export function arrayShape<S extends ContractShape>(
 ): ArrayShape<S> {
 	return contain(() => {
 		const safe = readOptions(options, ['min', 'max', 'description'], 'arrayShape', 'array')
+		refuseOptionKeys(options, ['min', 'max', 'description'], 'arrayShape', 'array')
 		if (safe?.min !== undefined && (!INTRINSICS.safe(safe.min) || safe.min < 0)) {
 			throw new ContractError('arrayShape: min must be a non-negative safe integer', {
 				code: 'bound',
@@ -482,12 +483,9 @@ export function objectShape<
 				context: { path: ['properties'], shape: 'object' },
 			})
 		}
-		const safe = readOptions(
-			options,
-			['additionalProperties', 'description'],
-			'objectShape',
-			'object',
-		)
+		const keys = ['additionalProperties', 'description'] as const
+		const safe = readOptions(options, keys, 'objectShape', 'object')
+		refuseOptionKeys(options, keys, 'objectShape', 'object')
 		const copied = readValue(
 			() => {
 				const record = matchesRecordBrand(input)
@@ -563,6 +561,7 @@ export function recordShape<S extends ContractShape>(
 			})
 		}
 		const safe = readOptions(options, ['description'], 'recordShape', 'object')
+		refuseOptionKeys(options, ['description'], 'recordShape', 'object')
 		const shape: ObjectShape<Record<never, never>, S> = {
 			category: 'object',
 			properties: INTRINSICS.freeze({}),
@@ -750,6 +749,7 @@ export function nullableShape<S extends ContractShape>(inner: S): NullableShape<
 export function jsonShape(options?: JSONShapeOptions): JSONShape {
 	return contain(() => {
 		const safe = readOptions(options, ['description'], 'jsonShape', 'json')
+		refuseOptionKeys(options, ['description'], 'jsonShape', 'json')
 		const shape: JSONShape = {
 			category: 'json',
 			...(safe?.description === undefined ? {} : { description: safe.description }),
@@ -772,6 +772,7 @@ export function jsonShape(options?: JSONShapeOptions): JSONShape {
 export function shapeShape(options?: ShapeShapeOptions): ShapeShape {
 	return contain(() => {
 		const safe = readOptions(options, ['description'], 'shapeShape', 'shape')
+		refuseOptionKeys(options, ['description'], 'shapeShape', 'shape')
 		const shape: ShapeShape = {
 			category: 'shape',
 			...(safe?.description === undefined ? {} : { description: safe.description }),
@@ -799,6 +800,7 @@ export function shapeShape(options?: ShapeShapeOptions): ShapeShape {
 export function functionShape(options?: FunctionShapeOptions): FunctionShape {
 	return contain(() => {
 		const safe = readOptions(options, ['description'], 'functionShape', 'function')
+		refuseOptionKeys(options, ['description'], 'functionShape', 'function')
 		const shape: FunctionShape = {
 			category: 'function',
 			...(safe?.description === undefined ? {} : { description: safe.description }),

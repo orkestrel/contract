@@ -1,4 +1,11 @@
-import type { ContractShape, Fault, JSONSchema, LiteralValue, RawShape } from '@src/core'
+import type {
+	ContractShape,
+	Fault,
+	JSONSchema,
+	LiteralValue,
+	NumberShape,
+	RawShape,
+} from '@src/core'
 import type { TerminalIntrinsic } from '../../setup.js'
 import {
 	iterateIndices,
@@ -58,6 +65,8 @@ import {
 	ASTRAL,
 	DATE_ADMITTED,
 	DATE_REFUSED,
+	faultsToConstraints,
+	NUMBER_BOUNDARY_ROWS,
 	DATE_SEEDS,
 	buildSurrogateText,
 	buildReportingRecord,
@@ -568,6 +577,8 @@ const COMPLETE_RAW_SCHEMA: JSONSchema = {
 	format: 'custom',
 	minimum: 0,
 	maximum: 1,
+	exclusiveMinimum: -1,
+	exclusiveMaximum: 2,
 	minItems: 0,
 	maxItems: 1,
 	items: { type: 'string' },
@@ -587,7 +598,15 @@ const COMPLETE_SHAPES = {
 		date: false,
 		description: 'complete',
 	},
-	number: { category: 'number', min: 0, max: 1, integer: true, description: 'complete' },
+	number: {
+		category: 'number',
+		min: 0,
+		over: -1,
+		max: 1,
+		under: 2,
+		integer: true,
+		description: 'complete',
+	},
 	boolean: { category: 'boolean', description: 'complete' },
 	null: { category: 'null', description: 'complete' },
 	literal: { category: 'literal', values: ['x', 1, true], description: 'complete' },
@@ -772,7 +791,7 @@ describe('validateShape', () => {
 			['createContract', (shape: ContractShape) => createContract(shape), true],
 		]),
 	)(
-		'%s applies descriptor-first accessor policy across all 42 node fields',
+		'%s applies descriptor-first accessor policy across all 44 node fields',
 		(_name, entry, ownership) => {
 			const cases = Object.values(COMPLETE_SHAPES).flatMap((source) =>
 				Object.keys(source).map((field) => ({ source, field })),
@@ -990,7 +1009,9 @@ describe('validateShape', () => {
 			['string.description', 'alternate'],
 			['number.category', 'boolean'],
 			['number.min', -1],
+			['number.over', -2],
 			['number.max', 2],
+			['number.under', 3],
 			['number.integer', false],
 			['number.description', 'alternate'],
 			['boolean.category', 'null'],
@@ -6657,5 +6678,133 @@ describe('date string shapes', () => {
 		expect(validateShape(authored)).toBeUndefined()
 		expect(compileGuard(authored)('2026-11-10')).toBe(true)
 		expect(compileGuard(authored)('2026-02-30')).toBe(false)
+	})
+})
+
+describe('exclusive number bounds — compiled doors', () => {
+	it.each(NUMBER_BOUNDARY_ROWS)('answers %s at every door', (_label, options, value, violated) => {
+		const contract = createContract(numberShape(options))
+		const admitted = violated === undefined
+		const constraints = admitted ? [] : [violated]
+		const limits = violated === undefined ? [] : [options[violated]]
+
+		expect(contract.is(value)).toBe(admitted)
+		expect(Object.is(contract.parse(value), admitted ? value : undefined)).toBe(true)
+		for (const faults of [contract.audit(value), contract.explain(value)]) {
+			expect(faultsToConstraints(faults)).toEqual(constraints)
+			expect(faults.map((fault) => ('limit' in fault ? fault.limit : undefined))).toEqual(limits)
+		}
+	})
+
+	it('emits exclusiveMinimum and exclusiveMaximum beside minimum and maximum', () => {
+		expect(compileSchema(numberShape({ min: 0, over: -1, max: 120, under: 121 }))).toEqual({
+			type: 'number',
+			minimum: 0,
+			exclusiveMinimum: -1,
+			maximum: 120,
+			exclusiveMaximum: 121,
+		})
+		expect(compileSchema(integerShape({ over: 0, description: 'Seat count' }))).toEqual({
+			type: 'integer',
+			exclusiveMinimum: 0,
+			description: 'Seat count',
+		})
+	})
+
+	it('reports number faults in the order integer, min, over, max, under', () => {
+		const contract = createContract(integerShape({ min: 2, over: 2, max: 10, under: 10 }))
+		const unchecked: NumberShape = {
+			category: 'number',
+			integer: true,
+			min: 5,
+			over: 5,
+			max: -5,
+			under: -5,
+		}
+
+		for (const faults of [contract.audit(1.5), contract.explain(1.5)]) {
+			expect(faultsToConstraints(faults)).toEqual(['integer', 'min', 'over'])
+		}
+		for (const faults of [contract.audit(10.5), contract.explain(10.5)]) {
+			expect(faultsToConstraints(faults)).toEqual(['integer', 'max', 'under'])
+		}
+		expect(buildNumberFaults(unchecked, 0.5, ['seats'])).toEqual([
+			{
+				reason: 'constraint',
+				path: ['seats'],
+				expected: 'integer',
+				constraint: 'integer',
+				received: '0.5',
+			},
+			{
+				reason: 'constraint',
+				path: ['seats'],
+				expected: 'integer',
+				constraint: 'min',
+				limit: 5,
+				received: '0.5',
+			},
+			{
+				reason: 'constraint',
+				path: ['seats'],
+				expected: 'integer',
+				constraint: 'over',
+				limit: 5,
+				received: '0.5',
+			},
+			{
+				reason: 'constraint',
+				path: ['seats'],
+				expected: 'integer',
+				constraint: 'max',
+				limit: -5,
+				received: '0.5',
+			},
+			{
+				reason: 'constraint',
+				path: ['seats'],
+				expected: 'integer',
+				constraint: 'under',
+				limit: -5,
+				received: '0.5',
+			},
+		])
+	})
+
+	it('generates only values strictly inside exclusive bounds', () => {
+		const shapes = [
+			numberShape({ over: 0 }),
+			numberShape({ under: 0 }),
+			numberShape({ over: 0, under: 1 }),
+			numberShape({ min: 0, over: 0, max: 1 }),
+			numberShape({ over: 1 - Number.EPSILON / 2, max: 1 }),
+			integerShape({ over: 0, under: 2 }),
+			integerShape({ over: -0.5, under: 0.5 }),
+		]
+		for (const shape of shapes) {
+			const contract = createContract(shape)
+			const label = JSON.stringify(shape)
+			const lowest = contract.generate(() => 0)
+			const highest = contract.generate(() => 1 - Number.EPSILON / 2)
+
+			expect(contract.is(lowest), `${label} drew ${lowest} at the lowest sample`).toBe(true)
+			expect(contract.is(highest), `${label} drew ${highest} at the highest sample`).toBe(true)
+			for (const seed of [7, 2026]) {
+				const random = seededRandom(seed)
+				for (const draw of iterateIndices(() => 8)) {
+					const value = contract.generate(random)
+					expect(contract.is(value), `${label} seed ${seed} draw ${draw} drew ${value}`).toBe(true)
+				}
+			}
+		}
+	})
+
+	it('refuses to generate where no number lies strictly inside the bounds', () => {
+		const contract = createContract(numberShape({ over: 0, under: Number.MIN_VALUE }))
+		const error = captureContractError(() => contract.generate(() => 0.5))
+
+		expect(error.code).toBe('generate')
+		expect(error.context).toEqual({ shape: 'number' })
+		expect([0, Number.MIN_VALUE].map((value) => contract.is(value))).toEqual([false, false])
 	})
 })

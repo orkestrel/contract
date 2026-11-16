@@ -4,22 +4,37 @@
 import type {
 	LiteralValue,
 	AuditFault,
+	ArrayShapeOptions,
+	BooleanShapeOptions,
 	ContractInterface,
 	ContractShape,
 	Fault,
 	FaultConstraint,
 	FaultKind,
+	FaultTextOptions,
+	FunctionShapeOptions,
 	Guard,
 	GuardsShape,
 	JSONSchema,
+	JSONShapeOptions,
 	JSONValue,
 	JSONSchemaType,
+	LiteralShapeOptions,
+	NullShapeOptions,
+	NumberShapeOptions,
+	ObjectShapeOptions,
 	OptionalShape,
 	OptionalShapeOptions,
 	RandomFunction,
+	RecordShapeOptions,
 	Result,
 	SampleMemo,
+	SchemaToShapeOptions,
+	ShapeShapeOptions,
+	StringGuardOptions,
 	StringShape,
+	StringShapeOptions,
+	ValueToSchemaOptions,
 } from '@src/core'
 import { createRecorder } from '@orkestrel/test'
 import { isUndefined } from '@src/core'
@@ -5915,6 +5930,7 @@ export const FOREIGN_SCHEMA_ROWS: ReadonlyArray<
 	['integer past the safe range', { type: 'integer' }, 1e21, true],
 	['integer past two to the fifty-third', { type: 'integer' }, 2 ** 60, true],
 	['exclusiveMinimum', { type: 'number', exclusiveMinimum: 0 }, 1, true],
+	['exclusiveMinimum at its bound', { type: 'number', exclusiveMinimum: 0 }, 0, false],
 	// The schema refuses this value; dropping a contradictory pair widens past it.
 	['a contradictory range', { type: 'integer', minimum: 5, maximum: 1 }, 3, true],
 	['a fractional minLength', { type: 'string', minLength: 1.5 }, 'ab', true],
@@ -6414,3 +6430,285 @@ export const DATE_REFUSED: ReadonlyArray<readonly [string, unknown]> = Object.fr
 
 /** Lists the seeds the date generator proofs draw from. */
 export const DATE_SEEDS: readonly number[] = Object.freeze([1, 7, 42, 2026])
+
+// === Option doors
+
+/** Declares how one public function takes an options record, and every key it reads. */
+export interface OptionDoor {
+	/** Holds the arguments the door builds from, with a placeholder at the options position. */
+	readonly args: readonly unknown[]
+	/** Names the argument position of the options record. */
+	readonly position: number
+	/** Holds a valid value for every key the door reads, in the order its refusal lists them. */
+	readonly options: Readonly<Record<string, unknown>>
+	/** Names the shape label a refusal carries in its context. */
+	readonly shape: string
+}
+
+/**
+ * Lists every public function that takes an options record under the refusal of an unread key.
+ *
+ * @remarks
+ * Each `options` record satisfies the door's options type with every key required, so a key the
+ * type gains and the table lacks stops compiling.
+ */
+export const OPTION_DOORS: Readonly<Record<string, OptionDoor>> = Object.freeze({
+	stringShape: {
+		args: [undefined],
+		position: 0,
+		options: {
+			min: 0,
+			max: 80,
+			pattern: /^[A-Z]/,
+			date: false,
+			description: 'Display name',
+		} satisfies Required<StringShapeOptions>,
+		shape: 'string',
+	},
+	numberShape: {
+		args: [undefined],
+		position: 0,
+		options: {
+			min: 0,
+			over: -1,
+			max: 120,
+			under: 121,
+			integer: false,
+			description: 'Age in years',
+		} satisfies Required<NumberShapeOptions>,
+		shape: 'number',
+	},
+	integerShape: {
+		args: [undefined],
+		position: 0,
+		options: {
+			min: 0,
+			over: -1,
+			max: 120,
+			under: 121,
+			description: 'Age in years',
+		} satisfies Required<Omit<NumberShapeOptions, 'integer'>>,
+		shape: 'integer',
+	},
+	dateShape: {
+		args: [undefined],
+		position: 0,
+		options: {
+			min: 10,
+			max: 10,
+			description: 'Check-in day',
+		} satisfies Required<Omit<StringShapeOptions, 'date' | 'pattern'>>,
+		shape: 'string',
+	},
+	booleanShape: {
+		args: [undefined],
+		position: 0,
+		options: {
+			description: 'Whether the account is active',
+		} satisfies Required<BooleanShapeOptions>,
+		shape: 'boolean',
+	},
+	nullShape: {
+		args: [undefined],
+		position: 0,
+		options: { description: 'No middle name' } satisfies Required<NullShapeOptions>,
+		shape: 'null',
+	},
+	literalShape: {
+		args: [['admin', 'member'], undefined],
+		position: 1,
+		options: { description: 'Account role' } satisfies Required<LiteralShapeOptions>,
+		shape: 'literal',
+	},
+	arrayShape: {
+		args: [{ category: 'string' }, undefined],
+		position: 1,
+		options: { min: 0, max: 10, description: 'Tags' } satisfies Required<ArrayShapeOptions>,
+		shape: 'array',
+	},
+	objectShape: {
+		args: [{}, undefined],
+		position: 1,
+		options: {
+			additionalProperties: true,
+			description: 'Profile',
+		} satisfies Required<ObjectShapeOptions<true>>,
+		shape: 'object',
+	},
+	recordShape: {
+		args: [{ category: 'number' }, undefined],
+		position: 1,
+		options: { description: 'Scores by player' } satisfies Required<RecordShapeOptions>,
+		shape: 'object',
+	},
+	optionalShape: {
+		args: [{ category: 'number', integer: true }, undefined],
+		position: 1,
+		options: { default: 3 } satisfies Required<OptionalShapeOptions>,
+		shape: 'optional',
+	},
+	jsonShape: {
+		args: [undefined],
+		position: 0,
+		options: { description: 'Webhook body' } satisfies Required<JSONShapeOptions>,
+		shape: 'json',
+	},
+	shapeShape: {
+		args: [undefined],
+		position: 0,
+		options: { description: 'Form definition' } satisfies Required<ShapeShapeOptions>,
+		shape: 'shape',
+	},
+	functionShape: {
+		args: [undefined],
+		position: 0,
+		options: { description: 'Upgrade callback' } satisfies Required<FunctionShapeOptions>,
+		shape: 'function',
+	},
+	schemaToShape: {
+		args: [{ type: 'string' }, undefined],
+		position: 1,
+		options: { strict: true } satisfies Required<SchemaToShapeOptions>,
+		shape: 'schema',
+	},
+	stringOf: {
+		args: [undefined],
+		position: 0,
+		options: { min: 1, max: 32, pattern: /^[a-z-]+$/ } satisfies Required<StringGuardOptions>,
+		shape: 'string',
+	},
+	valueToSchema: {
+		args: [{ id: 1, name: 'Ada' }, undefined],
+		position: 1,
+		options: {
+			limits: { depth: 4, properties: 16 },
+			closed: true,
+			format: false,
+			enum: false,
+		} satisfies Required<ValueToSchemaOptions>,
+		shape: 'schema',
+	},
+	samplesToSchema: {
+		args: [[{ id: 1 }, { id: 2, name: 'Ada' }], undefined],
+		position: 1,
+		options: {
+			limits: { depth: 4, properties: 16 },
+			closed: true,
+			format: false,
+			enum: false,
+		} satisfies Required<ValueToSchemaOptions>,
+		shape: 'schema',
+	},
+	describeFaults: {
+		args: [[{ reason: 'missing', path: ['age'], expected: 'number' }], undefined, undefined],
+		position: 2,
+		options: { limit: 256 } satisfies Required<FaultTextOptions>,
+		shape: 'fault',
+	},
+})
+
+/** Lists the barrel's `*Shape` functions that take no options record. */
+export const OPTIONLESS_SHAPE_DOORS: readonly string[] = Object.freeze([
+	'auditFaultShape',
+	'cloneShape',
+	'nullableShape',
+	'oneOfShape',
+	'ownShape',
+	'rawShape',
+	'readGuardShape',
+	'unionShape',
+	'validateShape',
+])
+
+/** Lists the functions outside the `*Shape` population that refuse an unread option key. */
+export const OPTION_FUNCTIONS: readonly string[] = Object.freeze([
+	'stringOf',
+	'valueToSchema',
+	'samplesToSchema',
+	'describeFaults',
+])
+
+/**
+ * Calls one {@link OPTION_DOORS} entry through the barrel with an options record in place.
+ *
+ * @param name - The door's export name
+ * @param options - The value placed at the door's options position
+ * @returns What the door returns
+ */
+export function callOptionDoor(name: string, options: unknown): unknown {
+	const door = OPTION_DOORS[name]
+	const run: unknown = Reflect.get(core, name)
+	if (door === undefined || typeof run !== 'function') {
+		throw new Error(`No option door is declared for ${name}`)
+	}
+	const args = [...door.args]
+	args[door.position] = options
+	return Reflect.apply(run, undefined, args)
+}
+
+// === Exclusive number bounds
+
+/**
+ * Lists a number shape's options, one value, and the exclusive bound that value violates.
+ *
+ * @remarks
+ * Each bound meets the value at itself, at the next representable number inside it, and at the
+ * signed zero beside it. A row whose value the shape admits names no bound.
+ */
+export const NUMBER_BOUNDARY_ROWS: ReadonlyArray<
+	readonly [string, NumberShapeOptions, number, 'over' | 'under' | undefined]
+> = Object.freeze([
+	['over 0 at 0', { over: 0 }, 0, 'over'],
+	['over 0 at -0', { over: 0 }, -0, 'over'],
+	['over 0 at the next number above it', { over: 0 }, Number.MIN_VALUE, undefined],
+	['over 0 below it', { over: 0 }, -Number.MIN_VALUE, 'over'],
+	['under 0 at 0', { under: 0 }, 0, 'under'],
+	['under 0 at -0', { under: 0 }, -0, 'under'],
+	['under 0 at the next number below it', { under: 0 }, -Number.MIN_VALUE, undefined],
+	['under 0 above it', { under: 0 }, Number.MIN_VALUE, 'under'],
+	['over 1 at 1', { over: 1, under: 2 }, 1, 'over'],
+	['over 1 at the next number above it', { over: 1, under: 2 }, 1 + Number.EPSILON, undefined],
+	['under 2 at the next number below it', { over: 1, under: 2 }, 2 - Number.EPSILON, undefined],
+	['under 2 at 2', { over: 1, under: 2 }, 2, 'under'],
+	['an integer over 0 at 0', { over: 0, under: 3, integer: true }, 0, 'over'],
+	['an integer over 0 at 1', { over: 0, under: 3, integer: true }, 1, undefined],
+	['an integer under 3 at 2', { over: 0, under: 3, integer: true }, 2, undefined],
+	['an integer under 3 at 3', { over: 0, under: 3, integer: true }, 3, 'under'],
+	['min 0 beside under 1 at 0', { min: 0, under: 1 }, 0, undefined],
+	['min 0 beside under 1 at 1', { min: 0, under: 1 }, 1, 'under'],
+	['over 0 beside max 1 at 1', { over: 0, max: 1 }, 1, undefined],
+	['over 0 beside max 1 at 0', { over: 0, max: 1 }, 0, 'over'],
+	['over 0 beside min 0 at 0', { min: 0, over: 0 }, 0, 'over'],
+	['under 1 beside max 1 at 1', { max: 1, under: 1 }, 1, 'under'],
+])
+
+/** Lists number options whose bounds no number satisfies, with the message the refusal carries. */
+export const EMPTY_NUMBER_RANGES: ReadonlyArray<readonly [string, NumberShapeOptions, string]> =
+	Object.freeze([
+		['over equal to under', { over: 1, under: 1 }, 'a number shape has an empty range'],
+		['over above under', { over: 2, under: 1 }, 'a number shape has an empty range'],
+		['min equal to under', { min: 1, under: 1 }, 'a number shape has an empty range'],
+		['over equal to max', { over: 1, max: 1 }, 'a number shape has an empty range'],
+		['over above max beside min', { min: 0, over: 5, max: 3 }, 'a number shape has an empty range'],
+		['min above max', { min: 2, max: 1 }, 'a number shape has min greater than max'],
+		[
+			'an integer between adjacent integers',
+			{ over: 0, under: 1, integer: true },
+			'an integer number shape has an empty integer range',
+		],
+		[
+			'an integer from a fraction under its ceiling',
+			{ min: 0.2, under: 1, integer: true },
+			'an integer number shape has an empty integer range',
+		],
+	])
+
+/** Lists number options at the edge of emptiness that still admit a number. */
+export const ADJACENT_NUMBER_RANGES: ReadonlyArray<readonly [string, NumberShapeOptions, number]> =
+	Object.freeze([
+		['min equal to max', { min: 1, max: 1 }, 1],
+		['over below under', { over: 0, under: 1 }, 0.5],
+		['min below under by one step', { min: 1, under: 1 + Number.EPSILON }, 1],
+		['over below max by one step', { over: 1 - Number.EPSILON / 2, max: 1 }, 1],
+		['an integer over 0 under 2', { over: 0, under: 2, integer: true }, 1],
+	])

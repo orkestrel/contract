@@ -3,6 +3,7 @@ import type {
 	JSONSchema,
 	JSONSchemaType,
 	LiteralValue,
+	NumberShapeOptions,
 	OptionalShape,
 } from './types.js'
 import {
@@ -23,10 +24,10 @@ import {
 	admitVisited,
 	collectMembers,
 	deriveLengthBounds,
-	deriveRangeBounds,
 	isFailure,
 	limitEntries,
 	iterateIndices,
+	matchesEmptyRange,
 	matchesMember,
 	matchesRecordBrand,
 	matchesVisited,
@@ -353,7 +354,11 @@ export class SchemaShaper {
 		const object = types.length === 0 && INTRINSICS.own(schema, 'properties') ? ['object'] : types
 		const effective: readonly string[] = hasForm ? [] : object
 		this.#confine(schema, ['minLength', 'maxLength', 'format'], this.#names(effective, 'string'))
-		this.#confine(schema, ['minimum', 'maximum'], this.#names(effective, 'number', 'integer'))
+		this.#confine(
+			schema,
+			['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum'],
+			this.#names(effective, 'number', 'integer'),
+		)
 		this.#confine(schema, ['items', 'minItems', 'maxItems'], this.#names(effective, 'array'))
 		this.#confine(
 			schema,
@@ -523,19 +528,42 @@ export class SchemaShaper {
 	}
 
 	#inspectRange(schema: JSONSchema, integer: boolean): void {
-		const min: unknown = INTRINSICS.own(schema, 'minimum') ? schema.minimum : undefined
-		const max: unknown = INTRINSICS.own(schema, 'maximum') ? schema.maximum : undefined
-		if (min !== undefined && !isFiniteNumber(min)) {
-			throw this.#refusal('a range bound must be a finite number', 'minimum')
-		}
-		if (max !== undefined && !isFiniteNumber(max)) {
-			throw this.#refusal('a range bound must be a finite number', 'maximum')
-		}
-		if (isFiniteNumber(min) && isFiniteNumber(max)) {
-			if (min > max) throw this.#refusal('a range may not be contradictory', 'minimum')
-			if (integer && INTRINSICS.ceil(min) > INTRINSICS.floor(max)) {
-				throw this.#refusal('an integer range may not be empty', 'minimum')
+		const keywords = ['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum'] as const
+		for (const index of iterateIndices(() => keywords.length)) {
+			const keyword = keywords[index]
+			if (keyword === undefined || !INTRINSICS.own(schema, keyword)) continue
+			const value: unknown = schema[keyword]
+			if (value !== undefined && !isFiniteNumber(value)) {
+				throw this.#refusal('a range bound must be a finite number', keyword)
 			}
+		}
+		const range = this.#range(schema)
+		// The refusal names the lower bound in force, the exclusive one where it is the stricter.
+		const lower =
+			range.over !== undefined && (range.min === undefined || range.over >= range.min)
+				? 'exclusiveMinimum'
+				: 'minimum'
+		if (matchesEmptyRange(range)) throw this.#refusal('a range may not be contradictory', lower)
+		if (integer && matchesEmptyRange({ ...range, integer: true })) {
+			throw this.#refusal('an integer range may not be empty', lower)
+		}
+	}
+
+	// The range keywords a node holds as finite numbers, read as number shape bounds.
+	#range(schema: JSONSchema): NumberShapeOptions {
+		const min: unknown = INTRINSICS.own(schema, 'minimum') ? schema.minimum : undefined
+		const over: unknown = INTRINSICS.own(schema, 'exclusiveMinimum')
+			? schema.exclusiveMinimum
+			: undefined
+		const max: unknown = INTRINSICS.own(schema, 'maximum') ? schema.maximum : undefined
+		const under: unknown = INTRINSICS.own(schema, 'exclusiveMaximum')
+			? schema.exclusiveMaximum
+			: undefined
+		return {
+			...(isFiniteNumber(min) ? { min } : {}),
+			...(isFiniteNumber(over) ? { over } : {}),
+			...(isFiniteNumber(max) ? { max } : {}),
+			...(isFiniteNumber(under) ? { under } : {}),
 		}
 	}
 
@@ -637,11 +665,11 @@ export class SchemaShaper {
 	//    spelling means, and it has no exactly-one to keep. An empty list or any
 	//    unrecognized member widens the whole node; dropping a member would narrow it.
 	// 5. `type: 'string'` / `'number'` / `'integer'` / `'boolean'` / `'null'` —
-	//    the matching primitive shape, with length/range bounds derived through
-	//    `deriveLengthBounds` / `deriveRangeBounds`. An integer node additionally
-	//    drops its bounds when they describe an EMPTY integer range (for example
-	//    `minimum: 1.5, maximum: 1.6`) — the same emptiness `validateShape`
-	//    rejects — so the result is always a valid shape.
+	//    the matching primitive shape, with length bounds derived through
+	//    `deriveLengthBounds` and the four range keywords read as finite numbers. A
+	//    numeric node drops all four when no number satisfies them, and an integer node
+	//    also when no whole number does (for example `minimum: 1.5, maximum: 1.6`) — the
+	//    same emptiness `validateShape` rejects — so the result is always a valid shape.
 	// 6. `type: 'array'` — an array shape whose element shape recurses into a
 	//    record-valued `items`, widening to `rawShape` otherwise, with bounds from
 	//    `minItems` / `maxItems`. A present `prefixItems` widens the elements too,
@@ -814,42 +842,17 @@ export class SchemaShaper {
 				),
 			)
 		}
-		if (type === 'number') {
-			const bounds = deriveRangeBounds(
-				INTRINSICS.own(schema, 'minimum') ? schema.minimum : undefined,
-				INTRINSICS.own(schema, 'maximum') ? schema.maximum : undefined,
+		if (type === 'number' || type === 'integer') {
+			const range = this.#range(schema)
+			// A range no number satisfies drops whole, which widens; a strict walk refused it earlier.
+			const options = INTRINSICS.rebase(
+				{
+					...(matchesEmptyRange({ ...range, integer: type === 'integer' }) ? {} : range),
+					...(description === undefined ? {} : { description }),
+				},
+				null,
 			)
-			return numberShape(
-				INTRINSICS.rebase(
-					{
-						...bounds,
-						...(description === undefined ? {} : { description }),
-					},
-					null,
-				),
-			)
-		}
-		if (type === 'integer') {
-			const bounds = deriveRangeBounds(
-				INTRINSICS.own(schema, 'minimum') ? schema.minimum : undefined,
-				INTRINSICS.own(schema, 'maximum') ? schema.maximum : undefined,
-			)
-			const emptyRange =
-				INTRINSICS.ceil(bounds.min ?? Number.NEGATIVE_INFINITY) >
-				INTRINSICS.floor(bounds.max ?? Number.POSITIVE_INFINITY)
-			return integerShape(
-				emptyRange
-					? description === undefined
-						? undefined
-						: INTRINSICS.rebase({ description }, null)
-					: INTRINSICS.rebase(
-							{
-								...bounds,
-								...(description === undefined ? {} : { description }),
-							},
-							null,
-						),
-			)
+			return type === 'integer' ? integerShape(options) : numberShape(options)
 		}
 		if (type === 'boolean') {
 			return booleanShape(description === undefined ? undefined : { description })

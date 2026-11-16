@@ -742,11 +742,20 @@ export interface StringShape {
 	readonly description?: string
 }
 
-/** Describes a number with optional bounds; `integer` restricts to whole numbers. */
+/**
+ * Describes a number with optional bounds; `integer` restricts to whole numbers.
+ *
+ * @remarks
+ * `min` and `max` are inclusive and emit `minimum` and `maximum`; `over` and `under` are
+ * exclusive and emit `exclusiveMinimum` and `exclusiveMaximum`. Every bound is finite, and
+ * bounds that no number satisfies refuse with code `range`.
+ */
 export interface NumberShape {
 	readonly category: 'number'
 	readonly min?: number
+	readonly over?: number
 	readonly max?: number
+	readonly under?: number
 	readonly integer?: boolean
 	readonly description?: string
 }
@@ -1162,10 +1171,18 @@ export interface StringGuardOptions {
 	readonly pattern?: RegExp
 }
 
-/** Groups the options for {@link NumberShape} (through `numberShape` / `integerShape`). */
+/**
+ * Groups the options for {@link NumberShape} (through `numberShape` / `integerShape`).
+ *
+ * @remarks
+ * `min` and `max` admit their own value; `over` admits a value greater than it and `under` a
+ * value less than it.
+ */
 export interface NumberShapeOptions {
 	readonly min?: number
+	readonly over?: number
 	readonly max?: number
+	readonly under?: number
 	readonly integer?: boolean
 	readonly description?: string
 }

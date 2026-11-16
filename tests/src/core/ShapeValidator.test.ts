@@ -174,13 +174,16 @@ describe('raw schema refusal paths', () => {
 			category: 'number',
 			integer: undefined,
 			min: undefined,
+			over: undefined,
 			max: undefined,
+			under: undefined,
 			description: undefined,
 		}
 		const schemas: readonly unknown[] = [
 			{},
 			{ type: 'string' },
 			{ type: 'number', minimum: 1, maximum: 2 },
+			{ type: 'number', exclusiveMinimum: 0, exclusiveMaximum: 3 },
 			{ type: 'array', items: { type: 'string' }, minItems: 0, maxItems: 2 },
 			{
 				type: 'object',
@@ -204,6 +207,7 @@ describe('raw schema refusal paths', () => {
 			{ pattern: '[' },
 			{ minLength: -1 },
 			{ minimum: Number.NaN },
+			{ exclusiveMaximum: Number.NaN },
 			{ enum: [] },
 			{ enum: ['a', 'a'] },
 			{ required: [2] },

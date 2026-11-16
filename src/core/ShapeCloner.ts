@@ -485,14 +485,18 @@ export class ShapeCloner implements ShapeClonerInterface {
 	#captureNumber(source: NumberShape, path: readonly string[]): NumberShape {
 		const integer = this.#captureField(source, 'integer', path)
 		const min = this.#captureField(source, 'min', path)
+		const over = this.#captureField(source, 'over', path)
 		const max = this.#captureField(source, 'max', path)
+		const under = this.#captureField(source, 'under', path)
 		const description = this.#captureField(source, 'description', path)
 		// Domain rules belong to the single gate on the carried clone; see
 		// `#captureString`.
 		return {
 			category: 'number',
 			...(min === undefined ? {} : { min }),
+			...(over === undefined ? {} : { over }),
 			...(max === undefined ? {} : { max }),
+			...(under === undefined ? {} : { under }),
 			...(integer === undefined ? {} : { integer }),
 			...(description === undefined ? {} : { description }),
 		}

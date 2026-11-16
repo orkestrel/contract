@@ -14,6 +14,7 @@ import {
 	readArrayEntries,
 	readOptions,
 	readValue,
+	refuseOptionKeys,
 	sanitizeBudget,
 	sanitizeDepth,
 	sortValues,
@@ -374,12 +375,9 @@ export function inferPrimitiveEnum(
  */
 export function valueToSchema(value: unknown, options?: ValueToSchemaOptions): JSONSchema {
 	return contain(() => {
-		const optionsSnapshot = readOptions(
-			options,
-			['limits', 'closed', 'format', 'enum'],
-			'valueToSchema',
-			'schema',
-		)
+		const keys = ['limits', 'closed', 'format', 'enum'] as const
+		const optionsSnapshot = readOptions(options, keys, 'valueToSchema', 'schema')
+		refuseOptionKeys(options, keys, 'valueToSchema', 'schema')
 		// The grouped budgets cross the same contained read the flat keys crossed:
 		// `limits` is a caller-owned record, so a hostile getter or `ownKeys` trap
 		// on it refuses under this door's name rather than reaching the walk.
@@ -448,12 +446,9 @@ export function samplesToSchema(
 	options?: ValueToSchemaOptions,
 ): JSONSchema {
 	return contain(() => {
-		const optionsSnapshot = readOptions(
-			options,
-			['limits', 'closed', 'format', 'enum'],
-			'samplesToSchema',
-			'schema',
-		)
+		const keys = ['limits', 'closed', 'format', 'enum'] as const
+		const optionsSnapshot = readOptions(options, keys, 'samplesToSchema', 'schema')
+		refuseOptionKeys(options, keys, 'samplesToSchema', 'schema')
 		const limits = readOptions(
 			optionsSnapshot?.limits,
 			['depth', 'properties'],

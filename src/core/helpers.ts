@@ -23,6 +23,7 @@ import type {
 	KeyStep,
 	LengthReader,
 	NumberShape,
+	NumberShapeOptions,
 	RandomFunction,
 	ReadValueOptions,
 	Result,
@@ -320,6 +321,7 @@ export function describeFaults(
 	options?: FaultTextOptions,
 ): string {
 	const requested = options?.limit ?? FAULT_TEXT_LIMIT
+	if (isObject(options)) refuseOptionKeys(options, ['limit'], 'describeFaults', 'fault')
 	if (!isInteger(requested) || requested < 0) {
 		throw new ContractError('Fault text limit must be a non-negative integer', { code: 'range' })
 	}
@@ -3391,7 +3393,7 @@ export function buildStringFaults(
  * doors for the same reason. `expected` is the shape's own kind — `'integer'`
  * when `integer: true`, otherwise `'number'` — so a caller reading the report
  * sees the declaration's vocabulary rather than the value's. Order is
- * `integer`, then `min`, then `max`. It refuses an unreadable shape through the
+ * `integer`, `min`, `over`, `max`, then `under`. It refuses an unreadable shape through the
  * same boundary and for the same reason {@link buildStringFaults} does.
  *
  * @param shape - The number shape whose refinements are checked
@@ -3439,6 +3441,16 @@ export function buildNumberFaults(
 					received: preview(value),
 				}
 			}
+			if (INTRINSICS.own(shape, 'over') && shape.over !== undefined && value <= shape.over) {
+				faults[faults.length] = {
+					reason: 'constraint',
+					path,
+					expected,
+					constraint: 'over',
+					limit: shape.over,
+					received: preview(value),
+				}
+			}
 			if (INTRINSICS.own(shape, 'max') && shape.max !== undefined && value > shape.max) {
 				faults[faults.length] = {
 					reason: 'constraint',
@@ -3449,11 +3461,57 @@ export function buildNumberFaults(
 					received: preview(value),
 				}
 			}
+			if (INTRINSICS.own(shape, 'under') && shape.under !== undefined && value >= shape.under) {
+				faults[faults.length] = {
+					reason: 'constraint',
+					path,
+					expected,
+					constraint: 'under',
+					limit: shape.under,
+					received: preview(value),
+				}
+			}
 			return faults
 		},
 		'buildNumberFaults',
 		{ subject: 'shape' },
 	)
+}
+
+/**
+ * Checks whether no number satisfies a set of number bounds.
+ *
+ * @remarks
+ * Compares the bounds as real numbers: `min` and `max` admit their own value, and `over` and
+ * `under` admit only a value beyond theirs. With `integer: true` a whole number must also lie
+ * between them. An absent bound constrains nothing.
+ *
+ * @param bounds - The bounds to check
+ * @returns True if no number satisfies the bounds; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesEmptyRange({ over: 1, under: 1 }) // true
+ * matchesEmptyRange({ min: 1, max: 1 }) // false
+ * matchesEmptyRange({ over: 0, under: 1, integer: true }) // true
+ * ```
+ */
+export function matchesEmptyRange(bounds: NumberShapeOptions): boolean {
+	const { min, over, max, under } = bounds
+	if (min !== undefined && max !== undefined && min > max) return true
+	if (min !== undefined && under !== undefined && min >= under) return true
+	if (over !== undefined && max !== undefined && over >= max) return true
+	if (over !== undefined && under !== undefined && over >= under) return true
+	if (bounds.integer !== true) return false
+	const lowest = INTRINSICS.max(
+		INTRINSICS.ceil(min ?? Number.NEGATIVE_INFINITY),
+		over === undefined ? Number.NEGATIVE_INFINITY : INTRINSICS.floor(over) + 1,
+	)
+	const highest = INTRINSICS.min(
+		INTRINSICS.floor(max ?? Number.POSITIVE_INFINITY),
+		under === undefined ? Number.POSITIVE_INFINITY : INTRINSICS.ceil(under) - 1,
+	)
+	return lowest > highest
 }
 
 /**
@@ -4114,6 +4172,8 @@ export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT
 							'maxLength',
 							'minimum',
 							'maximum',
+							'exclusiveMinimum',
+							'exclusiveMaximum',
 							'minItems',
 							'maxItems',
 							'pattern',

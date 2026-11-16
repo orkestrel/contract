@@ -13,6 +13,7 @@ import {
 	createContract,
 	INFER_BREADTH_LIMIT,
 	INFER_DEPTH_LIMIT,
+	integerShape,
 	isContractError,
 	isError,
 	JSON_SCHEMA_TYPES,
@@ -46,20 +47,20 @@ import { SchemaShaper } from '../../../src/core/SchemaShaper.js'
 
 describe('SchemaShaper — type arrays', () => {
 	it('names a bounded keyword path in the refusal message', () => {
-		const unsupported = { type: 'integer', exclusiveMinimum: 0 } as const
+		const unsupported = { type: 'integer', multipleOf: 5 } as const
 		const root = captureContractError(() => schemaToShape(unsupported, { strict: true }))
 		expect(root.message).toBe(
-			'schemaToShape: a strict conversion refuses a keyword it cannot honour at exclusiveMinimum',
+			'schemaToShape: a strict conversion refuses a keyword it cannot honour at multipleOf',
 		)
 		for (const key of SCHEMA_REFUSAL_KEYS) {
 			const error = captureContractError(() =>
 				schemaToShape({ type: 'object', properties: { [key]: unsupported } }, { strict: true }),
 			)
 			expect(error.message).toContain(' at properties.')
-			expect(error.message).toContain('.exclusiveMinimum')
+			expect(error.message).toContain('.multipleOf')
 			expect(error.message).not.toContain('\n')
 			expect(error.message.length).toBeLessThan(300)
-			expect(error.context?.path).toEqual(['properties', key, 'exclusiveMinimum'])
+			expect(error.context?.path).toEqual(['properties', key, 'multipleOf'])
 		}
 	})
 
@@ -344,6 +345,7 @@ describe('SchemaShaper — a value its schema accepts', () => {
 		const refused = FOREIGN_SCHEMA_ROWS.filter(([, , , admits]) => !admits).map(([name]) => name)
 
 		expect(refused).toEqual([
+			'exclusiveMinimum at its bound',
 			'null on a string property',
 			'an object for a string',
 			'a missing required key',
@@ -1809,5 +1811,90 @@ describe('SchemaShaper — a null enum in a strict conversion', () => {
 		expect(captureContractError(() => schemaToShape(repeated, { strict: true })).message).toContain(
 			'unique',
 		)
+	})
+})
+
+describe('SchemaShaper — exclusive range keywords', () => {
+	it('reads exclusiveMinimum and exclusiveMaximum in a strict conversion', () => {
+		const rows: ReadonlyArray<readonly [JSONSchema, ContractShape]> = [
+			[{ type: 'number', exclusiveMinimum: 0 }, numberShape({ over: 0 })],
+			[{ type: 'number', exclusiveMaximum: 1 }, numberShape({ under: 1 })],
+			[
+				{ type: 'integer', minimum: 0, exclusiveMinimum: -1, maximum: 9, exclusiveMaximum: 10 },
+				integerShape({ min: 0, over: -1, max: 9, under: 10 }),
+			],
+		]
+
+		for (const [schema, shape] of rows) {
+			expect(schemaToShape(schema, { strict: true })).toEqual(shape)
+			expect(schemaToShape(compileSchema(shape), { strict: true })).toEqual(shape)
+		}
+	})
+
+	it('refuses a malformed, misplaced, or empty exclusive range in a strict conversion', () => {
+		const rows: ReadonlyArray<readonly [Readonly<Record<string, unknown>>, string, string]> = [
+			[
+				{ type: 'number', exclusiveMinimum: true },
+				'a range bound must be a finite number',
+				'exclusiveMinimum',
+			],
+			[
+				{ type: 'number', exclusiveMaximum: Number.NaN },
+				'a range bound must be a finite number',
+				'exclusiveMaximum',
+			],
+			[
+				{ type: 'number', exclusiveMinimum: 1, exclusiveMaximum: 1 },
+				'a range may not be contradictory',
+				'exclusiveMinimum',
+			],
+			[
+				{ type: 'number', minimum: 1, exclusiveMaximum: 1 },
+				'a range may not be contradictory',
+				'minimum',
+			],
+			[
+				{ type: 'number', exclusiveMinimum: 1, maximum: 1 },
+				'a range may not be contradictory',
+				'exclusiveMinimum',
+			],
+			[
+				{ type: 'integer', exclusiveMinimum: 0, exclusiveMaximum: 1 },
+				'an integer range may not be empty',
+				'exclusiveMinimum',
+			],
+		]
+
+		for (const [schema, message, keyword] of rows) {
+			const error = captureContractError(() => schemaToShape(schema, { strict: true }))
+			expect(error.code).toBe('structure')
+			expect(error.message).toBe(`schemaToShape: ${message} at ${keyword}`)
+			expect(error.context).toEqual({ path: [keyword], shape: 'schema' })
+		}
+		const misplaced = captureContractError(() =>
+			schemaToShape({ type: 'string', exclusiveMinimum: 0 }, { strict: true }),
+		)
+		expect(misplaced.context?.path).toEqual(['exclusiveMinimum'])
+	})
+
+	it('honours exclusive bounds in a lenient conversion and drops an empty range whole', () => {
+		const over = createContract(schemaToShape({ type: 'number', exclusiveMinimum: 0 }))
+
+		expect([0, -0, Number.MIN_VALUE].map((value) => over.is(value))).toEqual([false, false, true])
+		expect(schemaToShape({ type: 'integer', exclusiveMaximum: 3 })).toEqual(
+			integerShape({ under: 3 }),
+		)
+		expect(schemaToShape({ type: 'number', minimum: 0, exclusiveMaximum: 0 })).toEqual(
+			numberShape(),
+		)
+		expect(schemaToShape({ type: 'integer', exclusiveMinimum: 0, exclusiveMaximum: 1 })).toEqual(
+			integerShape(),
+		)
+		const draft: Readonly<Record<string, unknown>> = {
+			type: 'number',
+			minimum: 0,
+			exclusiveMinimum: true,
+		}
+		expect(schemaToShape(draft)).toEqual(numberShape({ min: 0 }))
 	})
 })
