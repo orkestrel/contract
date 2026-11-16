@@ -253,6 +253,8 @@ export const INTRINSICS = Object.freeze({
 	indices: Array.prototype.keys,
 	/** Captures the native array iterator advance operation. */
 	advance: Object.getPrototypeOf([][Symbol.iterator]()).next,
+	/** Captures `String.prototype.slice` — the window a preview encodes, dispatched through `apply`. */
+	slice: String.prototype.slice,
 	/** Captures `Array.prototype.join` — text assembly from derived parts. */
 	join: Array.prototype.join,
 	/** Captures `Function.prototype.bind` for a receiver-bound host operation. */
@@ -476,7 +478,9 @@ export const FAULT_KINDS: readonly FaultKind[] = Object.freeze([
  */
 export const FAULT_CONSTRAINTS: readonly FaultConstraint[] = Object.freeze([
 	'min',
+	'over',
 	'max',
+	'under',
 	'pattern',
 	'date',
 	'integer',

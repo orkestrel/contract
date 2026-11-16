@@ -155,6 +155,13 @@ export interface ContractErrorContext {
 	readonly limit?: number | string
 	/** Holds the received-value description associated with the error. */
 	readonly received?: string
+	/**
+	 * Holds the audit faults of the refused value, each located by its own path.
+	 *
+	 * @remarks
+	 * A refusal that carries `faults` reports every fault it found, where `path` locates the first.
+	 */
+	readonly faults?: readonly AuditFault[]
 }
 
 /**
@@ -171,6 +178,19 @@ export interface ContractErrorOptions {
 	readonly context?: ContractErrorContext
 	/** Holds the optional originating thrown value. */
 	readonly cause?: unknown
+}
+
+/**
+ * Groups the options for `refuseValue`.
+ *
+ * @remarks
+ * `path` locates the refused value, `limit` states what the value must be, and `code` names the
+ * error category and defaults to `bound`.
+ */
+export interface RefuseValueOptions {
+	readonly path: FieldPath
+	readonly limit: string
+	readonly code?: ContractCode
 }
 
 /** Represents optional diagnostic metadata for a required read. */
@@ -580,6 +600,8 @@ export interface JSONSchema {
 	readonly format?: string
 	readonly minimum?: number
 	readonly maximum?: number
+	readonly exclusiveMinimum?: number
+	readonly exclusiveMaximum?: number
 	readonly minItems?: number
 	readonly maxItems?: number
 	readonly items?: JSONSchema
@@ -1238,9 +1260,9 @@ export type FaultKind =
  * Names the refinement a {@link Fault} of reason `'constraint'` violates.
  *
  * @remarks
- * The vocabulary is `'min'`, `'max'`, `'pattern'`, `'date'`, and `'integer'`.
+ * The vocabulary is `'min'`, `'over'`, `'max'`, `'under'`, `'pattern'`, `'date'`, and `'integer'`.
  */
-export type FaultConstraint = 'min' | 'max' | 'pattern' | 'date' | 'integer'
+export type FaultConstraint = 'min' | 'over' | 'max' | 'under' | 'pattern' | 'date' | 'integer'
 
 /**
  * Represents a single structured parse-failure diagnostic — one entry of an
