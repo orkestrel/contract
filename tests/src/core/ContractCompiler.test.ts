@@ -15,6 +15,7 @@ import {
 	createContract,
 	functionShape,
 	integerShape,
+	interfaceShape,
 	isRecord,
 	jsonShape,
 	literalShape,
@@ -51,7 +52,16 @@ import {
 	ReentrantShape,
 	buildDiscriminatedCases,
 	findAgreementViolations,
+	buildCountedStore,
+	buildImplementationRefusals,
+	buildImplementationRows,
+	createThrowingGetter,
+	INTERFACE_LAW_SHAPES,
+	PartialStore,
+	SessionStore,
+	STORE_DECLARATION,
 } from '../../setup.js'
+import { createRecorder } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 
 describe('ContractCompiler', () => {
@@ -1355,5 +1365,201 @@ describe('ContractCompiler — the undefined leaf', () => {
 		expect(corpus.some((value) => isRecord(value) && Object.hasOwn(value, 'limit'))).toBe(true)
 		expect(corpus.some((value) => contract.is(value))).toBe(true)
 		expect(corpus.some((value) => isRecord(value) && !contract.is(value))).toBe(true)
+	})
+})
+
+describe('ContractCompiler — the interface shape', () => {
+	it('emits an open object schema that names its format, its members, and the required ones', () => {
+		const schema = compileSchema(
+			interfaceShape(
+				{ get: functionShape(), ttl: optionalShape(integerShape()) },
+				{ description: 'Session store' },
+			),
+		)
+		expect(schema).toEqual({
+			type: 'object',
+			format: 'interface',
+			properties: { get: { not: {}, format: 'function' }, ttl: { type: 'integer' } },
+			required: ['get'],
+			additionalProperties: true,
+			description: 'Session store',
+		})
+		expect(Object.keys(schema)).toEqual([
+			'type',
+			'format',
+			'properties',
+			'required',
+			'additionalProperties',
+			'description',
+		])
+		expect(Object.isFrozen(schema)).toBe(true)
+		expect(Object.isFrozen(schema.properties)).toBe(true)
+		expect(Object.isFrozen(schema.required)).toBe(true)
+		expect(compileSchema(interfaceShape({}))).toStrictEqual({
+			type: 'object',
+			format: 'interface',
+			additionalProperties: true,
+		})
+	})
+
+	it.each(buildImplementationRows())('admits $name by identity', ({ value }) => {
+		const contract = createContract(STORE_DECLARATION)
+		expect(contract.is(value)).toBe(true)
+		expect(contract.audit(value)).toEqual([])
+		expect(contract.explain(value)).toEqual([])
+		expect(contract.parse(value)).toBe(value)
+	})
+
+	it.each(buildImplementationRefusals())(
+		'refuses $name with its declared faults',
+		({ shape, value, faults }) => {
+			const contract = createContract(shape)
+			expect(contract.is(value)).toBe(false)
+			expect(contract.parse(value)).toBeUndefined()
+			expect(contract.audit(value)).toEqual(faults)
+			expect(contract.explain(value)).toEqual(faults)
+		},
+	)
+
+	it('refuses a declared getter that throws, with a coded refusal where a read is required', () => {
+		const contract = createContract(STORE_DECLARATION)
+		const value = createThrowingGetter('get')
+		expect(contract.is(value)).toBe(false)
+		const audited = captureContractError(() => contract.audit(value))
+		expect(audited).toMatchObject({
+			code: 'structure',
+			message: 'compileAuditor: interface member could not be read',
+			context: { path: ['get'], shape: 'interface' },
+		})
+		expect(captureContractError(() => contract.parse(value)).context).toEqual(audited.context)
+		expect(contract.explain(value)).toEqual([
+			{ reason: 'type', path: [], expected: 'object', received: 'object' },
+		])
+	})
+
+	it('passes an optional member that reads undefined, and a required one only when it admits undefined', () => {
+		const contract = createContract(
+			interfaceShape({
+				get: functionShape(),
+				ttl: optionalShape(integerShape()),
+				limit: unionShape(integerShape(), undefinedShape()),
+			}),
+		)
+		const value = { get: encodeURI }
+		expect(contract.is(value)).toBe(true)
+		expect(contract.audit(value)).toEqual([])
+		expect(contract.parse(value)).toBe(value)
+		expect(contract.is({ get: encodeURI, limit: 'many' })).toBe(false)
+		expect(contract.audit({ ttl: 3 })).toEqual([
+			{ reason: 'missing', path: ['get'], expected: 'function' },
+		])
+	})
+
+	it('reports an undeclared or hidden key under a member as one type fault at that member', () => {
+		const contract = createContract(
+			interfaceShape({ config: objectShape({ port: integerShape() }) }),
+		)
+		const typed = { reason: 'type', path: ['config'], expected: 'object', received: 'object' }
+		const extra = { config: { port: 1, debug: true } }
+		expect(contract.audit(extra)).toEqual([{ reason: 'extra', path: ['config', 'debug'] }])
+		expect(contract.explain(extra)).toEqual([typed])
+		expect(contract.parse(extra)).toBeUndefined()
+		const hidden = { config: Object.defineProperty({}, 'port', { value: 1, enumerable: false }) }
+		expect(contract.audit(hidden)).toEqual([{ reason: 'hidden', path: ['config', 'port'] }])
+		expect(contract.explain(hidden)).toEqual([typed])
+		const mixed = { config: { port: 'eighty', debug: true } }
+		const wrong = {
+			reason: 'type',
+			path: ['config', 'port'],
+			expected: 'integer',
+			received: '"eighty"',
+		}
+		expect(contract.audit(mixed)).toEqual([wrong, { reason: 'extra', path: ['config', 'debug'] }])
+		expect(contract.explain(mixed)).toEqual([typed, wrong])
+	})
+
+	it.each(['prototype', 'function'] as const)(
+		'reads each declared member of a %s implementation one time at every door',
+		(form) => {
+			const contract = createContract(STORE_DECLARATION)
+			const reads = createRecorder<readonly [string]>()
+			const store = buildCountedStore(form, reads.handler)
+			const once = [['get'], ['set'], ['delete']]
+			expect(contract.is(store)).toBe(true)
+			expect(reads.calls).toEqual(once)
+			reads.clear()
+			expect(contract.audit(store)).toEqual([])
+			expect(reads.calls).toEqual(once)
+			reads.clear()
+			expect(contract.parse(store)).toBe(store)
+			expect(reads.calls).toEqual(once)
+			reads.clear()
+			expect(contract.explain(store)).toEqual([])
+			expect(reads.calls).toEqual(once)
+		},
+	)
+
+	it('admits a class-instance store with unknown extra members and refuses one missing delete at its path', () => {
+		const contract = createContract(STORE_DECLARATION)
+		const store = new SessionStore()
+		store.set('Ada', 1)
+		expect(contract.is(store)).toBe(true)
+		expect(contract.parse(store)).toBe(store)
+		const missing = [{ reason: 'missing', path: ['delete'], expected: 'function' }]
+		expect(contract.audit(new PartialStore())).toEqual(missing)
+		expect(contract.explain(new PartialStore())).toEqual(missing)
+		const nested = createContract(arrayShape(objectShape({ store: STORE_DECLARATION })))
+		expect(nested.audit([{ store }, { store: new PartialStore() }])).toEqual([
+			{ reason: 'missing', path: ['1', 'store', 'delete'], expected: 'function' },
+		])
+	})
+
+	it('answers from a compiler whose guard, parser, or reporter is read first', () => {
+		const store = new SessionStore()
+		const partial = new PartialStore()
+		expect(new ContractCompiler(STORE_DECLARATION).guard(store)).toBe(true)
+		expect(new ContractCompiler(STORE_DECLARATION).guard(partial)).toBe(false)
+		expect(new ContractCompiler(STORE_DECLARATION).parser(store)).toBe(store)
+		expect(new ContractCompiler(STORE_DECLARATION).parser(partial)).toBeUndefined()
+		expect(new ContractCompiler(STORE_DECLARATION).reporter(partial)).toEqual([
+			{ reason: 'missing', path: ['delete'], expected: 'function' },
+		])
+	})
+
+	it('generates a frozen plain record of generated members that the contract admits', () => {
+		const contract = createContract(
+			interfaceShape({
+				get: functionShape(),
+				ttl: optionalShape(integerShape({ min: 0, max: 9 })),
+			}),
+		)
+		for (const seed of [1, 2, 3, 4, 5, 6]) {
+			const generated = contract.generate(seededRandom(seed))
+			expect(Object.isFrozen(generated)).toBe(true)
+			expect(Object.getPrototypeOf(generated)).toBe(Object.prototype)
+			expect(typeof generated.get).toBe('function')
+			expect(contract.is(generated)).toBe(true)
+		}
+	})
+
+	it.each(INTERFACE_LAW_SHAPES.map((shape, index) => [index, shape] as const))(
+		'holds every law over the seeded corpus of interface law shape %i',
+		(_index, shape) => {
+			expect(findUndefinedLawViolations(shape, 16)).toEqual([])
+		},
+	)
+
+	it('publishes only coded refusals for an unreadable implementation', () => {
+		const contract = createContract(STORE_DECLARATION)
+		const revoked = Proxy.revocable({}, {})
+		revoked.revoke()
+		expect(contract.is(revoked.proxy)).toBe(false)
+		expect(captureContractError(() => contract.audit(revoked.proxy)).message).toBe(
+			'compileAuditor: interface could not be read',
+		)
+		expect(captureContractError(() => contract.parse(revoked.proxy)).code).toBe('structure')
+		expect(contract.explain(revoked.proxy)).toEqual([
+			{ reason: 'type', path: [], expected: 'object', received: 'instance' },
+		])
 	})
 })

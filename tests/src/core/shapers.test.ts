@@ -35,6 +35,7 @@ import {
 	INFER_BREADTH_LIMIT,
 	INFER_DEPTH_LIMIT,
 	integerShape,
+	interfaceShape,
 	isContractError,
 	isRegExp,
 	jsonShape,
@@ -286,6 +287,18 @@ const BUILDER_CASES: readonly BuilderCase[] = [
 		positions: { 0: 'options' },
 		options: { 0: ['description'] },
 		run: (args) => Reflect.apply(undefinedShape, undefined, [...args]),
+	},
+	{
+		name: 'interfaceShape',
+		valid: [
+			[{}],
+			[{ get: functionShape() }],
+			[{ get: functionShape(), ttl: optionalShape(integerShape()) }],
+			[{}, { description: 'value' }],
+		],
+		positions: { 0: 'properties', 1: 'options' },
+		options: { 1: ['description'] },
+		run: (args) => Reflect.apply(interfaceShape, undefined, [...args]),
 	},
 ]
 
@@ -3014,6 +3027,115 @@ describe('undefinedShape', () => {
 			category: 'raw',
 			schema: { not: {}, format: 'undefined' },
 		})
+	})
+})
+
+describe('interfaceShape', () => {
+	it('builds a frozen declaration over an owned null-prototype member map', () => {
+		const get = functionShape()
+		const members = { get, ttl: optionalShape(integerShape()) }
+		const shape = interfaceShape(members, { description: 'Session store' })
+		members.get = functionShape({ description: 'replaced' })
+
+		expect(shape).toEqual({
+			category: 'interface',
+			members: { get, ttl: optionalShape(integerShape()) },
+			description: 'Session store',
+		})
+		expect(shape.members.get).toBe(get)
+		expect(Object.getPrototypeOf(shape.members)).toBeNull()
+		expect(Object.isFrozen(shape)).toBe(true)
+		expect(Object.isFrozen(shape.members)).toBe(true)
+		expect(interfaceShape({})).toEqual({ category: 'interface', members: {} })
+		const proto = interfaceShape(JSON.parse('{"__proto__": {"category": "function"}}'))
+		expect(Object.hasOwn(proto.members, '__proto__')).toBe(true)
+	})
+
+	it('refuses a member map that is not a plain record, at members', () => {
+		for (const members of [null, [], new Map(), createClassInstance()]) {
+			const error = captureContractError(() => Reflect.apply(interfaceShape, undefined, [members]))
+			expect([error.code, error.message, error.context]).toEqual([
+				'structure',
+				'interfaceShape: members must be a plain record',
+				{ path: ['members'], shape: 'interface' },
+			])
+		}
+	})
+
+	it('infers required members, optional members that may read undefined, and no index signature', () => {
+		const shape = interfaceShape({
+			get: functionShape(),
+			name: stringShape(),
+			ttl: optionalShape(integerShape()),
+		})
+		type Inferred = Infer<typeof shape>
+
+		expectTypeOf<keyof Inferred>().toEqualTypeOf<'get' | 'name' | 'ttl'>()
+		expectTypeOf<Inferred['get']>().toEqualTypeOf<(...args: never[]) => unknown>()
+		expectTypeOf<Inferred['name']>().toEqualTypeOf<string>()
+		expectTypeOf<Inferred['ttl']>().toEqualTypeOf<number | undefined>()
+		expectTypeOf<{ get: () => 1; name: 'Ada' }>().toExtend<Inferred>()
+		expectTypeOf<{ get: () => 1; name: 'Ada'; ttl: undefined }>().toExtend<Inferred>()
+		expectTypeOf<{ get: () => 1 }>().not.toExtend<Inferred>()
+	})
+
+	it('reads its own emitted schema back in a strict conversion', () => {
+		const declarations = [
+			interfaceShape(
+				{ get: functionShape(), ttl: optionalShape(integerShape({ min: 0 })) },
+				{ description: 'Session store' },
+			),
+			interfaceShape({}),
+			objectShape(
+				{ store: interfaceShape({ get: functionShape() }), note: optionalShape(stringShape()) },
+				{ additionalProperties: false },
+			),
+			nullableShape(interfaceShape({ limit: unionShape(integerShape(), undefinedShape()) })),
+		]
+
+		for (const declaration of declarations) {
+			expect(schemaToShape(compileSchema(declaration), { strict: true })).toEqual(declaration)
+		}
+	})
+
+	it('refuses an interface schema a strict conversion cannot read back', () => {
+		const schemas: readonly JSONSchema[] = [
+			{ type: 'object', format: 'interface', properties: {} },
+			{ type: 'object', format: 'interface', additionalProperties: false },
+			{ type: 'string', format: 'interface' },
+			{
+				anyOf: [
+					{ type: 'object', format: 'interface', additionalProperties: true },
+					{ type: 'string' },
+				],
+			},
+			{
+				type: 'object',
+				format: 'interface',
+				properties: { ttl: { type: 'integer', default: 3 } },
+				additionalProperties: true,
+			},
+		]
+		const refusals = schemas.map((schema) => {
+			const error = captureContractError(() => schemaToShape(schema, { strict: true }))
+			return [error.code, error.context?.path]
+		})
+
+		expect(refusals).toEqual([
+			['structure', ['additionalProperties']],
+			['structure', ['additionalProperties']],
+			['structure', ['format']],
+			['placement', ['anyOf', '0']],
+			['placement', ['properties', 'ttl', 'default']],
+		])
+	})
+
+	it('reads an interface schema as an open object in a lenient conversion', () => {
+		const schema = compileSchema(interfaceShape({ get: functionShape(), name: stringShape() }))
+
+		expect(schemaToShape(schema)).toEqual(
+			objectShape({ get: rawShape({}), name: stringShape() }, { additionalProperties: true }),
+		)
 	})
 })
 

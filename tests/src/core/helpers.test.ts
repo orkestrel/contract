@@ -891,6 +891,8 @@ import {
 	readPatternSource,
 	readSampleMemo,
 	readSetEntries,
+	readShapeMap,
+	interfaceShape,
 	refuseExpansion,
 	retainDepth,
 	sortValues,
@@ -3856,6 +3858,57 @@ describe('shapeToKind', () => {
 	it('projects an undefined shape to undefined, through an optional wrapper too', () => {
 		expect(shapeToKind(undefinedShape())).toBe('undefined')
 		expect(shapeToKind(optionalShape(undefinedShape()))).toBe('undefined')
+	})
+
+	it('projects an interface shape to object, through a nullable wrapper too', () => {
+		expect(shapeToKind(interfaceShape({ get: functionShape() }))).toBe('object')
+		expect(shapeToKind(nullableShape(interfaceShape({})))).toBe('object')
+	})
+})
+
+describe('readShapeMap', () => {
+	it('copies each own enumerable member into a frozen null-prototype map, keeping children by identity', () => {
+		const name = stringShape()
+		const source = { name, age: integerShape() }
+		Object.defineProperty(source, 'hidden', { value: stringShape(), enumerable: false })
+		const map = readShapeMap(source, 'objectShape', 'properties', 'object')
+		source.name = stringShape({ min: 1 })
+
+		expect(Object.keys(map)).toEqual(['name', 'age'])
+		expect(map.name).toBe(name)
+		expect(Object.getPrototypeOf(map)).toBeNull()
+		expect(Object.isFrozen(map)).toBe(true)
+		const proto = readShapeMap(
+			JSON.parse('{"__proto__": {"category": "null"}}'),
+			'interfaceShape',
+			'members',
+			'interface',
+		)
+		expect(Object.hasOwn(proto, '__proto__')).toBe(true)
+	})
+
+	it('refuses a map that is not a plain record, and one whose read throws, naming the door and the field', () => {
+		const notRecord = captureContractError(() =>
+			Reflect.apply(readShapeMap, undefined, [new Map(), 'interfaceShape', 'members', 'interface']),
+		)
+		expect([notRecord.code, notRecord.message, notRecord.context]).toEqual([
+			'structure',
+			'interfaceShape: members must be a plain record',
+			{ path: ['members'], shape: 'interface' },
+		])
+		const unreadable = captureContractError(() =>
+			Reflect.apply(readShapeMap, undefined, [
+				createThrowingGetter('name'),
+				'objectShape',
+				'properties',
+				'object',
+			]),
+		)
+		expect([unreadable.code, unreadable.message, unreadable.context]).toEqual([
+			'structure',
+			'objectShape: properties could not be read',
+			{ path: ['properties'], shape: 'object' },
+		])
 	})
 })
 

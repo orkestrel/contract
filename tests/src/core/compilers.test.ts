@@ -322,6 +322,7 @@ describe('shape-valued contracts', () => {
 			'shape',
 			'function',
 			'undefined',
+			'interface',
 		]
 		expect(Object.keys(SHAPE_FIELDS)).toEqual(categories)
 		expect(Object.isFrozen(SHAPE_FIELDS)).toBe(true)
@@ -458,6 +459,7 @@ describe('shape-valued contracts', () => {
 						'shape',
 						'function',
 						'undefined',
+						'interface',
 					],
 				},
 			},
@@ -637,6 +639,11 @@ const COMPLETE_SHAPES = {
 	shape: { category: 'shape', description: 'complete' },
 	function: { category: 'function', description: 'complete' },
 	undefined: { category: 'undefined', description: 'complete' },
+	interface: {
+		category: 'interface',
+		members: { value: { category: 'string' } },
+		description: 'complete',
+	},
 	raw: { category: 'raw', schema: COMPLETE_RAW_SCHEMA },
 } satisfies { readonly [T in ContractShape['category']]: CompleteShape<T> }
 
@@ -677,7 +684,8 @@ describe('validator consolidation (R6-A)', () => {
 			),
 		).toMatchObject({
 			code: 'placement',
-			message: 'validateShape: an optional shape may only appear as a direct object-property value',
+			message:
+				'validateShape: an optional shape may only appear as a direct object-property or interface-member value',
 		})
 	})
 
@@ -794,7 +802,7 @@ describe('validateShape', () => {
 			['createContract', (shape: ContractShape) => createContract(shape), true],
 		]),
 	)(
-		'%s applies descriptor-first accessor policy across all 46 node fields',
+		'%s applies descriptor-first accessor policy across all 49 node fields',
 		(_name, entry, ownership) => {
 			const cases = Object.values(COMPLETE_SHAPES).flatMap((source) =>
 				Object.keys(source).map((field) => ({ source, field })),
@@ -1050,6 +1058,9 @@ describe('validateShape', () => {
 			['function.description', 'alternate'],
 			['undefined.category', 'boolean'],
 			['undefined.description', 'alternate'],
+			['interface.category', 'boolean'],
+			['interface.members', { alternate: { category: 'number' } }],
+			['interface.description', 'alternate'],
 			['raw.category', 'boolean'],
 			['raw.schema', { type: 'number' }],
 		])
@@ -1181,6 +1192,7 @@ describe('validateShape', () => {
 					(category === 'literal' && field === 'values') ||
 					(category === 'array' && field === 'items') ||
 					(category === 'object' && field === 'properties') ||
+					(category === 'interface' && field === 'members') ||
 					(category === 'union' && field === 'variants') ||
 					((category === 'optional' || category === 'nullable') && field === 'inner') ||
 					(category === 'raw' && field === 'schema')
@@ -1764,37 +1776,39 @@ describe('validateShape', () => {
 
 	it('throws on an optional shape used as an array item', () => {
 		expect(() => validateShape(arrayShape(optionalShape(stringShape())))).toThrow(
-			'validateShape: an optional shape may only appear as a direct object-property value',
+			'validateShape: an optional shape may only appear as a direct object-property or interface-member value',
 		)
 	})
 
 	it('throws on an optional shape used as a union variant', () => {
 		expect(() => validateShape(unionShape(optionalShape(stringShape()), integerShape()))).toThrow(
-			'validateShape: an optional shape may only appear as a direct object-property value',
+			'validateShape: an optional shape may only appear as a direct object-property or interface-member value',
 		)
 	})
 
 	it('throws on an optional shape used as a nullable inner', () => {
 		expect(() => validateShape(nullableShape(optionalShape(stringShape())))).toThrow(
-			'validateShape: an optional shape may only appear as a direct object-property value',
+			'validateShape: an optional shape may only appear as a direct object-property or interface-member value',
 		)
 	})
 
 	it('throws on an optional shape used as another optional inner', () => {
 		expect(() => validateShape(optionalShape(optionalShape(stringShape())))).toThrow(
-			'validateShape: an optional shape may only appear as a direct object-property value',
+			'validateShape: an optional shape may only appear as a direct object-property or interface-member value',
 		)
 	})
 
 	it('throws on an optional shape used as additionalProperties', () => {
 		expect(() =>
 			validateShape(objectShape({}, { additionalProperties: optionalShape(stringShape()) })),
-		).toThrow('validateShape: an optional shape may only appear as a direct object-property value')
+		).toThrow(
+			'validateShape: an optional shape may only appear as a direct object-property or interface-member value',
+		)
 	})
 
 	it('throws on a top-level optional shape', () => {
 		expect(() => validateShape(optionalShape(stringShape()))).toThrow(
-			'validateShape: an optional shape may only appear as a direct object-property value',
+			'validateShape: an optional shape may only appear as a direct object-property or interface-member value',
 		)
 	})
 
@@ -2847,7 +2861,7 @@ describe('malformed shape children', () => {
 				walks: 2,
 				code: 'placement',
 				message:
-					'validateShape: an optional shape may only appear as a direct object-property value',
+					'validateShape: an optional shape may only appear as a direct object-property or interface-member value',
 			},
 			{
 				walks: 2,
@@ -5650,7 +5664,7 @@ describe('createContract fail-fast', () => {
 			'validateShape: an integer number shape has an empty integer range',
 		)
 		expect(() => createContract(arrayShape(optionalShape(stringShape())))).toThrow(
-			'validateShape: an optional shape may only appear as a direct object-property value',
+			'validateShape: an optional shape may only appear as a direct object-property or interface-member value',
 		)
 	})
 })
@@ -5824,6 +5838,7 @@ describe('shape separation registry', () => {
 		const uncoded = observed.filter((outcome) => outcome.uncoded).length
 		expect(separations.map((separation) => separation.shape.category).sort()).toEqual([
 			'function',
+			'interface',
 			'json',
 			'null',
 			'raw',
@@ -5840,6 +5855,7 @@ describe('shape separation registry', () => {
 				'array',
 				'boolean',
 				'function',
+				'interface',
 				'json',
 				'literal',
 				'nullable',

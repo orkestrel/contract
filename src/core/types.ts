@@ -719,6 +719,7 @@ export type ContractShape =
 	| ShapeShape
 	| FunctionShape
 	| UndefinedShape
+	| InterfaceShape
 	| RawShape
 
 /**
@@ -852,8 +853,8 @@ export interface UnionShape<V extends readonly ContractShape[] = readonly Contra
  * `default` holds the JSON value the compiled parser fills when the property is
  * absent or `undefined`. It leaves `is`, `audit`, `explain`, and `generate`
  * unchanged, because an absent optional stays canonical. It must satisfy `inner`,
- * and it may sit only on a property of a closed object with no union ancestor, over
- * an `inner` that refuses `undefined`.
+ * and it may sit only on a property of a closed object with no union or interface
+ * ancestor, over an `inner` that refuses `undefined`.
  */
 export interface OptionalShape<S extends ContractShape = ContractShape> {
 	readonly category: 'optional'
@@ -990,6 +991,51 @@ export interface UndefinedShapeOptions {
 }
 
 /**
+ * Describes an implementation — a non-array object or a function that carries each declared member.
+ *
+ * @remarks
+ * The compiled walk reads each declared member one time through `Reflect.get`, so an inherited
+ * member and a prototype accessor satisfy the shape, and it never enumerates an undeclared
+ * member. A member wrapped in {@link OptionalShape} passes when it reads `undefined`; every
+ * other member that reads `undefined` faults `'missing'` unless its shape admits `undefined`.
+ * The guard is the audit returning no fault, and the parser returns the value by identity when
+ * the guard holds, so no member is copied, coerced, or filled. The emitted schema is
+ * `{ type: 'object', format: 'interface', properties, required, additionalProperties: true }`.
+ * The generator returns a frozen plain record of generated members. A member may not carry a
+ * `default`, and the shape may not sit under a union at any depth; both refuse with code
+ * `placement`.
+ *
+ * @example
+ * ```ts
+ * const declaration: InterfaceShape = {
+ * 	category: 'interface',
+ * 	members: { get: { category: 'function' } },
+ * }
+ * createContract(declaration).is(new Map()) // true
+ * ```
+ */
+export interface InterfaceShape<
+	P extends Readonly<Record<string, ContractShape>> = Readonly<Record<string, ContractShape>>,
+> {
+	readonly category: 'interface'
+	readonly members: P
+	readonly description?: string
+}
+
+/**
+ * Configures the description of an implementation declaration.
+ *
+ * @example
+ * ```ts
+ * const options: InterfaceShapeOptions = { description: 'The session store' }
+ * interfaceShape({}, options).description // 'The session store'
+ * ```
+ */
+export interface InterfaceShapeOptions {
+	readonly description?: string
+}
+
+/**
  * Describes a validated raw JSON Schema passthrough — embeds a supported schema fragment directly.
  *
  * @remarks
@@ -1079,7 +1125,34 @@ export type Infer<S extends ContractShape> = [ContractShape] extends [S]
 														? JSONValue
 														: S extends UndefinedShape
 															? undefined
-															: unknown
+															: S extends InterfaceShape<infer P>
+																? Readonly<
+																		{
+																			[
+																				K in keyof P as P[K] extends {
+																					readonly category: 'optional'
+																				}
+																					? never
+																					: K
+																			]: Infer<P[K]>
+																		} & {
+																			[
+																				K in keyof P as P[K] extends {
+																					readonly category: 'optional'
+																				}
+																					? K
+																					: never
+																			]?: P[K] extends {
+																				readonly category: 'optional'
+																				readonly inner: infer I
+																			}
+																				? I extends ContractShape
+																					? Infer<I> | undefined
+																					: never
+																				: never
+																		}
+																	>
+																: unknown
 
 /**
  * Resolves {@link Infer} of an object shape's `properties` — the required keys, plus the
@@ -1328,8 +1401,8 @@ export type FaultConstraint = 'min' | 'over' | 'max' | 'under' | 'pattern' | 'da
  * @remarks
  * A discriminated union on `reason`:
  * - `'type'` — the value could not coerce to `expected` at all.
- * - `'missing'` — a required object property was absent, or an array held a hole
- *   where its element shape admits `undefined`.
+ * - `'missing'` — a required object property was absent, a required interface member
+ *   read `undefined`, or an array held a hole where its element shape admits `undefined`.
  * - `'constraint'` — the value coerced to `expected` but violated one
  *   refinement (`min` / `max` / `pattern` / `date` / `integer`); `limit` carries the
  *   violated bound/pattern when applicable.
@@ -1545,8 +1618,8 @@ export interface ContractInterface<T> {
 	 * Coercion (`'36'` → `36`) and every leaf refinement (`min` / `max` /
 	 * `pattern`) both apply, so every non-`undefined` result satisfies `is`.
 	 * Honest invalidity answers `undefined`, while a failed required object,
-	 * JSON, or dense-array index read throws the shared coded refusal — the two
-	 * outcomes stay distinguishable.
+	 * interface member, JSON, or dense-array index read throws the shared coded
+	 * refusal — the two outcomes stay distinguishable.
 	 *
 	 * @param value - The value to coerce
 	 * @returns The typed value, or `undefined` when the value is readable and invalid
@@ -1611,9 +1684,11 @@ export interface ContractInterface<T> {
  * structural edge once into children-before-parent order; every artifact family
  * is then one postorder pass over that index, so a shared child costs its
  * authored nodes rather than its paths. A getter builds its own family and no
- * other, except where an artifact genuinely consumes the compiled guard —
- * `parser`, `reporter` and `generator` resolve union membership through it, so
- * they build it too. `contract` requests every root in getter order.
+ * other, except where an artifact genuinely consumes another — `parser`,
+ * `reporter` and `generator` resolve union membership through the compiled
+ * guard, so they build it too, and `guard`, `parser` and `reporter` answer an
+ * interface node from its audit, so they plan the audits when the graph holds
+ * one. `contract` requests every root in getter order.
  *
  * Every getter REPLAYS its exact artifact: reading one twice returns the same
  * function or graph by identity, and {@link contract}'s members are those

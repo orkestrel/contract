@@ -1738,6 +1738,69 @@ export function matchesRecordBrand(value: unknown): boolean {
 }
 
 /**
+ * Reads a shape builder's map of child shapes into a frozen null-prototype snapshot.
+ *
+ * @remarks
+ * Reads each own enumerable string key one time, so a key named `__proto__` lands as an own
+ * member and a later edit to the caller's map cannot reach the snapshot. The children are kept
+ * by identity.
+ *
+ * @param map - The caller's map of child shapes
+ * @param door - The builder the refusal names
+ * @param field - The builder field that holds the map
+ * @param shape - The shape category the refusal names
+ * @returns The frozen snapshot
+ * @throws {ContractError} When a read fails, or when the map is not a plain record
+ *
+ * @example
+ * ```ts
+ * readShapeMap({ city: stringShape() }, 'objectShape', 'properties', 'object').city // the same string shape
+ * ```
+ */
+export function readShapeMap<P extends Readonly<Record<string, ContractShape>>>(
+	map: P,
+	door: string,
+	field: string,
+	shape: string,
+): P {
+	const input: unknown = map
+	const copied = readValue(
+		() => {
+			const record = matchesRecordBrand(input)
+			const keyList = isObject(input) ? INTRINSICS.keys(input) : []
+			const entries: ReadonlyArray<readonly [string, PropertyDescriptor]> =
+				INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(keyList), [
+					(key: string) => [
+						key,
+						{
+							value: INTRINSICS.reflect.read(map, key),
+							enumerable: true,
+							configurable: true,
+							writable: true,
+						},
+					],
+				])
+			const descriptors = INTRINSICS.record<PropertyDescriptor>({
+				[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+					entries,
+				]),
+			})
+			const snapshot: { [K in keyof P]: P[K] } = INTRINSICS.create(null, descriptors)
+			return { record, snapshot: INTRINSICS.freeze(snapshot) }
+		},
+		door,
+		{ subject: field, context: { path: [field], shape } },
+	)
+	if (!copied.record) {
+		throw new ContractError(`${door}: ${field} must be a plain record`, {
+			code: 'structure',
+			context: { path: [field], shape },
+		})
+	}
+	return copied.snapshot
+}
+
+/**
  * Collects an array's entries through its reflected own-index population.
  *
  * @remarks
@@ -3666,7 +3729,8 @@ export function selectClosestFaults<T extends AuditFault>(
  * `'date'` when `date: true`, else `'string'`); `optionalShape` /
  * `nullableShape` project through to their inner shape's kind, and `rawShape`
  * (an arbitrary embedded schema with no fixed kind) projects to `'json'`.
- * `functionShape` projects to `'function'` and `undefinedShape` to `'undefined'`.
+ * `functionShape` projects to `'function'`, `undefinedShape` to `'undefined'`, and
+ * `interfaceShape` to `'object'`.
  *
  * A hand-authored node carrying an unrecognized discriminant is REFUSED rather
  * than answered out of type, which keeps the declared non-optional
@@ -3712,6 +3776,8 @@ export function shapeToKind(shape: ContractShape): FaultKind {
 					return 'function'
 				case 'undefined':
 					return 'undefined'
+				case 'interface':
+					return 'object'
 				case 'optional':
 					return shapeToKind(shape.inner)
 				case 'nullable':

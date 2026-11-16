@@ -30,6 +30,7 @@ export const SHAPE_FIELDS: Readonly<Record<string, readonly string[]>> = Object.
 	shape: Object.freeze(['description']),
 	function: Object.freeze(['description']),
 	undefined: Object.freeze(['description']),
+	interface: Object.freeze(['members', 'description']),
 } satisfies Record<ContractShape['category'], readonly string[]>)
 
 /**
@@ -378,7 +379,8 @@ export const SCHEMA_ANNOTATIONS = Object.freeze([
  * refuses. `pattern`, `format`, and `not` are absent because no compiled shape asserts
  * them, so a schema holding one would convert to a shape wider than the schema it came
  * from. The exceptions are `format: 'date'` on a string node, which a strict conversion
- * reads as a date string shape, the function leaf `{ not: {}, format: 'function' }`,
+ * reads as a date string shape, `format: 'interface'` on an object node, which it reads
+ * as an interface shape, the function leaf `{ not: {}, format: 'function' }`,
  * which it reads as a function shape, and the undefined leaf
  * `{ not: {}, format: 'undefined' }`, which it reads as an undefined shape.
  *

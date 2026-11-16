@@ -1,7 +1,7 @@
 import type { EvaluationFunction } from './types.js'
 import { INTRINSICS } from './constants.js'
 import { isFailure, readSetEntries } from './helpers.js'
-import { isObject } from './validators.js'
+import { isFunction, isObject } from './validators.js'
 
 /** Owns compiled-node memo entries for one synchronous evaluation. */
 export class EvaluationScope {
@@ -16,7 +16,7 @@ export class EvaluationScope {
 		path: readonly string[] = EvaluationScope.#path,
 		clean = false,
 	): T {
-		if (!isObject(value)) return plan(value, path)
+		if (!isObject(value) && !isFunction(value)) return plan(value, path)
 		const entries = readSetEntries(EvaluationScope.#active)
 		if (isFailure(entries)) throw entries.error
 		const active = entries.value[0]

@@ -4,6 +4,7 @@ import type {
 	ContractErrorOptions,
 	ContractShape,
 	FunctionShape,
+	InterfaceShape,
 	JSONShape,
 	LiteralShape,
 	LiteralValue,
@@ -300,6 +301,8 @@ export class ShapeCloner implements ShapeClonerInterface {
 				return this.#captureSimple(source, path, 'function')
 			case 'undefined':
 				return this.#captureSimple(source, path, 'undefined')
+			case 'interface':
+				return this.#captureInterface(source, path, budget)
 			case 'raw':
 				return this.#captureRaw(source, path, budget)
 			default:
@@ -579,7 +582,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 				context: { path: pathOf(path, 'properties') },
 			})
 		}
-		this.#captureProperties(source, propertySource, path, budget)
+		this.#captureProperties(source, propertySource, path, budget, 'properties')
 		if (additional !== undefined && additional !== true && additional !== false)
 			this.#spend(budget, 1, path)
 		const properties: Record<string, ContractShape> = INTRINSICS.create(null)
@@ -587,6 +590,28 @@ export class ShapeCloner implements ShapeClonerInterface {
 			category: 'object',
 			properties,
 			...(additional === undefined ? {} : { additionalProperties: additional }),
+			...(description === undefined ? {} : { description }),
+		}
+	}
+
+	#captureInterface(
+		source: InterfaceShape,
+		path: readonly string[],
+		budget: { left: number },
+	): InterfaceShape {
+		const memberSource = this.#captureField(source, 'members', path)
+		const description = this.#captureField(source, 'description', path)
+		if (!isRecord(memberSource)) {
+			throw this.#create('validateShape: members must be a plain member map', {
+				code: 'structure',
+				context: { path: pathOf(path, 'members') },
+			})
+		}
+		this.#captureProperties(source, memberSource, path, budget, 'members')
+		const members: Record<string, ContractShape> = INTRINSICS.create(null)
+		return {
+			category: 'interface',
+			members,
 			...(description === undefined ? {} : { description }),
 		}
 	}
@@ -748,10 +773,11 @@ export class ShapeCloner implements ShapeClonerInterface {
 	}
 
 	#captureProperties(
-		source: ObjectShape,
+		source: ObjectShape | InterfaceShape,
 		properties: Readonly<Record<string, ContractShape>>,
 		path: readonly string[],
 		budget: { left: number },
+		field: 'properties' | 'members',
 	): void {
 		const keys = INTRINSICS.keys(properties)
 		const snapshot: readonly ShapeProperty[] = INTRINSICS.reflect.apply(
@@ -764,7 +790,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 					if (descriptor === undefined || !INTRINSICS.own(descriptor, 'value')) {
 						throw this.#create('validateShape: every structural child must be a shape', {
 							code: 'structure',
-							context: { path: pathOf(path, 'properties', key) },
+							context: { path: pathOf(path, field, key) },
 						})
 					}
 					const child = properties[key]
@@ -773,7 +799,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 					if (!INTRINSICS.same(described, child) || !INTRINSICS.same(child, repeated)) {
 						throw this.#create('validateShape: every structural child must be a shape', {
 							code: 'structure',
-							context: { path: pathOf(path, 'properties', key) },
+							context: { path: pathOf(path, field, key) },
 						})
 					}
 					return { key, child }
@@ -787,10 +813,13 @@ export class ShapeCloner implements ShapeClonerInterface {
 				(key: string, index: number) => key !== keys[index],
 			])
 		if (drifted) {
-			throw this.#create('cloneShape: property keys must be stable data', {
-				code: 'structure',
-				context: { path: pathOf(path, 'properties') },
-			})
+			throw this.#create(
+				`cloneShape: ${field === 'members' ? 'member' : 'property'} keys must be stable data`,
+				{
+					code: 'structure',
+					context: { path: pathOf(path, field) },
+				},
+			)
 		}
 		const captured = this.#properties
 		if (captured === undefined) throw this.#unavailable()
@@ -858,21 +887,16 @@ export class ShapeCloner implements ShapeClonerInterface {
 			case 'array':
 				this.#registerChild(clone.items, pathOf(path, 'items'), depth)
 				break
+			case 'interface':
 			case 'object': {
-				const captured = this.#properties
-				if (captured === undefined) throw this.#unavailable()
-				const properties = INTRINSICS.reflect.apply(INTRINSICS.fetch, captured, [source])
-				if (properties === undefined) {
-					throw this.#create('cloneShape: properties could not be read', {
-						code: 'clone',
-						context: { path: pathOf(path, 'properties'), shape: 'object' },
-					})
-				}
-				for (const index of iterateIndices(() => properties.length)) {
-					const entry = properties[index]
+				const field = clone.category === 'object' ? 'properties' : 'members'
+				const entries = this.#readMap(source, path, field)
+				for (const index of iterateIndices(() => entries.length)) {
+					const entry = entries[index]
 					if (entry === undefined || entry.child === undefined) continue
-					this.#registerChild(entry.child, pathOf(path, 'properties', entry.key), depth)
+					this.#registerChild(entry.child, pathOf(path, field, entry.key), depth)
 				}
+				if (clone.category === 'interface') break
 				const additional = clone.additionalProperties
 				if (additional !== undefined && additional !== true && additional !== false) {
 					this.#registerChild(additional, pathOf(path, 'additionalProperties'), depth)
@@ -930,6 +954,9 @@ export class ShapeCloner implements ShapeClonerInterface {
 				case 'object':
 					this.#wireObject(source, clone, path)
 					break
+				case 'interface':
+					INTRINSICS.reflect.write(clone, 'members', this.#wireMap(source, path, 'members'))
+					break
 				case 'union':
 					this.#wireUnion(source, clone, path)
 					break
@@ -956,17 +983,36 @@ export class ShapeCloner implements ShapeClonerInterface {
 		INTRINSICS.reflect.write(clone, 'items', items)
 	}
 
-	#wireObject(source: ContractShape, clone: ObjectShape, path: readonly string[]): void {
-		const memo = this.#memo
+	// The captured entries of an object's properties or an interface's members.
+	#readMap(
+		source: ContractShape,
+		path: readonly string[],
+		field: 'properties' | 'members',
+	): readonly ShapeProperty[] {
 		const captured = this.#properties
-		if (memo === undefined || captured === undefined) throw this.#unavailable()
+		if (captured === undefined) throw this.#unavailable()
 		const snapshot = INTRINSICS.reflect.apply(INTRINSICS.fetch, captured, [source])
 		if (snapshot === undefined) {
-			throw this.#create('cloneShape: properties could not be read', {
+			throw this.#create(`cloneShape: ${field} could not be read`, {
 				code: 'clone',
-				context: { path: pathOf(path, 'properties'), shape: 'object' },
+				context: {
+					path: pathOf(path, field),
+					shape: field === 'members' ? 'interface' : 'object',
+				},
 			})
 		}
+		return snapshot
+	}
+
+	// The frozen null-prototype map of each captured entry's clone.
+	#wireMap(
+		source: ContractShape,
+		path: readonly string[],
+		field: 'properties' | 'members',
+	): Readonly<Record<string, ContractShape>> {
+		const memo = this.#memo
+		if (memo === undefined) throw this.#unavailable()
+		const snapshot = this.#readMap(source, path, field)
 		const pairs = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(snapshot), [
 			(entry: ShapeProperty | undefined) => {
 				if (entry === undefined) return []
@@ -974,26 +1020,32 @@ export class ShapeCloner implements ShapeClonerInterface {
 				if (child === undefined) {
 					throw this.#create('validateShape: every structural child must be a shape', {
 						code: 'structure',
-						context: { path: pathOf(path, 'properties', key) },
+						context: { path: pathOf(path, field, key) },
 					})
 				}
 				const cloned = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [child])
 				if (cloned === undefined) {
 					throw this.#create('validateShape: every structural child must be a shape', {
 						code: 'structure',
-						context: { path: pathOf(path, 'properties', key) },
+						context: { path: pathOf(path, field, key) },
 					})
 				}
 				return [[key, cloned]]
 			},
 		])
-		const properties = INTRINSICS.rebase(
+		const map = INTRINSICS.rebase(
 			INTRINSICS.record<ContractShape>({
 				[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [pairs]),
 			}),
 			null,
 		)
-		INTRINSICS.reflect.write(clone, 'properties', INTRINSICS.freeze(properties))
+		return INTRINSICS.freeze(map)
+	}
+
+	#wireObject(source: ContractShape, clone: ObjectShape, path: readonly string[]): void {
+		const memo = this.#memo
+		if (memo === undefined) throw this.#unavailable()
+		INTRINSICS.reflect.write(clone, 'properties', this.#wireMap(source, path, 'properties'))
 		const additional = clone.additionalProperties
 		if (additional !== undefined && additional !== true && additional !== false) {
 			const cloned = INTRINSICS.reflect.apply(INTRINSICS.fetch, memo, [additional])

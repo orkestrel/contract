@@ -8,6 +8,7 @@ import type {
 	BooleanShapeOptions,
 	ContractInterface,
 	ContractShape,
+	EvaluationFunction,
 	Fault,
 	FaultConstraint,
 	FaultKind,
@@ -15,6 +16,7 @@ import type {
 	FunctionShapeOptions,
 	Guard,
 	GuardsShape,
+	InterfaceShapeOptions,
 	JSONSchema,
 	JSONShapeOptions,
 	JSONValue,
@@ -166,6 +168,7 @@ import {
 	inferPrimitiveEnum,
 	instanceOf,
 	integerShape,
+	interfaceShape,
 	intersectionOf,
 	iterateIndices,
 	isArray,
@@ -3582,6 +3585,8 @@ export const SHAPE_SEPARATIONS: Readonly<Record<ContractShape['category'], Shape
 		function: Object.freeze({ shape: functionShape() }),
 		// Both artifacts accept only undefined; the corpus supplements rather than proves coincidence.
 		undefined: Object.freeze({ shape: undefinedShape() }),
+		// Both artifacts answer from the audit; the corpus supplements rather than proves coincidence.
+		interface: Object.freeze({ shape: interfaceShape({ value: integerShape() }) }),
 		// Both artifacts accept any defined value; the corpus supplements rather than proves coincidence.
 		raw: Object.freeze({ shape: rawShape({}) }),
 	})
@@ -6556,6 +6561,12 @@ export const OPTION_DOORS: Readonly<Record<string, OptionDoor>> = Object.freeze(
 		options: { description: 'No limit set' } satisfies Required<UndefinedShapeOptions>,
 		shape: 'undefined',
 	},
+	interfaceShape: {
+		args: [{ get: { category: 'function' } }, undefined],
+		position: 1,
+		options: { description: 'Session store' } satisfies Required<InterfaceShapeOptions>,
+		shape: 'interface',
+	},
 	schemaToShape: {
 		args: [{ type: 'string' }, undefined],
 		position: 1,
@@ -6879,3 +6890,238 @@ export function findUndefinedLawViolations(shape: ContractShape, seeds: number):
 		]
 	})
 }
+
+// === The interface shape
+
+/** Declares the store the M5 boundary names: a `get`, a `set`, and a `delete` function member. */
+export const STORE_DECLARATION = interfaceShape({
+	get: functionShape(),
+	set: functionShape(),
+	delete: functionShape(),
+})
+
+/** Holds session entries behind prototype methods, beside members no store declaration names. */
+export class SessionStore {
+	readonly #entries = new Map<string, unknown>()
+
+	get size(): number {
+		return this.#entries.size
+	}
+
+	get(key: string): unknown {
+		return this.#entries.get(key)
+	}
+
+	set(key: string, value: unknown): void {
+		this.#entries.set(key, value)
+	}
+
+	delete(key: string): boolean {
+		return this.#entries.delete(key)
+	}
+
+	clear(): void {
+		this.#entries.clear()
+	}
+}
+
+/** Holds session entries behind prototype methods and no `delete` member. */
+export class PartialStore {
+	readonly #entries = new Map<string, unknown>()
+
+	get(key: string): unknown {
+		return this.#entries.get(key)
+	}
+
+	set(key: string, value: unknown): void {
+		this.#entries.set(key, value)
+	}
+}
+
+/** Declares one implementation form a store declaration admits, by where its members live. */
+export interface ImplementationRow {
+	/** Names the form. */
+	readonly name: string
+	/** Holds a fresh value of that form. */
+	readonly value: unknown
+}
+
+/**
+ * Lists the table of the class for {@link STORE_DECLARATION}, each row a fresh value.
+ *
+ * @returns A class instance, a plain literal, a function carrying the members, an object whose
+ * prototype carries them, a getter-backed member, and an undeclared member whose getter throws
+ */
+export function buildImplementationRows(): readonly ImplementationRow[] {
+	const members = { get: encodeURI, set: encodeURI, delete: encodeURI }
+	return [
+		{ name: 'a class instance with prototype methods', value: new SessionStore() },
+		{ name: 'a plain literal', value: { ...members } },
+		{
+			name: 'a function carrying the members',
+			value: Object.assign(() => undefined, members),
+		},
+		{ name: 'an object whose prototype carries them', value: Object.create(members) },
+		{
+			name: 'a getter-backed member',
+			value: Object.defineProperty({ set: encodeURI, delete: encodeURI }, 'get', {
+				get: () => encodeURI,
+				enumerable: true,
+			}),
+		},
+		{
+			name: 'an undeclared member whose getter throws',
+			value: Object.defineProperty({ ...members }, 'secret', {
+				get: throwHostileAccess,
+				enumerable: true,
+			}),
+		},
+	]
+}
+
+/** Declares one value an interface declaration refuses, with the faults its audit reports. */
+export interface ImplementationRefusal {
+	/** Names the refusal. */
+	readonly name: string
+	/** Holds the refusing declaration. */
+	readonly shape: ContractShape
+	/** Holds the refused value. */
+	readonly value: unknown
+	/** Lists the faults `audit` and `explain` report. */
+	readonly faults: readonly Fault[]
+}
+
+/**
+ * Lists the refusals adjacent to the table of the class, each with its declared faults.
+ *
+ * @returns `null`, a primitive, an array, a missing member, a member of the wrong kind, and an
+ * optional member of the wrong kind
+ */
+export function buildImplementationRefusals(): readonly ImplementationRefusal[] {
+	const timed = interfaceShape({ get: functionShape(), ttl: optionalShape(integerShape()) })
+	return [
+		{
+			name: 'null',
+			shape: STORE_DECLARATION,
+			value: null,
+			faults: [{ reason: 'type', path: [], expected: 'object', received: 'null' }],
+		},
+		{
+			name: 'a primitive',
+			shape: STORE_DECLARATION,
+			value: 'session',
+			faults: [{ reason: 'type', path: [], expected: 'object', received: '"session"' }],
+		},
+		{
+			name: 'an array',
+			shape: STORE_DECLARATION,
+			value: [encodeURI, encodeURI, encodeURI],
+			faults: [{ reason: 'type', path: [], expected: 'object', received: 'array' }],
+		},
+		{
+			name: 'a missing member',
+			shape: STORE_DECLARATION,
+			value: new PartialStore(),
+			faults: [{ reason: 'missing', path: ['delete'], expected: 'function' }],
+		},
+		{
+			name: 'a member of the wrong kind',
+			shape: STORE_DECLARATION,
+			value: { get: encodeURI, set: encodeURI, delete: 'never' },
+			faults: [{ reason: 'type', path: ['delete'], expected: 'function', received: '"never"' }],
+		},
+		{
+			name: 'an optional member of the wrong kind',
+			shape: timed,
+			value: { get: encodeURI, ttl: 'soon' },
+			faults: [{ reason: 'type', path: ['ttl'], expected: 'integer', received: '"soon"' }],
+		},
+	]
+}
+
+/**
+ * Builds descriptors for a store's members that record each read.
+ *
+ * @param record - Called with the member's name on every read
+ * @returns Accessors for `get`, `set`, and `delete`, and a `secret` accessor that throws when read
+ */
+export function buildCountedMembers(record: (name: string) => void): PropertyDescriptorMap {
+	return {
+		get: {
+			get: () => {
+				record('get')
+				return encodeURI
+			},
+			enumerable: true,
+		},
+		set: {
+			get: () => {
+				record('set')
+				return encodeURI
+			},
+			enumerable: true,
+		},
+		delete: {
+			get: () => {
+				record('delete')
+				return encodeURI
+			},
+			enumerable: true,
+		},
+		secret: { get: throwHostileAccess, enumerable: true },
+	}
+}
+
+/**
+ * Builds an evaluation plan that records each value it is asked about and reports no fault.
+ *
+ * @param record - Called with the value on every evaluation
+ * @returns The plan, one function for every call it serves
+ */
+export function buildCleanPlan(
+	record: (value: unknown) => void,
+): EvaluationFunction<readonly AuditFault[]> {
+	return (value) => {
+		record(value)
+		return []
+	}
+}
+
+/** Names each implementation form the read count runs over. */
+export type CountedForm = 'prototype' | 'function'
+
+/**
+ * Builds a store whose members {@link buildCountedMembers} serves.
+ *
+ * @param form - `'prototype'` for an object whose prototype holds the accessors, or `'function'`
+ * for a function that holds them
+ * @param record - Called with the member's name on every read
+ * @returns The store
+ */
+export function buildCountedStore(form: CountedForm, record: (name: string) => void): object {
+	const members = buildCountedMembers(record)
+	return form === 'function'
+		? Object.defineProperties(() => undefined, members)
+		: Object.create(Object.defineProperties({}, members))
+}
+
+/**
+ * Lists the interface declarations the shared laws run over.
+ *
+ * @remarks
+ * The store, an interface mixing a required, an optional, and an `undefined`-admitting member, an
+ * interface member that is a closed object, an interface under an object property, an array of
+ * interfaces, and a nullable interface.
+ */
+export const INTERFACE_LAW_SHAPES: readonly ContractShape[] = Object.freeze([
+	STORE_DECLARATION,
+	interfaceShape({
+		name: stringShape(),
+		ttl: optionalShape(integerShape({ min: 0 })),
+		limit: unionShape(integerShape(), undefinedShape()),
+	}),
+	interfaceShape({ config: objectShape({ port: integerShape() }) }),
+	objectShape({ store: STORE_DECLARATION }),
+	arrayShape(interfaceShape({ id: integerShape() })),
+	nullableShape(interfaceShape({ id: integerShape() })),
+])

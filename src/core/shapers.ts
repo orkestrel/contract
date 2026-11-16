@@ -7,6 +7,8 @@ import type {
 	ContractShape,
 	FunctionShape,
 	FunctionShapeOptions,
+	InterfaceShape,
+	InterfaceShapeOptions,
 	JSONSchema,
 	JSONShape,
 	JSONShapeOptions,
@@ -40,18 +42,17 @@ import { ShapeValidator } from './ShapeValidator.js'
 import { FaultShaper } from './FaultShaper.js'
 import { INTRINSICS } from './constants.js'
 import {
-	readIndexView,
 	iterateIndices,
 	attempt,
 	contain,
 	isFailure,
 	isSuccess,
-	matchesRecordBrand,
 	preview,
 	readArrayEntries,
 	readOptions,
 	readPatternFlags,
 	readPatternSource,
+	readShapeMap,
 	readValue,
 	refuseOptionKeys,
 } from './helpers.js'
@@ -488,42 +489,9 @@ export function objectShape<
 		const keys = ['additionalProperties', 'description'] as const
 		const safe = readOptions(options, keys, 'objectShape', 'object')
 		refuseOptionKeys(options, keys, 'objectShape', 'object')
-		const copied = readValue(
-			() => {
-				const record = matchesRecordBrand(input)
-				const keyList = INTRINSICS.keys(input)
-				const entries: ReadonlyArray<readonly [string, PropertyDescriptor]> =
-					INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(keyList), [
-						(key: string) => [
-							key,
-							{
-								value: INTRINSICS.reflect.read(input, key),
-								enumerable: true,
-								configurable: true,
-								writable: true,
-							},
-						],
-					])
-				const descriptors = INTRINSICS.record<PropertyDescriptor>({
-					[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
-						entries,
-					]),
-				})
-				const snapshot: { [K in keyof P]: P[K] } = INTRINSICS.create(null, descriptors)
-				return { record, snapshot: INTRINSICS.freeze(snapshot) }
-			},
-			'objectShape',
-			{ subject: 'properties', context: { path: ['properties'], shape: 'object' } },
-		)
-		if (!copied.record) {
-			throw new ContractError('objectShape: properties must be a plain record', {
-				code: 'structure',
-				context: { path: ['properties'], shape: 'object' },
-			})
-		}
 		const shape: ObjectShape<P, A> = {
 			category: 'object',
-			properties: copied.snapshot,
+			properties: readShapeMap(properties, 'objectShape', 'properties', 'object'),
 			...(safe?.additionalProperties === undefined
 				? {}
 				: { additionalProperties: safe.additionalProperties }),
@@ -655,11 +623,12 @@ export function oneOfShape<V extends readonly ContractShape[]>(
  *
  * @remarks
  * As an {@link objectShape} property, the field becomes a true optional property
- * in the inferred type. A `default` is captured as an owned frozen copy, and the
+ * in the inferred type, and as an {@link interfaceShape} member, one that may read
+ * `undefined`. A `default` is captured as an owned frozen copy, and the
  * compiled parser fills it where the property is absent or `undefined`; the guard,
  * the audit, the report, and the generator keep treating the property as optional.
- * The compilers refuse a default `inner` refuses, a default under a union, and a
- * default on a property of an open object.
+ * The compilers refuse a default `inner` refuses, a default under a union or below
+ * an interface, and a default on a property of an open object.
  *
  * @param inner - The wrapped shape
  * @param options - Optional `default`, a JSON value
@@ -840,6 +809,50 @@ export function undefinedShape(options?: UndefinedShapeOptions): UndefinedShape 
 }
 
 /**
+ * Builds an {@link InterfaceShape} from a member map.
+ *
+ * @remarks
+ * Declare the members a consumer calls or reads on an implementation it does not own, such as a
+ * store or a signal: a class instance, a function, or an object whose prototype carries the
+ * members passes, and an undeclared member is never read. Wrap a member in
+ * {@link optionalShape} to let it read `undefined`. Take {@link objectShape} for a plain data
+ * record.
+ *
+ * @param members - Map of member names to child shapes
+ * @param options - Optional description
+ * @returns An interface shape
+ * @throws {ContractError} When `members` is not a plain record, a member carries a default, or an option key is unread
+ *
+ * @example
+ * ```ts
+ * const store = interfaceShape({ get: functionShape(), set: functionShape(), delete: functionShape() })
+ * createContract(store).is(new Map()) // true
+ * ```
+ */
+export function interfaceShape<P extends Readonly<Record<string, ContractShape>>>(
+	members: P,
+	options?: InterfaceShapeOptions,
+): InterfaceShape<P> {
+	return contain(() => {
+		const input: unknown = members
+		if (!isObject(input)) {
+			throw new ContractError('interfaceShape: members must be a plain record', {
+				code: 'structure',
+				context: { path: ['members'], shape: 'interface' },
+			})
+		}
+		const safe = readOptions(options, ['description'], 'interfaceShape', 'interface')
+		refuseOptionKeys(options, ['description'], 'interfaceShape', 'interface')
+		const shape: InterfaceShape<P> = {
+			category: 'interface',
+			members: readShapeMap(members, 'interfaceShape', 'members', 'interface'),
+			...(safe?.description === undefined ? {} : { description: safe.description }),
+		}
+		return ShapePass.seal(shape)
+	}, 'interfaceShape')
+}
+
+/**
  * Builds a {@link RawShape} from a supported JSON Schema fragment.
  *
  * @remarks
@@ -981,8 +994,9 @@ export function rawShape(schema: JSONSchema): RawShape {
  *
  * STRICT: `{ strict: true }` is the door for a foreign schema. It refuses, with
  * code `structure`, every node the lenient walk would widen, every keyword it
- * would ignore (`pattern`, every `format` but `'date'` on a string node and `'function'` or
- * `'undefined'` in its leaf, every `not` outside those two leaves, `nullable`,
+ * would ignore (`pattern`, every `format` but `'date'` on a string node, `'interface'` on an
+ * object node, and `'function'` or `'undefined'` in its leaf, every `not` outside those two
+ * leaves, `nullable`,
  * `patternProperties`, `propertyNames`, `prefixItems`, and anything else outside
  * {@link STRICT_SCHEMA_KEYWORDS}), a malformed keyword or annotation, a boolean schema, an `enum` entry
  * that is neither a finite primitive nor `null`, a contradictory bound, a date format whose
@@ -996,7 +1010,11 @@ export function rawShape(schema: JSONSchema): RawShape {
  * date string shape, so a compiled {@link dateShape} round-trips, and it reads the function
  * leaf `{ not: {}, format: 'function' }` back as {@link functionShape} and the undefined
  * leaf `{ not: {}, format: 'undefined' }` back as {@link undefinedShape}, so a compiled
- * function or undefined shape round-trips too.
+ * function or undefined shape round-trips too. It reads an object node with
+ * `format: 'interface'` back as {@link interfaceShape}, each property outside `required` an
+ * optional member, and refuses one without `additionalProperties: true` with code
+ * `structure`, and one under a union or with a member `default` with code `placement`. A
+ * lenient conversion reads that node as an open object.
  *
  * @param schema - The JSON Schema value to convert
  * @param options - Optional `strict`, default `false`

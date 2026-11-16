@@ -10,6 +10,8 @@ import {
 	CLONE_NODE_LIMIT,
 	COMPILE_DEPTH_LIMIT,
 	compileSchema,
+	functionShape,
+	interfaceShape,
 	optionalShape,
 	jsonShape,
 	numberShape,
@@ -2100,5 +2102,141 @@ describe('ShapeValidator — optional defaults', () => {
 		})
 
 		expect(refusals).toEqual(malformed.map(() => ['structure', ['schema', 'default']]))
+	})
+})
+
+describe('ShapeValidator — interface placement', () => {
+	const store: ContractShape = {
+		category: 'interface',
+		members: { get: { category: 'function' } },
+	}
+	const union =
+		'validateShape: an interface shape may not sit under a union, which would read its members once per arm; move the interface outside the union'
+	const below =
+		'validateShape: a default may not sit below an interface shape, whose parser returns the implementation by identity without filling it; remove the default'
+
+	it('refuses an interface under a union at any depth with placement', () => {
+		const cases: ReadonlyArray<readonly [ContractShape, readonly string[]]> = [
+			[{ category: 'union', variants: [store, { category: 'null' }] }, ['variants', '0']],
+			[
+				{ category: 'union', variants: [{ category: 'null' }, store], mode: 'oneOf' },
+				['variants', '1'],
+			],
+			[
+				{
+					category: 'union',
+					variants: [
+						{ category: 'object', properties: { a: { category: 'array', items: store } } },
+					],
+				},
+				['variants', '0', 'properties', 'a', 'items'],
+			],
+			[
+				{
+					category: 'object',
+					properties: {
+						u: { category: 'union', variants: [{ category: 'nullable', inner: store }] },
+					},
+				},
+				['properties', 'u', 'variants', '0', 'inner'],
+			],
+		]
+		const refusals = cases.map(([shape]) => {
+			const error = captureContractError(() => validateShape(shape))
+			return [error.code, error.context?.path, error.message]
+		})
+
+		expect(refusals).toEqual(cases.map(([, path]) => ['placement', path, union]))
+		const built = captureContractError(() =>
+			unionShape(objectShape({ store: interfaceShape({ get: functionShape() }) }), stringShape()),
+		)
+		expect([built.code, built.context?.path, built.message]).toEqual([
+			'placement',
+			['variants', '0', 'properties', 'store'],
+			union,
+		])
+	})
+
+	it('refuses a default on a member and below one with placement', () => {
+		const defaulted: ContractShape = {
+			category: 'optional',
+			inner: { category: 'number' },
+			default: 3,
+		}
+		const cases: ReadonlyArray<readonly [ContractShape, readonly string[]]> = [
+			[{ category: 'interface', members: { ttl: defaulted } }, ['members', 'ttl']],
+			[
+				{
+					category: 'interface',
+					members: { config: { category: 'object', properties: { ttl: defaulted } } },
+				},
+				['members', 'config', 'properties', 'ttl'],
+			],
+		]
+		const refusals = cases.map(([shape]) => {
+			const error = captureContractError(() => validateShape(shape))
+			return [error.code, error.context?.path, error.message]
+		})
+
+		expect(refusals).toEqual(cases.map(([, path]) => ['placement', path, below]))
+		const built = captureContractError(() =>
+			interfaceShape({ ttl: optionalShape(numberShape(), { default: 3 }) }),
+		)
+		expect([built.code, built.context?.path, built.message]).toEqual([
+			'placement',
+			['members', 'ttl'],
+			below,
+		])
+	})
+
+	it('admits an optional member, an interface outside every union, and a nullable interface', () => {
+		const legal: readonly ContractShape[] = [
+			{
+				category: 'interface',
+				members: { ttl: { category: 'optional', inner: { category: 'number' } } },
+			},
+			{ category: 'array', items: store },
+			{ category: 'nullable', inner: store },
+			{ category: 'object', properties: { store: { category: 'optional', inner: store } } },
+			{ category: 'interface', members: { inner: store } },
+			{
+				category: 'object',
+				properties: { store, mode: { category: 'union', variants: [{ category: 'string' }] } },
+			},
+		]
+
+		expect(legal.map((shape) => attempt(() => validateShape(shape)).success)).toEqual(
+			legal.map(() => true),
+		)
+		expect(() =>
+			interfaceShape({ get: functionShape(), ttl: optionalShape(numberShape()) }),
+		).not.toThrow()
+	})
+
+	it('refuses an optional anywhere but a direct member or property', () => {
+		const error = captureContractError(() =>
+			validateShape({
+				category: 'interface',
+				members: { tags: { category: 'array', items: { category: 'optional', inner: store } } },
+			}),
+		)
+
+		expect([error.code, error.context?.path, error.message]).toEqual([
+			'placement',
+			['members', 'tags', 'items'],
+			'validateShape: an optional shape may only appear as a direct object-property or interface-member value',
+		])
+	})
+
+	it('refuses a member map that is not a plain record', () => {
+		const malformed: ContractShape = { category: 'interface', members: {} }
+		Reflect.set(malformed, 'members', [])
+		const error = captureContractError(() => validateShape(malformed))
+
+		expect([error.code, error.context?.path, error.message]).toEqual([
+			'structure',
+			['members'],
+			'validateShape: members must be a plain member map',
+		])
 	})
 })

@@ -9,6 +9,7 @@ import type {
 	FaultKind,
 	Guard,
 	Infer,
+	InterfaceShape,
 	JSONSchema,
 	JSONValue,
 	LiteralValue,
@@ -124,7 +125,8 @@ import { seededRandom } from './seeders.js'
  * holds a union, because a union's membership question IS a guard question in
  * all three, and every getter builds it when the graph holds a default, because
  * a default that its inner shape refuses refuses at whichever artifact is read
- * first.
+ * first. The `guard`, `parser` and `reporter` plan the audits when the graph holds
+ * an interface, because an interface node answers each of the three from its audit.
  *
  * One terminal lifecycle covers preparation and every family. A failure settles
  * the compiler: later getters rethrow that exact error, while an artifact
@@ -186,6 +188,8 @@ export class ContractCompiler<
 	static readonly #emptyAdmitted: boolean[] = []
 	// One frozen function for every draw, so two seeds generate equal values.
 	static readonly #function: () => undefined = INTRINSICS.freeze(() => undefined)
+	// The path an interface's guard and parser hand its audit; a clean verdict carries none.
+	static readonly #root: readonly string[] = INTRINSICS.freeze([])
 
 	static {
 		// Frozen in a statement of its own, and the result discarded: `Object.freeze`
@@ -541,6 +545,16 @@ export class ContractCompiler<
 				}
 				return
 			}
+			case 'interface': {
+				const keys = INTRINSICS.keys(shape.members)
+				for (const offset of iterateIndices(() => keys.length)) {
+					const key = keys[keys.length - 1 - offset]
+					const child = key === undefined ? undefined : shape.members[key]
+					if (child === undefined) continue
+					this.#stack[this.#stack.length] = { operation: 'enter', shape: child }
+				}
+				return
+			}
 			default:
 				return
 		}
@@ -589,6 +603,15 @@ export class ContractCompiler<
 	#unions(): boolean {
 		for (const index of iterateIndices(() => this.#nodes.length)) {
 			if (this.#nodes[index]?.category === 'union') return true
+		}
+		return false
+	}
+
+	// An interface's guard, parser, and reporter answer from its audit, so those three plan the
+	// audits when — and only when — the graph holds one.
+	#interfaces(): boolean {
+		for (const index of iterateIndices(() => this.#nodes.length)) {
+			if (this.#nodes[index]?.category === 'interface') return true
 		}
 		return false
 	}
@@ -698,7 +721,7 @@ export class ContractCompiler<
 	#repeats(index: number): boolean {
 		const category = this.#node(index).category
 		if (category === 'array' || category === 'object' || category === 'union') return true
-		return category === 'optional' || category === 'nullable'
+		return category === 'optional' || category === 'nullable' || category === 'interface'
 	}
 
 	#trackGuard(plan: Guard<unknown>): Guard<unknown> {
@@ -989,6 +1012,36 @@ export class ContractCompiler<
 					...(owned.description !== undefined ? { description: owned.description } : {}),
 				})
 			}
+			case 'interface': {
+				const keys = INTRINSICS.keys(owned.members)
+				const pairs = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(keys), [
+					(key: string) => {
+						const child = owned.members[key]
+						return child === undefined ? [] : [[key, this.#schemaAt(child)]]
+					},
+				])
+				const properties = INTRINSICS.rebase(
+					INTRINSICS.record<JSONSchema>({
+						[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+							pairs,
+						]),
+					}),
+					null,
+				)
+				const required: readonly string[] = INTRINSICS.reflect.apply(
+					INTRINSICS.select,
+					readIndexView(keys),
+					[(key: string) => owned.members[key]?.category !== 'optional'],
+				)
+				return INTRINSICS.freeze({
+					type: 'object',
+					format: 'interface',
+					...(keys.length > 0 ? { properties: INTRINSICS.freeze(properties) } : {}),
+					...(required.length > 0 ? { required: INTRINSICS.freeze(required) } : {}),
+					additionalProperties: true,
+					...(owned.description !== undefined ? { description: owned.description } : {}),
+				})
+			}
 			case 'union': {
 				// Indexed, not `map`: this array IS the published schema, and
 				// `Array.prototype.map = () => ['INJECTED']` made `compileSchema` answer
@@ -1032,6 +1085,7 @@ export class ContractCompiler<
 		const ready = this.#guard
 		if (ready !== undefined) return ready
 		this.#prepare()
+		if (this.#interfaces()) this.#planAudits()
 		for (const step of iterateIndices(() => this.#order.length)) {
 			const index = this.#order[step]
 			if (index === undefined) continue
@@ -1295,6 +1349,12 @@ export class ContractCompiler<
 				return orOf(isUndefined, this.#guardAt(owned.inner))
 			case 'nullable':
 				return nullableOf(this.#guardAt(owned.inner))
+			case 'interface': {
+				// The tracked audit, so a scope that already holds its clean verdict reads no member again.
+				const audit = this.#auditAt(owned)
+				return (value: unknown): value is unknown =>
+					holds(() => audit(value, ContractCompiler.#root).length === 0)
+			}
 			case 'raw':
 				return (value: unknown): value is unknown => value !== undefined
 		}
@@ -1307,6 +1367,7 @@ export class ContractCompiler<
 		if (ready !== undefined) return ready
 		this.#prepare()
 		if (this.#unions() || this.#defaults()) this.#buildGuard()
+		if (this.#interfaces()) this.#planAudits()
 		for (const step of iterateIndices(() => this.#order.length)) {
 			const index = this.#order[step]
 			if (index === undefined) continue
@@ -1672,6 +1733,24 @@ export class ContractCompiler<
 				const inner = this.#parserAt(owned.inner)
 				return (value) => (value === null ? null : inner(value))
 			}
+			// The guard's own question, asked of the tracked audit, so the value returns by identity
+			// and a scope that already holds the clean verdict reads no member again. A failed member
+			// read refuses, as a failed required object read does.
+			case 'interface': {
+				const audit = this.#auditAt(owned)
+				return (value) => {
+					const outcome = attempt(() => audit(value, ContractCompiler.#root))
+					if (isSuccess(outcome)) return outcome.value.length === 0 ? value : undefined
+					if (isContractError(outcome.error)) throw outcome.error
+					return readValue(
+						() => {
+							throw outcome.error
+						},
+						'compileParser',
+						{ subject: 'interface', context: { shape: 'interface' } },
+					)
+				}
+			}
 			case 'raw':
 				return (value) => value
 		}
@@ -1684,15 +1763,53 @@ export class ContractCompiler<
 		if (ready !== undefined) return ready
 		this.#prepare()
 		if (this.#defaults()) this.#buildGuard()
+		this.#planAudits()
+		const root = this.#exposeAudit(this.#auditAt(this.#node(0)))
+		this.#auditor = root
+		return root
+	}
+
+	// Planned one time, by the auditor or by whichever family an interface sends here first.
+	#planAudits(): void {
+		if (this.#audits.length > 0) return
 		for (const step of iterateIndices(() => this.#order.length)) {
 			const index = this.#order[step]
 			if (index === undefined) continue
 			const plan = this.#auditOf(index)
 			this.#audits[index] = this.#repeats(index) ? this.#trackFaults(plan) : plan
 		}
-		const root = this.#exposeAudit(this.#auditAt(this.#node(0)))
-		this.#auditor = root
-		return root
+	}
+
+	// An interface's declared members, each with its child's tracked audit. An optional member
+	// audits its inner shape, and `admits` says whether that shape reads `undefined` as clean.
+	#membersOf(owned: InterfaceShape): ReadonlyArray<{
+		readonly key: string
+		readonly audit: (value: unknown, path: readonly string[]) => readonly AuditFault[]
+		readonly optional: boolean
+		readonly admits: boolean
+		readonly kind: FaultKind
+	}> {
+		return INTRINSICS.reflect.apply(
+			INTRINSICS.expand,
+			readIndexView(INTRINSICS.keys(owned.members)),
+			[
+				(key: string) => {
+					const child = owned.members[key]
+					if (child === undefined) return []
+					const optional = child.category === 'optional'
+					const inner = optional ? child.inner : child
+					return [
+						{
+							key,
+							audit: this.#auditAt(inner),
+							optional,
+							admits: this.#admits(inner),
+							kind: shapeToKind(inner),
+						},
+					]
+				},
+			],
+		)
 	}
 
 	// The published root supplies the documented default root path and carries the
@@ -2081,6 +2198,42 @@ export class ContractCompiler<
 				const inner = this.#auditAt(owned.inner)
 				return (value, path) => (value === null ? [] : inner(value, path))
 			}
+			// Each declared member is read one time and its value handed to the child, and an
+			// undeclared member is never read, so an implementation answers through its prototype.
+			case 'interface': {
+				const entries = this.#membersOf(owned)
+				return (value, path) => {
+					if (isObject(value)) {
+						readValue(() => INTRINSICS.array(value), 'compileAuditor', {
+							subject: 'interface',
+							context: { path, shape: 'interface' },
+						})
+					}
+					if ((!isObject(value) && !isFunction(value)) || isArray(value)) {
+						return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
+					}
+					const faults: AuditFault[] = []
+					for (const entryIndex of iterateIndices(() => entries.length)) {
+						const entry = entries[entryIndex]
+						if (entry === undefined) continue
+						if (faults.length >= FAULT_LIMIT) break
+						const at = pathOf(path, entry.key)
+						const member: unknown = readValue(
+							() => INTRINSICS.reflect.read(value, entry.key),
+							'compileAuditor',
+							{ subject: 'interface member', context: { path: at, shape: 'interface' } },
+						)
+						if (member === undefined && !entry.admits) {
+							if (!entry.optional) {
+								faults[faults.length] = { reason: 'missing', path: at, expected: entry.kind }
+							}
+							continue
+						}
+						appendEntries(faults, entry.audit(member, at))
+					}
+					return limitEntries(faults, FAULT_LIMIT)
+				}
+			}
 			case 'raw':
 				return (value, path) =>
 					value === undefined
@@ -2096,6 +2249,7 @@ export class ContractCompiler<
 		if (ready !== undefined) return ready
 		this.#prepare()
 		if (this.#unions() || this.#defaults()) this.#buildGuard()
+		if (this.#interfaces()) this.#planAudits()
 		for (const step of iterateIndices(() => this.#order.length)) {
 			const index = this.#order[step]
 			if (index === undefined) continue
@@ -2445,6 +2599,53 @@ export class ContractCompiler<
 				const inner = this.#reportAt(owned.inner)
 				return (value, path) => (value === null ? [] : inner(value, path))
 			}
+			// The parser returns the value by identity when the audit is clean, so the report is the
+			// audit's own walk. A member whose audit names an undeclared or hidden key reports one
+			// `type` fault in place of those keys, which a parse fault has no reason for, and a
+			// member that cannot be read reports the interface as the wrong kind.
+			case 'interface': {
+				const entries = this.#membersOf(owned)
+				return (value, path) => {
+					if ((!isObject(value) && !isFunction(value)) || isArray(value)) {
+						return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
+					}
+					const faults: Fault[] = []
+					const outcome = attempt(() => {
+						for (const entryIndex of iterateIndices(() => entries.length)) {
+							const entry = entries[entryIndex]
+							if (entry === undefined) continue
+							if (faults.length >= FAULT_LIMIT) return
+							const at = pathOf(path, entry.key)
+							const member: unknown = INTRINSICS.reflect.read(value, entry.key)
+							if (member === undefined && !entry.admits) {
+								if (!entry.optional) {
+									faults[faults.length] = { reason: 'missing', path: at, expected: entry.kind }
+								}
+								continue
+							}
+							const found = entry.audit(member, at)
+							const kept: readonly Fault[] = INTRINSICS.reflect.apply(
+								INTRINSICS.select,
+								readIndexView(found),
+								[(fault: AuditFault) => fault.reason !== 'extra' && fault.reason !== 'hidden'],
+							)
+							if (kept.length < found.length) {
+								faults[faults.length] = {
+									reason: 'type',
+									path: at,
+									expected: entry.kind,
+									received: preview(member),
+								}
+							}
+							appendEntries(faults, kept)
+						}
+					})
+					if (isFailure(outcome)) {
+						return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
+					}
+					return limitEntries(faults, FAULT_LIMIT)
+				}
+			}
 			case 'raw':
 				return (value, path) =>
 					value === undefined
@@ -2746,6 +2947,39 @@ export class ContractCompiler<
 			case 'nullable': {
 				const inner = this.#seedAt(owned.inner)
 				return (random) => (drawRandom(random, 'nullable') < 0.2 ? null : inner(random))
+			}
+			case 'interface': {
+				const entries: ReadonlyArray<{
+					readonly key: string
+					readonly seed: (random: RandomFunction) => unknown
+					readonly optional: boolean
+				}> = INTRINSICS.reflect.apply(
+					INTRINSICS.expand,
+					readIndexView(INTRINSICS.keys(owned.members)),
+					[
+						(key: string) => {
+							const child = owned.members[key]
+							if (child === undefined) return []
+							const optional = child.category === 'optional'
+							return [{ key, seed: this.#seedAt(optional ? child.inner : child), optional }]
+						},
+					],
+				)
+				return (random) => {
+					const pairs = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(entries), [
+						(entry: (typeof entries)[number]) =>
+							entry.optional && drawRandom(random, 'interface') < 0.3
+								? []
+								: [[entry.key, entry.seed(random)]],
+					])
+					return INTRINSICS.freeze(
+						INTRINSICS.record<unknown>({
+							[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+								pairs,
+							]),
+						}),
+					)
+				}
 			}
 			case 'raw':
 				return () => {

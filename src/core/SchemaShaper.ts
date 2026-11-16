@@ -57,6 +57,7 @@ import {
 	booleanShape,
 	functionShape,
 	integerShape,
+	interfaceShape,
 	literalShape,
 	nullableShape,
 	nullShape,
@@ -339,7 +340,7 @@ export class SchemaShaper {
 				INTRINSICS.reflect.apply(INTRINSICS.some, STRICT_SCHEMA_KEYWORDS, [
 					(keyword: string) => keyword === key,
 				]) ||
-				(key === 'format' && schema.format === 'date')
+				(key === 'format' && (schema.format === 'date' || schema.format === 'interface'))
 			if (!known) throw this.#refusal('a strict conversion refuses a keyword it cannot honour', key)
 		}
 		this.#inspectAnnotations(schema)
@@ -354,7 +355,9 @@ export class SchemaShaper {
 			INTRINSICS.own(schema, 'anyOf')
 		const object = types.length === 0 && INTRINSICS.own(schema, 'properties') ? ['object'] : types
 		const effective: readonly string[] = hasForm ? [] : object
-		this.#confine(schema, ['minLength', 'maxLength', 'format'], this.#names(effective, 'string'))
+		const implemented = INTRINSICS.own(schema, 'format') && schema.format === 'interface'
+		this.#confine(schema, ['minLength', 'maxLength'], this.#names(effective, 'string'))
+		this.#confine(schema, ['format'], this.#names(effective, implemented ? 'object' : 'string'))
 		this.#confine(
 			schema,
 			['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum'],
@@ -895,6 +898,10 @@ export class SchemaShaper {
 				INTRINSICS.own(schema, 'properties') &&
 				isRecord(schema.properties))
 		) {
+			// A strict walk has confined `format: 'interface'` to an object node.
+			if (this.#strict && INTRINSICS.own(schema, 'format') && schema.format === 'interface') {
+				return this.#buildInterface(schema, depth, description, enclosed)
+			}
 			return this.#buildObject(schema, depth, description, enclosed)
 		}
 		if (type === undefined && INTRINSICS.own(schema, 'properties') && isRecord(schema.properties)) {
@@ -1024,20 +1031,7 @@ export class SchemaShaper {
 			INTRINSICS.own(schema, 'properties') && isRecord(schema.properties)
 				? schema.properties
 				: undefined
-		const requiredSource =
-			INTRINSICS.own(schema, 'required') && isArray(schema.required)
-				? INTRINSICS.from(
-						iterateIndices(
-							() =>
-								INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'required'])
-									.length,
-						),
-						(index) =>
-							INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'required'])[
-								index
-							],
-					)
-				: []
+		const requiredSource = this.#readRequired(schema)
 		const allKeys = propertiesSource === undefined ? [] : INTRINSICS.keys(propertiesSource)
 		const truncated = allKeys.length > INFER_BREADTH_LIMIT
 		if (this.#strict && truncated) {
@@ -1095,6 +1089,90 @@ export class SchemaShaper {
 			additionalProperties,
 			...(description === undefined ? {} : { description }),
 		})
+	}
+
+	// The entries of a node's `required` list, or none when the keyword is not an array.
+	#readRequired(schema: JSONSchema): readonly unknown[] {
+		return INTRINSICS.own(schema, 'required') && isArray(schema.required)
+			? INTRINSICS.from(
+					iterateIndices(
+						() =>
+							INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'required'])
+								.length,
+					),
+					(index) =>
+						INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'required'])[
+							index
+						],
+				)
+			: []
+	}
+
+	// The interface branch, which only a strict walk takes: each required property reads as a
+	// member and every other one as an optional member. An implementation carries members its
+	// schema does not name, so the node must declare `additionalProperties: true`. A union would
+	// read the members once per arm and an interface's parser fills no default, so both refuse
+	// with code `placement`, as `validateShape` refuses them.
+	#buildInterface(
+		schema: JSONSchema,
+		depth: number,
+		description: string | undefined,
+		enclosed: boolean,
+	): ContractShape {
+		if (enclosed || this.#oneOfs > 0) {
+			throw new ContractError(
+				'schemaToShape: an interface cannot sit under a union, which would read its members once per arm; move the interface outside the union',
+				{ code: 'placement', context: { path: pathOf(this.#path), shape: 'schema' } },
+			)
+		}
+		if (!INTRINSICS.own(schema, 'additionalProperties') || schema.additionalProperties !== true) {
+			throw this.#refusal(
+				'an interface schema must declare additionalProperties true',
+				'additionalProperties',
+			)
+		}
+		const source =
+			INTRINSICS.own(schema, 'properties') && isRecord(schema.properties)
+				? schema.properties
+				: undefined
+		const required = this.#readRequired(schema)
+		const keys = source === undefined ? [] : INTRINSICS.keys(source)
+		if (keys.length > INFER_BREADTH_LIMIT) {
+			throw this.#refusal('properties exceeds the breadth limit', 'properties')
+		}
+		const pairs = INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(keys), [
+			(key: string) => {
+				const child = source !== undefined && INTRINSICS.own(source, key) ? source[key] : undefined
+				if (isRecord(child) && INTRINSICS.own(child, 'default')) {
+					throw new ContractError(
+						'schemaToShape: a default cannot fill an interface member, whose parser returns the implementation by identity; remove the default',
+						{
+							code: 'placement',
+							context: { path: pathOf(this.#path, 'properties', key, 'default'), shape: 'schema' },
+						},
+					)
+				}
+				const member = isRecord(child)
+					? this.#descend(child, depth - 1, enclosed, 'properties', key)
+					: this.#widen(
+							'every property schema must be a plain record',
+							undefined,
+							'properties',
+							key,
+						)
+				const listed = INTRINSICS.reflect.apply(INTRINSICS.some, required, [
+					(entry: unknown) => isString(entry) && entry === key,
+				])
+				return [key, listed ? member : optionalShape(member)]
+			},
+		])
+		const members = INTRINSICS.rebase(
+			INTRINSICS.record<ContractShape>({
+				[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [pairs]),
+			}),
+			null,
+		)
+		return interfaceShape(members, description === undefined ? undefined : { description })
 	}
 
 	// The one place a schema's `default` becomes a shape's. The lenient walk stays total
