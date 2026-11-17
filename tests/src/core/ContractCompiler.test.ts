@@ -1,8 +1,19 @@
-import type { ContractCompilerInterface, ContractShape, StringShape } from '@src/core'
+import type {
+	ContractCompilerInterface,
+	ContractInterface,
+	ContractRefusal,
+	ContractShape,
+	Infer,
+	Result,
+	StringShape,
+} from '@src/core'
+import type { Equal, Expect } from '../../setup.js'
 import {
+	admitValue,
 	arrayShape,
 	attempt,
 	booleanShape,
+	CLONE_NODE_LIMIT,
 	compileAuditor,
 	compileGenerator,
 	compileGuard,
@@ -16,6 +27,7 @@ import {
 	functionShape,
 	integerShape,
 	interfaceShape,
+	isContractError,
 	isRecord,
 	jsonShape,
 	literalShape,
@@ -28,6 +40,7 @@ import {
 	rawShape,
 	recordShape,
 	seededRandom,
+	shapeShape,
 	stringShape,
 	undefinedShape,
 	unionShape,
@@ -60,6 +73,17 @@ import {
 	PartialStore,
 	SessionStore,
 	STORE_DECLARATION,
+	admissionToVerdict,
+	buildCyclicRecord,
+	buildLawShapes,
+	buildFaultedStore,
+	buildOwnedBag,
+	buildOwnLawCorpus,
+	createShiftingStore,
+	createStatefulGetter,
+	drawLawShape,
+	OWNED_BAG_SHAPE,
+	throwSentinel,
 } from '../../setup.js'
 import { createRecorder } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
@@ -94,7 +118,7 @@ describe('ContractCompiler', () => {
 		expect(actual.refused).toBe(false)
 	})
 
-	it('exposes exactly the seven ruled getters and pins them', () => {
+	it('exposes exactly the eight ruled getters and pins them', () => {
 		const compiler: ContractCompilerInterface<StringShape> = new ContractCompiler(
 			stringShape({ min: 1 }),
 		)
@@ -107,6 +131,7 @@ describe('ContractCompiler', () => {
 			'auditor',
 			'reporter',
 			'generator',
+			'owner',
 			'contract',
 		])
 		const configurable = Object.getOwnPropertyNames(ContractCompiler.prototype).filter(
@@ -141,7 +166,7 @@ describe('ContractCompiler', () => {
 		expect(observed.reads).toBeGreaterThan(0)
 	})
 
-	it('replays each root by identity and bundles those exact six values', () => {
+	it('replays each root by identity and bundles those exact seven values', () => {
 		const compiler = new ContractCompiler(objectShape({ name: stringShape({ min: 1 }) }))
 		const bundle = compiler.contract
 
@@ -151,9 +176,18 @@ describe('ContractCompiler', () => {
 		expect(compiler.auditor).toBe(compiler.auditor)
 		expect(compiler.reporter).toBe(compiler.reporter)
 		expect(compiler.generator).toBe(compiler.generator)
+		expect(compiler.owner).toBe(compiler.owner)
 		expect(compiler.contract).toBe(bundle)
 
-		expect(Object.keys(bundle)).toEqual(['schema', 'is', 'parse', 'audit', 'explain', 'generate'])
+		expect(Object.keys(bundle)).toEqual([
+			'schema',
+			'is',
+			'parse',
+			'audit',
+			'explain',
+			'generate',
+			'own',
+		])
 		expect(Object.isFrozen(bundle)).toBe(true)
 		expect(bundle.schema).toBe(compiler.schema)
 		expect(bundle.is).toBe(compiler.guard)
@@ -161,6 +195,7 @@ describe('ContractCompiler', () => {
 		expect(bundle.audit).toBe(compiler.auditor)
 		expect(bundle.explain).toBe(compiler.reporter)
 		expect(bundle.generate).toBe(compiler.generator)
+		expect(bundle.own).toBe(compiler.owner)
 	})
 
 	it('keeps every root usable after all six exist and working state is released', () => {
@@ -1561,5 +1596,289 @@ describe('ContractCompiler — the interface shape', () => {
 		expect(contract.explain(revoked.proxy)).toEqual([
 			{ reason: 'type', path: [], expected: 'object', received: 'instance' },
 		])
+	})
+})
+
+describe('ContractCompiler — own', () => {
+	it.each(['prototype', 'function'] as const)(
+		'reads each own member and each declared member of a %s store one time when the bag is admitted',
+		(form) => {
+			const reads = createRecorder<readonly [string]>()
+			const bag = buildOwnedBag(form, 5, reads.handler)
+			const result = createContract(OWNED_BAG_SHAPE).own(bag)
+
+			expect(result.success).toBe(true)
+			expect(reads.calls).toEqual([['secret'], ['get'], ['set'], ['delete']])
+		},
+	)
+
+	it.each(['prototype', 'function'] as const)(
+		'reads each own member and each declared member of a %s store one time when the bag is refused',
+		(form) => {
+			const reads = createRecorder<readonly [string]>()
+			const bag = buildOwnedBag(form, 'soon', reads.handler)
+			const result = createContract(OWNED_BAG_SHAPE).own(bag)
+
+			expect(result).toEqual({
+				success: false,
+				error: {
+					faults: [{ reason: 'type', path: ['ttl'], expected: 'number', received: '"soon"' }],
+				},
+			})
+			expect(reads.calls).toEqual([['secret'], ['get'], ['set'], ['delete']])
+		},
+	)
+
+	it('reads each declared member of a store that faults two times, where the refusal is explained', () => {
+		const reads = createRecorder<readonly [string]>()
+		const bag = { secret: 'hunter2', store: buildFaultedStore(reads.handler), ttl: 5 }
+		const result = createContract(OWNED_BAG_SHAPE).own(bag)
+
+		expect(result).toEqual({
+			success: false,
+			error: {
+				faults: [
+					{ reason: 'type', path: ['store', 'delete'], expected: 'function', received: '"never"' },
+				],
+			},
+		})
+		expect(reads.calls).toEqual([['get'], ['set'], ['delete'], ['get'], ['set'], ['delete']])
+	})
+
+	it('keeps the refusal of a store member that reads invalid then valid, with a structure cause', () => {
+		const bag = { secret: 'hunter2', store: createShiftingStore(), ttl: 5 }
+		const result = createContract(OWNED_BAG_SHAPE).own(bag)
+		const cause = result.success ? undefined : result.error.cause
+
+		expect(result.success).toBe(false)
+		expect(!result.success && result.error.faults).toEqual([])
+		expect(isContractError(cause) && cause.code).toBe('structure')
+		expect(isContractError(cause) && cause.message).toBe('own: the value changed between reads')
+		expect(isContractError(cause) && cause.context?.path).toEqual([])
+	})
+
+	it.each(buildImplementationRows())(
+		'returns $name at the store position by identity, inside a copy of the bag',
+		({ value }) => {
+			const bag = { secret: 'hunter2', store: value, ttl: 5 }
+			const result = createContract(OWNED_BAG_SHAPE).own(bag)
+
+			expect(result.success && result.value.store).toBe(value)
+			expect(result.success && result.value).not.toBe(bag)
+			expect(result.success && result.value).toEqual(bag)
+		},
+	)
+
+	it('answers from the one read a changing getter gives, where admitValue reads it twice', () => {
+		const counted = createContract(objectShape({ value: integerShape() }))
+		const named = createContract(objectShape({ value: stringShape() }))
+
+		expect(counted.own(createStatefulGetter())).toEqual({ success: true, value: { value: 1 } })
+		expect(admitValue(counted, createStatefulGetter())).toEqual({
+			success: false,
+			error: { faults: [] },
+		})
+		expect(named.own(createStatefulGetter())).toEqual({
+			success: false,
+			error: {
+				faults: [{ reason: 'type', path: ['value'], expected: 'string', received: '1' }],
+			},
+		})
+		expect(admitValue(named, createStatefulGetter())).toEqual({
+			success: false,
+			error: { faults: [] },
+		})
+	})
+
+	it.each(Array.from({ length: 24 }, (_entry, seed) => seed + 1))(
+		'equals admitValue in verdict, value, and faults over seeded law shape %i',
+		(seed) => {
+			const contract: ContractInterface<unknown> = createContract(
+				drawLawShape(seededRandom(seed), 3),
+			)
+			const corpus = buildOwnLawCorpus(contract, 8)
+
+			expect(corpus.length).toBeGreaterThan(0)
+			expect(corpus.map((value) => admissionToVerdict(contract.own(value)))).toEqual(
+				corpus.map((value) => admissionToVerdict(admitValue(contract, value))),
+			)
+		},
+	)
+
+	it.each([1, 2, 3, 4])(
+		'equals admitValue over the union and refinement shapes of seed %i',
+		(seed) => {
+			for (const shape of buildLawShapes(seed)) {
+				const contract: ContractInterface<unknown> = createContract(shape)
+				const corpus = buildOwnLawCorpus(contract, 8)
+
+				expect(corpus.map((value) => admissionToVerdict(contract.own(value)))).toEqual(
+					corpus.map((value) => admissionToVerdict(admitValue(contract, value))),
+				)
+			}
+		},
+	)
+
+	it('judges a non-enumerable data member a shape position reads as admitValue does', () => {
+		const contract = createContract(shapeShape())
+		const low = Object.defineProperty({ category: 'number' }, 'min', {
+			value: 'low',
+			enumerable: false,
+		})
+		const bounded = Object.defineProperty({ category: 'number' }, 'min', {
+			value: 2,
+			enumerable: false,
+		})
+
+		expect(contract.own(low)).toEqual(admitValue(contract, low))
+		expect(contract.own(low).success).toBe(false)
+		expect(admissionToVerdict(contract.own(bounded))).toEqual(
+			admissionToVerdict(admitValue(contract, bounded)),
+		)
+	})
+
+	it('reports every fault of a bag with a function member beside data that is not JSON in one refusal', () => {
+		const contract = createContract(
+			objectShape({
+				name: stringShape({ min: 1 }),
+				version: optionalShape(integerShape({ min: 1 })),
+				stores: recordShape(objectShape({ key: stringShape() })),
+				upgrade: optionalShape(functionShape()),
+			}),
+		)
+		const upgrade = encodeURI
+		const refused = contract.own({
+			name: '',
+			version: 0,
+			stores: { users: { key: new Date(0) } },
+			upgrade,
+		})
+		const admitted = contract.own({ name: 'app', stores: { users: { key: 'id' } }, upgrade })
+
+		expect(refused).toEqual({
+			success: false,
+			error: {
+				faults: [
+					{
+						reason: 'constraint',
+						path: ['name'],
+						expected: 'string',
+						constraint: 'min',
+						limit: 1,
+						received: '""',
+					},
+					{
+						reason: 'constraint',
+						path: ['version'],
+						expected: 'integer',
+						constraint: 'min',
+						limit: 1,
+						received: '0',
+					},
+					{
+						reason: 'type',
+						path: ['stores', 'users', 'key'],
+						expected: 'string',
+						received: 'instance',
+					},
+				],
+			},
+		})
+		expect(admitted.success && admitted.value.upgrade).toBe(upgrade)
+	})
+
+	it('owns JSON data through a JSON contract and refuses a value that is not JSON data', () => {
+		const contract = createContract(jsonShape())
+		const source = { name: 'Ada', tags: ['admin'], profile: { age: 36 } }
+		const owned = contract.own(source)
+
+		expect(owned).toEqual({ success: true, value: source })
+		expect(owned.success && owned.value).not.toBe(source)
+		expect(owned.success && Object.isFrozen(owned.value)).toBe(true)
+		expect(contract.own({ name: 'Ada', joined: new Date(0) })).toEqual(
+			admitValue(contract, { name: 'Ada', joined: new Date(0) }),
+		)
+		expect(contract.own({ name: 'Ada', joined: new Date(0) }).success).toBe(false)
+	})
+
+	it('refuses a class-instance bag at an object position without reading its members', () => {
+		const reads = createRecorder<readonly [string]>()
+		const bag = Object.defineProperty(new SessionStore(), 'secret', {
+			get: () => {
+				reads.handler('secret')
+				return 'hunter2'
+			},
+			enumerable: true,
+		})
+		const contract = createContract(objectShape({ secret: stringShape() }))
+
+		expect(contract.own(bag)).toEqual({
+			success: false,
+			error: {
+				faults: [{ reason: 'type', path: [], expected: 'object', received: 'instance' }],
+			},
+		})
+		expect(reads.calls).toEqual([])
+	})
+
+	it('owns a cyclic value in one walk and answers it as admitValue does', () => {
+		const contract = createContract(jsonShape())
+		const nested = createContract(objectShape({ self: objectShape({ self: jsonShape() }) }))
+
+		expect(contract.own(buildCyclicRecord())).toEqual(admitValue(contract, buildCyclicRecord()))
+		expect(contract.own(buildCyclicRecord()).success).toBe(false)
+		expect(admissionToVerdict(nested.own(buildCyclicRecord()))).toEqual(
+			admissionToVerdict(admitValue(nested, buildCyclicRecord())),
+		)
+	})
+
+	it('refuses a value past the node limit with a clone cause and admits one at the limit', () => {
+		const contract = createContract(arrayShape(numberShape()))
+		const refused = contract.own(new Array<number>(CLONE_NODE_LIMIT).fill(0))
+		const admitted = contract.own(new Array<number>(CLONE_NODE_LIMIT - 1).fill(0))
+
+		expect(refused.success).toBe(false)
+		expect(!refused.success && refused.error.faults).toEqual([])
+		expect(
+			!refused.success && isContractError(refused.error.cause) && refused.error.cause.code,
+		).toBe('clone')
+		expect(admitted.success).toBe(true)
+	})
+
+	it('refuses a throwing getter with a coded cause that keeps the thrown value', () => {
+		const sentinel = Object.freeze({ stage: 'read' })
+		const bag = Object.defineProperty({}, 'secret', {
+			get: throwSentinel(sentinel),
+			enumerable: true,
+		})
+		const result = createContract(objectShape({ secret: stringShape() })).own(bag)
+
+		expect(result.success).toBe(false)
+		expect(!result.success && result.error.faults).toEqual([])
+		const cause = result.success ? undefined : result.error.cause
+		expect(isContractError(cause) && cause.code).toBe('structure')
+		expect(isContractError(cause) && cause.cause).toBe(sentinel)
+	})
+
+	it('types the generic call at the argument and the unannotated call at the contract', () => {
+		const contract = createContract(OWNED_BAG_SHAPE)
+		const bag = { secret: 'hunter2', store: new SessionStore(), ttl: 5 }
+		const typed = contract.own(bag)
+		const unknown: unknown = bag
+		const widened = contract.own(unknown)
+		const lock: Expect<Equal<typeof typed, Result<typeof bag, ContractRefusal>>> = true
+		const wide: Expect<
+			Equal<typeof widened, Result<Infer<typeof OWNED_BAG_SHAPE>, ContractRefusal>>
+		> = true
+
+		expect([lock, wide]).toEqual([true, true])
+		expect(typed.success && typed.value.store.size).toBe(0)
+	})
+
+	it('publishes one owner on the compiler and in the bundle', () => {
+		const compiler = new ContractCompiler(OWNED_BAG_SHAPE)
+
+		expect(compiler.owner).toBe(compiler.owner)
+		expect(compiler.contract.own).toBe(compiler.owner)
 	})
 })

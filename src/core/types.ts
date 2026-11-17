@@ -1542,6 +1542,45 @@ export type ReporterFunction = (value: unknown, path?: readonly string[]) => rea
 export type SeederFunction<T> = (random?: RandomFunction) => T
 
 /**
+ * Represents a compiled owning admission — the `own` member of a {@link ContractInterface}.
+ *
+ * @remarks
+ * The generic call returns the owned value at the argument's static type, because `Infer` types a
+ * function member as `(...args: never[]) => unknown`; the unannotated call returns the contract's type.
+ */
+export interface OwnerFunction<T> {
+	<V extends T>(value: V): Result<V, ContractRefusal>
+	(value: unknown): Result<T, ContractRefusal>
+}
+
+/**
+ * Represents where an owned snapshot holds a value by identity instead of copying it.
+ *
+ * @remarks
+ * A compiler derives one plan per declaration node below which an interface sits; absence means
+ * that no interface sits below the position, so every plain record and array there is copied.
+ * `held` marks an interface position. `properties` holds every declared object key, each with
+ * its plan or `undefined`, `tail` the plan of an undeclared key, and `items` the plan of an array
+ * element.
+ *
+ * @example
+ * ```ts
+ * const plan: CapturePlan = {
+ * 	held: false,
+ * 	properties: { store: { held: true, properties: {}, tail: undefined, items: undefined } },
+ * 	tail: undefined,
+ * 	items: undefined,
+ * }
+ * ```
+ */
+export interface CapturePlan {
+	readonly held: boolean
+	readonly properties: Readonly<Record<string, CapturePlan | undefined>>
+	readonly tail: CapturePlan | undefined
+	readonly items: CapturePlan | undefined
+}
+
+/**
  * Validates one retained contract-shape source on demand.
  *
  * @remarks
@@ -1585,9 +1624,9 @@ export interface ShapeValidatorInterface {
  * Built by `createContract`: `is` narrows, `audit` diagnoses strict rejection,
  * `parse` coerces (returning the typed value or `undefined`), `schema` is an
  * owned deeply frozen emitted JSON Schema, `explain` reports the structured
- * faults behind a failed `parse`, and `generate` produces deterministic seed
+ * faults behind a failed `parse`, `generate` produces deterministic seed
  * data from a {@link RandomFunction} (defaulting to a wall-clock-seeded source
- * when none is supplied).
+ * when none is supplied), and `own` admits an owned snapshot of a value.
  *
  * LOCKSTEP means derived from one owned snapshot of the shape, not agreeing on
  * which values to accept: `is` and `schema` describe the contract's canonical
@@ -1673,6 +1712,20 @@ export interface ContractInterface<T> {
 	 * @throws {ContractError} When the declaration cannot be satisfied, or when the sample source fails
 	 */
 	generate(random?: RandomFunction): T
+	/**
+	 * Admits an owned snapshot of a value and returns the parser's value, at the argument's static type.
+	 *
+	 * @remarks
+	 * Reads each own enumerable string member and each present index of a plain record or array one
+	 * time, into a frozen copy, and admits that copy as {@link admitValue} would. A value at an
+	 * interface position, any other object, and every function are held by identity.
+	 *
+	 * @param value - The value to own
+	 * @returns The parser's value over the snapshot, or the refusal
+	 */
+	own<V extends T>(value: V): Result<V, ContractRefusal>
+	// The unannotated call: the parser's value at the contract's type.
+	own(value: unknown): Result<T, ContractRefusal>
 }
 
 /**
@@ -1688,7 +1741,8 @@ export interface ContractInterface<T> {
  * `reporter` and `generator` resolve union membership through the compiled
  * guard, so they build it too, and `guard`, `parser` and `reporter` answer an
  * interface node from its audit, so they plan the audits when the graph holds
- * one. `contract` requests every root in getter order.
+ * one, and `owner` builds the guard, the auditor, and the parser it judges with. `contract`
+ * requests every root in getter order.
  *
  * Every getter REPLAYS its exact artifact: reading one twice returns the same
  * function or graph by identity, and {@link contract}'s members are those
@@ -1711,11 +1765,11 @@ export interface ContractInterface<T> {
  * It declares no call-signature member, so its whole surface is the readonly data
  * properties: `schema` (a {@link JSONSchema}), `guard` (a `Guard<Infer<S>>`), `parser`
  * (a `Parser<Infer<S>>`), `auditor` (an {@link AuditorFunction}), `reporter` (a {@link
- * ReporterFunction}), `generator` (a `SeederFunction<Infer<S>>`), and `contract` (a
- * `ContractInterface<Infer<S>>`). `contract` is the frozen bundle whose own enumerable
- * keys are `schema`, `is`, `parse`, `audit`, `explain`, and `generate` in that order,
- * each holding the exact value the corresponding getter publishes — `contract.is` is
- * exactly `compiler.guard`, by identity rather than as a copy.
+ * ReporterFunction}), `generator` (a `SeederFunction<Infer<S>>`), `owner` (an {@link
+ * OwnerFunction}), and `contract` (a `ContractInterface<Infer<S>>`). `contract` is the frozen
+ * bundle whose own enumerable keys are `schema`, `is`, `parse`, `audit`, `explain`,
+ * `generate`, and `own` in that order, each holding the exact value the corresponding getter
+ * publishes — `contract.is` is exactly `compiler.guard`, by identity rather than as a copy.
  *
  * @example
  * ```ts
@@ -1736,6 +1790,8 @@ export interface ContractCompilerInterface<S extends ContractShape> {
 	readonly reporter: ReporterFunction
 	/** Returns the compiled seed-data source. */
 	readonly generator: SeederFunction<Infer<S>>
+	/** Returns the compiled owning admission. */
+	readonly owner: OwnerFunction<Infer<S>>
 	/** Returns the frozen bundle whose values are the artifacts declared earlier. */
 	readonly contract: ContractInterface<Infer<S>>
 }

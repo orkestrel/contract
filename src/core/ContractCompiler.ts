@@ -2,8 +2,10 @@ import type {
 	ArrayShape,
 	AuditFault,
 	AuditorFunction,
+	CapturePlan,
 	ContractCompilerInterface,
 	ContractInterface,
+	ContractRefusal,
 	ContractShape,
 	Fault,
 	FaultKind,
@@ -15,6 +17,7 @@ import type {
 	LiteralValue,
 	NumberShape,
 	ObjectShape,
+	OwnerFunction,
 	Parser,
 	RandomFunction,
 	ReporterFunction,
@@ -46,6 +49,8 @@ import {
 	computeMonthLength,
 	drawRandom,
 	enumerableKeys,
+	failure,
+	filterUncoveredFaults,
 	holds,
 	isFailure,
 	isSuccess,
@@ -66,6 +71,7 @@ import {
 	refuseExpansion,
 	selectClosestFaults,
 	shapeToKind,
+	success,
 } from './helpers.js'
 import {
 	isArray,
@@ -97,6 +103,7 @@ import { ShapePass } from './ShapePass.js'
 import { ShapeValidator } from './ShapeValidator.js'
 import { EvaluationScope } from './EvaluationScope.js'
 import { KeyPlanCache } from './KeyPlanCache.js'
+import { ValueCloner } from './ValueCloner.js'
 import { seededRandom } from './seeders.js'
 
 /**
@@ -127,6 +134,7 @@ import { seededRandom } from './seeders.js'
  * a default that its inner shape refuses refuses at whichever artifact is read
  * first. The `guard`, `parser` and `reporter` plan the audits when the graph holds
  * an interface, because an interface node answers each of the three from its audit.
+ * The `owner` builds the guard, the auditor, and the parser, because it judges with all three.
  *
  * One terminal lifecycle covers preparation and every family. A failure settles
  * the compiler: later getters rethrow that exact error, while an artifact
@@ -186,6 +194,14 @@ export class ContractCompiler<
 	> = []
 	static readonly #emptySeeds: Array<(random: RandomFunction) => unknown> = []
 	static readonly #emptyAdmitted: boolean[] = []
+	static readonly #emptyCaptures: Array<CapturePlan | undefined> = []
+	// The plan of every interface position: the value there is held, so nothing below it is planned.
+	static readonly #held: CapturePlan = INTRINSICS.freeze({
+		held: true,
+		properties: INTRINSICS.freeze(INTRINSICS.create(null)),
+		tail: undefined,
+		items: undefined,
+	})
 	// One frozen function for every draw, so two seeds generate equal values.
 	static readonly #function: () => undefined = INTRINSICS.freeze(() => undefined)
 	// The path an interface's guard and parser hand its audit; a clean verdict carries none.
@@ -205,6 +221,7 @@ export class ContractCompiler<
 		INTRINSICS.freeze(ContractCompiler.#emptyReports)
 		INTRINSICS.freeze(ContractCompiler.#emptySeeds)
 		INTRINSICS.freeze(ContractCompiler.#emptyAdmitted)
+		INTRINSICS.freeze(ContractCompiler.#emptyCaptures)
 	}
 
 	#source: ContractShape | undefined
@@ -240,12 +257,15 @@ export class ContractCompiler<
 	#seeds: Array<(random: RandomFunction) => unknown>
 	// The one static fact the container families share: whether each node admits `undefined`.
 	#admitted: boolean[]
+	// Each node's capture plan, absent where no interface sits below it.
+	#captures: Array<CapturePlan | undefined>
 	#schema: JSONSchema | undefined
 	#guard: Guard<unknown> | undefined
 	#parser: Parser<unknown> | undefined
 	#auditor: AuditorFunction | undefined
 	#reporter: ReporterFunction | undefined
 	#generator: SeederFunction<unknown> | undefined
+	#owner: OwnerFunction<unknown> | undefined
 	#bundle: ContractInterface<unknown> | undefined
 
 	/**
@@ -267,12 +287,14 @@ export class ContractCompiler<
 		this.#reports = []
 		this.#seeds = []
 		this.#admitted = []
+		this.#captures = []
 		this.#schema = undefined
 		this.#guard = undefined
 		this.#parser = undefined
 		this.#auditor = undefined
 		this.#reporter = undefined
 		this.#generator = undefined
+		this.#owner = undefined
 		this.#bundle = undefined
 	}
 
@@ -325,13 +347,20 @@ export class ContractCompiler<
 		return this.#publish(this.#enter(() => this.#buildGenerator()))
 	}
 
+	/** Returns the compiled owning admission for the owned declaration. */
+	get owner(): OwnerFunction<Infer<S>> {
+		const ready = this.#owner
+		if (ready !== undefined && this.#state.phase === 'ready') return this.#publish(ready)
+		return this.#publish(this.#enter(() => this.#buildOwner()))
+	}
+
 	/**
 	 * Returns the frozen bundle of this compiler's artifacts.
 	 *
 	 * @remarks
 	 * Own enumerable keys `schema`, `is`, `parse`, `audit`, `explain`,
-	 * `generate`, in that order, each holding the exact value the corresponding
-	 * getter publishes.
+	 * `generate`, `own`, in that order, each holding the exact value the
+	 * corresponding getter publishes.
 	 */
 	get contract(): ContractInterface<Infer<S>> {
 		const ready = this.#bundle
@@ -339,13 +368,15 @@ export class ContractCompiler<
 		return this.#publish(this.#enter(() => this.#buildContract()))
 	}
 
-	// The one typed boundary in this class. Every family is compiled over the
-	// OWNED graph, whose static type is the widened `ContractShape` union, while
+	// One of the two typed boundaries in this class, with `#claim`. Every family is compiled over
+	// the OWNED graph, whose static type is the widened `ContractShape` union, while
 	// the compiler publishes artifacts under the inferred type of the declaration
 	// it was constructed from. The standalone `compile*` functions make the
 	// identical claim through their own overload pairs; declaring it once here is
-	// that same statement rather than an extra one, and it is the reason no
-	// assertion appears anywhere in this file.
+	// that same statement rather than an extra one, and the two boundaries are the
+	// reason no assertion appears anywhere in this file.
+	// The owner overload comes first, because an owner is also assignable to `Parser<unknown>`.
+	#publish(root: OwnerFunction<unknown>): OwnerFunction<Infer<S>>
 	#publish(root: Guard<unknown>): Guard<Infer<S>>
 	#publish(root: Parser<unknown>): Parser<Infer<S>>
 	#publish(root: SeederFunction<unknown>): SeederFunction<Infer<S>>
@@ -406,6 +437,7 @@ export class ContractCompiler<
 		if (this.#schema === undefined || this.#guard === undefined) return
 		if (this.#parser === undefined || this.#auditor === undefined) return
 		if (this.#reporter === undefined || this.#generator === undefined) return
+		if (this.#owner === undefined) return
 		this.#release()
 	}
 
@@ -426,6 +458,7 @@ export class ContractCompiler<
 		this.#reports = ContractCompiler.#emptyReports
 		this.#seeds = ContractCompiler.#emptySeeds
 		this.#admitted = ContractCompiler.#emptyAdmitted
+		this.#captures = ContractCompiler.#emptyCaptures
 	}
 
 	// === Preparation
@@ -2994,6 +3027,157 @@ export class ContractCompiler<
 		}
 	}
 
+	// === Owner family
+
+	#buildOwner(): OwnerFunction<unknown> {
+		const ready = this.#owner
+		if (ready !== undefined) return ready
+		this.#prepare()
+		const guard = this.#buildGuard()
+		const auditor = this.#buildAuditor()
+		const parser = this.#buildParser()
+		this.#planCaptures()
+		const root = ContractCompiler.#claim(
+			this.#exposeOwner(this.#captureAt(this.#node(0)), { guard, auditor, parser }),
+		)
+		this.#owner = root
+		return root
+	}
+
+	// Planned one time, children first.
+	#planCaptures(): void {
+		if (this.#captures.length > 0) return
+		for (const step of iterateIndices(() => this.#order.length)) {
+			const index = this.#order[step]
+			if (index === undefined) continue
+			this.#captures[index] = this.#captureOf(index)
+		}
+	}
+
+	#captureAt(shape: ContractShape): CapturePlan | undefined {
+		return this.#captures[this.#locate(shape)]
+	}
+
+	// A node plans only where an interface sits below it. An interface under a union refuses at
+	// validation, so a union plans nothing, as every leaf does.
+	#captureOf(index: number): CapturePlan | undefined {
+		const owned = this.#node(index)
+		switch (owned.category) {
+			case 'interface':
+				return ContractCompiler.#held
+			case 'optional':
+			case 'nullable':
+				return this.#captureAt(owned.inner)
+			case 'array': {
+				const items = this.#captureAt(owned.items)
+				if (items === undefined) return undefined
+				return INTRINSICS.freeze({
+					held: false,
+					properties: ContractCompiler.#held.properties,
+					tail: undefined,
+					items,
+				})
+			}
+			case 'object': {
+				const extra = owned.additionalProperties
+				const tail =
+					extra === undefined || extra === true || extra === false
+						? undefined
+						: this.#captureAt(extra)
+				const pairs: ReadonlyArray<readonly [string, CapturePlan | undefined]> =
+					INTRINSICS.reflect.apply(
+						INTRINSICS.project,
+						readIndexView(INTRINSICS.keys(owned.properties)),
+						[
+							(key: string) => {
+								const child = owned.properties[key]
+								return [key, child === undefined ? undefined : this.#captureAt(child)]
+							},
+						],
+					)
+				const planned = INTRINSICS.reflect.apply(INTRINSICS.some, pairs, [
+					(pair: readonly [string, CapturePlan | undefined]) => pair[1] !== undefined,
+				])
+				if (tail === undefined && !planned) return undefined
+				const properties = INTRINSICS.rebase(
+					INTRINSICS.record<CapturePlan | undefined>({
+						[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+							pairs,
+						]),
+					}),
+					null,
+				)
+				return INTRINSICS.freeze({
+					held: false,
+					properties: INTRINSICS.freeze(properties),
+					tail,
+					items: undefined,
+				})
+			}
+			default:
+				return undefined
+		}
+	}
+
+	// Capture, then the guard, then the parser or the audit, inside one evaluation scope: a clean
+	// interface audit is kept in the scope, so its declared members are read one time.
+	#exposeOwner(
+		plan: CapturePlan | undefined,
+		judges: {
+			readonly guard: Guard<unknown>
+			readonly auditor: AuditorFunction
+			readonly parser: Parser<unknown>
+		},
+	): (value: unknown) => Result<unknown, ContractRefusal> {
+		return (value: unknown): Result<unknown, ContractRefusal> => {
+			try {
+				const snapshot = new ValueCloner(value, plan).clone()
+				return EvaluationScope.run(
+					(owned: unknown) => ContractCompiler.#judge(judges, owned),
+					snapshot,
+				)
+			} catch (cause) {
+				return failure({ faults: [], cause })
+			}
+		}
+	}
+
+	// The guard decides the verdict and the audit only explains a refusal, built as `admitValue`
+	// builds it. A held member read live can answer the audit differently, so an empty audit
+	// after a refused guard still refuses.
+	static #judge(
+		judges: {
+			readonly guard: Guard<unknown>
+			readonly auditor: AuditorFunction
+			readonly parser: Parser<unknown>
+		},
+		value: unknown,
+	): Result<unknown, ContractRefusal> {
+		if (judges.guard(value)) {
+			const parsed = judges.parser(value)
+			if (parsed === undefined && value !== undefined) return failure({ faults: [] })
+			return success(parsed === undefined ? value : parsed)
+		}
+		const faults = judges.auditor(value)
+		if (faults.length > 0) {
+			return failure({ faults: limitEntries(filterUncoveredFaults(faults), FAULT_LIMIT) })
+		}
+		return failure({
+			faults: [],
+			cause: new ContractError('own: the value changed between reads', {
+				code: 'structure',
+				context: { path: [] },
+			}),
+		})
+	}
+
+	// The other typed boundary, beside `#publish`: the generic call of `own` answers at its
+	// argument's static type, because the owned snapshot stands in for the argument.
+	static #claim(owner: (value: unknown) => Result<unknown, ContractRefusal>): OwnerFunction<unknown>
+	static #claim(owner: unknown): unknown {
+		return owner
+	}
+
 	// === Bundle
 
 	#buildContract(): ContractInterface<unknown> {
@@ -3007,6 +3191,7 @@ export class ContractCompiler<
 		const auditor = this.#buildAuditor()
 		const reporter = this.#buildReporter()
 		const generator = this.#buildGenerator()
+		const owner = this.#buildOwner()
 		const bundle = INTRINSICS.freeze({
 			schema,
 			is: guard,
@@ -3014,6 +3199,7 @@ export class ContractCompiler<
 			audit: auditor,
 			explain: reporter,
 			generate: generator,
+			own: owner,
 		})
 		this.#bundle = bundle
 		return bundle

@@ -49,7 +49,7 @@ import { ShapePass } from './ShapePass.js'
  * diagnostics and generator refuse.
  *
  * @param shape - The shape to compile
- * @returns A contract bundling `schema` / `is` / `parse` / `audit` / `explain` / `generate`
+ * @returns A contract bundling `schema` / `is` / `parse` / `audit` / `explain` / `generate` / `own`
  *
  * @example Compiling a contract
  * ```ts

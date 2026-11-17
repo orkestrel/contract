@@ -6,7 +6,9 @@ import type {
 	AuditFault,
 	ArrayShapeOptions,
 	BooleanShapeOptions,
+	CapturePlan,
 	ContractInterface,
+	ContractRefusal,
 	ContractShape,
 	EvaluationFunction,
 	Fault,
@@ -1793,6 +1795,7 @@ export function publicDoors(): readonly PublicDoor[] {
 		['ContractCompiler.auditor', () => new ContractCompiler(shape).auditor({ name: 1 })],
 		['ContractCompiler.reporter', () => new ContractCompiler(shape).reporter({ name: 1 })],
 		['ContractCompiler.generator', () => new ContractCompiler(shape).generator(seededRandom(7))],
+		['ContractCompiler.owner', () => new ContractCompiler(shape).owner(record)],
 		['ContractCompiler.contract', () => new ContractCompiler(shape).contract],
 		['contract.parse', () => contract.parse(record)],
 		['contract.explain', () => contract.explain({ name: 1 })],
@@ -1869,6 +1872,7 @@ export function publicDoors(): readonly PublicDoor[] {
 	])
 	const total: ReadonlyArray<readonly [string, () => unknown]> = Object.freeze([
 		['contract.is', () => contract.is(record)],
+		['contract.own', () => contract.own(record)],
 		['contract.schema', () => contract.schema],
 		['isContractError', () => isContractError(record)],
 		['isRecord', () => isRecord(record)],
@@ -7124,4 +7128,273 @@ export const INTERFACE_LAW_SHAPES: readonly ContractShape[] = Object.freeze([
 	objectShape({ store: STORE_DECLARATION }),
 	arrayShape(interfaceShape({ id: integerShape() })),
 	nullableShape(interfaceShape({ id: integerShape() })),
+])
+
+// === The owning admission
+
+/** Declares the bag the owning read count runs over: a string, a store, and an optional number. */
+export const OWNED_BAG_SHAPE = objectShape({
+	secret: stringShape(),
+	store: STORE_DECLARATION,
+	ttl: optionalShape(numberShape()),
+})
+
+/**
+ * Builds an {@link OWNED_BAG_SHAPE} bag whose `secret` getter and store members record each read.
+ *
+ * @param form - The store's implementation form, as {@link buildCountedStore} takes it
+ * @param ttl - The `ttl` member: a number the shape admits, or any value it refuses
+ * @param record - Called with the member's name on every read
+ * @returns The bag
+ */
+export function buildOwnedBag(
+	form: CountedForm,
+	ttl: unknown,
+	record: (name: string) => void,
+): Readonly<Record<string, unknown>> {
+	return Object.defineProperties(
+		{ store: buildCountedStore(form, record), ttl },
+		{
+			secret: {
+				get: () => {
+					record('secret')
+					return 'hunter2'
+				},
+				enumerable: true,
+			},
+		},
+	)
+}
+
+/**
+ * Builds a store whose prototype accessors record each read, with a `delete` that holds no function.
+ *
+ * @param record - Called with the member's name on every read
+ * @returns The store, which {@link STORE_DECLARATION} refuses at `['delete']`
+ */
+export function buildFaultedStore(record: (name: string) => void): object {
+	return Object.create(
+		Object.defineProperties(
+			{},
+			{
+				get: {
+					get: () => {
+						record('get')
+						return encodeURI
+					},
+					enumerable: true,
+				},
+				set: {
+					get: () => {
+						record('set')
+						return encodeURI
+					},
+					enumerable: true,
+				},
+				delete: {
+					get: () => {
+						record('delete')
+						return 'never'
+					},
+					enumerable: true,
+				},
+			},
+		),
+	)
+}
+
+/**
+ * Creates a store whose `get` reads as a string on its first read and as a function on every read after.
+ *
+ * @returns The store, which {@link STORE_DECLARATION} refuses on the first read and admits after
+ */
+export function createShiftingStore(): object {
+	const reads = new ObservationCounter()
+	return Object.create(
+		Object.defineProperties(
+			{},
+			{
+				get: {
+					get: () => (reads.increment() === 1 ? 'never' : encodeURI),
+					enumerable: true,
+				},
+				set: { value: encodeURI, enumerable: true },
+				delete: { value: encodeURI, enumerable: true },
+			},
+		),
+	)
+}
+
+/**
+ * Checks whether every own member of a value reads without throwing.
+ *
+ * @param value - The value to read
+ * @returns True if the value is not an object or each own member reads; false otherwise
+ */
+export function matchesStableSample(value: unknown): boolean {
+	if (typeof value !== 'object' || value === null) return true
+	return attempt(() => Reflect.ownKeys(value).map((key) => Reflect.get(value, key))).success
+}
+
+/**
+ * Builds the seeded corpus the owning law runs over for one contract.
+ *
+ * @remarks
+ * The {@link buildUndefinedCorpus} corpus, each generated value's {@link perturbLawValue}
+ * variations, and {@link buildLawEdges}, less every value {@link matchesStableSample} refuses.
+ *
+ * @param contract - The contract whose generator seeds the corpus
+ * @param seeds - The number of seeds, drawn from `0`
+ * @returns The corpus values
+ */
+export function buildOwnLawCorpus(
+	contract: ContractInterface<unknown>,
+	seeds: number,
+): readonly unknown[] {
+	const generated = Array.from({ length: seeds }, (_entry, seed) =>
+		attempt(() => contract.generate(seededRandom(seed))),
+	).flatMap((outcome) => (outcome.success ? [outcome.value] : []))
+	return [
+		...buildUndefinedCorpus(contract, seeds),
+		...generated.flatMap((value) => perturbLawValue(value)),
+		...buildLawEdges(),
+	].filter(matchesStableSample)
+}
+
+/**
+ * Projects an admission onto what the owning law compares.
+ *
+ * @param result - The admission
+ * @returns The verdict with the value or the faults, and whether a refusal carries a cause
+ */
+export function admissionToVerdict(result: Result<unknown, ContractRefusal>): unknown {
+	return result.success
+		? { success: true, value: result.value }
+		: { success: false, faults: result.error.faults, cause: Object.hasOwn(result.error, 'cause') }
+}
+
+/** Declares a cross-origin bag of three optional string lists. */
+export const OWN_BENCH_CORS_SHAPE = objectShape({
+	origin: optionalShape(unionShape(stringShape(), arrayShape(stringShape()))),
+	methods: optionalShape(arrayShape(stringShape())),
+	headers: optionalShape(arrayShape(stringShape())),
+})
+
+/** Holds a cross-origin bag {@link OWN_BENCH_CORS_SHAPE} admits. */
+export const OWN_BENCH_CORS_BAG: Readonly<Record<string, unknown>> = {
+	origin: ['https://app.example.org', 'https://admin.example.org'],
+	methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE'],
+	headers: ['content-type', 'authorization', 'x-request-id'],
+}
+
+/** Declares an upload bag of nested size and count limits. */
+export const OWN_BENCH_MULTIPART_SHAPE = objectShape({
+	limits: optionalShape(
+		objectShape({
+			file: optionalShape(
+				objectShape({
+					size: optionalShape(numberShape({ min: 0 })),
+					count: optionalShape(integerShape({ min: 0 })),
+				}),
+			),
+			field: optionalShape(
+				objectShape({
+					size: optionalShape(numberShape({ min: 0 })),
+					count: optionalShape(integerShape({ min: 0 })),
+				}),
+			),
+			total: optionalShape(numberShape({ min: 0 })),
+		}),
+	),
+	allowed: optionalShape(arrayShape(stringShape())),
+	directory: optionalShape(stringShape()),
+})
+
+/** Holds an upload bag {@link OWN_BENCH_MULTIPART_SHAPE} admits. */
+export const OWN_BENCH_MULTIPART_BAG: Readonly<Record<string, unknown>> = {
+	limits: {
+		file: { size: 10_485_760, count: 4 },
+		field: { size: 65_536, count: 32 },
+		total: 41_943_040,
+	},
+	allowed: ['image/png', 'image/jpeg', 'application/pdf'],
+	directory: '/var/uploads',
+}
+
+/** Declares a session bag of a transport and a store, each an implementation, beside numbers and functions. */
+export const OWN_BENCH_SESSION_SHAPE = objectShape({
+	transport: interfaceShape({
+		read: functionShape(),
+		write: functionShape(),
+		clear: functionShape(),
+	}),
+	store: optionalShape(STORE_DECLARATION),
+	ttl: optionalShape(numberShape({ min: Number.MIN_VALUE })),
+	lifetime: optionalShape(numberShape({ min: Number.MIN_VALUE })),
+	capacity: optionalShape(integerShape({ min: 1 })),
+	evict: optionalShape(functionShape()),
+	create: optionalShape(functionShape()),
+	mint: optionalShape(functionShape()),
+	required: optionalShape(booleanShape()),
+	clock: optionalShape(functionShape()),
+})
+
+/** Holds a session bag {@link OWN_BENCH_SESSION_SHAPE} admits, with a class-instance store. */
+export const OWN_BENCH_SESSION_BAG: Readonly<Record<string, unknown>> = {
+	transport: { read: encodeURI, write: encodeURI, clear: encodeURI },
+	store: new SessionStore(),
+	ttl: 1_800_000,
+	lifetime: 86_400_000,
+	capacity: 10_000,
+	mint: encodeURI,
+	required: true,
+	clock: Date.now,
+}
+
+/** Declares one bag kind the owning bench reads: its shape, a bag the shape admits, and its capture plan. */
+export interface OwnBenchCase {
+	/** Names the kind in each cell's title. */
+	readonly kind: string
+	/** Holds the declaration. */
+	readonly shape: ContractShape
+	/** Holds a bag the declaration admits. */
+	readonly bag: Readonly<Record<string, unknown>>
+	/** Holds the plan the declaration's owner captures with; `undefined` where no interface sits. */
+	readonly plan: CapturePlan | undefined
+}
+
+/** Holds the capture plan of {@link OWN_BENCH_SESSION_SHAPE}: the transport and the store held. */
+export const OWN_BENCH_SESSION_PLAN: CapturePlan = Object.freeze({
+	held: false,
+	properties: Object.freeze({
+		transport: Object.freeze({ held: true, properties: {}, tail: undefined, items: undefined }),
+		store: Object.freeze({ held: true, properties: {}, tail: undefined, items: undefined }),
+		ttl: undefined,
+		lifetime: undefined,
+		capacity: undefined,
+		evict: undefined,
+		create: undefined,
+		mint: undefined,
+		required: undefined,
+		clock: undefined,
+	}),
+	tail: undefined,
+	items: undefined,
+})
+
+/** Lists the bag kinds the owning bench reads: cross-origin lists, nested upload limits, and a session of implementations. */
+export const OWN_BENCH_CASES: readonly OwnBenchCase[] = Object.freeze([
+	{ kind: 'cors', shape: OWN_BENCH_CORS_SHAPE, bag: OWN_BENCH_CORS_BAG, plan: undefined },
+	{
+		kind: 'multipart',
+		shape: OWN_BENCH_MULTIPART_SHAPE,
+		bag: OWN_BENCH_MULTIPART_BAG,
+		plan: undefined,
+	},
+	{
+		kind: 'session',
+		shape: OWN_BENCH_SESSION_SHAPE,
+		bag: OWN_BENCH_SESSION_BAG,
+		plan: OWN_BENCH_SESSION_PLAN,
+	},
 ])

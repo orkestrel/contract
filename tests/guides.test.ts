@@ -33,6 +33,7 @@ const INTERNAL: readonly string[] = Object.freeze([
 	'class SampleInferer',
 	'class SchemaShaper',
 	'class ShapePass',
+	'class ValueCloner',
 	'class ValueInferer',
 ])
 

@@ -43,6 +43,40 @@ refuses with every fault `audit` reports after `filterUncoveredFaults` prunes th
 `oneOf` fault covers, bounded at `FAULT_LIMIT`. A `hidden` fault and an `extra` fault carrying `symbol`
 stay whatever covers them. It repairs nothing: a numeric string for a number refuses.
 
+A contract's `own` method admits an owned snapshot in place of the caller's value, so it reads that
+value one time. Each own enumerable string member and each present index of a plain record or array
+is read into a frozen copy that keeps sharing and cycles, and an accessor there becomes data. A
+member outside the enumerable view keeps its presence and its data value, and its accessor never
+runs, so `hidden` and `extra` still report. A value at an `interfaceShape` position, any other
+object, and every function are held by identity and never read, so a class instance at an
+`objectShape` position refuses with a `type` fault. `own` then runs `is` over the snapshot inside
+one evaluation scope, then `parse` when `is` holds and `audit` when it refuses, and it refuses as
+`admitValue` does. A declared interface member is read one time on success and at most two times
+on a refusal whose interface itself faults. Because an interface member is read live, an `audit`
+that finds no fault after `is` refused still refuses, with a `structure` cause stating that the
+value changed between reads. A snapshot past `CLONE_NODE_LIMIT` nodes, an unreadable member, and
+any other throw refuse with no fault and the error as `cause`. For a stable
+value made of data and a contract with no interface, `own` answers as `admitValue` does, in verdict,
+value, and faults.
+
+```ts
+import {
+	createContract,
+	functionShape,
+	interfaceShape,
+	numberShape,
+	objectShape,
+} from '@orkestrel/contract'
+
+const store = { get: encodeURI, set: encodeURI }
+const contract = createContract(
+	objectShape({ ttl: numberShape(), store: interfaceShape({ get: functionShape() }) }),
+)
+const owned = contract.own({ ttl: 60, store })
+owned.success && owned.value.store === store // true — the implementation is held by identity
+contract.own({ ttl: '60', store }).success // false — the refusal carries the type fault at ['ttl']
+```
+
 `repairValue` is the repairing door. It requires stable reads across its guard, reports, and parser,
 parses once, refuses lossy repairs and capped audits, and returns the parser's ownership unchanged.
 Its result carries the lossless repairs made. An own undefined optional field can be omitted or filled
@@ -716,13 +750,15 @@ Turn one `ContractShape` into the six lockstep outputs — `schema` / `is` / `pa
 | `compileSchema`             | function  | `(shape: ContractShape) => JSONSchema`                                                                                                      | Compiles a `ContractShape` into a JSON Schema document.                                                                                                                                    |
 | `compileGenerator`          | function  | `(<S extends ContractShape>(shape: S, random?: RandomFunction) => Infer<S>) & ((shape: ContractShape, random?: RandomFunction) => unknown)` | Compiles a `ContractShape` into a deterministic seed value.                                                                                                                                |
 | `createContract`            | function  | `(<S extends ContractShape>(shape: S) => ContractInterface<Infer<S>>) & ((shape: ContractShape) => ContractInterface<unknown>)`             | Compiles a `ContractShape` into a `ContractInterface` — the lockstep outputs from one declaration, lockstep meaning derived from one owned snapshot rather than accepting the same values. |
-| `ContractInterface`         | interface | `{ schema, is, parse(), audit(), explain(), generate() }`                                                                                   | Represents a compiled contract — the lockstep outputs derived from one shape.                                                                                                              |
+| `ContractInterface`         | interface | `{ schema, is, parse(), audit(), explain(), generate(), own() }`                                                                            | Represents a compiled contract — the lockstep outputs derived from one shape.                                                                                                              |
 | `ContractCompiler`          | class     | `new <S extends ContractShape = ContractShape>(shape: S) => ContractCompilerInterface<S>`                                                   | Owns one contract shape's artifacts and their bundle, compiled lazily.                                                                                                                     |
-| `ContractCompilerInterface` | interface | `{ schema, guard, parser, auditor, reporter, generator, contract }`                                                                         | Owns one contract shape's compiled artifacts plus their bundle, lazily.                                                                                                                    |
+| `ContractCompilerInterface` | interface | `{ schema, guard, parser, auditor, reporter, generator, owner, contract }`                                                                  | Owns one contract shape's compiled artifacts plus their bundle, lazily.                                                                                                                    |
 | `RandomFunction`            | type      | `() => number`                                                                                                                              | Represents a deterministic random source returning a value in `[0, 1)`.                                                                                                                    |
 | `AuditorFunction`           | type      | `(value: unknown, path?: readonly string[]) => readonly AuditFault[]`                                                                       | Represents a compiled strict-domain diagnostic — the shape of `compileAuditor` bound to one shape.                                                                                         |
 | `ReporterFunction`          | type      | `(value: unknown, path?: readonly string[]) => readonly Fault[]`                                                                            | Represents a compiled coercive-domain diagnostic — the shape of `compileReporter` bound to one shape.                                                                                      |
 | `SeederFunction`            | type      | `(random?: RandomFunction) => T`                                                                                                            | Represents a compiled seed-data source — the shape of `compileGenerator` bound to one shape.                                                                                               |
+| `OwnerFunction`             | interface | `{ <V extends T>(value: V): Result<V, ContractRefusal>, (value: unknown): Result<T, ContractRefusal> }`                                     | Represents a compiled owning admission — the `own` member of a `ContractInterface`.                                                                                                        |
+| `CapturePlan`               | interface | `{ held, properties, tail, items }`                                                                                                         | Represents where an owned snapshot holds a value by identity instead of copying it.                                                                                                        |
 | `GENERATION_ATTEMPT_LIMIT`  | const     | `32`                                                                                                                                        | Caps at `32` the number of candidate-generation attempts for a constrained generated value, frozen.                                                                                        |
 | `COMPILE_DEPTH_LIMIT`       | const     | `512`                                                                                                                                       | Caps at `512` the supported nesting depth of a compiled contract shape, frozen.                                                                                                            |
 | `COMPILE_NODE_LIMIT`        | const     | `16384`                                                                                                                                     | Caps at `16384` the number of nodes a compiled artifact may expand a shape into, frozen.                                                                                                   |
@@ -739,11 +775,11 @@ A compiled closed-object guard keeps the plans of the key orders it accepts unti
 `ContractCompilerInterface` declares no call-signature member, so it has no Methods table: its
 whole surface is the readonly data properties — `schema` (a `JSONSchema`), `guard` (a
 `Guard<Infer<S>>`), `parser` (a `Parser<Infer<S>>`), `auditor` (an `AuditorFunction`), `reporter`
-(a `ReporterFunction`), `generator` (a `SeederFunction<Infer<S>>`), and `contract` (a
-`ContractInterface<Infer<S>>`). `contract` is the frozen bundle whose own enumerable keys are
-`schema`, `is`, `parse`, `audit`, `explain`, and `generate` in that order, each holding the exact
-value the corresponding getter publishes — `contract.is` is exactly `compiler.guard`, by
-identity rather than as a copy of it.
+(a `ReporterFunction`), `generator` (a `SeederFunction<Infer<S>>`), `owner` (an
+`OwnerFunction<Infer<S>>`), and `contract` (a `ContractInterface<Infer<S>>`). `contract` is the
+frozen bundle whose own enumerable keys are `schema`, `is`, `parse`, `audit`, `explain`,
+`generate`, and `own` in that order, each holding the exact value the corresponding getter
+publishes — `contract.is` is exactly `compiler.guard`, by identity rather than as a copy of it.
 
 Compilation costs ONE ownership and ONE validation per call, not one per node. Every `compile*` entry and `createContract` construct a `ContractCompiler`, which owns the declaration once, validates that owned graph once, and indexes each unique node and structural edge once; the artifact families are postorder passes over that index. A builder records what it validated, so wrapping a built child observes only the new node, and a declaration made entirely by builders is compiled as it stands, with no snapshot and no walk. A hand-written node anywhere in the graph, or a field a node may leave out appearing on `Object.prototype`, takes the whole walk instead, and that walk authors every refusal, so a refusal reads the same and fires at the same call either way. This is what replaced the arrangement where each recursive invocation re-ran `ownShape` AND `validateShape` over the subgraph it received — quadratic work for a linear declaration, and the reason a 129-node depth chain used to measure 6.3 ms of gate plus 7.9 ms of ownership and a 257-node chain 26.0 + 41.9 ms. A 30-alias depth-100 declaration now compiles a guard in 3 ms and a whole contract in 4 ms, against 640 ms and 1.87 s before. Every artifact compiles once, so `audit`, `explain` and `generate` re-walk and re-gate nothing on a later call either; `contract.audit` and `compileAuditor` run the same compiled plan reached by different names. A union whose arms are all objects declaring a required literal property answers through one arm when a value's own property exactly equals a literal only that arm holds: `explain` and `audit` report that arm's faults at their real paths in place of `variant`, and `parse` repairs through it alone, so `{ operation: 'find', limit: '5' }` parses to `limit: 5` however many arms precede it. `is` answers from that arm alone as well, in both modes, so `is`, `parse`, `audit`, and `explain` agree on that value and the three laws hold. When the property reads as its own descriptor states, no other arm's guard could accept that value, so `is` answers as every arm would, and an accepted or refused value costs one arm rather than every arm. A value that names no one arm, because its property is absent, matches no literal, or matches one two arms share, keeps `variant` or `oneOf`, with `key` and `expected` naming the property and what it may hold. `oneOfShape` behaves the same way: its parser refuses to coerce only because an ambiguous value has no target, and a named arm is one. An arm that is not an object, a discriminator that is optional or inside a nullable, and a nested union all change nothing at that union. `createContract` over a declaration made entirely by builders compiles its schema at that call and its function members together on the first call to any of them, so a module can declare contracts as data and pay only for the ones it uses; any other declaration, and a bare leaf, compiles every member at that call. Every refusal a declaration can earn still fires at `createContract` either way, because preparation and the schema ask them all, and each member is one plain function, so destructuring and spreading compile nothing. A member compiling after the call reads its declaration through own fields, so a field added to `Object.prototype` since cannot reach it. A host member replaced since is the one thing that can stop it: compiling there would outlive the replacement, so the member refuses to compile until the host is restored, with its guard answering `false`, its parser `undefined`, and its diagnostics and generator refusing, and the next call on a restored host compiles as usual. A first call near the stack limit recovers the same way. A compiled artifact is no longer a TREE either. Each family holds one entry per unique node and a parent points at its children, so a shared child is compiled once and the emitted schema preserves that sharing — which is why the cap boundary stopped being expensive: `createContract` over the two-edge-per-level DAG at the 16,383-node boundary now takes under a millisecond where it took 1,342 ms, because it compiles fourteen nodes rather than sixteen thousand. Cost tracks AUTHORED nodes and edges instead: measured here, a depth-100 chain and a 30-alias depth-100 staircase answer every door in 1–5 ms, and a flat 10,001-node object takes 52–68 ms per artifact and 110 ms for a whole contract. One level past the cap boundary — 32,767 emitted nodes over thirty-one authored ones — still refuses in about two milliseconds with code `expansion`, because the count is measured over the captured graph rather than by walking the expansion. What the cap now protects is the consumer's side of the artifacts rather than the compiler's: `generate` materializes the whole tree, and so does serializing the schema. The JSON cloner is capped for the opposite reason — it DUPLICATES a shared alias by contract rather than re-walking it: see `CLONE_NODE_LIMIT`. The `samplesToSchema` family is not on this list and was never meant to be reachable: its record path carried neither an ancestor set nor a memo, so an ordinary shared reference bought `k^depth` visits; it now memoizes a single-row slot on `(row, remaining depth)` exactly as the record branch of `valueToSchema` does. Everything above is the DECLARATION side, and for one release that was the only side measured. A compiled artifact applies each child artifact once per OCCURRENCE, which is right for a tree and wrong for a graph, so a value whose levels each held two references to one object was walked once per PATH: twenty-two shared arrays against a twenty-three-node chain of `arrayShape` — zero aliases in the declaration, every published limit satisfied — cost 524,286 node reads, 4.4 s for `is` and 8.4 s for `audit`, growing fourfold per two levels, while the same declaration over a TREE value answered instantly and `valueToSchema` answered the same graph in 4 ms because it already memoized. The verdict families now carry a per-CALL identity memo keyed by `(compiled node, value object)`, and the same value now costs thirty-six reads and under a millisecond. These details are exact rather than incidental. The guard reuses either answer while the auditor and reporter reuse only the CLEAN one, because a fault carries the path it was found at and emptiness carries nothing — a faulted node is re-walked and bounded by `FAULT_LIMIT` instead. The active synchronous call owns each node's memo and releases the scope on settlement, so an answer never survives into a later call where the caller may have changed the value. And a leaf is not tracked at all: it descends into no child, so tracking one would buy nothing and would replace the package's own guards and parsers in the artifacts a leaf-rooted declaration publishes. `parse` is deliberately absent from that list, because its result IS the expansion; the threat model names what that costs.
 
@@ -988,12 +1024,13 @@ The whole traversal is contained, and its cleanup builds its active-path set fro
 
 #### `ContractInterface`
 
-| Method     | Returns                 | Summary                                                                  |
-| ---------- | ----------------------- | ------------------------------------------------------------------------ |
-| `parse`    | `T \| undefined`        | Coerces a readable value to the contract's type, or returns `undefined`. |
-| `audit`    | `readonly AuditFault[]` | Reports every strict fault a value has against this contract.            |
-| `explain`  | `readonly Fault[]`      | Reports every structured parse fault a value has against this contract.  |
-| `generate` | `T`                     | Produces deterministic seed data for this contract.                      |
+| Method     | Returns                      | Summary                                                                                            |
+| ---------- | ---------------------------- | -------------------------------------------------------------------------------------------------- |
+| `parse`    | `T \| undefined`             | Coerces a readable value to the contract's type, or returns `undefined`.                           |
+| `audit`    | `readonly AuditFault[]`      | Reports every strict fault a value has against this contract.                                      |
+| `explain`  | `readonly Fault[]`           | Reports every structured parse fault a value has against this contract.                            |
+| `generate` | `T`                          | Produces deterministic seed data for this contract.                                                |
+| `own`      | `Result<V, ContractRefusal>` | Admits an owned snapshot of a value and returns the parser's value, at the argument's static type. |
 
 ## Contract
 
@@ -1005,7 +1042,7 @@ These invariants hold across `src/core` ↔ `contract.md`:
 4. **Types are the source of truth.** `Guard`, `Parser`, and the guard-shape types are declared in [`types.ts`](../src/core/types.ts) first; guards and parsers conform to them, never the reverse.
 5. **`createContract` validates before it compiles.** The declaration is owned once and that OWNED graph is validated once, or was already by the builders that made it, before any artifact is built, and the same is true at every `compile*` entry — a malformed shape (a structural child that is not a shape, `min > max`, a non-finite number bound, an empty integer range, an empty literal/union, a literal shape holding a non-finite number value, an `optionalShape` placed anywhere but a direct object-property or interface-member value, a `default` under a union, below an interface, or on a property of an open object, an interface under a union, a `default` its inner shape refuses, a structural cycle, or nesting past `COMPILE_DEPTH_LIMIT`) throws a coded `ContractError` immediately instead of silently producing a wrong guard, parser, schema, audit, report, or generator. `optionalShape` is legal in exactly two positions: as the value of an object property and as the value of an interface member. ONE population, one rule set: ownership refuses a malformed structural slot, scalar field, or bound rather than normalizing it, so the graph the gate judges is the graph the artifacts compile from — there is no earlier reading of the caller's live source that is validated and then thrown away.
 6. **DOC ↔ SOURCE method bijection.** Every behavioral interface's `## Methods` table lists exactly its public methods (call-signature members) — exhaustive, both directions — and each implementing class exposes the same public methods, no more (`AGENTS.md`, Documentation contract). A renamed / added / removed method breaks the gate until the table is reconciled.
-7. **Compilation owns its input.** A builder freezes what it produces, copies what you hand it, and re-exposes a `pattern` as a fresh frozen `RegExp` per read; every `compile*` entry point and `createContract` take their argument through `ownShape`, which always returns an independent clone, unless the builders made all of it, when it is frozen and validated all the way down already and nothing a caller holds can change it. Ownership refuses a non-record node before discriminant normalization and retains only primitive-string RegExp `source` / `flags` pairs. A shape you keep a reference to can never change what an already-compiled artifact does, and a compiled `schema` is deeply frozen — so the six outputs stay in lockstep with the declaration they came from, lockstep meaning derived from that one snapshot rather than agreeing on which values to accept.
+7. **Compilation owns its input.** A builder freezes what it produces, copies what you hand it, and re-exposes a `pattern` as a fresh frozen `RegExp` per read; every `compile*` entry point and `createContract` take their argument through `ownShape`, which always returns an independent clone, unless the builders made all of it, when it is frozen and validated all the way down already and nothing a caller holds can change it. Ownership refuses a non-record node before discriminant normalization and retains only primitive-string RegExp `source` / `flags` pairs. A shape you keep a reference to can never change what an already-compiled artifact does, and a compiled `schema` is deeply frozen — so the outputs stay in lockstep with the declaration they came from, lockstep meaning derived from that one snapshot rather than agreeing on which values to accept.
 
 The `parseJSON` / `parseJSONAs` text boundary is **lazy by default**: keep the result unknown, validate only a supplied shape, or read fields individually. Whole-tree work is explicit through the shipped `isJSONValue`, fixed-cap `isBoundedJSONValue` / `isBoundedJSONRecord`, `parseJSONValue`, `cloneJSONValue`, and record-root `cloneJSONRecord`; `JSONRecord` is the reusable record-root type. A dedicated `JSONArray` alias and broad deep JSON-Schema validators / `JSONSchemaDefinition` remain omitted; compose any narrower contract a consumer actually needs.
 
@@ -1164,6 +1201,17 @@ if (blob) {
 import { matchesJSONValue } from '@orkestrel/contract'
 
 matchesJSONValue({ nested: [1, 'x', null] }, new WeakSet()) // true
+```
+
+To own JSON data, call `own` on a JSON contract. It answers a frozen copy, or a refusal that carries
+every fault the audit found, where `cloneJSONValue` throws at the first value that is not JSON data.
+
+```ts
+import { createContract, jsonShape } from '@orkestrel/contract'
+
+const json = createContract(jsonShape())
+json.own({ name: 'Ada', tags: ['admin'] }) // { success: true, value: { name: 'Ada', tags: ['admin'] } }
+json.own({ joined: new Date(0) }).success // false
 ```
 
 ### Declaring a shape
