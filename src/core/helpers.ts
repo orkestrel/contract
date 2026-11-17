@@ -50,6 +50,7 @@ import {
 } from './constants.js'
 import { ContractError, isContractError } from './errors.js'
 import {
+	isAuditFaults,
 	isBigInt,
 	isArray,
 	isError,
@@ -1577,7 +1578,7 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 						...(owned.shape === undefined ? {} : { shape: owned.shape }),
 						...(owned.limit === undefined ? {} : { limit: owned.limit }),
 						...(owned.received === undefined ? {} : { received: owned.received }),
-						...(owned.faults === undefined ? {} : { faults: owned.faults }),
+						...(isAuditFaults(owned.faults) ? { faults: owned.faults } : {}),
 					}
 		throw new ContractError(
 			`${diagnostics.value.reader}: ${diagnostics.value.subject} could not be read`,

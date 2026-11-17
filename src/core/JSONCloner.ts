@@ -8,7 +8,6 @@ import type {
 import { CLONE_NODE_LIMIT, INTRINSICS } from './constants.js'
 import { ContractError } from './errors.js'
 import {
-	iterateIndices,
 	admitVisited,
 	attempt,
 	failure,
@@ -74,23 +73,41 @@ export class JSONCloner implements JSONClonerInterface {
 	// foot of the class freezes it, so a write that did reach it fails loudly at
 	// its own line rather than leaking one cloner's frame into every other
 	// cloner's release.
-	static readonly #emptyPending: Array<{
-		readonly source: object
-		readonly clone: JSONValue[] | JSONRecord
-		readonly array: boolean
-		entries: ReadonlyArray<readonly [key: string, value: unknown]> | undefined
-		index: number
-	}> = []
+	static readonly #emptyPending: Array<
+		| {
+				readonly source: object
+				readonly clone: JSONValue[]
+				readonly array: true
+				readonly entries: ReadonlyArray<readonly [key: string, value: unknown]>
+				index: number
+		  }
+		| {
+				readonly source: object
+				readonly clone: Record<string, JSONValue>
+				readonly array: false
+				readonly entries: ReadonlyArray<readonly [key: string, value: unknown]>
+				index: number
+		  }
+	> = []
 	readonly #source: unknown
 	readonly #owned: WeakSet<object>
 	readonly #active: WeakSet<object>
-	#pending: Array<{
-		readonly source: object
-		readonly clone: JSONValue[] | JSONRecord
-		readonly array: boolean
-		entries: ReadonlyArray<readonly [key: string, value: unknown]> | undefined
-		index: number
-	}>
+	#pending: Array<
+		| {
+				readonly source: object
+				readonly clone: JSONValue[]
+				readonly array: true
+				readonly entries: ReadonlyArray<readonly [key: string, value: unknown]>
+				index: number
+		  }
+		| {
+				readonly source: object
+				readonly clone: Record<string, JSONValue>
+				readonly array: false
+				readonly entries: ReadonlyArray<readonly [key: string, value: unknown]>
+				index: number
+		  }
+	>
 	#poison: ContractError | undefined
 	#terminal: Result<JSONValue, ContractError> | undefined
 
@@ -163,33 +180,27 @@ export class JSONCloner implements JSONClonerInterface {
 		return root
 	}
 
+	// Each write lands on an own data property: an array clone is created holding
+	// every index, and a record clone has no prototype, so neither a member named
+	// `__proto__` nor an accessor on `Array.prototype` intercepts the assignment.
 	#drain(budget: { left: number }): void {
 		while (this.#pending.length > 0) {
 			const frame = this.#pending[this.#pending.length - 1]
 			if (frame === undefined) continue
 
-			if (frame.entries === undefined) {
-				frame.entries = frame.array
-					? this.#captureArray(frame.source)
-					: this.#captureRecord(frame.source)
-			}
-
-			const entry = frame.entries[frame.index]
+			const index = frame.index
+			const entry = frame.entries[index]
 			if (entry === undefined) {
 				INTRINSICS.freeze(frame.clone)
 				omitVisited(this.#active, frame.source)
 				this.#pending.pop()
 				continue
 			}
-			frame.index += 1
+			frame.index = index + 1
 
 			const clone = this.#capture(entry[1], budget)
-			INTRINSICS.define(frame.clone, entry[0], {
-				value: clone,
-				enumerable: true,
-				configurable: true,
-				writable: true,
-			})
+			if (frame.array) frame.clone[index] = clone
+			else frame.clone[entry[0]] = clone
 		}
 	}
 
@@ -227,16 +238,20 @@ export class JSONCloner implements JSONClonerInterface {
 		this.#refusePath('object is not a plain record', preview(source))
 	}
 
+	// A node's members are read before its frame joins the stack, so its array clone
+	// can be created at its final length.
 	#schedule(source: object, array: boolean): JSONValue[] | JSONRecord {
-		const clone: JSONValue[] | JSONRecord = array ? [] : INTRINSICS.create(null)
 		admitVisited(this.#active, source)
-		this.#pending[this.#pending.length] = {
-			source,
-			clone,
-			array,
-			entries: undefined,
-			index: 0,
+		if (array) {
+			const entries = this.#captureArray(source)
+			const indices = { __proto__: null, length: entries.length }
+			const clone = INTRINSICS.from(indices, (): JSONValue => null)
+			this.#pending[this.#pending.length] = { source, clone, array, entries, index: 0 }
+			return clone
 		}
+		const entries = this.#captureRecord(source)
+		const clone: Record<string, JSONValue> = INTRINSICS.create(null)
+		this.#pending[this.#pending.length] = { source, clone, array, entries, index: 0 }
 		return clone
 	}
 
@@ -275,28 +290,28 @@ export class JSONCloner implements JSONClonerInterface {
 		if (keysOutcome.value.length !== lengthDescriptor.value + 1) {
 			this.#refusePath('array own keys are not exact', preview(source))
 		}
-		return INTRINSICS.from(
-			iterateIndices(() => lengthDescriptor.value),
-			(index): readonly [string, unknown] => {
-				const key = INTRINSICS.text(index)
-				if (!matchesMember(owned, key)) {
-					this.#refusePath('array own keys are not exact', preview(source))
-				}
-				const descriptorOutcome = attempt(() => INTRINSICS.reflect.describe(source, key))
-				if (isFailure(descriptorOutcome)) {
-					this.#refusePath('array index could not be inspected', 'threw', key)
-				}
-				const descriptor = descriptorOutcome.value
-				if (
-					descriptor === undefined ||
-					!INTRINSICS.own(descriptor, 'value') ||
-					descriptor.enumerable !== true
-				) {
-					this.#refuseMember('array index is not enumerable data', descriptor, key)
-				}
-				return [key, descriptor.value]
-			},
-		)
+		// An array-like with no prototype reaches no iterator and no caller member, and
+		// hands the mapper each index once, in order.
+		const indices = { __proto__: null, length: lengthDescriptor.value }
+		return INTRINSICS.from(indices, (_entry, index): readonly [string, unknown] => {
+			const key = INTRINSICS.text(index)
+			if (!matchesMember(owned, key)) {
+				this.#refusePath('array own keys are not exact', preview(source))
+			}
+			const descriptorOutcome = attempt(() => INTRINSICS.reflect.describe(source, key))
+			if (isFailure(descriptorOutcome)) {
+				this.#refusePath('array index could not be inspected', 'threw', key)
+			}
+			const descriptor = descriptorOutcome.value
+			if (
+				descriptor === undefined ||
+				!INTRINSICS.own(descriptor, 'value') ||
+				descriptor.enumerable !== true
+			) {
+				this.#refuseMember('array index is not enumerable data', descriptor, key)
+			}
+			return [key, descriptor.value]
+		})
 	}
 
 	#captureRecord(source: object): ReadonlyArray<readonly [key: string, value: unknown]> {
@@ -306,29 +321,27 @@ export class JSONCloner implements JSONClonerInterface {
 		// Indexed, not iterated: this walk decides the published record's own-key
 		// population, and an iterator is a caller-writable member that can yield a
 		// key the source never had.
-		return INTRINSICS.from(
-			iterateIndices(() => names.length),
-			(index): readonly [string, unknown] => {
-				const key = names[index]
-				// Every string can be a key, so a symbol takes no segment and is named in the text.
-				if (typeof key !== 'string') {
-					this.#refusePath(`record has a symbol property ${preview(key)}`, preview(key))
-				}
-				const descriptorOutcome = attempt(() => INTRINSICS.reflect.describe(source, key))
-				if (isFailure(descriptorOutcome)) {
-					this.#refusePath('record property could not be inspected', 'threw', key)
-				}
-				const descriptor = descriptorOutcome.value
-				if (
-					descriptor === undefined ||
-					!INTRINSICS.own(descriptor, 'value') ||
-					descriptor.enumerable !== true
-				) {
-					this.#refuseMember('record property is not enumerable data', descriptor, key)
-				}
-				return [key, descriptor.value]
-			},
-		)
+		const indices = { __proto__: null, length: names.length }
+		return INTRINSICS.from(indices, (_entry, index): readonly [string, unknown] => {
+			const key = names[index]
+			// Every string can be a key, so a symbol takes no segment and is named in the text.
+			if (typeof key !== 'string') {
+				this.#refusePath(`record has a symbol property ${preview(key)}`, preview(key))
+			}
+			const descriptorOutcome = attempt(() => INTRINSICS.reflect.describe(source, key))
+			if (isFailure(descriptorOutcome)) {
+				this.#refusePath('record property could not be inspected', 'threw', key)
+			}
+			const descriptor = descriptorOutcome.value
+			if (
+				descriptor === undefined ||
+				!INTRINSICS.own(descriptor, 'value') ||
+				descriptor.enumerable !== true
+			) {
+				this.#refuseMember('record property is not enumerable data', descriptor, key)
+			}
+			return [key, descriptor.value]
+		})
 	}
 
 	#create(message: string, context: ContractErrorContext): ContractError {
@@ -371,20 +384,19 @@ export class JSONCloner implements JSONClonerInterface {
 		)
 	}
 
-	// Each frame below the top holds its current entry; a capture method's key stands in for the top's.
+	// Each frame names its current member; a capture method's key names the member of
+	// the node it is capturing, which joins the stack only after its capture succeeds.
 	#trace(key: string | undefined): readonly string[] {
 		const pending = this.#pending
-		const top = pending[pending.length - 1]
-		const size =
-			top?.entries === undefined && key === undefined ? pending.length - 1 : pending.length
-		return INTRINSICS.from(
-			iterateIndices(() => size),
-			(index): string => {
-				const frame = pending[index]
-				const entry = frame?.entries?.[frame.index - 1]
-				return entry === undefined ? (key ?? '') : entry[0]
-			},
-		)
+		const indices = {
+			__proto__: null,
+			length: key === undefined ? pending.length : pending.length + 1,
+		}
+		return INTRINSICS.from(indices, (_entry, index): string => {
+			const frame = pending[index]
+			const entry = frame?.entries[frame.index - 1]
+			return entry === undefined ? (key ?? '') : entry[0]
+		})
 	}
 
 	static {

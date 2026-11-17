@@ -17,6 +17,7 @@ import {
 	ObservationCounter,
 	ObservedValue,
 	pollutePrototype,
+	PROTO_ROWS,
 	redirectIntrinsic,
 	ReentrantPollution,
 	replaceIntrinsic,
@@ -616,6 +617,45 @@ describe('JSONCloner', () => {
 		expect(record).toEqual({ value: 1 })
 		expect(Object.getPrototypeOf(record)).toBeNull()
 		expect(Object.isFrozen(record)).toBe(true)
+	})
+
+	it.each(PROTO_ROWS)('keeps a member named __proto__ as own data in $name', ({ source, key }) => {
+		const clone = new JSONCloner(source).clone()
+		const holder = key === undefined ? clone : Reflect.get(Object(clone), key)
+		if (!isRecord(holder)) throw new Error('expected the record that holds the member')
+
+		expect(Object.getPrototypeOf(holder)).toBeNull()
+		expect(Reflect.ownKeys(holder)).toEqual(['first', '__proto__', 'last'])
+		expect(Object.getOwnPropertyDescriptor(holder, '__proto__')).toEqual({
+			value: { tag: 'inner' },
+			enumerable: true,
+			configurable: false,
+			writable: false,
+		})
+		expect(Object.getPrototypeOf(Reflect.get(holder, '__proto__'))).toBeNull()
+		expect(cloneJSONValue(source)).toEqual(clone)
+	})
+
+	it('writes each array index as own data while Array.prototype carries an index accessor', () => {
+		const accesses = new ObservationCounter()
+		const clone = pollutePrototype(
+			Array.prototype,
+			'2',
+			() => {
+				accesses.increment()
+				return 'inherited'
+			},
+			() => new JSONCloner(['first', 'second', 'third']).clone(),
+		)
+
+		expect(accesses.value).toBe(0)
+		expect(Reflect.ownKeys(Object(clone))).toEqual(['0', '1', '2', 'length'])
+		expect(Object.getOwnPropertyDescriptor(clone, '2')).toEqual({
+			value: 'third',
+			enumerable: true,
+			configurable: false,
+			writable: false,
+		})
 	})
 })
 
