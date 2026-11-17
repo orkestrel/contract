@@ -3296,21 +3296,99 @@ export function preview(value: unknown): string {
 			const whole = INTRINSICS.stringify(source)
 			if (whole.length <= PREVIEW_LIMIT) return whole
 		}
-		const parts = previewParts(source, 0, PREVIEW_LIMIT - (quoted ? 2 : 1), quoted)
-		const body: string = INTRINSICS.reflect.apply(INTRINSICS.join, parts, [''])
-		return quoted ? `"${body}` : body
+		return previewText(source, PREVIEW_LIMIT - (quoted ? 2 : 1), quoted)
 	}
 	if (isNumber(value) || isBoolean(value)) return INTRINSICS.text(value)
 	if (isBigInt(value)) {
 		const digits = INTRINSICS.text(value)
 		if (digits.length < PREVIEW_LIMIT) return `${digits}n`
-		const parts = previewParts(digits, 0, PREVIEW_LIMIT - 2, false)
-		const body: string = INTRINSICS.reflect.apply(INTRINSICS.join, parts, [''])
-		return `${body}n`
+		return `${previewText(digits, PREVIEW_LIMIT - 2, false)}n`
 	}
 	if (isArray(value)) return 'array'
 	if (isObject(value) && !isRecord(value)) return 'instance'
 	return typeof value
+}
+
+/**
+ * Encodes a bounded window of a source text as preview tokens in one pass.
+ *
+ * @remarks
+ * Gives the answer `previewParts` gives, joined, with a quoted source's opening quote: the first
+ * `capacity` UTF-16 code units are encoded through one `JSON.stringify` call, DEL, the C1
+ * controls, U+2028, and U+2029 take their `\u` sequences, and the encoded text is cut at
+ * `capacity` to its longest prefix of complete tokens. No token the recursion keeps lies outside
+ * the window, and a surrogate pair the window splits encodes as a 6-unit sequence that cannot fit.
+ *
+ * @param source - The source text
+ * @param capacity - The UTF-16 code units left for tokens; the closing quote or `…` takes one more
+ * @param quoted - Whether the text opens and closes with a string quote
+ * @returns The encoded text, closed by its quote or by `…`
+ *
+ * @example
+ * ```ts
+ * previewText('abc', 2, false) // 'ab…'
+ * ```
+ */
+export function previewText(source: string, capacity: number, quoted: boolean): string {
+	const window: string = INTRINSICS.reflect.apply(INTRINSICS.slice, source, [0, capacity])
+	const raw: string = INTRINSICS.reflect.apply(
+		INTRINSICS.slice,
+		INTRINSICS.stringify(window),
+		[1, -1],
+	)
+	const encoded = matchesPattern(/[\x7f-\x9f\u{2028}\u{2029}]/u, raw) ? escapeControls(raw) : raw
+	const open = quoted ? '"' : ''
+	if (window.length === source.length && encoded.length <= capacity) {
+		return `${open}${encoded}${quoted ? '"' : ''}`
+	}
+	const cut: string = INTRINSICS.reflect.apply(INTRINSICS.slice, encoded, [0, capacity])
+	const tokens = INTRINSICS.reflect.apply(
+		INTRINSICS.captures,
+		/^(?:\\u[0-9a-f]{4}|\\["\\bfnrt]|[\ud800-\udbff][\udc00-\udfff]|[^\\\ud800-\udfff])*/,
+		[cut],
+	)
+	return `${open}${tokens?.[0] ?? ''}…`
+}
+
+/**
+ * Replaces each DEL, C1 control, U+2028, and U+2029 in a text with its `\u` sequence.
+ *
+ * @param text - The text to rewrite
+ * @returns The text with those characters as lowercase `\u` sequences
+ *
+ * @example
+ * ```ts
+ * escapeControls('a\u2028b') // 'a\\u2028b'
+ * ```
+ */
+export function escapeControls(text: string): string {
+	const digits = '0123456789abcdef'
+	const parts: readonly string[] = INTRINSICS.from(
+		iterateIndices(() => text.length),
+		(index) => {
+			const character = text[index] ?? ''
+			if (
+				!(character >= '\x7f' && character <= '\x9f') &&
+				character !== '\u2028' &&
+				character !== '\u2029'
+			) {
+				return character
+			}
+			const code: number =
+				character === '\u2028'
+					? 0x2028
+					: character === '\u2029'
+						? 0x2029
+						: 0x7f +
+							INTRINSICS.reflect.apply(
+								INTRINSICS.find,
+								'\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f',
+								[(entry: unknown) => entry === character],
+							)
+			return `\\u${digits[INTRINSICS.floor(code / 4096)] ?? ''}${digits[INTRINSICS.floor(code / 256) % 16] ?? ''}${digits[INTRINSICS.floor(code / 16) % 16] ?? ''}${digits[code % 16] ?? ''}`
+		},
+	)
+	return INTRINSICS.reflect.apply(INTRINSICS.join, parts, [''])
 }
 
 /**

@@ -847,6 +847,8 @@ import {
 	buildPositions,
 	encodeParts,
 	iterateIndices,
+	escapeControls,
+	previewText,
 	previewParts,
 	readPresence,
 	readIndexView,
@@ -3644,6 +3646,62 @@ describe('preview', () => {
 		const giant = preview('x'.repeat(200))
 		expect(giant.endsWith('…')).toBe(true)
 		expect(giant).toHaveLength(door.PREVIEW_LIMIT)
+	})
+
+	it('escapes DEL, the C1 controls, U+2028, and U+2029 as lowercase sequences', () => {
+		expect(escapeControls('a\u007fb\u0085c\u009fd\u2028e\u2029f')).toBe(
+			'a\\u007fb\\u0085c\\u009fd\\u2028e\\u2029f',
+		)
+		expect(escapeControls('plain \\n text')).toBe('plain \\n text')
+	})
+
+	it('cuts encoded text at the last complete token before the limit', () => {
+		expect(previewText('ab\ncd', 3, true)).toBe('"ab…')
+		expect(previewText('ab\ncd', 4, true)).toBe('"ab\\n…')
+		expect(previewText('ab', 2, true)).toBe('"ab"')
+		expect(previewText('abc', 2, false)).toBe('ab…')
+		expect(previewText(`${'x'.repeat(3)}\ud83d\ude00zz`, 6, false)).toBe(`xxx\ud83d\ude00z…`)
+		expect(previewText(`${'x'.repeat(5)}\ud83d\ude00`, 6, false)).toBe('xxxxx…')
+		expect(previewText('xx\ud83d', 8, true)).toBe('"xx\\ud83d"')
+	})
+
+	it('answers what the previewParts recursion answers over a seeded corpus', () => {
+		const random = seededRandom(25)
+		const alphabet = [
+			'a',
+			'Z',
+			' ',
+			'"',
+			'\\',
+			'\n',
+			'\t',
+			'\u0000',
+			'\u001f',
+			'\u007f',
+			'\u0085',
+			'\u009f',
+			'\u2028',
+			'\u2029',
+			'\ud83d',
+			'\ude00',
+			String.fromCodePoint(0x1f600),
+			'é',
+		]
+		const lengths = [...Array.from({ length: 15 }, (_unused, index) => 56 + index), 200, 20_000]
+		const rounds = lengths.flatMap((length) => Array.from({ length: 40 }, () => length))
+		for (const length of rounds) {
+			const source = Array.from(
+				{ length },
+				() => alphabet[Math.floor(random() * alphabet.length)] ?? '',
+			).join('')
+			expect(preview(source)).toBe(
+				`"${previewParts(source, 0, door.PREVIEW_LIMIT - 2, true).join('')}`,
+			)
+			expect(preview(Symbol(source))).toBe(
+				previewParts(`Symbol(${source})`, 0, door.PREVIEW_LIMIT - 1, false).join(''),
+			)
+		}
+		expect(rounds).toHaveLength(lengths.length * 40)
 	})
 
 	it('bounds 100,000-code-unit string and symbol inputs', () => {
