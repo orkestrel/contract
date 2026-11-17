@@ -9,7 +9,7 @@ import { ShapePass } from './ShapePass.js'
  * @remarks
  * Construction performs no source observation. Every non-overlapping
  * {@link validate} call starts a fresh pass over the source's current state.
- * Reentry poisons the active pass with one shared cause-free structure error;
+ * Reentry invalidates the active pass with one shared cause-free structure error;
  * cleanup always restores an idle validator for the next independent call.
  *
  * @example

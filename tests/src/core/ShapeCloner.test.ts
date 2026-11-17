@@ -465,6 +465,14 @@ describe('ShapeCloner', () => {
 				fields: ['category', 'description'],
 			},
 			{
+				source: { category: 'undefined', description: 'undefined' },
+				fields: ['category', 'description'],
+			},
+			{
+				source: { category: 'interface', members: { value: leaf }, description: 'interface' },
+				fields: ['category', 'members', 'description'],
+			},
+			{
 				source: { category: 'string' },
 				fields: ['category'],
 				absent: ['min', 'max', 'pattern', 'description'],
@@ -486,6 +494,8 @@ describe('ShapeCloner', () => {
 			'raw',
 			'shape',
 			'function',
+			'undefined',
+			'interface',
 			'string',
 		])
 		for (const row of rows) {
@@ -728,7 +738,7 @@ describe('ShapeCloner', () => {
 		const optional: ContractShape = { category: 'optional', inner: shared }
 		const placementEngine = new ShapeCloner({ category: 'array', items: optional })
 		expect(() => placementEngine.clone()).toThrow(
-			'validateShape: an optional shape may only appear as a direct object-property value',
+			'validateShape: an optional shape may only appear as a direct object-property or interface-member value',
 		)
 	})
 
@@ -1366,5 +1376,58 @@ describe('ShapeCloner — function shape', () => {
 		)
 		expect(error.message).toBe('validateShape: description must be a string')
 		expect(error.context).toEqual({ path: ['description'] })
+	})
+})
+
+describe('ShapeCloner — undefined shape', () => {
+	it('captures an undefined declaration and refuses a description that is not a string', () => {
+		const clone = cloneShape({ category: 'undefined', description: 'No limit set' })
+		expect(clone).toEqual({ category: 'undefined', description: 'No limit set' })
+		expect(Object.isFrozen(clone)).toBe(true)
+		const error = captureContractError(() =>
+			Reflect.apply(cloneShape, undefined, [{ category: 'undefined', description: 42 }]),
+		)
+		expect(error.message).toBe('validateShape: description must be a string')
+		expect(error.context).toEqual({ path: ['description'] })
+	})
+})
+
+describe('ShapeCloner — interface shape', () => {
+	it('captures a frozen null-prototype member map and keeps a shared member shared', () => {
+		const shared: ContractShape = { category: 'function' }
+		const source: ContractShape = {
+			category: 'interface',
+			members: {
+				get: shared,
+				set: shared,
+				ttl: { category: 'optional', inner: { category: 'number' } },
+			},
+			description: 'Session store',
+		}
+		const clone = cloneShape(source)
+
+		expect(clone).toEqual(source)
+		expect(clone).not.toBe(source)
+		if (clone.category !== 'interface') throw new Error('the clone must be an interface')
+		expect(clone.members.get).toBe(clone.members.set)
+		expect(clone.members.get).not.toBe(shared)
+		expect(Object.getPrototypeOf(clone.members)).toBeNull()
+		expect(Object.isFrozen(clone.members)).toBe(true)
+	})
+
+	it('refuses a member that is not a shape, and a member map that is not a record, at its path', () => {
+		const member: ContractShape = { category: 'interface', members: {} }
+		Reflect.set(member.members, 'get', 42)
+		const map: ContractShape = { category: 'interface', members: {} }
+		Reflect.set(map, 'members', [])
+		const refusals = [member, map].map((source) => {
+			const error = captureContractError(() => cloneShape(source))
+			return [error.code, error.context?.path]
+		})
+
+		expect(refusals).toEqual([
+			['structure', ['members', 'get']],
+			['structure', ['members']],
+		])
 	})
 })

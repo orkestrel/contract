@@ -33,7 +33,6 @@ import * as door from '@src/core'
 import {
 	buildReportingRecord,
 	createNonEnumerableRecord,
-	createUndefinedContract,
 	DATE_ADMITTED,
 	DATE_REFUSED,
 	pollutePrototypeData,
@@ -110,7 +109,7 @@ describe('admitValue', () => {
 	})
 
 	it('accepts a valid undefined result on the fast path', () => {
-		expect(door.admitValue(createUndefinedContract(), undefined)).toEqual({
+		expect(door.admitValue(door.createContract(door.undefinedShape()), undefined)).toEqual({
 			success: true,
 			value: undefined,
 		})
@@ -314,7 +313,7 @@ describe('repairValue', () => {
 	})
 
 	it('accepts a valid undefined result on the fast path', () => {
-		const contract = createUndefinedContract()
+		const contract = door.createContract(door.undefinedShape())
 		expect(contract.is(undefined)).toBe(true)
 		expect(door.repairValue(contract, undefined)).toEqual({
 			success: true,
@@ -848,6 +847,11 @@ import {
 	buildPositions,
 	encodeParts,
 	iterateIndices,
+	refusalToError,
+	refuseValue,
+	settle,
+	escapeControls,
+	previewText,
 	previewParts,
 	readPresence,
 	readIndexView,
@@ -892,6 +896,8 @@ import {
 	readPatternSource,
 	readSampleMemo,
 	readSetEntries,
+	readShapeMap,
+	interfaceShape,
 	refuseExpansion,
 	retainDepth,
 	sortValues,
@@ -903,7 +909,9 @@ import {
 	isBoundedJSONValue,
 	isJSONValue,
 	isContractError,
+	CONTRACT_CODES,
 	isRecord,
+	isNumber,
 	isString,
 	parseJSONValue,
 	integerShape,
@@ -936,10 +944,12 @@ import {
 	shapeToKind,
 	stringShape,
 	functionShape,
+	undefinedShape,
 	unionShape,
 	valueToSchema,
 	matchesExactKeys,
 	matchesLosslessRepair,
+	matchesUndefinedNode,
 	numberShape,
 	booleanShape,
 	literalShape,
@@ -2109,6 +2119,141 @@ describe('readGuardShape', () => {
 		)
 		expect(optional.code).toBe('structure')
 		expect(optional.message).toBe('recordOf: optional could not be read')
+	})
+})
+
+describe('settle', () => {
+	it('answers a returned, awaited, thrown, rejected, and throwing-then outcome without rejecting', async () => {
+		const reason = Object.freeze({ operation: 'settle' })
+		const failed = { success: false, error: reason }
+		expect(await settle(() => 7)).toEqual({ success: true, value: 7 })
+		expect(await settle(() => Promise.resolve('late'))).toEqual({ success: true, value: 'late' })
+		expect(
+			await settle(async () => {
+				throw reason
+			}),
+		).toEqual(failed)
+		expect(await settle(throwSentinel(reason))).toEqual(failed)
+		expect(await settle(() => Promise.reject(reason))).toEqual(failed)
+		expect(await settle(() => ({ then: throwSentinel(reason) }))).toEqual(failed)
+	})
+
+	it('runs the callback one time and keeps the answer attempt gives a synchronous callback', async () => {
+		const reads = new ObservationCounter()
+		const reason = Object.freeze({ operation: 'settle' })
+		const outcome = await settle(() => {
+			reads.increment()
+			return 3
+		})
+		expect(reads.value).toBe(1)
+		expect(outcome).toEqual(attempt(() => 3))
+		const attempted = attempt(async () => {
+			throw reason
+		})
+		expect(attempted.success).toBe(true)
+		await expect(isSuccess(attempted) ? attempted.value : undefined).rejects.toBe(reason)
+	})
+})
+
+describe('refuseValue', () => {
+	it.each(CONTRACT_CODES)(
+		'refuses a value under the %s code with its path, limit, and preview',
+		(code) => {
+			const error = captureContractError(() =>
+				refuseValue('abc', isNumber, 'openDoor', {
+					path: ['options', 'size'],
+					limit: 'a number',
+					code,
+				}),
+			)
+			expect(error.code).toBe(code)
+			expect(error.message).toBe('openDoor: options.size must be a number')
+			expect(error.context).toEqual({
+				path: ['options', 'size'],
+				limit: 'a number',
+				received: '"abc"',
+			})
+		},
+	)
+
+	it('defaults the code to bound and renders a string path as one segment', () => {
+		const error = captureContractError(() =>
+			refuseValue(1, isString, 'openDoor', { path: 'name', limit: 'a string' }),
+		)
+		expect(error.code).toBe('bound')
+		expect(error.message).toBe('openDoor: name must be a string')
+	})
+
+	it('refuses when the predicate throws and returns when it holds', () => {
+		const error = captureContractError(() =>
+			refuseValue(
+				1,
+				(_value): _value is number => {
+					throw new Error('predicate failure')
+				},
+				'openDoor',
+				{ path: [], limit: 'readable' },
+			),
+		)
+		expect(error.code).toBe('bound')
+		expect(error.context?.received).toBe('1')
+		expect(() =>
+			refuseValue(1, isNumber, 'openDoor', { path: [], limit: 'a number' }),
+		).not.toThrow()
+	})
+
+	it('narrows the value at the call with no assertion', () => {
+		const value: unknown = 5
+		refuseValue(value, isNumber, 'openDoor', { path: ['n'], limit: 'a number' })
+		expectTypeOf(value).toEqualTypeOf<number>()
+		expect(value + 1).toBe(6)
+	})
+})
+
+describe('refusalToError', () => {
+	it('carries every fault, the first fault path, the structure code, and the refusal cause', () => {
+		const cause = new Error('unreadable')
+		const faults: readonly AuditFault[] = [
+			{ reason: 'missing', path: ['age'], expected: 'number' },
+			{ reason: 'extra', path: ['typo'] },
+		]
+		const error = refusalToError({ faults, cause }, 'openDoor')
+		expect(error).toBeInstanceOf(door.ContractError)
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe(`openDoor: ${describeFaults(faults)}`)
+		expect(error.context).toEqual({ path: ['age'], faults })
+		expect(error.context?.faults).toBe(faults)
+		expect(error.cause).toBe(cause)
+		expect(isContractError(error)).toBe(true)
+	})
+
+	it('puts the schema summary in the message and reports an empty refusal as unreadable', () => {
+		const schema: JSONSchema = { type: 'object', properties: { age: { type: 'number' } } }
+		const faults: readonly AuditFault[] = [{ reason: 'missing', path: 'age', expected: 'number' }]
+		expect(refusalToError({ faults }, 'openDoor', schema).message).toBe(
+			`openDoor: ${describeFaults(faults, schema)}`,
+		)
+		const empty = refusalToError({ faults: [] }, 'openDoor')
+		expect(empty.message).toBe('openDoor: value could not be read')
+		expect(empty.context).toEqual({ faults: [] })
+		expect('cause' in empty).toBe(false)
+	})
+})
+
+describe('readValue faults', () => {
+	it('carries the faults of the context a failed read refuses with', () => {
+		const faults: readonly AuditFault[] = [{ reason: 'missing', path: ['id'], expected: 'string' }]
+		const error = captureContractError(() =>
+			readValue(
+				() => {
+					throw new Error('unreadable')
+				},
+				'openDoor',
+				{ context: { path: ['id'], faults } },
+			),
+		)
+		expect(error.context).toEqual({ path: ['id'], faults })
+		expect(isContractError(error)).toBe(true)
 	})
 })
 
@@ -3643,6 +3788,62 @@ describe('preview', () => {
 		expect(giant).toHaveLength(door.PREVIEW_LIMIT)
 	})
 
+	it('escapes DEL, the C1 controls, U+2028, and U+2029 as lowercase sequences', () => {
+		expect(escapeControls('a\u007fb\u0085c\u009fd\u2028e\u2029f')).toBe(
+			'a\\u007fb\\u0085c\\u009fd\\u2028e\\u2029f',
+		)
+		expect(escapeControls('plain \\n text')).toBe('plain \\n text')
+	})
+
+	it('cuts encoded text at the last complete token before the limit', () => {
+		expect(previewText('ab\ncd', 3, true)).toBe('"ab…')
+		expect(previewText('ab\ncd', 4, true)).toBe('"ab\\n…')
+		expect(previewText('ab', 2, true)).toBe('"ab"')
+		expect(previewText('abc', 2, false)).toBe('ab…')
+		expect(previewText(`${'x'.repeat(3)}\ud83d\ude00zz`, 6, false)).toBe(`xxx\ud83d\ude00z…`)
+		expect(previewText(`${'x'.repeat(5)}\ud83d\ude00`, 6, false)).toBe('xxxxx…')
+		expect(previewText('xx\ud83d', 8, true)).toBe('"xx\\ud83d"')
+	})
+
+	it('answers what the previewParts recursion answers over a seeded corpus', () => {
+		const random = seededRandom(25)
+		const alphabet = [
+			'a',
+			'Z',
+			' ',
+			'"',
+			'\\',
+			'\n',
+			'\t',
+			'\u0000',
+			'\u001f',
+			'\u007f',
+			'\u0085',
+			'\u009f',
+			'\u2028',
+			'\u2029',
+			'\ud83d',
+			'\ude00',
+			String.fromCodePoint(0x1f600),
+			'é',
+		]
+		const lengths = [...Array.from({ length: 15 }, (_unused, index) => 56 + index), 200, 20_000]
+		const rounds = lengths.flatMap((length) => Array.from({ length: 40 }, () => length))
+		for (const length of rounds) {
+			const source = Array.from(
+				{ length },
+				() => alphabet[Math.floor(random() * alphabet.length)] ?? '',
+			).join('')
+			expect(preview(source)).toBe(
+				`"${previewParts(source, 0, door.PREVIEW_LIMIT - 2, true).join('')}`,
+			)
+			expect(preview(Symbol(source))).toBe(
+				previewParts(`Symbol(${source})`, 0, door.PREVIEW_LIMIT - 1, false).join(''),
+			)
+		}
+		expect(rounds).toHaveLength(lengths.length * 40)
+	})
+
 	it('bounds 100,000-code-unit string and symbol inputs', () => {
 		expect(preview('x'.repeat(100_000))).toBe(`"${'x'.repeat(62)}…`)
 		expect(preview(Symbol('x'.repeat(100_000)))).toBe(`Symbol(${'x'.repeat(56)}…`)
@@ -3850,6 +4051,121 @@ describe('shapeToKind', () => {
 	it('projects a function shape to function, through an optional wrapper too', () => {
 		expect(shapeToKind(functionShape())).toBe('function')
 		expect(shapeToKind(optionalShape(functionShape()))).toBe('function')
+	})
+
+	it('projects an undefined shape to undefined, through an optional wrapper too', () => {
+		expect(shapeToKind(undefinedShape())).toBe('undefined')
+		expect(shapeToKind(optionalShape(undefinedShape()))).toBe('undefined')
+	})
+
+	it('projects an interface shape to object, through a nullable wrapper too', () => {
+		expect(shapeToKind(interfaceShape({ get: functionShape() }))).toBe('object')
+		expect(shapeToKind(nullableShape(interfaceShape({})))).toBe('object')
+	})
+})
+
+describe('readShapeMap', () => {
+	it('copies each own enumerable member into a frozen null-prototype map, keeping children by identity', () => {
+		const name = stringShape()
+		const source = { name, age: integerShape() }
+		Object.defineProperty(source, 'hidden', { value: stringShape(), enumerable: false })
+		const map = readShapeMap(source, 'objectShape', 'properties', 'object')
+		source.name = stringShape({ min: 1 })
+
+		expect(Object.keys(map)).toEqual(['name', 'age'])
+		expect(map.name).toBe(name)
+		expect(Object.getPrototypeOf(map)).toBeNull()
+		expect(Object.isFrozen(map)).toBe(true)
+		const proto = readShapeMap(
+			JSON.parse('{"__proto__": {"category": "null"}}'),
+			'interfaceShape',
+			'members',
+			'interface',
+		)
+		expect(Object.hasOwn(proto, '__proto__')).toBe(true)
+	})
+
+	it('refuses a map that is not a plain record, and one whose read throws, naming the door and the field', () => {
+		const notRecord = captureContractError(() =>
+			Reflect.apply(readShapeMap, undefined, [new Map(), 'interfaceShape', 'members', 'interface']),
+		)
+		expect([notRecord.code, notRecord.message, notRecord.context]).toEqual([
+			'structure',
+			'interfaceShape: members must be a plain record',
+			{ path: ['members'], shape: 'interface' },
+		])
+		const unreadable = captureContractError(() =>
+			Reflect.apply(readShapeMap, undefined, [
+				createThrowingGetter('name'),
+				'objectShape',
+				'properties',
+				'object',
+			]),
+		)
+		expect([unreadable.code, unreadable.message, unreadable.context]).toEqual([
+			'structure',
+			'objectShape: properties could not be read',
+			{ path: ['properties'], shape: 'object' },
+		])
+	})
+})
+
+describe('matchesUndefinedNode', () => {
+	it('admits undefined at the leaf, through a nullable, and through a union arm', () => {
+		expect(matchesUndefinedNode('undefined', undefined, [])).toBe(true)
+		expect(matchesUndefinedNode('nullable', undefined, [true])).toBe(true)
+		expect(matchesUndefinedNode('nullable', undefined, [false])).toBe(false)
+		expect(matchesUndefinedNode('union', undefined, [false, true])).toBe(true)
+		expect(matchesUndefinedNode('union', 'anyOf', [true, true])).toBe(true)
+		expect(matchesUndefinedNode('union', 'anyOf', [false, false])).toBe(false)
+	})
+
+	it('admits undefined through a oneOf union only when exactly one arm does', () => {
+		expect(matchesUndefinedNode('union', 'oneOf', [false, true])).toBe(true)
+		expect(matchesUndefinedNode('union', 'oneOf', [true, true])).toBe(false)
+		expect(matchesUndefinedNode('union', 'oneOf', [false, false])).toBe(false)
+	})
+
+	it('refuses undefined for every other category, whatever its children answer', () => {
+		const categories = Object.keys(door.SHAPE_FIELDS).filter(
+			(category) => !['undefined', 'nullable', 'union'].includes(category),
+		)
+		expect(categories).toContain('optional')
+		for (const category of categories) {
+			expect(matchesUndefinedNode(category, 'oneOf', [true])).toBe(false)
+		}
+		expect(matchesUndefinedNode('wrong', undefined, [true])).toBe(false)
+	})
+
+	it('equals what a compiled root answers for undefined', () => {
+		const shapes: readonly ContractShape[] = [
+			undefinedShape(),
+			nullableShape(undefinedShape()),
+			unionShape(numberShape(), undefinedShape()),
+			door.oneOfShape(undefinedShape(), nullableShape(undefinedShape())),
+			door.oneOfShape(undefinedShape(), stringShape()),
+			nullableShape(numberShape()),
+			door.rawShape({}),
+			door.jsonShape(),
+		]
+		const expected = [true, true, true, false, true, false, false, false]
+
+		expect(shapes.map((shape) => door.createContract(shape).is(undefined))).toEqual(expected)
+		expect(
+			shapes.map((shape) => {
+				const children =
+					shape.category === 'union'
+						? shape.variants.map((variant) => door.createContract(variant).is(undefined))
+						: shape.category === 'nullable'
+							? [door.createContract(shape.inner).is(undefined)]
+							: []
+				return matchesUndefinedNode(
+					shape.category,
+					shape.category === 'union' ? shape.mode : undefined,
+					children,
+				)
+			}),
+		).toEqual(expected)
 	})
 })
 
@@ -5646,9 +5962,14 @@ describe('renderForm', () => {
 		expect(renderForm({})).toBe('any')
 	})
 
-	it('names a schema with an own not as function when its format says so and never otherwise', () => {
+	it('names a schema with an own not by a function or undefined format, and never otherwise', () => {
 		expect(renderForm({ not: {}, format: 'function' })).toBe('function')
 		expect(renderForm({ not: {}, format: 'function', description: 'Runs it' })).toBe('function')
+		expect(renderForm({ not: {}, format: 'undefined' })).toBe('undefined')
+		expect(renderForm({ anyOf: [{ type: 'number' }, { not: {}, format: 'undefined' }] })).toBe(
+			'number | undefined',
+		)
+		expect(renderForm({ format: 'undefined' })).toBe('any (format "undefined")')
 		expect(renderForm({ not: {} })).toBe('never')
 		expect(renderForm({ not: {}, format: 'date' })).toBe('never')
 		expect(renderForm({ format: 'function' })).toBe('any (format "function")')
@@ -5660,6 +5981,9 @@ describe('renderForm', () => {
 		)
 		expect(renderForm({ type: 'number', minimum: 0, maximum: 1 })).toBe(
 			'number (minimum 0, maximum 1)',
+		)
+		expect(renderForm({ type: 'integer', exclusiveMinimum: 0, exclusiveMaximum: 10 })).toBe(
+			'integer (exclusiveMinimum 0, exclusiveMaximum 10)',
 		)
 		expect(renderForm({ type: 'array', items: { type: 'string' }, minItems: 1 })).toBe(
 			'array of string (minItems 1)',

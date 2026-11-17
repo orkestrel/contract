@@ -1,4 +1,4 @@
-import type { ContractShape } from './types.js'
+import type { ContractShape, NumberShapeOptions } from './types.js'
 import {
 	CLONE_NODE_LIMIT,
 	COMPILE_DEPTH_LIMIT,
@@ -18,8 +18,10 @@ import {
 	holds,
 	isFailure,
 	isSuccess,
+	matchesEmptyRange,
 	matchesMember,
 	matchesJSONValue,
+	matchesUndefinedNode,
 	matchesVisited,
 	omitVisited,
 	pathOf,
@@ -29,7 +31,7 @@ import {
 } from './helpers.js'
 import { isJSONValue, isLiteralValue, isRecord, isRegExp } from './validators.js'
 
-/** Owns the traversal and reentry poison of one validation call. */
+/** Owns the traversal and reentry refusal of one validation call. */
 export class ShapePass {
 	static readonly #weakSet = WeakSet
 	static readonly #weakMap = WeakMap
@@ -45,7 +47,9 @@ export class ShapePass {
 	// to it. A required field is own on every node that recognizes it.
 	static readonly #fields = [
 		'min',
+		'over',
 		'max',
+		'under',
 		'pattern',
 		'date',
 		'description',
@@ -61,8 +65,9 @@ export class ShapePass {
 	// whose children are all sealed, so a mutable node, a node frozen by a caller, and a
 	// node with an accessor are never recorded and take the whole walk. `reach` is the
 	// deepest level the subtree occupies, a raw node's embedded schema included, `count`
-	// is the expansion, `defaulted` is a default on this node, and `held` is one
-	// anywhere in the subtree.
+	// is the expansion, `defaulted` is a default on this node, `held` is one
+	// anywhere in the subtree, `admits` is whether the node admits `undefined`, and
+	// `implemented` is an interface anywhere in the subtree.
 	static readonly #seals = new ShapePass.#weakMap<
 		ContractShape,
 		{
@@ -71,6 +76,8 @@ export class ShapePass {
 			readonly count: number
 			readonly defaulted: boolean
 			readonly held: boolean
+			readonly admits: boolean
+			readonly implemented: boolean
 		}
 	>()
 	readonly #source: unknown
@@ -109,6 +116,7 @@ export class ShapePass {
 		readonly raw: number
 		readonly defaulted: boolean
 		readonly open: boolean
+		readonly mode: unknown
 	}> = []
 	// Discovery postorder: children finish before parents, so reading it forwards
 	// solves any bottom-up fact in one pass and reading it backwards solves any
@@ -124,6 +132,9 @@ export class ShapePass {
 	// The edge that first put a node below a union, so a default's refusal can spell
 	// the route through that union rather than the node's deepest one.
 	#within: Array<{ readonly parent: number; readonly first: string; readonly second?: string }> = []
+	// The edge that first put a node below an interface, whose parser fills no default below it.
+	#beneath: Array<{ readonly parent: number; readonly first: string; readonly second?: string }> =
+		[]
 	// One node per node per incoming edge: the size of the TREE a compiler would
 	// build from this DAG, which is what actually bounds compilation.
 	#counts: number[] = []
@@ -138,6 +149,9 @@ export class ShapePass {
 	#raw = 0
 	#defaulted = false
 	#open = false
+	#mode: unknown
+	// Whether each captured node admits `undefined`, solved children first when a default needs it.
+	#admitted: boolean[] = []
 	#structure: ContractError | undefined
 	#cycle: ContractError | undefined
 	#domain: ContractError | undefined
@@ -228,7 +242,7 @@ export class ShapePass {
 		return !holds(() => readPatternFlags(ShapePass.#blank) === '')
 	}
 
-	/** Poisons this pass and throws the same refusal on every reentry. */
+	/** Invalidates this pass and throws the same refusal on every reentry. */
 	interrupt(): never {
 		this.#poison ??= new ContractError(
 			'ShapeValidator.validate: shape validation may not be reentered',
@@ -268,20 +282,34 @@ export class ShapePass {
 			count: 1,
 			defaulted: this.#defaulted,
 			held: this.#defaulted,
+			implemented: shape.category === 'interface',
 		}
 		for (const index of iterateIndices(() => this.#children.length)) {
 			const child = this.#children[index]
 			const known = INTRINSICS.reflect.apply(INTRINSICS.recall, ShapePass.#seals, [child?.shape])
 			if (child === undefined || known === undefined) return false
 			if (known.category === 'optional' && !child.optional) return false
-			if (known.held && shape.category === 'union') return false
+			if (known.held && (shape.category === 'union' || shape.category === 'interface')) return false
+			if (known.implemented && shape.category === 'union') return false
 			if (known.defaulted && this.#open) return false
 			seal.reach = INTRINSICS.max(seal.reach, known.reach + 1)
 			seal.count += known.count
 			seal.held ||= known.held
+			seal.implemented ||= known.implemented
 		}
 		if (seal.reach + lift > COMPILE_DEPTH_LIMIT) return false
-		INTRINSICS.reflect.apply(INTRINSICS.retain, ShapePass.#seals, [shape, seal])
+		const answers: readonly boolean[] = INTRINSICS.reflect.apply(
+			INTRINSICS.project,
+			readIndexView(this.#children),
+			[
+				(child: { readonly shape: unknown }) =>
+					INTRINSICS.reflect.apply(INTRINSICS.recall, ShapePass.#seals, [child.shape])?.admits ===
+					true,
+			],
+		)
+		if (this.#defaulted && answers[0] === true) return false
+		const admits = matchesUndefinedNode(shape.category, shape.mode, answers)
+		INTRINSICS.reflect.apply(INTRINSICS.retain, ShapePass.#seals, [shape, { ...seal, admits }])
 		return true
 	}
 
@@ -362,6 +390,7 @@ export class ShapePass {
 		this.#raw = 0
 		this.#defaulted = false
 		this.#open = false
+		this.#mode = undefined
 		const outcome = attempt(() => this.#observe(current, frame.depth))
 		this.#spend(0)
 		if (isFailure(outcome) || !outcome.value) {
@@ -420,10 +449,13 @@ export class ShapePass {
 				)
 			}
 		}
-		if (category === 'object') {
+		if (category === 'object' || category === 'interface') {
 			const outcome = attempt(() => this.#populate(current))
 			if (isFailure(outcome)) {
-				return this.#refuse('validateShape: every node must be a recognized shape', 'properties')
+				return this.#refuse(
+					'validateShape: every node must be a recognized shape',
+					category === 'object' ? 'properties' : 'members',
+				)
 			}
 			return outcome.value
 		}
@@ -532,71 +564,71 @@ export class ShapePass {
 			}
 		}
 		if (current.category === 'number') {
-			if (current.min !== undefined && typeof current.min !== 'number') {
-				return this.#refuse('validateShape: number min must be a number', 'min')
-			}
-			if (current.max !== undefined && typeof current.max !== 'number') {
-				return this.#refuse('validateShape: number max must be a number', 'max')
+			const bounds = ['min', 'over', 'max', 'under'] as const
+			for (const index of iterateIndices(() => bounds.length)) {
+				const field = bounds[index]
+				if (field === undefined) continue
+				if (current[field] !== undefined && typeof current[field] !== 'number') {
+					return this.#refuse(`validateShape: number ${field} must be a number`, field)
+				}
 			}
 			if (current.integer !== undefined && typeof current.integer !== 'boolean') {
 				return this.#refuse('validateShape: number integer must be a boolean', 'integer')
 			}
 			const shape = current.integer === true ? 'integer' : 'number'
-			if (
-				this.#domain === undefined &&
-				current.min !== undefined &&
-				!INTRINSICS.finite(current.min)
-			) {
-				this.#domain = new ContractError('validateShape: a number shape min must be finite', {
-					code: 'bound',
-					context: {
-						path: pathOf(this.#path),
-						shape,
-						limit: 'finite number',
-						received: INTRINSICS.text(current.min),
-					},
-				})
+			for (const index of iterateIndices(() => bounds.length)) {
+				const field = bounds[index]
+				const value = field === undefined ? undefined : current[field]
+				if (this.#domain === undefined && typeof value === 'number' && !INTRINSICS.finite(value)) {
+					this.#domain = new ContractError(
+						`validateShape: a number shape ${field} must be finite`,
+						{
+							code: 'bound',
+							context: {
+								path: pathOf(this.#path),
+								shape,
+								limit: 'finite number',
+								received: INTRINSICS.text(value),
+							},
+						},
+					)
+				}
+			}
+			const range: NumberShapeOptions = {
+				...(typeof current.min === 'number' ? { min: current.min } : {}),
+				...(typeof current.over === 'number' ? { over: current.over } : {}),
+				...(typeof current.max === 'number' ? { max: current.max } : {}),
+				...(typeof current.under === 'number' ? { under: current.under } : {}),
 			}
 			if (
 				this.#domain === undefined &&
-				current.max !== undefined &&
-				!INTRINSICS.finite(current.max)
-			) {
-				this.#domain = new ContractError('validateShape: a number shape max must be finite', {
-					code: 'bound',
-					context: {
-						path: pathOf(this.#path),
-						shape,
-						limit: 'finite number',
-						received: INTRINSICS.text(current.max),
-					},
-				})
-			}
-			if (
-				this.#domain === undefined &&
-				current.min !== undefined &&
-				current.max !== undefined &&
-				typeof current.min === 'number' &&
-				typeof current.max === 'number' &&
-				current.min > current.max
+				range.min !== undefined &&
+				range.max !== undefined &&
+				range.min > range.max
 			) {
 				this.#domain = new ContractError('validateShape: a number shape has min greater than max', {
 					code: 'range',
 					context: { path: pathOf(this.#path), shape },
 				})
 			}
-			if (this.#domain === undefined && current.integer === true) {
-				const lo = INTRINSICS.ceil(current.min ?? Number.NEGATIVE_INFINITY)
-				const hi = INTRINSICS.floor(current.max ?? Number.POSITIVE_INFINITY)
-				if (lo > hi) {
-					this.#domain = new ContractError(
-						'validateShape: an integer number shape has an empty integer range',
-						{
-							code: 'range',
-							context: { path: pathOf(this.#path), shape: 'integer' },
-						},
-					)
-				}
+			if (this.#domain === undefined && matchesEmptyRange(range)) {
+				this.#domain = new ContractError('validateShape: a number shape has an empty range', {
+					code: 'range',
+					context: { path: pathOf(this.#path), shape },
+				})
+			}
+			if (
+				this.#domain === undefined &&
+				current.integer === true &&
+				matchesEmptyRange({ ...range, integer: true })
+			) {
+				this.#domain = new ContractError(
+					'validateShape: an integer number shape has an empty integer range',
+					{
+						code: 'range',
+						context: { path: pathOf(this.#path), shape: 'integer' },
+					},
+				)
 			}
 		}
 		if (
@@ -685,7 +717,7 @@ export class ShapePass {
 		if (optional || this.#domain !== undefined) return
 		if (this.#captures[index]?.category !== 'optional') return
 		this.#domain = new ContractError(
-			'validateShape: an optional shape may only appear as a direct object-property value',
+			'validateShape: an optional shape may only appear as a direct object-property or interface-member value',
 			{
 				code: 'placement',
 				context: { path: pathOf(this.#path), shape: 'optional' },
@@ -858,6 +890,8 @@ export class ShapePass {
 					key !== 'format' &&
 					key !== 'minimum' &&
 					key !== 'maximum' &&
+					key !== 'exclusiveMinimum' &&
+					key !== 'exclusiveMaximum' &&
 					key !== 'minItems' &&
 					key !== 'maxItems' &&
 					key !== 'items' &&
@@ -987,7 +1021,7 @@ export class ShapePass {
 					)
 				}
 			}
-			const rangeList = ['minimum', 'maximum']
+			const rangeList = ['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum']
 			for (const rangeIndex of iterateIndices(() => rangeList.length)) {
 				const key = rangeList[rangeIndex]
 				if (key === undefined) continue
@@ -1039,7 +1073,7 @@ export class ShapePass {
 				const values = collectMembers([])
 				for (const valueIndex of iterateIndices(() => snapshot.value.entries.length)) {
 					// A present member whose captured value is `undefined` is refused by
-					// the literal test below rather than skipped.
+					// the following literal test rather than skipped.
 					const value = snapshot.value.entries[valueIndex]
 					if (
 						!isLiteralValue(value) ||
@@ -1234,80 +1268,10 @@ export class ShapePass {
 					optional: false,
 				}
 				break
+			case 'interface':
+				return this.#populateMap(current, 'members')
 			case 'object': {
-				const properties = current.properties
-				if (!isRecord(properties)) {
-					return this.#refuse(
-						'validateShape: properties must be a plain property map',
-						'properties',
-					)
-				}
-				const keys = INTRINSICS.keys(properties)
-				for (const keyIndex of iterateIndices(() => keys.length)) {
-					const key = keys[keyIndex]
-					if (key === undefined) continue
-					this.#spend(1)
-					const descriptorOutcome = attempt(() => INTRINSICS.describe(properties, key))
-					if (isFailure(descriptorOutcome)) {
-						return this.#refuse(
-							'validateShape: every node must be a recognized shape',
-							'properties',
-							key,
-						)
-					}
-					const descriptor = descriptorOutcome.value
-					if (descriptor === undefined || !INTRINSICS.own(descriptor, 'value')) {
-						this.#children[this.#children.length] = {
-							shape: undefined,
-							first: 'properties',
-							second: key,
-							optional: true,
-						}
-						continue
-					}
-					const childOutcome = attempt(() => {
-						const population = current.properties
-						return isRecord(population) ? population[key] : undefined
-					})
-					if (isFailure(childOutcome)) {
-						return this.#refuse(
-							'validateShape: every node must be a recognized shape',
-							'properties',
-							key,
-						)
-					}
-					const child = childOutcome.value
-					const stable = attempt(() => {
-						const population = current.properties
-						return (
-							isRecord(population) &&
-							INTRINSICS.same(population[key], child) &&
-							INTRINSICS.same(descriptor.value, child)
-						)
-					})
-					if (isFailure(stable)) {
-						return this.#refuse(
-							'validateShape: every node must be a recognized shape',
-							'properties',
-							key,
-						)
-					}
-					if (!stable.value) {
-						this.#children[this.#children.length] = {
-							shape: undefined,
-							first: 'properties',
-							second: key,
-							optional: true,
-						}
-						continue
-					}
-					this.#children[this.#children.length] = {
-						shape: child,
-						first: 'properties',
-						second: key,
-						optional: true,
-					}
-				}
+				if (!this.#populateMap(current, 'properties')) return false
 				const extra = current.additionalProperties
 				this.#open = extra !== undefined && extra !== false
 				if (extra !== undefined && extra !== true && extra !== false) {
@@ -1321,6 +1285,7 @@ export class ShapePass {
 				break
 			}
 			case 'union': {
+				this.#mode = current.mode
 				if (!INTRINSICS.array(current.variants)) {
 					return this.#refuse('validateShape: variants must be a finite array', 'variants')
 				}
@@ -1504,8 +1469,66 @@ export class ShapePass {
 			case 'json':
 			case 'shape':
 			case 'function':
+			case 'undefined':
 			case 'raw':
 				break
+		}
+		return true
+	}
+
+	// An object's properties and an interface's members: each slot is one an optional may fill.
+	#populateMap(current: Record<string, unknown>, field: 'properties' | 'members'): boolean {
+		const map = current[field]
+		if (!isRecord(map)) {
+			return this.#refuse(
+				`validateShape: ${field} must be a plain ${field === 'members' ? 'member' : 'property'} map`,
+				field,
+			)
+		}
+		const keys = INTRINSICS.keys(map)
+		for (const keyIndex of iterateIndices(() => keys.length)) {
+			const key = keys[keyIndex]
+			if (key === undefined) continue
+			this.#spend(1)
+			const descriptorOutcome = attempt(() => INTRINSICS.describe(map, key))
+			if (isFailure(descriptorOutcome)) {
+				return this.#refuse('validateShape: every node must be a recognized shape', field, key)
+			}
+			const descriptor = descriptorOutcome.value
+			if (descriptor === undefined || !INTRINSICS.own(descriptor, 'value')) {
+				this.#children[this.#children.length] = {
+					shape: undefined,
+					first: field,
+					second: key,
+					optional: true,
+				}
+				continue
+			}
+			const childOutcome = attempt(() => {
+				const population = current[field]
+				return isRecord(population) ? population[key] : undefined
+			})
+			if (isFailure(childOutcome)) {
+				return this.#refuse('validateShape: every node must be a recognized shape', field, key)
+			}
+			const child = childOutcome.value
+			const stable = attempt(() => {
+				const population = current[field]
+				return (
+					isRecord(population) &&
+					INTRINSICS.same(population[key], child) &&
+					INTRINSICS.same(descriptor.value, child)
+				)
+			})
+			if (isFailure(stable)) {
+				return this.#refuse('validateShape: every node must be a recognized shape', field, key)
+			}
+			this.#children[this.#children.length] = {
+				shape: stable.value ? child : undefined,
+				first: field,
+				second: key,
+				optional: true,
+			}
 		}
 		return true
 	}
@@ -1569,6 +1592,7 @@ export class ShapePass {
 			raw: this.#raw,
 			defaulted: this.#defaulted,
 			open: this.#open,
+			mode: this.#mode,
 		}
 		INTRINSICS.reflect.apply(INTRINSICS.retain, this.#index, [shape, index])
 		return index
@@ -1660,21 +1684,25 @@ export class ShapePass {
 				{ code: 'structure', context: { path: pathOf(this.#ascend(index), 'schema') } },
 			)
 		}
-		this.#placeDefaults()
+		this.#placeEnclosed()
 	}
 
-	// Where a default can fill is a fact about every route to it, and a shared node is
-	// discovered through one route alone, so this is asked over the captured graph. It
-	// reads the reverse postorder top-down: a node's union ancestry is final before its
-	// edges are read, so one pass answers every route. A union's parser returns a
+	// Where a default can fill, and where an interface can sit, is a fact about every route to
+	// it, and a shared node is discovered through one route alone, so this is asked over the
+	// captured graph. It reads the reverse postorder top-down: a node's union and interface
+	// ancestry is final before its edges are read, so one pass answers every route. A union's parser returns a
 	// guard-valid value by identity, so a default below one fills only the inputs that
 	// needed a coercion. An open object takes a misspelled key as an extra, so a default
-	// beside one fills the real key with no fault to report it.
-	#placeDefaults(): void {
+	// beside one fills the real key with no fault to report it. An interface's parser returns
+	// the implementation by identity, so a default below one never fills, and a union asks each
+	// arm in turn, so an interface below one would read its members once per arm.
+	#placeEnclosed(): void {
 		const carried = INTRINSICS.reflect.apply(INTRINSICS.some, this.#captures, [
-			(capture: { readonly defaulted: boolean }) => capture.defaulted,
+			(capture: { readonly defaulted: boolean; readonly category: unknown }) =>
+				capture.defaulted || capture.category === 'interface',
 		])
 		if (!carried) return
+		this.#admit()
 		for (const offset of iterateIndices(() => this.#post.length)) {
 			const index = this.#post[this.#post.length - 1 - offset]
 			if (index === undefined) continue
@@ -1683,22 +1711,48 @@ export class ShapePass {
 			const enclosed =
 				capture.category === 'union' ||
 				(INTRINSICS.own(this.#within, index) && this.#within[index] !== undefined)
+			const implemented =
+				capture.category === 'interface' ||
+				(INTRINSICS.own(this.#beneath, index) && this.#beneath[index] !== undefined)
 			for (const edge of iterateIndices(() => capture.children.length)) {
 				const child = capture.children[edge]
 				if (child === undefined) continue
 				const located = this.#locate(child.shape)
 				if (located === undefined) continue
+				const via = {
+					parent: index,
+					first: child.first,
+					...(INTRINSICS.own(child, 'second') && child.second !== undefined
+						? { second: child.second }
+						: {}),
+				}
 				if (
 					enclosed &&
 					(!INTRINSICS.own(this.#within, located) || this.#within[located] === undefined)
 				) {
-					this.#within[located] = {
-						parent: index,
-						first: child.first,
-						...(INTRINSICS.own(child, 'second') && child.second !== undefined
-							? { second: child.second }
-							: {}),
-					}
+					this.#within[located] = via
+				}
+				if (
+					implemented &&
+					(!INTRINSICS.own(this.#beneath, located) || this.#beneath[located] === undefined)
+				) {
+					this.#beneath[located] = via
+				}
+				if (enclosed && this.#captures[located]?.category === 'interface') {
+					this.#domain ??= new ContractError(
+						'validateShape: an interface shape may not sit under a union, which would read its members once per arm; move the interface outside the union',
+						{
+							code: 'placement',
+							context: {
+								path: pathOf(
+									this.#route(index, this.#within),
+									child.first,
+									INTRINSICS.own(child, 'second') ? child.second : undefined,
+								),
+								shape: 'interface',
+							},
+						},
+					)
 				}
 				if (this.#captures[located]?.defaulted !== true) continue
 				// Keep own guards consistent; valid optional-property edges always own their second segment.
@@ -1709,7 +1763,23 @@ export class ShapePass {
 							code: 'placement',
 							context: {
 								path: pathOf(
-									this.#route(index),
+									this.#route(index, this.#within),
+									child.first,
+									INTRINSICS.own(child, 'second') ? child.second : undefined,
+								),
+								shape: 'optional',
+							},
+						},
+					)
+				}
+				if (implemented) {
+					this.#domain ??= new ContractError(
+						'validateShape: a default may not sit below an interface shape, whose parser returns the implementation by identity without filling it; remove the default',
+						{
+							code: 'placement',
+							context: {
+								path: pathOf(
+									this.#route(index, this.#beneath),
 									child.first,
 									INTRINSICS.own(child, 'second') ? child.second : undefined,
 								),
@@ -1734,18 +1804,64 @@ export class ShapePass {
 						},
 					)
 				}
+				const filled = this.#captures[located]?.children[0]
+				const inner = filled === undefined ? undefined : this.#locate(filled.shape)
+				if (inner !== undefined && this.#admitted[inner] === true) {
+					this.#domain ??= new ContractError(
+						'validateShape: a default may not sit on an optional whose inner shape admits undefined, where a present undefined keeps its key unfilled; remove the default or the undefined arm',
+						{
+							code: 'placement',
+							context: {
+								path: pathOf(
+									this.#ascend(index),
+									child.first,
+									INTRINSICS.own(child, 'second') ? child.second : undefined,
+								),
+								shape: 'optional',
+							},
+						},
+					)
+				}
 			}
 		}
 	}
 
-	// The path to a node through the union edge recorded for it, falling back to its
-	// deepest occurrence above the union that encloses it.
-	#route(index: number): readonly string[] {
-		const edge = INTRINSICS.own(this.#within, index) ? this.#within[index] : undefined
+	// Postorder forwards, so each node's children are answered before the node itself.
+	#admit(): void {
+		for (const step of iterateIndices(() => this.#post.length)) {
+			const index = this.#post[step]
+			if (index === undefined) continue
+			const capture = this.#captures[index]
+			if (capture === undefined) continue
+			const answers: readonly boolean[] = INTRINSICS.reflect.apply(
+				INTRINSICS.project,
+				readIndexView(capture.children),
+				[
+					(child: { readonly shape: unknown }) => {
+						const located = this.#locate(child.shape)
+						return located !== undefined && this.#admitted[located] === true
+					},
+				],
+			)
+			this.#admitted[index] = matchesUndefinedNode(capture.category, capture.mode, answers)
+		}
+	}
+
+	// The path to a node through the union or interface edge recorded for it, falling back to
+	// its deepest occurrence above the node that encloses it.
+	#route(
+		index: number,
+		edges: ReadonlyArray<{
+			readonly parent: number
+			readonly first: string
+			readonly second?: string
+		}>,
+	): readonly string[] {
+		const edge = INTRINSICS.own(edges, index) ? edges[index] : undefined
 		return edge === undefined
 			? this.#ascend(index)
 			: pathOf(
-					this.#route(edge.parent),
+					this.#route(edge.parent, edges),
 					edge.first,
 					INTRINSICS.own(edge, 'second') ? edge.second : undefined,
 				)

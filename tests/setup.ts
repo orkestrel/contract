@@ -4,25 +4,44 @@
 import type {
 	LiteralValue,
 	AuditFault,
+	ArrayShapeOptions,
+	BooleanShapeOptions,
+	CapturePlan,
 	ContractInterface,
+	ContractRefusal,
 	ContractShape,
+	EvaluationFunction,
 	Fault,
 	FaultConstraint,
 	FaultKind,
+	FaultTextOptions,
+	FunctionShapeOptions,
 	Guard,
 	GuardsShape,
+	InterfaceShapeOptions,
 	JSONSchema,
+	JSONShapeOptions,
 	JSONValue,
 	JSONSchemaType,
+	LiteralShapeOptions,
+	NullShapeOptions,
+	NumberShapeOptions,
+	ObjectShapeOptions,
 	OptionalShape,
 	OptionalShapeOptions,
 	RandomFunction,
+	RecordShapeOptions,
 	Result,
 	SampleMemo,
+	SchemaToShapeOptions,
+	ShapeShapeOptions,
+	StringGuardOptions,
 	StringShape,
+	StringShapeOptions,
+	UndefinedShapeOptions,
+	ValueToSchemaOptions,
 } from '@src/core'
 import { createRecorder } from '@orkestrel/test'
-import { isUndefined } from '@src/core'
 
 export const FAULT_TEXT_UNION_INPUTS = [
 	{ kind: 'bank', speed: 'fast', iban: 'DE123' },
@@ -92,24 +111,6 @@ export function createFaultTextKinds(): readonly unknown[] {
 	]
 }
 
-/** Implements the undefined-only domain admitted by ContractInterface but not by a root shape. */
-export function createUndefinedContract(): ContractInterface<undefined> {
-	return {
-		schema: {},
-		is: isUndefined,
-		parse: () => undefined,
-		audit: (value) =>
-			isUndefined(value)
-				? []
-				: [{ reason: 'type', path: [], expected: 'json', received: preview(value) }],
-		explain: (value) =>
-			isUndefined(value)
-				? []
-				: [{ reason: 'type', path: [], expected: 'json', received: preview(value) }],
-		generate: () => undefined,
-	}
-}
-
 /** Records artifact invocations while every answer comes from the real compiled contract. */
 export function recordAdmission<T>(contract: ContractInterface<T>) {
 	const calls = createRecorder<[string]>()
@@ -169,6 +170,7 @@ import {
 	inferPrimitiveEnum,
 	instanceOf,
 	integerShape,
+	interfaceShape,
 	intersectionOf,
 	iterateIndices,
 	isArray,
@@ -255,6 +257,7 @@ import {
 	stringToFormat,
 	transformOf,
 	tupleOf,
+	undefinedShape,
 	unifySchemas,
 	unionOf,
 	unionShape,
@@ -1792,6 +1795,7 @@ export function publicDoors(): readonly PublicDoor[] {
 		['ContractCompiler.auditor', () => new ContractCompiler(shape).auditor({ name: 1 })],
 		['ContractCompiler.reporter', () => new ContractCompiler(shape).reporter({ name: 1 })],
 		['ContractCompiler.generator', () => new ContractCompiler(shape).generator(seededRandom(7))],
+		['ContractCompiler.owner', () => new ContractCompiler(shape).owner(record)],
 		['ContractCompiler.contract', () => new ContractCompiler(shape).contract],
 		['contract.parse', () => contract.parse(record)],
 		['contract.explain', () => contract.explain({ name: 1 })],
@@ -1868,6 +1872,7 @@ export function publicDoors(): readonly PublicDoor[] {
 	])
 	const total: ReadonlyArray<readonly [string, () => unknown]> = Object.freeze([
 		['contract.is', () => contract.is(record)],
+		['contract.own', () => contract.own(record)],
 		['contract.schema', () => contract.schema],
 		['isContractError', () => isContractError(record)],
 		['isRecord', () => isRecord(record)],
@@ -3582,6 +3587,10 @@ export const SHAPE_SEPARATIONS: Readonly<Record<ContractShape['category'], Shape
 		shape: Object.freeze({ shape: shapeShape() }),
 		// Both artifacts delegate to isFunction; the corpus supplements rather than proves coincidence.
 		function: Object.freeze({ shape: functionShape() }),
+		// Both artifacts accept only undefined; the corpus supplements rather than proves coincidence.
+		undefined: Object.freeze({ shape: undefinedShape() }),
+		// Both artifacts answer from the audit; the corpus supplements rather than proves coincidence.
+		interface: Object.freeze({ shape: interfaceShape({ value: integerShape() }) }),
 		// Both artifacts accept any defined value; the corpus supplements rather than proves coincidence.
 		raw: Object.freeze({ shape: rawShape({}) }),
 	})
@@ -5915,6 +5924,7 @@ export const FOREIGN_SCHEMA_ROWS: ReadonlyArray<
 	['integer past the safe range', { type: 'integer' }, 1e21, true],
 	['integer past two to the fifty-third', { type: 'integer' }, 2 ** 60, true],
 	['exclusiveMinimum', { type: 'number', exclusiveMinimum: 0 }, 1, true],
+	['exclusiveMinimum at its bound', { type: 'number', exclusiveMinimum: 0 }, 0, false],
 	// The schema refuses this value; dropping a contradictory pair widens past it.
 	['a contradictory range', { type: 'integer', minimum: 5, maximum: 1 }, 3, true],
 	['a fractional minLength', { type: 'string', minLength: 1.5 }, 'ab', true],
@@ -6414,3 +6424,977 @@ export const DATE_REFUSED: ReadonlyArray<readonly [string, unknown]> = Object.fr
 
 /** Lists the seeds the date generator proofs draw from. */
 export const DATE_SEEDS: readonly number[] = Object.freeze([1, 7, 42, 2026])
+
+// === Option doors
+
+/** Declares how one public function takes an options record, and every key it reads. */
+export interface OptionDoor {
+	/** Holds the arguments the door builds from, with a placeholder at the options position. */
+	readonly args: readonly unknown[]
+	/** Names the argument position of the options record. */
+	readonly position: number
+	/** Holds a valid value for every key the door reads, in the order its refusal lists them. */
+	readonly options: Readonly<Record<string, unknown>>
+	/** Names the shape label a refusal carries in its context. */
+	readonly shape: string
+}
+
+/**
+ * Lists every public function that takes an options record under the refusal of an unread key.
+ *
+ * @remarks
+ * Each `options` record satisfies the door's options type with every key required, so a key the
+ * type gains and the table lacks stops compiling.
+ */
+export const OPTION_DOORS: Readonly<Record<string, OptionDoor>> = Object.freeze({
+	stringShape: {
+		args: [undefined],
+		position: 0,
+		options: {
+			min: 0,
+			max: 80,
+			pattern: /^[A-Z]/,
+			date: false,
+			description: 'Display name',
+		} satisfies Required<StringShapeOptions>,
+		shape: 'string',
+	},
+	numberShape: {
+		args: [undefined],
+		position: 0,
+		options: {
+			min: 0,
+			over: -1,
+			max: 120,
+			under: 121,
+			integer: false,
+			description: 'Age in years',
+		} satisfies Required<NumberShapeOptions>,
+		shape: 'number',
+	},
+	integerShape: {
+		args: [undefined],
+		position: 0,
+		options: {
+			min: 0,
+			over: -1,
+			max: 120,
+			under: 121,
+			description: 'Age in years',
+		} satisfies Required<Omit<NumberShapeOptions, 'integer'>>,
+		shape: 'integer',
+	},
+	dateShape: {
+		args: [undefined],
+		position: 0,
+		options: {
+			min: 10,
+			max: 10,
+			description: 'Check-in day',
+		} satisfies Required<Omit<StringShapeOptions, 'date' | 'pattern'>>,
+		shape: 'string',
+	},
+	booleanShape: {
+		args: [undefined],
+		position: 0,
+		options: {
+			description: 'Whether the account is active',
+		} satisfies Required<BooleanShapeOptions>,
+		shape: 'boolean',
+	},
+	nullShape: {
+		args: [undefined],
+		position: 0,
+		options: { description: 'No middle name' } satisfies Required<NullShapeOptions>,
+		shape: 'null',
+	},
+	literalShape: {
+		args: [['admin', 'member'], undefined],
+		position: 1,
+		options: { description: 'Account role' } satisfies Required<LiteralShapeOptions>,
+		shape: 'literal',
+	},
+	arrayShape: {
+		args: [{ category: 'string' }, undefined],
+		position: 1,
+		options: { min: 0, max: 10, description: 'Tags' } satisfies Required<ArrayShapeOptions>,
+		shape: 'array',
+	},
+	objectShape: {
+		args: [{}, undefined],
+		position: 1,
+		options: {
+			additionalProperties: true,
+			description: 'Profile',
+		} satisfies Required<ObjectShapeOptions<true>>,
+		shape: 'object',
+	},
+	recordShape: {
+		args: [{ category: 'number' }, undefined],
+		position: 1,
+		options: { description: 'Scores by player' } satisfies Required<RecordShapeOptions>,
+		shape: 'object',
+	},
+	optionalShape: {
+		args: [{ category: 'number', integer: true }, undefined],
+		position: 1,
+		options: { default: 3 } satisfies Required<OptionalShapeOptions>,
+		shape: 'optional',
+	},
+	jsonShape: {
+		args: [undefined],
+		position: 0,
+		options: { description: 'Webhook body' } satisfies Required<JSONShapeOptions>,
+		shape: 'json',
+	},
+	shapeShape: {
+		args: [undefined],
+		position: 0,
+		options: { description: 'Form definition' } satisfies Required<ShapeShapeOptions>,
+		shape: 'shape',
+	},
+	functionShape: {
+		args: [undefined],
+		position: 0,
+		options: { description: 'Upgrade callback' } satisfies Required<FunctionShapeOptions>,
+		shape: 'function',
+	},
+	undefinedShape: {
+		args: [undefined],
+		position: 0,
+		options: { description: 'No limit set' } satisfies Required<UndefinedShapeOptions>,
+		shape: 'undefined',
+	},
+	interfaceShape: {
+		args: [{ get: { category: 'function' } }, undefined],
+		position: 1,
+		options: { description: 'Session store' } satisfies Required<InterfaceShapeOptions>,
+		shape: 'interface',
+	},
+	schemaToShape: {
+		args: [{ type: 'string' }, undefined],
+		position: 1,
+		options: { strict: true } satisfies Required<SchemaToShapeOptions>,
+		shape: 'schema',
+	},
+	stringOf: {
+		args: [undefined],
+		position: 0,
+		options: { min: 1, max: 32, pattern: /^[a-z-]+$/ } satisfies Required<StringGuardOptions>,
+		shape: 'string',
+	},
+	valueToSchema: {
+		args: [{ id: 1, name: 'Ada' }, undefined],
+		position: 1,
+		options: {
+			limits: { depth: 4, properties: 16 },
+			closed: true,
+			format: false,
+			enum: false,
+		} satisfies Required<ValueToSchemaOptions>,
+		shape: 'schema',
+	},
+	samplesToSchema: {
+		args: [[{ id: 1 }, { id: 2, name: 'Ada' }], undefined],
+		position: 1,
+		options: {
+			limits: { depth: 4, properties: 16 },
+			closed: true,
+			format: false,
+			enum: false,
+		} satisfies Required<ValueToSchemaOptions>,
+		shape: 'schema',
+	},
+	describeFaults: {
+		args: [[{ reason: 'missing', path: ['age'], expected: 'number' }], undefined, undefined],
+		position: 2,
+		options: { limit: 256 } satisfies Required<FaultTextOptions>,
+		shape: 'fault',
+	},
+})
+
+/** Lists the barrel's `*Shape` functions that take no options record. */
+export const OPTIONLESS_SHAPE_DOORS: readonly string[] = Object.freeze([
+	'auditFaultShape',
+	'cloneShape',
+	'nullableShape',
+	'oneOfShape',
+	'ownShape',
+	'rawShape',
+	'readGuardShape',
+	'unionShape',
+	'validateShape',
+])
+
+/** Lists the functions outside the `*Shape` population that refuse an unread option key. */
+export const OPTION_FUNCTIONS: readonly string[] = Object.freeze([
+	'stringOf',
+	'valueToSchema',
+	'samplesToSchema',
+	'describeFaults',
+])
+
+/**
+ * Calls one {@link OPTION_DOORS} entry through the barrel with an options record in place.
+ *
+ * @param name - The door's export name
+ * @param options - The value placed at the door's options position
+ * @returns What the door returns
+ */
+export function callOptionDoor(name: string, options: unknown): unknown {
+	const door = OPTION_DOORS[name]
+	const run: unknown = Reflect.get(core, name)
+	if (door === undefined || typeof run !== 'function') {
+		throw new Error(`No option door is declared for ${name}`)
+	}
+	const args = [...door.args]
+	args[door.position] = options
+	return Reflect.apply(run, undefined, args)
+}
+
+// === Exclusive number bounds
+
+/**
+ * Lists a number shape's options, one value, and the exclusive bound that value violates.
+ *
+ * @remarks
+ * Each bound meets the value at itself, at the next representable number inside it, and at the
+ * signed zero beside it. A row whose value the shape admits names no bound.
+ */
+export const NUMBER_BOUNDARY_ROWS: ReadonlyArray<
+	readonly [string, NumberShapeOptions, number, 'over' | 'under' | undefined]
+> = Object.freeze([
+	['over 0 at 0', { over: 0 }, 0, 'over'],
+	['over 0 at -0', { over: 0 }, -0, 'over'],
+	['over 0 at the next number above it', { over: 0 }, Number.MIN_VALUE, undefined],
+	['over 0 below it', { over: 0 }, -Number.MIN_VALUE, 'over'],
+	['under 0 at 0', { under: 0 }, 0, 'under'],
+	['under 0 at -0', { under: 0 }, -0, 'under'],
+	['under 0 at the next number below it', { under: 0 }, -Number.MIN_VALUE, undefined],
+	['under 0 above it', { under: 0 }, Number.MIN_VALUE, 'under'],
+	['over 1 at 1', { over: 1, under: 2 }, 1, 'over'],
+	['over 1 at the next number above it', { over: 1, under: 2 }, 1 + Number.EPSILON, undefined],
+	['under 2 at the next number below it', { over: 1, under: 2 }, 2 - Number.EPSILON, undefined],
+	['under 2 at 2', { over: 1, under: 2 }, 2, 'under'],
+	['an integer over 0 at 0', { over: 0, under: 3, integer: true }, 0, 'over'],
+	['an integer over 0 at 1', { over: 0, under: 3, integer: true }, 1, undefined],
+	['an integer under 3 at 2', { over: 0, under: 3, integer: true }, 2, undefined],
+	['an integer under 3 at 3', { over: 0, under: 3, integer: true }, 3, 'under'],
+	['min 0 beside under 1 at 0', { min: 0, under: 1 }, 0, undefined],
+	['min 0 beside under 1 at 1', { min: 0, under: 1 }, 1, 'under'],
+	['over 0 beside max 1 at 1', { over: 0, max: 1 }, 1, undefined],
+	['over 0 beside max 1 at 0', { over: 0, max: 1 }, 0, 'over'],
+	['over 0 beside min 0 at 0', { min: 0, over: 0 }, 0, 'over'],
+	['under 1 beside max 1 at 1', { max: 1, under: 1 }, 1, 'under'],
+])
+
+/** Lists number options whose bounds no number satisfies, with the message the refusal carries. */
+export const EMPTY_NUMBER_RANGES: ReadonlyArray<readonly [string, NumberShapeOptions, string]> =
+	Object.freeze([
+		['over equal to under', { over: 1, under: 1 }, 'a number shape has an empty range'],
+		['over above under', { over: 2, under: 1 }, 'a number shape has an empty range'],
+		['min equal to under', { min: 1, under: 1 }, 'a number shape has an empty range'],
+		['over equal to max', { over: 1, max: 1 }, 'a number shape has an empty range'],
+		['over above max beside min', { min: 0, over: 5, max: 3 }, 'a number shape has an empty range'],
+		['min above max', { min: 2, max: 1 }, 'a number shape has min greater than max'],
+		[
+			'an integer between adjacent integers',
+			{ over: 0, under: 1, integer: true },
+			'an integer number shape has an empty integer range',
+		],
+		[
+			'an integer from a fraction under its ceiling',
+			{ min: 0.2, under: 1, integer: true },
+			'an integer number shape has an empty integer range',
+		],
+	])
+
+/** Lists number options at the edge of emptiness that still admit a number. */
+export const ADJACENT_NUMBER_RANGES: ReadonlyArray<readonly [string, NumberShapeOptions, number]> =
+	Object.freeze([
+		['min equal to max', { min: 1, max: 1 }, 1],
+		['over below under', { over: 0, under: 1 }, 0.5],
+		['min below under by one step', { min: 1, under: 1 + Number.EPSILON }, 1],
+		['over below max by one step', { over: 1 - Number.EPSILON / 2, max: 1 }, 1],
+		['an integer over 0 under 2', { over: 0, under: 2, integer: true }, 1],
+	])
+
+// === The undefined leaf
+
+/** Declares one position an `undefined` member takes and the own keys its parsed value keeps. */
+export interface UndefinedRow {
+	/** Names the position. */
+	readonly name: string
+	/** Holds a declaration whose child at that position admits `undefined`. */
+	readonly shape: ContractShape
+	/** Holds `undefined` present at that position. */
+	readonly value: unknown
+	/** Lists the own keys the parsed value keeps, or `undefined` for the root. */
+	readonly keys: readonly string[] | undefined
+}
+
+/** Lists every position the undefined leaf's table names, each holding a present `undefined`. */
+export const UNDEFINED_ROWS: readonly UndefinedRow[] = Object.freeze([
+	{ name: 'the leaf at the root', shape: undefinedShape(), value: undefined, keys: undefined },
+	{
+		name: 'a required property',
+		shape: objectShape({ limit: undefinedShape() }),
+		value: { limit: undefined },
+		keys: ['limit'],
+	},
+	{
+		name: 'an optional property',
+		shape: objectShape({ limit: optionalShape(undefinedShape()) }),
+		value: { limit: undefined },
+		keys: ['limit'],
+	},
+	{
+		name: 'an array element',
+		shape: arrayShape(undefinedShape()),
+		value: [undefined],
+		keys: ['0'],
+	},
+	{
+		name: 'a record value',
+		shape: recordShape(undefinedShape()),
+		value: { limit: undefined },
+		keys: ['limit'],
+	},
+	{
+		name: 'under nullableShape',
+		shape: objectShape({ limit: nullableShape(undefinedShape()) }),
+		value: { limit: undefined },
+		keys: ['limit'],
+	},
+	{
+		name: 'a union arm',
+		shape: objectShape({ limit: unionShape(integerShape(), undefinedShape()) }),
+		value: { limit: undefined },
+		keys: ['limit'],
+	},
+])
+
+/**
+ * Lists the declarations the `undefined` laws run over.
+ *
+ * @remarks
+ * Each table row's declaration, a closed object mixing a required, a union, and an optional
+ * member, an array of objects, a record of union values, and a `oneOf` union whose two arms both
+ * admit `undefined`, which therefore admits none.
+ */
+export const UNDEFINED_LAW_SHAPES: readonly ContractShape[] = Object.freeze([
+	...UNDEFINED_ROWS.map((row) => row.shape),
+	objectShape({
+		name: stringShape(),
+		limit: unionShape(integerShape({ min: 0 }), undefinedShape()),
+		note: optionalShape(unionShape(stringShape(), undefinedShape())),
+	}),
+	arrayShape(objectShape({ limit: nullableShape(undefinedShape()) })),
+	recordShape(unionShape(booleanShape(), undefinedShape())),
+	objectShape({ limit: oneOfShape(undefinedShape(), nullableShape(undefinedShape())) }),
+])
+
+/**
+ * Copies an array with a hole at one index.
+ *
+ * @param value - The array to copy
+ * @param index - The index left empty
+ * @returns A fresh sparse array of the same length
+ */
+export function buildHoledArray(value: readonly unknown[], index: number): readonly unknown[] {
+	const holed: unknown[] = []
+	holed.length = value.length
+	for (const [at, entry] of value.entries()) if (at !== index) holed[at] = entry
+	return holed
+}
+
+/**
+ * Lists the one-member variations of a generated value.
+ *
+ * @remarks
+ * An array gains a trailing `undefined`, and each element is set to `undefined`, replaced with a
+ * string, and left as a hole. A record has each member removed, set to `undefined`, and replaced
+ * with a string. Any other value has none.
+ *
+ * @param value - The generated value to vary
+ * @returns The variations, each a fresh value
+ */
+export function varyMembers(value: unknown): readonly unknown[] {
+	if (Array.isArray(value)) {
+		return [
+			[...value, undefined],
+			...value.flatMap((_entry: unknown, index: number) => [
+				value.map((entry: unknown, at: number) => (at === index ? undefined : entry)),
+				value.map((entry: unknown, at: number) => (at === index ? 'x' : entry)),
+				buildHoledArray(value, index),
+			]),
+		]
+	}
+	if (!isRecord(value)) return []
+	return Object.keys(value).flatMap((key) => [
+		Object.fromEntries(Object.entries(value).filter(([name]) => name !== key)),
+		{ ...value, [key]: undefined },
+		{ ...value, [key]: 'x' },
+	])
+}
+
+/**
+ * Builds a seeded corpus for one contract: each generated value, its one-member variations, and
+ * {@link SOUNDNESS_SAMPLE}.
+ *
+ * @remarks
+ * A seed whose draw the generator refuses contributes nothing.
+ *
+ * @param contract - The contract whose generator seeds the corpus
+ * @param seeds - The number of seeds, drawn from `0`
+ * @returns The corpus values
+ */
+export function buildUndefinedCorpus(
+	contract: ContractInterface<unknown>,
+	seeds: number,
+): readonly unknown[] {
+	const generated = Array.from({ length: seeds }, (_entry, seed) =>
+		attempt(() => contract.generate(seededRandom(seed))),
+	).flatMap((outcome) => (outcome.success ? [outcome.value] : []))
+	return [...generated, ...generated.flatMap((value) => varyMembers(value)), ...SOUNDNESS_SAMPLE]
+}
+
+/**
+ * Lists where one contract breaks a law over its {@link buildUndefinedCorpus} corpus.
+ *
+ * @remarks
+ * A value parses when `parse` returns a value, or returns `undefined` for an `undefined` the
+ * contract's `is` admits. The laws: every parsed result satisfies `is`, every value `is` admits
+ * parses, `audit` is empty exactly where `is` holds, and `explain` is empty exactly where the
+ * value parses. A value whose read throws a `ContractError` is skipped, and any other throw is
+ * a violation.
+ *
+ * @param shape - The declaration to compile
+ * @param seeds - The number of seeds the corpus draws
+ * @returns Violation tags (`<law>@<index>`); empty when every law holds
+ */
+export function findUndefinedLawViolations(shape: ContractShape, seeds: number): readonly string[] {
+	const contract: ContractInterface<unknown> = createContract(shape)
+	const admits = contract.is(undefined)
+	return buildUndefinedCorpus(contract, seeds).flatMap((value, index) => {
+		const outcome = attempt(() => ({
+			valid: contract.is(value),
+			parsed: contract.parse(value),
+			audited: contract.audit(value).length === 0,
+			explained: contract.explain(value).length === 0,
+		}))
+		if (!outcome.success) return isContractError(outcome.error) ? [] : [`throw@${index}`]
+		const { valid, parsed, audited, explained } = outcome.value
+		const read = parsed !== undefined || (value === undefined && admits)
+		return [
+			...(read && !contract.is(parsed) ? [`parsed@${index}`] : []),
+			...(valid && !read ? [`refused@${index}`] : []),
+			...(audited !== valid ? [`audit@${index}`] : []),
+			...(explained !== read ? [`explain@${index}`] : []),
+		]
+	})
+}
+
+// === The interface shape
+
+/** Declares the store the M5 boundary names: a `get`, a `set`, and a `delete` function member. */
+export const STORE_DECLARATION = interfaceShape({
+	get: functionShape(),
+	set: functionShape(),
+	delete: functionShape(),
+})
+
+/** Holds session entries behind prototype methods, beside members no store declaration names. */
+export class SessionStore {
+	readonly #entries = new Map<string, unknown>()
+
+	get size(): number {
+		return this.#entries.size
+	}
+
+	get(key: string): unknown {
+		return this.#entries.get(key)
+	}
+
+	set(key: string, value: unknown): void {
+		this.#entries.set(key, value)
+	}
+
+	delete(key: string): boolean {
+		return this.#entries.delete(key)
+	}
+
+	clear(): void {
+		this.#entries.clear()
+	}
+}
+
+/** Holds session entries behind prototype methods and no `delete` member. */
+export class PartialStore {
+	readonly #entries = new Map<string, unknown>()
+
+	get(key: string): unknown {
+		return this.#entries.get(key)
+	}
+
+	set(key: string, value: unknown): void {
+		this.#entries.set(key, value)
+	}
+}
+
+/** Declares one implementation form a store declaration admits, by where its members live. */
+export interface ImplementationRow {
+	/** Names the form. */
+	readonly name: string
+	/** Holds a fresh value of that form. */
+	readonly value: unknown
+}
+
+/**
+ * Lists the table of the class for {@link STORE_DECLARATION}, each row a fresh value.
+ *
+ * @returns A class instance, a plain literal, a function carrying the members, an object whose
+ * prototype carries them, a getter-backed member, and an undeclared member whose getter throws
+ */
+export function buildImplementationRows(): readonly ImplementationRow[] {
+	const members = { get: encodeURI, set: encodeURI, delete: encodeURI }
+	return [
+		{ name: 'a class instance with prototype methods', value: new SessionStore() },
+		{ name: 'a plain literal', value: { ...members } },
+		{
+			name: 'a function carrying the members',
+			value: Object.assign(() => undefined, members),
+		},
+		{ name: 'an object whose prototype carries them', value: Object.create(members) },
+		{
+			name: 'a getter-backed member',
+			value: Object.defineProperty({ set: encodeURI, delete: encodeURI }, 'get', {
+				get: () => encodeURI,
+				enumerable: true,
+			}),
+		},
+		{
+			name: 'an undeclared member whose getter throws',
+			value: Object.defineProperty({ ...members }, 'secret', {
+				get: throwHostileAccess,
+				enumerable: true,
+			}),
+		},
+	]
+}
+
+/** Declares one value an interface declaration refuses, with the faults its audit reports. */
+export interface ImplementationRefusal {
+	/** Names the refusal. */
+	readonly name: string
+	/** Holds the refusing declaration. */
+	readonly shape: ContractShape
+	/** Holds the refused value. */
+	readonly value: unknown
+	/** Lists the faults `audit` and `explain` report. */
+	readonly faults: readonly Fault[]
+}
+
+/**
+ * Lists the refusals adjacent to the table of the class, each with its declared faults.
+ *
+ * @returns `null`, a primitive, an array, a missing member, a member of the wrong kind, and an
+ * optional member of the wrong kind
+ */
+export function buildImplementationRefusals(): readonly ImplementationRefusal[] {
+	const timed = interfaceShape({ get: functionShape(), ttl: optionalShape(integerShape()) })
+	return [
+		{
+			name: 'null',
+			shape: STORE_DECLARATION,
+			value: null,
+			faults: [{ reason: 'type', path: [], expected: 'object', received: 'null' }],
+		},
+		{
+			name: 'a primitive',
+			shape: STORE_DECLARATION,
+			value: 'session',
+			faults: [{ reason: 'type', path: [], expected: 'object', received: '"session"' }],
+		},
+		{
+			name: 'an array',
+			shape: STORE_DECLARATION,
+			value: [encodeURI, encodeURI, encodeURI],
+			faults: [{ reason: 'type', path: [], expected: 'object', received: 'array' }],
+		},
+		{
+			name: 'a missing member',
+			shape: STORE_DECLARATION,
+			value: new PartialStore(),
+			faults: [{ reason: 'missing', path: ['delete'], expected: 'function' }],
+		},
+		{
+			name: 'a member of the wrong kind',
+			shape: STORE_DECLARATION,
+			value: { get: encodeURI, set: encodeURI, delete: 'never' },
+			faults: [{ reason: 'type', path: ['delete'], expected: 'function', received: '"never"' }],
+		},
+		{
+			name: 'an optional member of the wrong kind',
+			shape: timed,
+			value: { get: encodeURI, ttl: 'soon' },
+			faults: [{ reason: 'type', path: ['ttl'], expected: 'integer', received: '"soon"' }],
+		},
+	]
+}
+
+/**
+ * Builds descriptors for a store's members that record each read.
+ *
+ * @param record - Called with the member's name on every read
+ * @returns Accessors for `get`, `set`, and `delete`, and a `secret` accessor that throws when read
+ */
+export function buildCountedMembers(record: (name: string) => void): PropertyDescriptorMap {
+	return {
+		get: {
+			get: () => {
+				record('get')
+				return encodeURI
+			},
+			enumerable: true,
+		},
+		set: {
+			get: () => {
+				record('set')
+				return encodeURI
+			},
+			enumerable: true,
+		},
+		delete: {
+			get: () => {
+				record('delete')
+				return encodeURI
+			},
+			enumerable: true,
+		},
+		secret: { get: throwHostileAccess, enumerable: true },
+	}
+}
+
+/**
+ * Builds an evaluation plan that records each value it is asked about and reports no fault.
+ *
+ * @param record - Called with the value on every evaluation
+ * @returns The plan, one function for every call it serves
+ */
+export function buildCleanPlan(
+	record: (value: unknown) => void,
+): EvaluationFunction<readonly AuditFault[]> {
+	return (value) => {
+		record(value)
+		return []
+	}
+}
+
+/** Names each implementation form the read count runs over. */
+export type CountedForm = 'prototype' | 'function'
+
+/**
+ * Builds a store whose members {@link buildCountedMembers} serves.
+ *
+ * @param form - `'prototype'` for an object whose prototype holds the accessors, or `'function'`
+ * for a function that holds them
+ * @param record - Called with the member's name on every read
+ * @returns The store
+ */
+export function buildCountedStore(form: CountedForm, record: (name: string) => void): object {
+	const members = buildCountedMembers(record)
+	return form === 'function'
+		? Object.defineProperties(() => undefined, members)
+		: Object.create(Object.defineProperties({}, members))
+}
+
+/**
+ * Lists the interface declarations the shared laws run over.
+ *
+ * @remarks
+ * The store, an interface mixing a required, an optional, and an `undefined`-admitting member, an
+ * interface member that is a closed object, an interface under an object property, an array of
+ * interfaces, and a nullable interface.
+ */
+export const INTERFACE_LAW_SHAPES: readonly ContractShape[] = Object.freeze([
+	STORE_DECLARATION,
+	interfaceShape({
+		name: stringShape(),
+		ttl: optionalShape(integerShape({ min: 0 })),
+		limit: unionShape(integerShape(), undefinedShape()),
+	}),
+	interfaceShape({ config: objectShape({ port: integerShape() }) }),
+	objectShape({ store: STORE_DECLARATION }),
+	arrayShape(interfaceShape({ id: integerShape() })),
+	nullableShape(interfaceShape({ id: integerShape() })),
+])
+
+// === The owning admission
+
+/** Declares the bag the owning read count runs over: a string, a store, and an optional number. */
+export const OWNED_BAG_SHAPE = objectShape({
+	secret: stringShape(),
+	store: STORE_DECLARATION,
+	ttl: optionalShape(numberShape()),
+})
+
+/**
+ * Builds an {@link OWNED_BAG_SHAPE} bag whose `secret` getter and store members record each read.
+ *
+ * @param form - The store's implementation form, as {@link buildCountedStore} takes it
+ * @param ttl - The `ttl` member: a number the shape admits, or any value it refuses
+ * @param record - Called with the member's name on every read
+ * @returns The bag
+ */
+export function buildOwnedBag(
+	form: CountedForm,
+	ttl: unknown,
+	record: (name: string) => void,
+): Readonly<Record<string, unknown>> {
+	return Object.defineProperties(
+		{ store: buildCountedStore(form, record), ttl },
+		{
+			secret: {
+				get: () => {
+					record('secret')
+					return 'hunter2'
+				},
+				enumerable: true,
+			},
+		},
+	)
+}
+
+/**
+ * Builds a store whose prototype accessors record each read, with a `delete` that holds no function.
+ *
+ * @param record - Called with the member's name on every read
+ * @returns The store, which {@link STORE_DECLARATION} refuses at `['delete']`
+ */
+export function buildFaultedStore(record: (name: string) => void): object {
+	return Object.create(
+		Object.defineProperties(
+			{},
+			{
+				get: {
+					get: () => {
+						record('get')
+						return encodeURI
+					},
+					enumerable: true,
+				},
+				set: {
+					get: () => {
+						record('set')
+						return encodeURI
+					},
+					enumerable: true,
+				},
+				delete: {
+					get: () => {
+						record('delete')
+						return 'never'
+					},
+					enumerable: true,
+				},
+			},
+		),
+	)
+}
+
+/**
+ * Creates a store whose `get` reads as a string on its first read and as a function on every read after.
+ *
+ * @returns The store, which {@link STORE_DECLARATION} refuses on the first read and admits after
+ */
+export function createShiftingStore(): object {
+	const reads = new ObservationCounter()
+	return Object.create(
+		Object.defineProperties(
+			{},
+			{
+				get: {
+					get: () => (reads.increment() === 1 ? 'never' : encodeURI),
+					enumerable: true,
+				},
+				set: { value: encodeURI, enumerable: true },
+				delete: { value: encodeURI, enumerable: true },
+			},
+		),
+	)
+}
+
+/**
+ * Checks whether every own member of a value reads without throwing.
+ *
+ * @param value - The value to read
+ * @returns True if the value is not an object or each own member reads; false otherwise
+ */
+export function matchesStableSample(value: unknown): boolean {
+	if (typeof value !== 'object' || value === null) return true
+	return attempt(() => Reflect.ownKeys(value).map((key) => Reflect.get(value, key))).success
+}
+
+/**
+ * Builds the seeded corpus the owning law runs over for one contract.
+ *
+ * @remarks
+ * The {@link buildUndefinedCorpus} corpus, each generated value's {@link perturbLawValue}
+ * variations, and {@link buildLawEdges}, less every value {@link matchesStableSample} refuses.
+ *
+ * @param contract - The contract whose generator seeds the corpus
+ * @param seeds - The number of seeds, drawn from `0`
+ * @returns The corpus values
+ */
+export function buildOwnLawCorpus(
+	contract: ContractInterface<unknown>,
+	seeds: number,
+): readonly unknown[] {
+	const generated = Array.from({ length: seeds }, (_entry, seed) =>
+		attempt(() => contract.generate(seededRandom(seed))),
+	).flatMap((outcome) => (outcome.success ? [outcome.value] : []))
+	return [
+		...buildUndefinedCorpus(contract, seeds),
+		...generated.flatMap((value) => perturbLawValue(value)),
+		...buildLawEdges(),
+	].filter(matchesStableSample)
+}
+
+/**
+ * Projects an admission onto what the owning law compares.
+ *
+ * @param result - The admission
+ * @returns The verdict with the value or the faults, and whether a refusal carries a cause
+ */
+export function admissionToVerdict(result: Result<unknown, ContractRefusal>): unknown {
+	return result.success
+		? { success: true, value: result.value }
+		: { success: false, faults: result.error.faults, cause: Object.hasOwn(result.error, 'cause') }
+}
+
+/** Declares a cross-origin bag of three optional string lists. */
+export const OWN_BENCH_CORS_SHAPE = objectShape({
+	origin: optionalShape(unionShape(stringShape(), arrayShape(stringShape()))),
+	methods: optionalShape(arrayShape(stringShape())),
+	headers: optionalShape(arrayShape(stringShape())),
+})
+
+/** Holds a cross-origin bag {@link OWN_BENCH_CORS_SHAPE} admits. */
+export const OWN_BENCH_CORS_BAG: Readonly<Record<string, unknown>> = {
+	origin: ['https://app.example.org', 'https://admin.example.org'],
+	methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE'],
+	headers: ['content-type', 'authorization', 'x-request-id'],
+}
+
+/** Declares an upload bag of nested size and count limits. */
+export const OWN_BENCH_MULTIPART_SHAPE = objectShape({
+	limits: optionalShape(
+		objectShape({
+			file: optionalShape(
+				objectShape({
+					size: optionalShape(numberShape({ min: 0 })),
+					count: optionalShape(integerShape({ min: 0 })),
+				}),
+			),
+			field: optionalShape(
+				objectShape({
+					size: optionalShape(numberShape({ min: 0 })),
+					count: optionalShape(integerShape({ min: 0 })),
+				}),
+			),
+			total: optionalShape(numberShape({ min: 0 })),
+		}),
+	),
+	allowed: optionalShape(arrayShape(stringShape())),
+	directory: optionalShape(stringShape()),
+})
+
+/** Holds an upload bag {@link OWN_BENCH_MULTIPART_SHAPE} admits. */
+export const OWN_BENCH_MULTIPART_BAG: Readonly<Record<string, unknown>> = {
+	limits: {
+		file: { size: 10_485_760, count: 4 },
+		field: { size: 65_536, count: 32 },
+		total: 41_943_040,
+	},
+	allowed: ['image/png', 'image/jpeg', 'application/pdf'],
+	directory: '/var/uploads',
+}
+
+/** Declares a session bag of a transport and a store, each an implementation, beside numbers and functions. */
+export const OWN_BENCH_SESSION_SHAPE = objectShape({
+	transport: interfaceShape({
+		read: functionShape(),
+		write: functionShape(),
+		clear: functionShape(),
+	}),
+	store: optionalShape(STORE_DECLARATION),
+	ttl: optionalShape(numberShape({ min: Number.MIN_VALUE })),
+	lifetime: optionalShape(numberShape({ min: Number.MIN_VALUE })),
+	capacity: optionalShape(integerShape({ min: 1 })),
+	evict: optionalShape(functionShape()),
+	create: optionalShape(functionShape()),
+	mint: optionalShape(functionShape()),
+	required: optionalShape(booleanShape()),
+	clock: optionalShape(functionShape()),
+})
+
+/** Holds a session bag {@link OWN_BENCH_SESSION_SHAPE} admits, with a class-instance store. */
+export const OWN_BENCH_SESSION_BAG: Readonly<Record<string, unknown>> = {
+	transport: { read: encodeURI, write: encodeURI, clear: encodeURI },
+	store: new SessionStore(),
+	ttl: 1_800_000,
+	lifetime: 86_400_000,
+	capacity: 10_000,
+	mint: encodeURI,
+	required: true,
+	clock: Date.now,
+}
+
+/** Declares one bag kind the owning bench reads: its shape, a bag the shape admits, and its capture plan. */
+export interface OwnBenchCase {
+	/** Names the kind in each cell's title. */
+	readonly kind: string
+	/** Holds the declaration. */
+	readonly shape: ContractShape
+	/** Holds a bag the declaration admits. */
+	readonly bag: Readonly<Record<string, unknown>>
+	/** Holds the plan the declaration's owner captures with; `undefined` where no interface sits. */
+	readonly plan: CapturePlan | undefined
+}
+
+/** Holds the capture plan of {@link OWN_BENCH_SESSION_SHAPE}: the transport and the store held. */
+export const OWN_BENCH_SESSION_PLAN: CapturePlan = Object.freeze({
+	held: false,
+	properties: Object.freeze({
+		transport: Object.freeze({ held: true, properties: {}, tail: undefined, items: undefined }),
+		store: Object.freeze({ held: true, properties: {}, tail: undefined, items: undefined }),
+		ttl: undefined,
+		lifetime: undefined,
+		capacity: undefined,
+		evict: undefined,
+		create: undefined,
+		mint: undefined,
+		required: undefined,
+		clock: undefined,
+	}),
+	tail: undefined,
+	items: undefined,
+})
+
+/** Lists the bag kinds the owning bench reads: cross-origin lists, nested upload limits, and a session of implementations. */
+export const OWN_BENCH_CASES: readonly OwnBenchCase[] = Object.freeze([
+	{ kind: 'cors', shape: OWN_BENCH_CORS_SHAPE, bag: OWN_BENCH_CORS_BAG, plan: undefined },
+	{
+		kind: 'multipart',
+		shape: OWN_BENCH_MULTIPART_SHAPE,
+		bag: OWN_BENCH_MULTIPART_BAG,
+		plan: undefined,
+	},
+	{
+		kind: 'session',
+		shape: OWN_BENCH_SESSION_SHAPE,
+		bag: OWN_BENCH_SESSION_BAG,
+		plan: OWN_BENCH_SESSION_PLAN,
+	},
+])

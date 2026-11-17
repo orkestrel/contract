@@ -46,6 +46,7 @@ import {
 	readPattern,
 	readSetEntries,
 	readValue,
+	refuseOptionKeys,
 } from './helpers.js'
 
 // Every combinator returns a `Guard<T>` — a total function, as
@@ -54,7 +55,7 @@ import {
 // contain the whole call through `holds`, so
 // the produced guard reports a non-match instead of propagating. The container
 // combinators likewise wrap their complete element/entry/key-read walk in
-// `holds` — a hostile Proxy trap, a throwing getter, a throwing
+// `holds` — an untrusted Proxy trap, a throwing getter, a throwing
 // iterator, or a throwing caller-supplied predicate yields a non-match, never a
 // propagated throw.
 
@@ -504,7 +505,7 @@ export function recordOf<
  * prototype accessors can satisfy the shape. An optional member passes when its
  * read value is `undefined`; otherwise its guard must accept the value. Unknown
  * members are never enumerated or inspected. Member-carrying functions are
- * accepted. Arrays, `null`, and primitives are rejected. Hostile reads return
+ * accepted. Arrays, `null`, and primitives are rejected. Untrusted reads return
  * `false` rather than throwing.
  *
  * @param shape - The guard shape whose declared members the object must satisfy
@@ -807,7 +808,7 @@ export function orOf(
  *
  * The negation applies to the contained verdict, so a throwing guard is a non-match and
  * its negation passes. Containing the negation instead made a guard and its `notOf`
- * both reject the same value, which broke `orOf(g, notOf(g))` as a tautology.
+ * both reject the same value, which falsified `orOf(g, notOf(g))` as a tautology.
  *
  * @param guard - The guard or predicate to negate
  * @returns A guard accepting exactly the values `guard` rejects
@@ -982,7 +983,7 @@ export function whereOf<T>(base: Guard<T>, predicate: (value: T) => boolean): Gu
  * Each lazy guard tracks its active invocation depth. An invocation that would
  * exceed {@link GUARD_DEPTH_LIMIT} returns `false` before resolving `thunk`; the
  * counter always unwinds after the contained call, so one deep or cyclic input
- * cannot poison later guard calls.
+ * cannot corrupt later guard calls.
  *
  * @param thunk - The factory producing the guard to apply, called on every invocation
  * @returns A guard deferring each call to the thunk's guard
@@ -1141,6 +1142,7 @@ export function matchOf(pattern: RegExp): Guard<string> {
 export function stringOf(options?: StringGuardOptions): Guard<string> {
 	return contain(() => {
 		const safe = readOptions(options, ['min', 'max', 'pattern'], 'stringOf', 'string')
+		refuseOptionKeys(options, ['min', 'max', 'pattern'], 'stringOf', 'string')
 		// Own reads, because the snapshot's prototype is `Object.prototype`, and a field
 		// these options leave out must not answer from there.
 		const min = safe !== undefined && INTRINSICS.own(safe, 'min') ? safe.min : undefined

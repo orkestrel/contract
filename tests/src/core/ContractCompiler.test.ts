@@ -1,8 +1,19 @@
-import type { ContractCompilerInterface, ContractShape, StringShape } from '@src/core'
+import type {
+	ContractCompilerInterface,
+	ContractInterface,
+	ContractRefusal,
+	ContractShape,
+	Infer,
+	Result,
+	StringShape,
+} from '@src/core'
+import type { Equal, Expect } from '../../setup.js'
 import {
+	admitValue,
 	arrayShape,
 	attempt,
 	booleanShape,
+	CLONE_NODE_LIMIT,
 	compileAuditor,
 	compileGenerator,
 	compileGuard,
@@ -15,6 +26,8 @@ import {
 	createContract,
 	functionShape,
 	integerShape,
+	interfaceShape,
+	isContractError,
 	isRecord,
 	jsonShape,
 	literalShape,
@@ -27,10 +40,17 @@ import {
 	rawShape,
 	recordShape,
 	seededRandom,
+	shapeShape,
 	stringShape,
+	undefinedShape,
 	unionShape,
 } from '@src/core'
 import {
+	buildHoledArray,
+	buildUndefinedCorpus,
+	findUndefinedLawViolations,
+	UNDEFINED_LAW_SHAPES,
+	UNDEFINED_ROWS,
 	polluteArrayConstruction,
 	measureAllocations,
 	buildCountedGraph,
@@ -45,7 +65,27 @@ import {
 	ReentrantShape,
 	buildDiscriminatedCases,
 	findAgreementViolations,
+	buildCountedStore,
+	buildImplementationRefusals,
+	buildImplementationRows,
+	createThrowingGetter,
+	INTERFACE_LAW_SHAPES,
+	PartialStore,
+	SessionStore,
+	STORE_DECLARATION,
+	admissionToVerdict,
+	buildCyclicRecord,
+	buildLawShapes,
+	buildFaultedStore,
+	buildOwnedBag,
+	buildOwnLawCorpus,
+	createShiftingStore,
+	createStatefulGetter,
+	drawLawShape,
+	OWNED_BAG_SHAPE,
+	throwSentinel,
 } from '../../setup.js'
+import { createRecorder } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 
 describe('ContractCompiler', () => {
@@ -78,7 +118,7 @@ describe('ContractCompiler', () => {
 		expect(actual.refused).toBe(false)
 	})
 
-	it('exposes exactly the seven ruled getters and pins them', () => {
+	it('exposes exactly the eight ruled getters and pins them', () => {
 		const compiler: ContractCompilerInterface<StringShape> = new ContractCompiler(
 			stringShape({ min: 1 }),
 		)
@@ -91,6 +131,7 @@ describe('ContractCompiler', () => {
 			'auditor',
 			'reporter',
 			'generator',
+			'owner',
 			'contract',
 		])
 		const configurable = Object.getOwnPropertyNames(ContractCompiler.prototype).filter(
@@ -125,7 +166,7 @@ describe('ContractCompiler', () => {
 		expect(observed.reads).toBeGreaterThan(0)
 	})
 
-	it('replays each root by identity and bundles those exact six values', () => {
+	it('replays each root by identity and bundles those exact seven values', () => {
 		const compiler = new ContractCompiler(objectShape({ name: stringShape({ min: 1 }) }))
 		const bundle = compiler.contract
 
@@ -135,9 +176,18 @@ describe('ContractCompiler', () => {
 		expect(compiler.auditor).toBe(compiler.auditor)
 		expect(compiler.reporter).toBe(compiler.reporter)
 		expect(compiler.generator).toBe(compiler.generator)
+		expect(compiler.owner).toBe(compiler.owner)
 		expect(compiler.contract).toBe(bundle)
 
-		expect(Object.keys(bundle)).toEqual(['schema', 'is', 'parse', 'audit', 'explain', 'generate'])
+		expect(Object.keys(bundle)).toEqual([
+			'schema',
+			'is',
+			'parse',
+			'audit',
+			'explain',
+			'generate',
+			'own',
+		])
 		expect(Object.isFrozen(bundle)).toBe(true)
 		expect(bundle.schema).toBe(compiler.schema)
 		expect(bundle.is).toBe(compiler.guard)
@@ -145,6 +195,7 @@ describe('ContractCompiler', () => {
 		expect(bundle.audit).toBe(compiler.auditor)
 		expect(bundle.explain).toBe(compiler.reporter)
 		expect(bundle.generate).toBe(compiler.generator)
+		expect(bundle.own).toBe(compiler.owner)
 	})
 
 	it('keeps every root usable after all six exist and working state is released', () => {
@@ -1198,5 +1249,636 @@ describe('ContractCompiler — function shape', () => {
 		const generated = options.generate(seededRandom(3))
 		expect(options.is(generated)).toBe(true)
 		expect(options.generate(seededRandom(3))).toEqual(generated)
+	})
+})
+
+describe('ContractCompiler — the undefined leaf', () => {
+	it('emits the unsatisfiable leaf, with a description only when one is authored', () => {
+		const schema = compileSchema(undefinedShape())
+		expect(schema).toStrictEqual({ not: {}, format: 'undefined' })
+		expect(Object.isFrozen(schema)).toBe(true)
+		expect(Object.isFrozen(schema.not)).toBe(true)
+		expect(compileSchema(undefinedShape({ description: 'No limit set' }))).toEqual({
+			not: {},
+			format: 'undefined',
+			description: 'No limit set',
+		})
+	})
+
+	it('accepts only undefined at the root and reports a type fault for anything else', () => {
+		const contract = new ContractCompiler(undefinedShape()).contract
+		expect(contract.is(undefined)).toBe(true)
+		expect(contract.parse(undefined)).toBeUndefined()
+		expect(contract.audit(undefined)).toEqual([])
+		expect(contract.explain(undefined)).toEqual([])
+		expect(contract.generate(seededRandom(1))).toBeUndefined()
+		for (const value of [null, 0, '', false, Number.NaN, {}, [], encodeURI]) {
+			expect(contract.is(value)).toBe(false)
+			expect(contract.parse(value)).toBeUndefined()
+			expect(contract.explain(value).length).toBe(1)
+		}
+		expect(contract.audit(null)).toEqual([
+			{ reason: 'type', path: [], expected: 'undefined', received: 'null' },
+		])
+		expect(contract.explain('')).toEqual([
+			{ reason: 'type', path: [], expected: 'undefined', received: '""' },
+		])
+	})
+
+	it.each(UNDEFINED_ROWS)('keeps a present undefined at $name', ({ shape, value, keys }) => {
+		const contract = createContract(shape)
+		expect(contract.is(value)).toBe(true)
+		expect(contract.audit(value)).toEqual([])
+		expect(contract.explain(value)).toEqual([])
+		const parsed = contract.parse(value)
+		expect(contract.is(parsed)).toBe(true)
+		expect(isRecord(parsed) || Array.isArray(parsed) ? Object.keys(parsed) : parsed).toEqual(keys)
+		expect(isRecord(parsed) || Array.isArray(parsed) ? Object.values(parsed) : []).toEqual(
+			(keys ?? []).map(() => undefined),
+		)
+		for (const seed of [1, 2, 3, 4]) {
+			expect(contract.is(contract.generate(seededRandom(seed)))).toBe(true)
+		}
+	})
+
+	it('holds the sound pair on { limit: undefined } for a required member', () => {
+		const contract = createContract(objectShape({ limit: undefinedShape() }))
+		const value = { limit: undefined }
+		const parsed = contract.parse(value)
+		expect(contract.is(value)).toBe(true)
+		expect(parsed).toBeDefined()
+		expect(contract.is(parsed)).toBe(true)
+		expect(isRecord(parsed) && Object.hasOwn(parsed, 'limit')).toBe(true)
+	})
+
+	it('tells a present undefined from an absent member', () => {
+		const required = createContract(objectShape({ limit: undefinedShape() }))
+		const missing = [{ reason: 'missing', path: ['limit'], expected: 'undefined' }]
+		expect(required.is({})).toBe(false)
+		expect(required.parse({})).toBeUndefined()
+		expect(required.audit({})).toEqual(missing)
+		expect(required.explain({})).toEqual(missing)
+		const optional = createContract(objectShape({ limit: optionalShape(undefinedShape()) }))
+		const absent = optional.parse({})
+		expect(optional.is({})).toBe(true)
+		expect(isRecord(absent) && Object.keys(absent)).toEqual([])
+	})
+
+	it('admits undefined through a oneOf union only when exactly one arm does', () => {
+		const both = createContract(
+			objectShape({ limit: oneOfShape(undefinedShape(), nullableShape(undefinedShape())) }),
+		)
+		const value = { limit: undefined }
+		expect(both.is(value)).toBe(false)
+		expect(both.parse(value)).toBeUndefined()
+		expect(both.audit(value)).toEqual([{ reason: 'oneOf', path: ['limit'], matched: 2 }])
+		expect(both.explain(value).length).toBeGreaterThan(0)
+		const one = createContract(objectShape({ limit: oneOfShape(undefinedShape(), stringShape()) }))
+		const kept = one.parse(value)
+		expect(one.is(value)).toBe(true)
+		expect(isRecord(kept) && Object.keys(kept)).toEqual(['limit'])
+	})
+
+	it('coerces through a union arm and keeps the undefined arm for undefined alone', () => {
+		const contract = createContract(unionShape(integerShape(), undefinedShape()))
+		expect(contract.parse('3')).toBe(3)
+		expect(contract.is(undefined)).toBe(true)
+		expect(contract.parse(undefined)).toBeUndefined()
+		expect(contract.explain(undefined)).toEqual([])
+		expect(contract.parse('x')).toBeUndefined()
+		expect(contract.explain('x').length).toBeGreaterThan(0)
+		const member = createContract(
+			objectShape({ limit: unionShape(integerShape(), undefinedShape()) }),
+		)
+		expect(member.parse({ limit: '3' })).toEqual({ limit: 3 })
+	})
+
+	it('refuses an array hole where the element admits undefined, as a missing element', () => {
+		const contract = createContract(arrayShape(undefinedShape()))
+		const holed = buildHoledArray([undefined, undefined], 0)
+		const missing = [{ reason: 'missing', path: ['0'], expected: 'undefined' }]
+		expect(contract.is(holed)).toBe(false)
+		expect(contract.parse(holed)).toBeUndefined()
+		expect(contract.audit(holed)).toEqual(missing)
+		expect(contract.explain(holed)).toEqual(missing)
+	})
+
+	it('leaves the adjacent refusals where 0.0.24 answers them', () => {
+		const optional = createContract(objectShape({ limit: optionalShape(numberShape()) }))
+		const value = { limit: undefined }
+		const typed = [{ reason: 'type', path: ['limit'], expected: 'number', received: 'undefined' }]
+		expect(optional.is(value)).toBe(false)
+		expect(optional.audit(value)).toEqual(typed)
+		expect(optional.explain(value)).toEqual([])
+		const dropped = optional.parse(value)
+		expect(isRecord(dropped) && Object.keys(dropped)).toEqual([])
+		const raw = createContract(rawShape({}))
+		expect(raw.is(undefined)).toBe(false)
+		expect(raw.parse(undefined)).toBeUndefined()
+		expect(raw.audit(undefined)).toEqual([
+			{ reason: 'type', path: [], expected: 'json', received: 'undefined' },
+		])
+		const numbers = createContract(arrayShape(numberShape()))
+		const holed = buildHoledArray([1, 2, 3], 1)
+		const hole = [{ reason: 'type', path: ['1'], expected: 'number', received: 'undefined' }]
+		expect(numbers.is(holed)).toBe(false)
+		expect(numbers.parse(holed)).toBeUndefined()
+		expect(numbers.audit(holed)).toEqual(hole)
+		expect(numbers.explain(holed)).toEqual(hole)
+	})
+
+	it.each(UNDEFINED_LAW_SHAPES.map((shape, index) => [index, shape] as const))(
+		'holds every law over the seeded corpus of law shape %i',
+		(_index, shape) => {
+			expect(findUndefinedLawViolations(shape, 16)).toEqual([])
+		},
+	)
+
+	it('draws a corpus that holds undefined members, admitted values, and refused values', () => {
+		const contract = createContract(objectShape({ limit: undefinedShape() }))
+		const corpus = buildUndefinedCorpus(contract, 4)
+		expect(corpus.some((value) => isRecord(value) && Object.hasOwn(value, 'limit'))).toBe(true)
+		expect(corpus.some((value) => contract.is(value))).toBe(true)
+		expect(corpus.some((value) => isRecord(value) && !contract.is(value))).toBe(true)
+	})
+})
+
+describe('ContractCompiler — the interface shape', () => {
+	it('emits an open object schema that names its format, its members, and the required ones', () => {
+		const schema = compileSchema(
+			interfaceShape(
+				{ get: functionShape(), ttl: optionalShape(integerShape()) },
+				{ description: 'Session store' },
+			),
+		)
+		expect(schema).toEqual({
+			type: 'object',
+			format: 'interface',
+			properties: { get: { not: {}, format: 'function' }, ttl: { type: 'integer' } },
+			required: ['get'],
+			additionalProperties: true,
+			description: 'Session store',
+		})
+		expect(Object.keys(schema)).toEqual([
+			'type',
+			'format',
+			'properties',
+			'required',
+			'additionalProperties',
+			'description',
+		])
+		expect(Object.isFrozen(schema)).toBe(true)
+		expect(Object.isFrozen(schema.properties)).toBe(true)
+		expect(Object.isFrozen(schema.required)).toBe(true)
+		expect(compileSchema(interfaceShape({}))).toStrictEqual({
+			type: 'object',
+			format: 'interface',
+			additionalProperties: true,
+		})
+	})
+
+	it.each(buildImplementationRows())('admits $name by identity', ({ value }) => {
+		const contract = createContract(STORE_DECLARATION)
+		expect(contract.is(value)).toBe(true)
+		expect(contract.audit(value)).toEqual([])
+		expect(contract.explain(value)).toEqual([])
+		expect(contract.parse(value)).toBe(value)
+	})
+
+	it.each(buildImplementationRefusals())(
+		'refuses $name with its declared faults',
+		({ shape, value, faults }) => {
+			const contract = createContract(shape)
+			expect(contract.is(value)).toBe(false)
+			expect(contract.parse(value)).toBeUndefined()
+			expect(contract.audit(value)).toEqual(faults)
+			expect(contract.explain(value)).toEqual(faults)
+		},
+	)
+
+	it('refuses a declared getter that throws, with a coded refusal where a read is required', () => {
+		const contract = createContract(STORE_DECLARATION)
+		const value = createThrowingGetter('get')
+		expect(contract.is(value)).toBe(false)
+		const audited = captureContractError(() => contract.audit(value))
+		expect(audited).toMatchObject({
+			code: 'structure',
+			message: 'compileAuditor: interface member could not be read',
+			context: { path: ['get'], shape: 'interface' },
+		})
+		expect(captureContractError(() => contract.parse(value)).context).toEqual(audited.context)
+		expect(contract.explain(value)).toEqual([
+			{ reason: 'type', path: [], expected: 'object', received: 'object' },
+		])
+	})
+
+	it('passes an optional member that reads undefined, and a required one only when it admits undefined', () => {
+		const contract = createContract(
+			interfaceShape({
+				get: functionShape(),
+				ttl: optionalShape(integerShape()),
+				limit: unionShape(integerShape(), undefinedShape()),
+			}),
+		)
+		const value = { get: encodeURI }
+		expect(contract.is(value)).toBe(true)
+		expect(contract.audit(value)).toEqual([])
+		expect(contract.parse(value)).toBe(value)
+		expect(contract.is({ get: encodeURI, limit: 'many' })).toBe(false)
+		expect(contract.audit({ ttl: 3 })).toEqual([
+			{ reason: 'missing', path: ['get'], expected: 'function' },
+		])
+	})
+
+	it('reports an undeclared or hidden key under a member as one type fault at that member', () => {
+		const contract = createContract(
+			interfaceShape({ config: objectShape({ port: integerShape() }) }),
+		)
+		const typed = { reason: 'type', path: ['config'], expected: 'object', received: 'object' }
+		const extra = { config: { port: 1, debug: true } }
+		expect(contract.audit(extra)).toEqual([{ reason: 'extra', path: ['config', 'debug'] }])
+		expect(contract.explain(extra)).toEqual([typed])
+		expect(contract.parse(extra)).toBeUndefined()
+		const hidden = { config: Object.defineProperty({}, 'port', { value: 1, enumerable: false }) }
+		expect(contract.audit(hidden)).toEqual([{ reason: 'hidden', path: ['config', 'port'] }])
+		expect(contract.explain(hidden)).toEqual([typed])
+		const mixed = { config: { port: 'eighty', debug: true } }
+		const wrong = {
+			reason: 'type',
+			path: ['config', 'port'],
+			expected: 'integer',
+			received: '"eighty"',
+		}
+		expect(contract.audit(mixed)).toEqual([wrong, { reason: 'extra', path: ['config', 'debug'] }])
+		expect(contract.explain(mixed)).toEqual([typed, wrong])
+	})
+
+	it.each(['prototype', 'function'] as const)(
+		'reads each declared member of a %s implementation one time at every door',
+		(form) => {
+			const contract = createContract(STORE_DECLARATION)
+			const reads = createRecorder<readonly [string]>()
+			const store = buildCountedStore(form, reads.handler)
+			const once = [['get'], ['set'], ['delete']]
+			expect(contract.is(store)).toBe(true)
+			expect(reads.calls).toEqual(once)
+			reads.clear()
+			expect(contract.audit(store)).toEqual([])
+			expect(reads.calls).toEqual(once)
+			reads.clear()
+			expect(contract.parse(store)).toBe(store)
+			expect(reads.calls).toEqual(once)
+			reads.clear()
+			expect(contract.explain(store)).toEqual([])
+			expect(reads.calls).toEqual(once)
+		},
+	)
+
+	it('admits a class-instance store with unknown extra members and refuses one missing delete at its path', () => {
+		const contract = createContract(STORE_DECLARATION)
+		const store = new SessionStore()
+		store.set('Ada', 1)
+		expect(contract.is(store)).toBe(true)
+		expect(contract.parse(store)).toBe(store)
+		const missing = [{ reason: 'missing', path: ['delete'], expected: 'function' }]
+		expect(contract.audit(new PartialStore())).toEqual(missing)
+		expect(contract.explain(new PartialStore())).toEqual(missing)
+		const nested = createContract(arrayShape(objectShape({ store: STORE_DECLARATION })))
+		expect(nested.audit([{ store }, { store: new PartialStore() }])).toEqual([
+			{ reason: 'missing', path: ['1', 'store', 'delete'], expected: 'function' },
+		])
+	})
+
+	it('answers from a compiler whose guard, parser, or reporter is read first', () => {
+		const store = new SessionStore()
+		const partial = new PartialStore()
+		expect(new ContractCompiler(STORE_DECLARATION).guard(store)).toBe(true)
+		expect(new ContractCompiler(STORE_DECLARATION).guard(partial)).toBe(false)
+		expect(new ContractCompiler(STORE_DECLARATION).parser(store)).toBe(store)
+		expect(new ContractCompiler(STORE_DECLARATION).parser(partial)).toBeUndefined()
+		expect(new ContractCompiler(STORE_DECLARATION).reporter(partial)).toEqual([
+			{ reason: 'missing', path: ['delete'], expected: 'function' },
+		])
+	})
+
+	it('generates a frozen plain record of generated members that the contract admits', () => {
+		const contract = createContract(
+			interfaceShape({
+				get: functionShape(),
+				ttl: optionalShape(integerShape({ min: 0, max: 9 })),
+			}),
+		)
+		for (const seed of [1, 2, 3, 4, 5, 6]) {
+			const generated = contract.generate(seededRandom(seed))
+			expect(Object.isFrozen(generated)).toBe(true)
+			expect(Object.getPrototypeOf(generated)).toBe(Object.prototype)
+			expect(typeof generated.get).toBe('function')
+			expect(contract.is(generated)).toBe(true)
+		}
+	})
+
+	it.each(INTERFACE_LAW_SHAPES.map((shape, index) => [index, shape] as const))(
+		'holds every law over the seeded corpus of interface law shape %i',
+		(_index, shape) => {
+			expect(findUndefinedLawViolations(shape, 16)).toEqual([])
+		},
+	)
+
+	it('publishes only coded refusals for an unreadable implementation', () => {
+		const contract = createContract(STORE_DECLARATION)
+		const revoked = Proxy.revocable({}, {})
+		revoked.revoke()
+		expect(contract.is(revoked.proxy)).toBe(false)
+		expect(captureContractError(() => contract.audit(revoked.proxy)).message).toBe(
+			'compileAuditor: interface could not be read',
+		)
+		expect(captureContractError(() => contract.parse(revoked.proxy)).code).toBe('structure')
+		expect(contract.explain(revoked.proxy)).toEqual([
+			{ reason: 'type', path: [], expected: 'object', received: 'instance' },
+		])
+	})
+})
+
+describe('ContractCompiler — own', () => {
+	it.each(['prototype', 'function'] as const)(
+		'reads each own member and each declared member of a %s store one time when the bag is admitted',
+		(form) => {
+			const reads = createRecorder<readonly [string]>()
+			const bag = buildOwnedBag(form, 5, reads.handler)
+			const result = createContract(OWNED_BAG_SHAPE).own(bag)
+
+			expect(result.success).toBe(true)
+			expect(reads.calls).toEqual([['secret'], ['get'], ['set'], ['delete']])
+		},
+	)
+
+	it.each(['prototype', 'function'] as const)(
+		'reads each own member and each declared member of a %s store one time when the bag is refused',
+		(form) => {
+			const reads = createRecorder<readonly [string]>()
+			const bag = buildOwnedBag(form, 'soon', reads.handler)
+			const result = createContract(OWNED_BAG_SHAPE).own(bag)
+
+			expect(result).toEqual({
+				success: false,
+				error: {
+					faults: [{ reason: 'type', path: ['ttl'], expected: 'number', received: '"soon"' }],
+				},
+			})
+			expect(reads.calls).toEqual([['secret'], ['get'], ['set'], ['delete']])
+		},
+	)
+
+	it('reads each declared member of a store that faults two times, where the refusal is explained', () => {
+		const reads = createRecorder<readonly [string]>()
+		const bag = { secret: 'hunter2', store: buildFaultedStore(reads.handler), ttl: 5 }
+		const result = createContract(OWNED_BAG_SHAPE).own(bag)
+
+		expect(result).toEqual({
+			success: false,
+			error: {
+				faults: [
+					{ reason: 'type', path: ['store', 'delete'], expected: 'function', received: '"never"' },
+				],
+			},
+		})
+		expect(reads.calls).toEqual([['get'], ['set'], ['delete'], ['get'], ['set'], ['delete']])
+	})
+
+	it('keeps the refusal of a store member that reads invalid then valid, with a structure cause', () => {
+		const bag = { secret: 'hunter2', store: createShiftingStore(), ttl: 5 }
+		const result = createContract(OWNED_BAG_SHAPE).own(bag)
+		const cause = result.success ? undefined : result.error.cause
+
+		expect(result.success).toBe(false)
+		expect(!result.success && result.error.faults).toEqual([])
+		expect(isContractError(cause) && cause.code).toBe('structure')
+		expect(isContractError(cause) && cause.message).toBe('own: the value changed between reads')
+		expect(isContractError(cause) && cause.context?.path).toEqual([])
+	})
+
+	it.each(buildImplementationRows())(
+		'returns $name at the store position by identity, inside a copy of the bag',
+		({ value }) => {
+			const bag = { secret: 'hunter2', store: value, ttl: 5 }
+			const result = createContract(OWNED_BAG_SHAPE).own(bag)
+
+			expect(result.success && result.value.store).toBe(value)
+			expect(result.success && result.value).not.toBe(bag)
+			expect(result.success && result.value).toEqual(bag)
+		},
+	)
+
+	it('answers from the one read a changing getter gives, where admitValue reads it twice', () => {
+		const counted = createContract(objectShape({ value: integerShape() }))
+		const named = createContract(objectShape({ value: stringShape() }))
+
+		expect(counted.own(createStatefulGetter())).toEqual({ success: true, value: { value: 1 } })
+		expect(admitValue(counted, createStatefulGetter())).toEqual({
+			success: false,
+			error: { faults: [] },
+		})
+		expect(named.own(createStatefulGetter())).toEqual({
+			success: false,
+			error: {
+				faults: [{ reason: 'type', path: ['value'], expected: 'string', received: '1' }],
+			},
+		})
+		expect(admitValue(named, createStatefulGetter())).toEqual({
+			success: false,
+			error: { faults: [] },
+		})
+	})
+
+	it.each(Array.from({ length: 24 }, (_entry, seed) => seed + 1))(
+		'equals admitValue in verdict, value, and faults over seeded law shape %i',
+		(seed) => {
+			const contract: ContractInterface<unknown> = createContract(
+				drawLawShape(seededRandom(seed), 3),
+			)
+			const corpus = buildOwnLawCorpus(contract, 8)
+
+			expect(corpus.length).toBeGreaterThan(0)
+			expect(corpus.map((value) => admissionToVerdict(contract.own(value)))).toEqual(
+				corpus.map((value) => admissionToVerdict(admitValue(contract, value))),
+			)
+		},
+	)
+
+	it.each([1, 2, 3, 4])(
+		'equals admitValue over the union and refinement shapes of seed %i',
+		(seed) => {
+			for (const shape of buildLawShapes(seed)) {
+				const contract: ContractInterface<unknown> = createContract(shape)
+				const corpus = buildOwnLawCorpus(contract, 8)
+
+				expect(corpus.map((value) => admissionToVerdict(contract.own(value)))).toEqual(
+					corpus.map((value) => admissionToVerdict(admitValue(contract, value))),
+				)
+			}
+		},
+	)
+
+	it('judges a non-enumerable data member a shape position reads as admitValue does', () => {
+		const contract = createContract(shapeShape())
+		const low = Object.defineProperty({ category: 'number' }, 'min', {
+			value: 'low',
+			enumerable: false,
+		})
+		const bounded = Object.defineProperty({ category: 'number' }, 'min', {
+			value: 2,
+			enumerable: false,
+		})
+
+		expect(contract.own(low)).toEqual(admitValue(contract, low))
+		expect(contract.own(low).success).toBe(false)
+		expect(admissionToVerdict(contract.own(bounded))).toEqual(
+			admissionToVerdict(admitValue(contract, bounded)),
+		)
+	})
+
+	it('reports every fault of a bag with a function member beside data that is not JSON in one refusal', () => {
+		const contract = createContract(
+			objectShape({
+				name: stringShape({ min: 1 }),
+				version: optionalShape(integerShape({ min: 1 })),
+				stores: recordShape(objectShape({ key: stringShape() })),
+				upgrade: optionalShape(functionShape()),
+			}),
+		)
+		const upgrade = encodeURI
+		const refused = contract.own({
+			name: '',
+			version: 0,
+			stores: { users: { key: new Date(0) } },
+			upgrade,
+		})
+		const admitted = contract.own({ name: 'app', stores: { users: { key: 'id' } }, upgrade })
+
+		expect(refused).toEqual({
+			success: false,
+			error: {
+				faults: [
+					{
+						reason: 'constraint',
+						path: ['name'],
+						expected: 'string',
+						constraint: 'min',
+						limit: 1,
+						received: '""',
+					},
+					{
+						reason: 'constraint',
+						path: ['version'],
+						expected: 'integer',
+						constraint: 'min',
+						limit: 1,
+						received: '0',
+					},
+					{
+						reason: 'type',
+						path: ['stores', 'users', 'key'],
+						expected: 'string',
+						received: 'instance',
+					},
+				],
+			},
+		})
+		expect(admitted.success && admitted.value.upgrade).toBe(upgrade)
+	})
+
+	it('owns JSON data through a JSON contract and refuses a value that is not JSON data', () => {
+		const contract = createContract(jsonShape())
+		const source = { name: 'Ada', tags: ['admin'], profile: { age: 36 } }
+		const owned = contract.own(source)
+
+		expect(owned).toEqual({ success: true, value: source })
+		expect(owned.success && owned.value).not.toBe(source)
+		expect(owned.success && Object.isFrozen(owned.value)).toBe(true)
+		expect(contract.own({ name: 'Ada', joined: new Date(0) })).toEqual(
+			admitValue(contract, { name: 'Ada', joined: new Date(0) }),
+		)
+		expect(contract.own({ name: 'Ada', joined: new Date(0) }).success).toBe(false)
+	})
+
+	it('refuses a class-instance bag at an object position without reading its members', () => {
+		const reads = createRecorder<readonly [string]>()
+		const bag = Object.defineProperty(new SessionStore(), 'secret', {
+			get: () => {
+				reads.handler('secret')
+				return 'hunter2'
+			},
+			enumerable: true,
+		})
+		const contract = createContract(objectShape({ secret: stringShape() }))
+
+		expect(contract.own(bag)).toEqual({
+			success: false,
+			error: {
+				faults: [{ reason: 'type', path: [], expected: 'object', received: 'instance' }],
+			},
+		})
+		expect(reads.calls).toEqual([])
+	})
+
+	it('owns a cyclic value in one walk and answers it as admitValue does', () => {
+		const contract = createContract(jsonShape())
+		const nested = createContract(objectShape({ self: objectShape({ self: jsonShape() }) }))
+
+		expect(contract.own(buildCyclicRecord())).toEqual(admitValue(contract, buildCyclicRecord()))
+		expect(contract.own(buildCyclicRecord()).success).toBe(false)
+		expect(admissionToVerdict(nested.own(buildCyclicRecord()))).toEqual(
+			admissionToVerdict(admitValue(nested, buildCyclicRecord())),
+		)
+	})
+
+	it('refuses a value past the node limit with a clone cause and admits one at the limit', () => {
+		const contract = createContract(arrayShape(numberShape()))
+		const refused = contract.own(new Array<number>(CLONE_NODE_LIMIT).fill(0))
+		const admitted = contract.own(new Array<number>(CLONE_NODE_LIMIT - 1).fill(0))
+
+		expect(refused.success).toBe(false)
+		expect(!refused.success && refused.error.faults).toEqual([])
+		expect(
+			!refused.success && isContractError(refused.error.cause) && refused.error.cause.code,
+		).toBe('clone')
+		expect(admitted.success).toBe(true)
+	})
+
+	it('refuses a throwing getter with a coded cause that keeps the thrown value', () => {
+		const sentinel = Object.freeze({ stage: 'read' })
+		const bag = Object.defineProperty({}, 'secret', {
+			get: throwSentinel(sentinel),
+			enumerable: true,
+		})
+		const result = createContract(objectShape({ secret: stringShape() })).own(bag)
+
+		expect(result.success).toBe(false)
+		expect(!result.success && result.error.faults).toEqual([])
+		const cause = result.success ? undefined : result.error.cause
+		expect(isContractError(cause) && cause.code).toBe('structure')
+		expect(isContractError(cause) && cause.cause).toBe(sentinel)
+	})
+
+	it('types the generic call at the argument and the unannotated call at the contract', () => {
+		const contract = createContract(OWNED_BAG_SHAPE)
+		const bag = { secret: 'hunter2', store: new SessionStore(), ttl: 5 }
+		const typed = contract.own(bag)
+		const unknown: unknown = bag
+		const widened = contract.own(unknown)
+		const lock: Expect<Equal<typeof typed, Result<typeof bag, ContractRefusal>>> = true
+		const wide: Expect<
+			Equal<typeof widened, Result<Infer<typeof OWNED_BAG_SHAPE>, ContractRefusal>>
+		> = true
+
+		expect([lock, wide]).toEqual([true, true])
+		expect(typed.success && typed.value.store.size).toBe(0)
+	})
+
+	it('publishes one owner on the compiler and in the bundle', () => {
+		const compiler = new ContractCompiler(OWNED_BAG_SHAPE)
+
+		expect(compiler.owner).toBe(compiler.owner)
+		expect(compiler.contract.own).toBe(compiler.owner)
 	})
 })

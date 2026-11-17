@@ -3,6 +3,7 @@ import type {
 	JSONSchema,
 	JSONSchemaType,
 	LiteralValue,
+	NumberShapeOptions,
 	OptionalShape,
 } from './types.js'
 import {
@@ -23,10 +24,10 @@ import {
 	admitVisited,
 	collectMembers,
 	deriveLengthBounds,
-	deriveRangeBounds,
 	isFailure,
 	limitEntries,
 	iterateIndices,
+	matchesEmptyRange,
 	matchesMember,
 	matchesRecordBrand,
 	matchesVisited,
@@ -56,6 +57,7 @@ import {
 	booleanShape,
 	functionShape,
 	integerShape,
+	interfaceShape,
 	literalShape,
 	nullableShape,
 	nullShape,
@@ -65,6 +67,7 @@ import {
 	optionalShape,
 	rawShape,
 	stringShape,
+	undefinedShape,
 	unionShape,
 } from './shapers.js'
 
@@ -326,7 +329,7 @@ export class SchemaShaper {
 	// and a pair of keywords only one of which the walk would keep.
 	#inspect(schema: JSONSchema): void {
 		if (INTRINSICS.own(schema, 'not')) {
-			this.#inspectFunction(schema)
+			this.#inspectLeaf(schema)
 			return
 		}
 		const keys = INTRINSICS.keys(schema)
@@ -337,7 +340,7 @@ export class SchemaShaper {
 				INTRINSICS.reflect.apply(INTRINSICS.some, STRICT_SCHEMA_KEYWORDS, [
 					(keyword: string) => keyword === key,
 				]) ||
-				(key === 'format' && schema.format === 'date')
+				(key === 'format' && (schema.format === 'date' || schema.format === 'interface'))
 			if (!known) throw this.#refusal('a strict conversion refuses a keyword it cannot honour', key)
 		}
 		this.#inspectAnnotations(schema)
@@ -352,8 +355,14 @@ export class SchemaShaper {
 			INTRINSICS.own(schema, 'anyOf')
 		const object = types.length === 0 && INTRINSICS.own(schema, 'properties') ? ['object'] : types
 		const effective: readonly string[] = hasForm ? [] : object
-		this.#confine(schema, ['minLength', 'maxLength', 'format'], this.#names(effective, 'string'))
-		this.#confine(schema, ['minimum', 'maximum'], this.#names(effective, 'number', 'integer'))
+		const implemented = INTRINSICS.own(schema, 'format') && schema.format === 'interface'
+		this.#confine(schema, ['minLength', 'maxLength'], this.#names(effective, 'string'))
+		this.#confine(schema, ['format'], this.#names(effective, implemented ? 'object' : 'string'))
+		this.#confine(
+			schema,
+			['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum'],
+			this.#names(effective, 'number', 'integer'),
+		)
 		this.#confine(schema, ['items', 'minItems', 'maxItems'], this.#names(effective, 'array'))
 		this.#confine(
 			schema,
@@ -376,17 +385,18 @@ export class SchemaShaper {
 		this.#inspectObject(schema)
 	}
 
-	// `not` converts only as the function leaf, so every other keyword beside it would be dropped.
-	#inspectFunction(schema: JSONSchema): void {
+	// `not` converts only as the function or the undefined leaf, so every other keyword beside it
+	// would be dropped.
+	#inspectLeaf(schema: JSONSchema): void {
 		const operand: unknown = schema.not
+		const format = INTRINSICS.own(schema, 'format') ? schema.format : undefined
 		if (
 			!isRecord(operand) ||
 			INTRINSICS.reflect.members(operand).length > 0 ||
-			!INTRINSICS.own(schema, 'format') ||
-			schema.format !== 'function'
+			(format !== 'function' && format !== 'undefined')
 		) {
 			throw this.#refusal(
-				'a strict conversion reads not only as the empty schema beside format function',
+				'a strict conversion reads not only as the empty schema beside format function or undefined',
 				'not',
 			)
 		}
@@ -401,7 +411,7 @@ export class SchemaShaper {
 				INTRINSICS.reflect.apply(INTRINSICS.some, SCHEMA_ANNOTATIONS, [
 					(keyword: string) => keyword === key,
 				])
-			if (!known) throw this.#refusal('a function schema reads no assertion beside not', key)
+			if (!known) throw this.#refusal(`a ${format} schema reads no assertion beside not`, key)
 		}
 		this.#inspectAnnotations(schema)
 		if (INTRINSICS.own(schema, 'default') && !isJSONValue(schema.default)) {
@@ -523,19 +533,42 @@ export class SchemaShaper {
 	}
 
 	#inspectRange(schema: JSONSchema, integer: boolean): void {
-		const min: unknown = INTRINSICS.own(schema, 'minimum') ? schema.minimum : undefined
-		const max: unknown = INTRINSICS.own(schema, 'maximum') ? schema.maximum : undefined
-		if (min !== undefined && !isFiniteNumber(min)) {
-			throw this.#refusal('a range bound must be a finite number', 'minimum')
-		}
-		if (max !== undefined && !isFiniteNumber(max)) {
-			throw this.#refusal('a range bound must be a finite number', 'maximum')
-		}
-		if (isFiniteNumber(min) && isFiniteNumber(max)) {
-			if (min > max) throw this.#refusal('a range may not be contradictory', 'minimum')
-			if (integer && INTRINSICS.ceil(min) > INTRINSICS.floor(max)) {
-				throw this.#refusal('an integer range may not be empty', 'minimum')
+		const keywords = ['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum'] as const
+		for (const index of iterateIndices(() => keywords.length)) {
+			const keyword = keywords[index]
+			if (keyword === undefined || !INTRINSICS.own(schema, keyword)) continue
+			const value: unknown = schema[keyword]
+			if (value !== undefined && !isFiniteNumber(value)) {
+				throw this.#refusal('a range bound must be a finite number', keyword)
 			}
+		}
+		const range = this.#range(schema)
+		// The refusal names the lower bound in force, the exclusive one where it is the stricter.
+		const lower =
+			range.over !== undefined && (range.min === undefined || range.over >= range.min)
+				? 'exclusiveMinimum'
+				: 'minimum'
+		if (matchesEmptyRange(range)) throw this.#refusal('a range may not be contradictory', lower)
+		if (integer && matchesEmptyRange({ ...range, integer: true })) {
+			throw this.#refusal('an integer range may not be empty', lower)
+		}
+	}
+
+	// The range keywords a node holds as finite numbers, read as number shape bounds.
+	#range(schema: JSONSchema): NumberShapeOptions {
+		const min: unknown = INTRINSICS.own(schema, 'minimum') ? schema.minimum : undefined
+		const over: unknown = INTRINSICS.own(schema, 'exclusiveMinimum')
+			? schema.exclusiveMinimum
+			: undefined
+		const max: unknown = INTRINSICS.own(schema, 'maximum') ? schema.maximum : undefined
+		const under: unknown = INTRINSICS.own(schema, 'exclusiveMaximum')
+			? schema.exclusiveMaximum
+			: undefined
+		return {
+			...(isFiniteNumber(min) ? { min } : {}),
+			...(isFiniteNumber(over) ? { over } : {}),
+			...(isFiniteNumber(max) ? { max } : {}),
+			...(isFiniteNumber(under) ? { under } : {}),
 		}
 	}
 
@@ -637,11 +670,11 @@ export class SchemaShaper {
 	//    spelling means, and it has no exactly-one to keep. An empty list or any
 	//    unrecognized member widens the whole node; dropping a member would narrow it.
 	// 5. `type: 'string'` / `'number'` / `'integer'` / `'boolean'` / `'null'` —
-	//    the matching primitive shape, with length/range bounds derived through
-	//    `deriveLengthBounds` / `deriveRangeBounds`. An integer node additionally
-	//    drops its bounds when they describe an EMPTY integer range (for example
-	//    `minimum: 1.5, maximum: 1.6`) — the same emptiness `validateShape`
-	//    rejects — so the result is always a valid shape.
+	//    the matching primitive shape, with length bounds derived through
+	//    `deriveLengthBounds` and the four range keywords read as finite numbers. A
+	//    numeric node drops all four when no number satisfies them, and an integer node
+	//    also when no whole number does (for example `minimum: 1.5, maximum: 1.6`) — the
+	//    same emptiness `validateShape` rejects — so the result is always a valid shape.
 	// 6. `type: 'array'` — an array shape whose element shape recurses into a
 	//    record-valued `items`, widening to `rawShape` otherwise, with bounds from
 	//    `minItems` / `maxItems`. A present `prefixItems` widens the elements too,
@@ -674,9 +707,12 @@ export class SchemaShaper {
 			return this.#widen('a reference is not resolved', description, '$ref')
 		}
 
-		// A strict walk reaches `not` only through the function leaf `#inspect` admitted.
+		// A strict walk reaches `not` only through the function or undefined leaf `#inspect` admitted.
 		if (this.#strict && INTRINSICS.own(schema, 'not')) {
-			return functionShape(description === undefined ? undefined : { description })
+			const options = description === undefined ? undefined : { description }
+			return INTRINSICS.own(schema, 'format') && schema.format === 'undefined'
+				? undefinedShape(options)
+				: functionShape(options)
 		}
 
 		if (INTRINSICS.own(schema, 'enum') && isArray(schema.enum)) {
@@ -814,42 +850,17 @@ export class SchemaShaper {
 				),
 			)
 		}
-		if (type === 'number') {
-			const bounds = deriveRangeBounds(
-				INTRINSICS.own(schema, 'minimum') ? schema.minimum : undefined,
-				INTRINSICS.own(schema, 'maximum') ? schema.maximum : undefined,
+		if (type === 'number' || type === 'integer') {
+			const range = this.#range(schema)
+			// A range no number satisfies drops whole, which widens; a strict walk refused it earlier.
+			const options = INTRINSICS.rebase(
+				{
+					...(matchesEmptyRange({ ...range, integer: type === 'integer' }) ? {} : range),
+					...(description === undefined ? {} : { description }),
+				},
+				null,
 			)
-			return numberShape(
-				INTRINSICS.rebase(
-					{
-						...bounds,
-						...(description === undefined ? {} : { description }),
-					},
-					null,
-				),
-			)
-		}
-		if (type === 'integer') {
-			const bounds = deriveRangeBounds(
-				INTRINSICS.own(schema, 'minimum') ? schema.minimum : undefined,
-				INTRINSICS.own(schema, 'maximum') ? schema.maximum : undefined,
-			)
-			const emptyRange =
-				INTRINSICS.ceil(bounds.min ?? Number.NEGATIVE_INFINITY) >
-				INTRINSICS.floor(bounds.max ?? Number.POSITIVE_INFINITY)
-			return integerShape(
-				emptyRange
-					? description === undefined
-						? undefined
-						: INTRINSICS.rebase({ description }, null)
-					: INTRINSICS.rebase(
-							{
-								...bounds,
-								...(description === undefined ? {} : { description }),
-							},
-							null,
-						),
-			)
+			return type === 'integer' ? integerShape(options) : numberShape(options)
 		}
 		if (type === 'boolean') {
 			return booleanShape(description === undefined ? undefined : { description })
@@ -887,6 +898,10 @@ export class SchemaShaper {
 				INTRINSICS.own(schema, 'properties') &&
 				isRecord(schema.properties))
 		) {
+			// A strict walk has confined `format: 'interface'` to an object node.
+			if (this.#strict && INTRINSICS.own(schema, 'format') && schema.format === 'interface') {
+				return this.#buildInterface(schema, depth, description, enclosed)
+			}
 			return this.#buildObject(schema, depth, description, enclosed)
 		}
 		if (type === undefined && INTRINSICS.own(schema, 'properties') && isRecord(schema.properties)) {
@@ -1016,20 +1031,7 @@ export class SchemaShaper {
 			INTRINSICS.own(schema, 'properties') && isRecord(schema.properties)
 				? schema.properties
 				: undefined
-		const requiredSource =
-			INTRINSICS.own(schema, 'required') && isArray(schema.required)
-				? INTRINSICS.from(
-						iterateIndices(
-							() =>
-								INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'required'])
-									.length,
-						),
-						(index) =>
-							INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'required'])[
-								index
-							],
-					)
-				: []
+		const requiredSource = this.#readRequired(schema)
 		const allKeys = propertiesSource === undefined ? [] : INTRINSICS.keys(propertiesSource)
 		const truncated = allKeys.length > INFER_BREADTH_LIMIT
 		if (this.#strict && truncated) {
@@ -1089,6 +1091,90 @@ export class SchemaShaper {
 		})
 	}
 
+	// The entries of a node's `required` list, or none when the keyword is not an array.
+	#readRequired(schema: JSONSchema): readonly unknown[] {
+		return INTRINSICS.own(schema, 'required') && isArray(schema.required)
+			? INTRINSICS.from(
+					iterateIndices(
+						() =>
+							INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'required'])
+								.length,
+					),
+					(index) =>
+						INTRINSICS.reflect.apply(INTRINSICS.reflect.read, undefined, [schema, 'required'])[
+							index
+						],
+				)
+			: []
+	}
+
+	// The interface branch, which only a strict walk takes: each required property reads as a
+	// member and every other one as an optional member. An implementation carries members its
+	// schema does not name, so the node must declare `additionalProperties: true`. A union would
+	// read the members once per arm and an interface's parser fills no default, so both refuse
+	// with code `placement`, as `validateShape` refuses them.
+	#buildInterface(
+		schema: JSONSchema,
+		depth: number,
+		description: string | undefined,
+		enclosed: boolean,
+	): ContractShape {
+		if (enclosed || this.#oneOfs > 0) {
+			throw new ContractError(
+				'schemaToShape: an interface cannot sit under a union, which would read its members once per arm; move the interface outside the union',
+				{ code: 'placement', context: { path: pathOf(this.#path), shape: 'schema' } },
+			)
+		}
+		if (!INTRINSICS.own(schema, 'additionalProperties') || schema.additionalProperties !== true) {
+			throw this.#refusal(
+				'an interface schema must declare additionalProperties true',
+				'additionalProperties',
+			)
+		}
+		const source =
+			INTRINSICS.own(schema, 'properties') && isRecord(schema.properties)
+				? schema.properties
+				: undefined
+		const required = this.#readRequired(schema)
+		const keys = source === undefined ? [] : INTRINSICS.keys(source)
+		if (keys.length > INFER_BREADTH_LIMIT) {
+			throw this.#refusal('properties exceeds the breadth limit', 'properties')
+		}
+		const pairs = INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(keys), [
+			(key: string) => {
+				const child = source !== undefined && INTRINSICS.own(source, key) ? source[key] : undefined
+				if (isRecord(child) && INTRINSICS.own(child, 'default')) {
+					throw new ContractError(
+						'schemaToShape: a default cannot fill an interface member, whose parser returns the implementation by identity; remove the default',
+						{
+							code: 'placement',
+							context: { path: pathOf(this.#path, 'properties', key, 'default'), shape: 'schema' },
+						},
+					)
+				}
+				const member = isRecord(child)
+					? this.#descend(child, depth - 1, enclosed, 'properties', key)
+					: this.#widen(
+							'every property schema must be a plain record',
+							undefined,
+							'properties',
+							key,
+						)
+				const listed = INTRINSICS.reflect.apply(INTRINSICS.some, required, [
+					(entry: unknown) => isString(entry) && entry === key,
+				])
+				return [key, listed ? member : optionalShape(member)]
+			},
+		])
+		const members = INTRINSICS.rebase(
+			INTRINSICS.record<ContractShape>({
+				[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [pairs]),
+			}),
+			null,
+		)
+		return interfaceShape(members, description === undefined ? undefined : { description })
+	}
+
 	// The one place a schema's `default` becomes a shape's. The lenient walk stays total
 	// by carrying only what can compile: a primitive or literal the property's guard
 	// accepts, in a slot that can fill. The strict walk carries any default, and refuses
@@ -1113,7 +1199,18 @@ export class SchemaShaper {
 					},
 				)
 			}
-			if (new ContractCompiler(shape).guard(value)) return optionalShape(shape, { default: value })
+			const guard = new ContractCompiler(shape).guard
+			// A schema that admits `undefined` keeps a present `undefined` unfilled, so it takes no default.
+			if (guard(undefined)) {
+				throw new ContractError(
+					'schemaToShape: a default cannot fill a property whose schema admits undefined; remove the default or the undefined arm',
+					{
+						code: 'placement',
+						context: { path: pathOf(this.#path, 'properties', key, 'default'), shape: 'schema' },
+					},
+				)
+			}
+			if (guard(value)) return optionalShape(shape, { default: value })
 			throw this.#refusal('a default must satisfy its schema', 'properties', key, 'default')
 		}
 		const leaf =

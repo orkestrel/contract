@@ -1,16 +1,19 @@
 import type {
 	AuditorFunction,
 	ContractInterface,
+	ContractRefusal,
 	ContractShape,
 	Guard,
+	OwnerFunction,
 	Parser,
 	RandomFunction,
 	ReporterFunction,
+	Result,
 	SeederFunction,
 } from './types.js'
 import { INTRINSICS } from './constants.js'
 import { ContractError } from './errors.js'
-import { attempt, contain } from './helpers.js'
+import { attempt, contain, failure, isFailure } from './helpers.js'
 import { ContractCompiler } from './ContractCompiler.js'
 import { ShapePass } from './ShapePass.js'
 
@@ -25,10 +28,10 @@ import { ShapePass } from './ShapePass.js'
  *
  * A compile can still fail for the host's reasons: a first call near the stack limit,
  * or a host whose members were replaced after this contract was created, which it
- * refuses to compile on since the result would outlive the replacement. Neither says
+ * refuses to compile on because the result would outlive the replacement. Neither says
  * anything about a later call, which compiles afresh. Until then a guard answers
- * `false` and a parser `undefined`, and the diagnostic and seed members publish the
- * failure as their doors do.
+ * `false`, a parser `undefined`, and `own` a refusal carrying the failure as its
+ * cause, and the diagnostic and seed members publish the failure as their doors do.
  */
 export class LazyContract {
 	readonly #shape: ContractShape
@@ -61,6 +64,7 @@ export class LazyContract {
 			audit: this.#audit(),
 			explain: this.#explain(),
 			generate: this.#generate(),
+			own: this.#own(),
 		})
 	}
 
@@ -91,6 +95,15 @@ export class LazyContract {
 	#generate(): SeederFunction<unknown> {
 		return (random?: RandomFunction): unknown =>
 			(this.#settled ?? this.#settle('compileGenerator')).generator(random)
+	}
+
+	// A compile that fails is a refusal like any other read failure, because `own` never throws.
+	#own(): OwnerFunction<unknown> {
+		return <V>(value: V): Result<V, ContractRefusal> => {
+			const settled = attempt(() => this.#settled ?? this.#settle('own'))
+			if (isFailure(settled)) return failure({ faults: [], cause: settled.error })
+			return settled.value.owner(value)
+		}
 	}
 
 	#attempt(): ContractInterface<unknown> | undefined {

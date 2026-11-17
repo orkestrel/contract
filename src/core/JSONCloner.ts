@@ -33,7 +33,7 @@ import { isObject, isRecord } from './validators.js'
  * permanently. Success replays the exact frozen root; failure rethrows the
  * exact class-owned error. Nonredirectable terminal failure releases partial
  * traversal working state while retaining the source and exact error. Reentry
- * poisons the active operation and every later call with one shared cause-free
+ * invalidates the active operation and every later call with one shared cause-free
  * error.
  *
  * @param value - The unknown value to retain for cloning
@@ -55,8 +55,8 @@ export class JSONCloner implements JSONClonerInterface {
 	// them. Terminal settlement must reach the genuine implementation of every
 	// intrinsic it dispatches through, or a caller who redirects one after
 	// construction makes the first call escape with a raw caller value while the
-	// replay reports the reentry poison — two different answers for one
-	// operation. The constructor is already too late: a poison error, and so its
+	// replay reports the reentry refusal — two different answers for one
+	// operation. The constructor is already too late: a reentry error, and so its
 	// ownership record, is created before the source is ever observed. The
 	// The active-path set is NOT an exception to that, and the sentence that made
 	// it one was wrong: a redirected member there does not produce an owned

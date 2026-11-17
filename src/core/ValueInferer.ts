@@ -139,7 +139,7 @@ export class ValueInferer {
 	//
 	// ALL reads of `value` — including its `length` — happen inside `attempt`, and
 	// the ancestor set is restored before the captured failure is rethrown, so a
-	// hostile `length` getter, throwing own-getter element, or hostile element
+	// untrusted `length` getter, throwing own-getter element, or untrusted element
 	// access reaches the door's boundary with the walk already unwound. A
 	// genuinely empty sampled list still returns `{ type: 'array' }` with no
 	// `items`. A same-object re-inference at the same remaining depth is served
@@ -194,7 +194,7 @@ export class ValueInferer {
 	// `enumerableKeys`, sorted lexicographically for deterministic output, capped
 	// at `#breadth`. This is the same property view compiled object guards,
 	// parsers, and reporters use. Each property value is read inside `attempt`; a
-	// hostile getter reaches the door's boundary. A readable property whose value
+	// untrusted getter reaches the door's boundary. A readable property whose value
 	// is `undefined` is DROPPED — JSON encodes no such property
 	// (`JSON.stringify({ a: undefined })` is `'{}'`), so it contributes neither a
 	// `properties` entry nor a `required` entry. Every other present key is

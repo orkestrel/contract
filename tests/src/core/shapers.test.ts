@@ -35,6 +35,7 @@ import {
 	INFER_BREADTH_LIMIT,
 	INFER_DEPTH_LIMIT,
 	integerShape,
+	interfaceShape,
 	isContractError,
 	isRegExp,
 	jsonShape,
@@ -54,12 +55,20 @@ import {
 	schemaToShape,
 	seededRandom,
 	stringShape,
+	undefinedShape,
 	unionShape,
 	validateShape,
 	valueToSchema,
 } from '@src/core'
+import * as core from '@src/core'
 import type { Equal, Expect } from '../../setup.js'
 import {
+	ADJACENT_NUMBER_RANGES,
+	callOptionDoor,
+	EMPTY_NUMBER_RANGES,
+	OPTION_DOORS,
+	OPTION_FUNCTIONS,
+	OPTIONLESS_SHAPE_DOORS,
 	buildNonJSONValues,
 	polluteArrayConstruction,
 	buildCycle,
@@ -271,6 +280,25 @@ const BUILDER_CASES: readonly BuilderCase[] = [
 		positions: { 0: 'options' },
 		options: { 0: ['description'] },
 		run: (args) => Reflect.apply(functionShape, undefined, [...args]),
+	},
+	{
+		name: 'undefinedShape',
+		valid: [[], [{ description: 'value' }]],
+		positions: { 0: 'options' },
+		options: { 0: ['description'] },
+		run: (args) => Reflect.apply(undefinedShape, undefined, [...args]),
+	},
+	{
+		name: 'interfaceShape',
+		valid: [
+			[{}],
+			[{ get: functionShape() }],
+			[{ get: functionShape(), ttl: optionalShape(integerShape()) }],
+			[{}, { description: 'value' }],
+		],
+		positions: { 0: 'properties', 1: 'options' },
+		options: { 1: ['description'] },
+		run: (args) => Reflect.apply(interfaceShape, undefined, [...args]),
 	},
 ]
 
@@ -2374,7 +2402,9 @@ describe('shape builders — a built child answers as a walked one does', () => 
 
 	it.each([
 		'min',
+		'over',
 		'max',
+		'under',
 		'pattern',
 		'description',
 		'integer',
@@ -2934,5 +2964,324 @@ describe('functionShape', () => {
 		expect(schemaToShape({ not: {}, format: 'function', description: 'Runs it' })).toEqual(
 			rawShape({ description: 'Runs it' }),
 		)
+	})
+})
+
+describe('undefinedShape', () => {
+	it('builds a frozen declaration that carries an authored description alone', () => {
+		expect(undefinedShape()).toEqual({ category: 'undefined' })
+		expect(Object.isFrozen(undefinedShape())).toBe(true)
+		expect(undefinedShape({ description: 'No limit set' })).toEqual({
+			category: 'undefined',
+			description: 'No limit set',
+		})
+	})
+
+	it('infers undefined alone, and undefined beside a union arm', () => {
+		const shape = undefinedShape()
+		const limits = objectShape({ max: unionShape(numberShape(), undefinedShape()) })
+		expectTypeOf<Infer<typeof shape>>().toEqualTypeOf<undefined>()
+		expectTypeOf<Infer<typeof limits>['max']>().toEqualTypeOf<number | undefined>()
+		expect(createContract(limits).is({ max: undefined })).toBe(true)
+	})
+
+	it('reads the undefined leaf back in a strict conversion and widens it in a lenient one', () => {
+		expect(schemaToShape({ not: {}, format: 'undefined' }, { strict: true })).toEqual(
+			undefinedShape(),
+		)
+		expect(
+			schemaToShape(
+				{ not: {}, format: 'undefined', description: 'No limit set' },
+				{ strict: true },
+			),
+		).toEqual(undefinedShape({ description: 'No limit set' }))
+		const declaration = objectShape(
+			{ max: unionShape(numberShape(), undefinedShape()), note: optionalShape(undefinedShape()) },
+			{ additionalProperties: false },
+		)
+		expect(schemaToShape(compileSchema(declaration), { strict: true })).toEqual(declaration)
+		expect(schemaToShape({ not: {}, format: 'undefined' })).toEqual(rawShape({}))
+		const refusal = captureContractError(() =>
+			schemaToShape({ not: {}, format: 'never' }, { strict: true }),
+		)
+		expect(refusal.context).toEqual({ path: ['not'], shape: 'schema' })
+		const defaulted = captureContractError(() =>
+			schemaToShape(
+				{
+					type: 'object',
+					properties: {
+						max: { anyOf: [{ type: 'number' }, { not: {}, format: 'undefined' }], default: 3 },
+					},
+				},
+				{ strict: true },
+			),
+		)
+		expect([defaulted.code, defaulted.context]).toEqual([
+			'placement',
+			{ path: ['properties', 'max', 'default'], shape: 'schema' },
+		])
+	})
+
+	it('admits its own emitted schema as a raw shape', () => {
+		expect(rawShape(compileSchema(undefinedShape()))).toEqual({
+			category: 'raw',
+			schema: { not: {}, format: 'undefined' },
+		})
+	})
+})
+
+describe('interfaceShape', () => {
+	it('builds a frozen declaration over an owned null-prototype member map', () => {
+		const get = functionShape()
+		const members = { get, ttl: optionalShape(integerShape()) }
+		const shape = interfaceShape(members, { description: 'Session store' })
+		members.get = functionShape({ description: 'replaced' })
+
+		expect(shape).toEqual({
+			category: 'interface',
+			members: { get, ttl: optionalShape(integerShape()) },
+			description: 'Session store',
+		})
+		expect(shape.members.get).toBe(get)
+		expect(Object.getPrototypeOf(shape.members)).toBeNull()
+		expect(Object.isFrozen(shape)).toBe(true)
+		expect(Object.isFrozen(shape.members)).toBe(true)
+		expect(interfaceShape({})).toEqual({ category: 'interface', members: {} })
+		const proto = interfaceShape(JSON.parse('{"__proto__": {"category": "function"}}'))
+		expect(Object.hasOwn(proto.members, '__proto__')).toBe(true)
+	})
+
+	it('refuses a member map that is not a plain record, at members', () => {
+		for (const members of [null, [], new Map(), createClassInstance()]) {
+			const error = captureContractError(() => Reflect.apply(interfaceShape, undefined, [members]))
+			expect([error.code, error.message, error.context]).toEqual([
+				'structure',
+				'interfaceShape: members must be a plain record',
+				{ path: ['members'], shape: 'interface' },
+			])
+		}
+	})
+
+	it('infers required members, optional members that may read undefined, and no index signature', () => {
+		const shape = interfaceShape({
+			get: functionShape(),
+			name: stringShape(),
+			ttl: optionalShape(integerShape()),
+		})
+		type Inferred = Infer<typeof shape>
+
+		expectTypeOf<keyof Inferred>().toEqualTypeOf<'get' | 'name' | 'ttl'>()
+		expectTypeOf<Inferred['get']>().toEqualTypeOf<(...args: never[]) => unknown>()
+		expectTypeOf<Inferred['name']>().toEqualTypeOf<string>()
+		expectTypeOf<Inferred['ttl']>().toEqualTypeOf<number | undefined>()
+		expectTypeOf<{ get: () => 1; name: 'Ada' }>().toExtend<Inferred>()
+		expectTypeOf<{ get: () => 1; name: 'Ada'; ttl: undefined }>().toExtend<Inferred>()
+		expectTypeOf<{ get: () => 1 }>().not.toExtend<Inferred>()
+	})
+
+	it('reads its own emitted schema back in a strict conversion', () => {
+		const declarations = [
+			interfaceShape(
+				{ get: functionShape(), ttl: optionalShape(integerShape({ min: 0 })) },
+				{ description: 'Session store' },
+			),
+			interfaceShape({}),
+			objectShape(
+				{ store: interfaceShape({ get: functionShape() }), note: optionalShape(stringShape()) },
+				{ additionalProperties: false },
+			),
+			nullableShape(interfaceShape({ limit: unionShape(integerShape(), undefinedShape()) })),
+		]
+
+		for (const declaration of declarations) {
+			expect(schemaToShape(compileSchema(declaration), { strict: true })).toEqual(declaration)
+		}
+	})
+
+	it('refuses an interface schema a strict conversion cannot read back', () => {
+		const schemas: readonly JSONSchema[] = [
+			{ type: 'object', format: 'interface', properties: {} },
+			{ type: 'object', format: 'interface', additionalProperties: false },
+			{ type: 'string', format: 'interface' },
+			{
+				anyOf: [
+					{ type: 'object', format: 'interface', additionalProperties: true },
+					{ type: 'string' },
+				],
+			},
+			{
+				type: 'object',
+				format: 'interface',
+				properties: { ttl: { type: 'integer', default: 3 } },
+				additionalProperties: true,
+			},
+		]
+		const refusals = schemas.map((schema) => {
+			const error = captureContractError(() => schemaToShape(schema, { strict: true }))
+			return [error.code, error.context?.path]
+		})
+
+		expect(refusals).toEqual([
+			['structure', ['additionalProperties']],
+			['structure', ['additionalProperties']],
+			['structure', ['format']],
+			['placement', ['anyOf', '0']],
+			['placement', ['properties', 'ttl', 'default']],
+		])
+	})
+
+	it('reads an interface schema as an open object in a lenient conversion', () => {
+		const schema = compileSchema(interfaceShape({ get: functionShape(), name: stringShape() }))
+
+		expect(schemaToShape(schema)).toEqual(
+			objectShape({ get: rawShape({}), name: stringShape() }, { additionalProperties: true }),
+		)
+	})
+})
+
+describe('option doors — an unread key', () => {
+	it("derives the door population from the barrel's shape functions and the option functions", () => {
+		const shapes = Object.entries(core)
+			.filter(([name, value]) => name.endsWith('Shape') && typeof value === 'function')
+			.map(([name]) => name)
+
+		expect(shapes).toEqual(expect.arrayContaining(['stringShape', 'numberShape', 'rawShape']))
+		expect([...Object.keys(OPTION_DOORS), ...OPTIONLESS_SHAPE_DOORS].sort()).toEqual(
+			[...shapes, ...OPTION_FUNCTIONS].sort(),
+		)
+	})
+
+	it.each(Object.keys(OPTION_DOORS))(
+		'%s refuses an own enumerable key it does not read',
+		(name) => {
+			const door = OPTION_DOORS[name]
+			if (door === undefined) throw new Error(`No option door is declared for ${name}`)
+			const known = Object.keys(door.options).join(', ')
+
+			for (const stray of ['nickname', 'mininum']) {
+				for (const value of ['Ada', undefined]) {
+					const error = captureContractError(() =>
+						callOptionDoor(name, { ...door.options, [stray]: value }),
+					)
+					expect(error.code).toBe('structure')
+					expect(error.message).toBe(`${name}: unknown option "${stray}"; the options are ${known}`)
+					expect(error.context).toEqual({ path: [stray], shape: door.shape })
+				}
+			}
+		},
+	)
+
+	it.each(Object.keys(OPTION_DOORS))('%s reads every key its options type declares', (name) => {
+		const door = OPTION_DOORS[name]
+		if (door === undefined) throw new Error(`No option door is declared for ${name}`)
+
+		expect(attempt(() => callOptionDoor(name, door.options)).success).toBe(true)
+		for (const [key, value] of Object.entries(door.options)) {
+			expect(attempt(() => callOptionDoor(name, { [key]: value })).success, `${name}.${key}`).toBe(
+				true,
+			)
+		}
+	})
+
+	it.each(Object.keys(OPTION_DOORS))(
+		'%s builds past an inherited, a symbol, and a non-enumerable key',
+		(name) => {
+			const plain = callOptionDoor(name, {})
+			const hidden = Object.defineProperty({}, 'nickname', { value: 'Ada', enumerable: false })
+
+			expect(pollutePrototypeData('nickname', 'Ada', () => callOptionDoor(name, {}))).toEqual(plain)
+			expect(callOptionDoor(name, { [Symbol('nickname')]: 'Ada' })).toEqual(plain)
+			expect(callOptionDoor(name, hidden)).toEqual(plain)
+		},
+	)
+
+	it('refuses an unread key after the plain-record check and before a value check', () => {
+		const instance = Object.assign(createClassInstance(), { nickname: 'Ada' })
+		const record = captureContractError(() => Reflect.apply(numberShape, undefined, [instance]))
+		const value = captureContractError(() =>
+			Reflect.apply(numberShape, undefined, [{ min: Number.NaN, nickname: 'Ada' }]),
+		)
+
+		expect(record.message).toBe('numberShape: options must be a plain record')
+		expect(value.message).toBe(
+			'numberShape: unknown option "nickname"; the options are min, over, max, under, integer, description',
+		)
+		expect(captureContractError(() => numberShape({ min: Number.NaN })).code).toBe('bound')
+	})
+})
+
+describe('numberShape — exclusive bounds', () => {
+	it('carries over and under beside min and max', () => {
+		const shape = numberShape({ min: 0, over: -1, max: 120, under: 121 })
+
+		expect(shape).toEqual({ category: 'number', min: 0, over: -1, max: 120, under: 121 })
+		expect(Object.keys(shape)).toEqual(['category', 'min', 'over', 'max', 'under'])
+		expect(Object.isFrozen(shape)).toBe(true)
+		expect(integerShape({ over: 0, under: 3 })).toEqual({
+			category: 'number',
+			over: 0,
+			under: 3,
+			integer: true,
+		})
+	})
+
+	it('refuses a bound that is not finite with code bound', () => {
+		for (const bound of ['over', 'under'] as const) {
+			for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, '1']) {
+				for (const [run, shape] of [
+					[numberShape, 'number'],
+					[integerShape, 'integer'],
+				] as const) {
+					const error = captureContractError(() =>
+						Reflect.apply(run, undefined, [{ [bound]: value }]),
+					)
+					expect(error.code).toBe('bound')
+					expect(error.message).toBe(`numberShape: ${bound} must be finite`)
+					expect(error.context).toMatchObject({ shape, limit: 'finite number' })
+				}
+				const authored = captureContractError(() =>
+					validateShape({ category: 'number', [bound]: value }),
+				)
+				expect(authored.code).toBe(typeof value === 'number' ? 'bound' : 'structure')
+				expect(authored.context?.path).toEqual(typeof value === 'number' ? [] : [bound])
+			}
+		}
+	})
+
+	it.each(EMPTY_NUMBER_RANGES)('refuses %s with code range', (_label, options, message) => {
+		const built = captureContractError(() => numberShape(options))
+		const authored = captureContractError(() => validateShape({ category: 'number', ...options }))
+
+		for (const error of [built, authored]) {
+			expect(error.code).toBe('range')
+			expect(error.message).toBe(`validateShape: ${message}`)
+			expect(error.context?.path).toEqual([])
+		}
+	})
+
+	it.each(ADJACENT_NUMBER_RANGES)(
+		'builds %s and admits its witness',
+		(_label, options, witness) => {
+			expect(createContract(numberShape(options)).is(witness)).toBe(true)
+			expect(() => validateShape({ category: 'number', ...options })).not.toThrow()
+		},
+	)
+
+	it('lets rawShape embed exclusiveMinimum and exclusiveMaximum as finite numbers', () => {
+		const schema: JSONSchema = { type: 'number', exclusiveMinimum: 0, exclusiveMaximum: 1 }
+
+		expect(rawShape(schema).schema).toEqual(schema)
+		for (const keyword of ['exclusiveMinimum', 'exclusiveMaximum']) {
+			for (const value of [Number.NaN, Number.POSITIVE_INFINITY, '1', true]) {
+				const error = captureContractError(() =>
+					Reflect.apply(rawShape, undefined, [{ type: 'number', [keyword]: value }]),
+				)
+				expect(error.code).toBe('structure')
+				expect(error.message).toBe(
+					'validateShape: raw schema numeric bounds must be finite numbers',
+				)
+				expect(error.context?.path).toEqual(['schema', keyword])
+			}
+		}
 	})
 })

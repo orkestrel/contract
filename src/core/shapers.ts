@@ -7,6 +7,8 @@ import type {
 	ContractShape,
 	FunctionShape,
 	FunctionShapeOptions,
+	InterfaceShape,
+	InterfaceShapeOptions,
 	JSONSchema,
 	JSONShape,
 	JSONShapeOptions,
@@ -29,6 +31,8 @@ import type {
 	ShapeShapeOptions,
 	StringShape,
 	StringShapeOptions,
+	UndefinedShape,
+	UndefinedShapeOptions,
 	UnionShape,
 } from './types.js'
 import { cloneJSONValue, cloneSchema, cloneShape } from './cloners.js'
@@ -38,18 +42,17 @@ import { ShapeValidator } from './ShapeValidator.js'
 import { FaultShaper } from './FaultShaper.js'
 import { INTRINSICS } from './constants.js'
 import {
-	readIndexView,
 	iterateIndices,
 	attempt,
 	contain,
 	isFailure,
 	isSuccess,
-	matchesRecordBrand,
 	preview,
 	readArrayEntries,
 	readOptions,
 	readPatternFlags,
 	readPatternSource,
+	readShapeMap,
 	readValue,
 	refuseOptionKeys,
 } from './helpers.js'
@@ -105,12 +108,9 @@ export function auditFaultShape(): AuditFaultShape {
  */
 export function stringShape(options?: StringShapeOptions): StringShape {
 	return contain(() => {
-		const safe = readOptions(
-			options,
-			['min', 'max', 'pattern', 'date', 'description'],
-			'stringShape',
-			'string',
-		)
+		const keys = ['min', 'max', 'pattern', 'date', 'description'] as const
+		const safe = readOptions(options, keys, 'stringShape', 'string')
+		refuseOptionKeys(options, keys, 'stringShape', 'string')
 		const pattern = safe?.pattern
 		if (safe?.min !== undefined && (!INTRINSICS.safe(safe.min) || safe.min < 0)) {
 			throw new ContractError('stringShape: min must be a non-negative safe integer', {
@@ -190,13 +190,13 @@ export function stringShape(options?: StringShapeOptions): StringShape {
  * Builds a numeric {@link NumberShape}.
  *
  * @remarks
- * A present `min` or `max` must be finite. `NaN` and `±Infinity` throw a `bound` {@link
- * ContractError} at construction, because no finite value satisfies them and no JSON
- * Schema keyword expresses them.
+ * `min` and `max` are inclusive; `over` and `under` are exclusive. A present bound must be
+ * finite. `NaN` and `±Infinity` throw a `bound` {@link ContractError} at construction,
+ * because no finite value satisfies them and no JSON Schema keyword expresses them.
  *
- * @param options - Optional bounds (`min` / `max`), `integer`, and `description`
+ * @param options - Optional bounds (`min` / `over` / `max` / `under`), `integer`, and `description`
  * @returns A number shape
- * @throws {ContractError} When a present bound is not finite
+ * @throws {ContractError} When an option key is unknown, a present bound is not finite, or no number satisfies the bounds
  *
  * @example
  * ```ts
@@ -205,29 +205,27 @@ export function stringShape(options?: StringShapeOptions): StringShape {
  */
 export function numberShape(options?: NumberShapeOptions): NumberShape {
 	return contain(() => {
-		const safe = readOptions(
-			options,
-			['min', 'max', 'integer', 'description'],
-			'numberShape',
-			'number',
-		)
+		const keys = ['min', 'over', 'max', 'under', 'integer', 'description'] as const
+		const safe = readOptions(options, keys, 'numberShape', 'number')
+		refuseOptionKeys(options, keys, 'numberShape', 'number')
 		const shape = safe?.integer === true ? 'integer' : 'number'
-		if (safe?.min !== undefined && !INTRINSICS.finite(safe.min)) {
-			throw new ContractError('numberShape: min must be finite', {
-				code: 'bound',
-				context: { shape, limit: 'finite number', received: preview(safe.min) },
-			})
-		}
-		if (safe?.max !== undefined && !INTRINSICS.finite(safe.max)) {
-			throw new ContractError('numberShape: max must be finite', {
-				code: 'bound',
-				context: { shape, limit: 'finite number', received: preview(safe.max) },
-			})
+		const bounds = ['min', 'over', 'max', 'under'] as const
+		for (const index of iterateIndices(() => bounds.length)) {
+			const bound = bounds[index]
+			const value = bound === undefined ? undefined : safe?.[bound]
+			if (value !== undefined && !INTRINSICS.finite(value)) {
+				throw new ContractError(`numberShape: ${bound} must be finite`, {
+					code: 'bound',
+					context: { shape, limit: 'finite number', received: preview(value) },
+				})
+			}
 		}
 		const result: NumberShape = {
 			category: 'number',
 			...(safe?.min === undefined ? {} : { min: safe.min }),
+			...(safe?.over === undefined ? {} : { over: safe.over }),
 			...(safe?.max === undefined ? {} : { max: safe.max }),
+			...(safe?.under === undefined ? {} : { under: safe.under }),
 			...(safe?.integer === undefined ? {} : { integer: safe.integer }),
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
@@ -244,11 +242,13 @@ export function numberShape(options?: NumberShapeOptions): NumberShape {
  *
  * @param options - Optional bounds and `description` (no `integer` key)
  * @returns An integer number shape
- * @throws {ContractError} When a present bound is not finite
+ * @throws {ContractError} When an option key is unknown, a present bound is not finite, or no whole number satisfies the bounds
  */
 export function integerShape(options?: Omit<NumberShapeOptions, 'integer'>): NumberShape {
 	return contain(() => {
-		const safe = readOptions(options, ['min', 'max', 'description'], 'integerShape', 'integer')
+		const keys = ['min', 'over', 'max', 'under', 'description'] as const
+		const safe = readOptions(options, keys, 'integerShape', 'integer')
+		refuseOptionKeys(options, keys, 'integerShape', 'integer')
 		return numberShape({ ...safe, integer: true })
 	}, 'integerShape')
 }
@@ -293,6 +293,7 @@ export function dateShape(options?: Omit<StringShapeOptions, 'date' | 'pattern'>
 export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
 	return contain(() => {
 		const safe = readOptions(options, ['description'], 'booleanShape', 'boolean')
+		refuseOptionKeys(options, ['description'], 'booleanShape', 'boolean')
 		const shape: BooleanShape = {
 			category: 'boolean',
 			...(safe?.description === undefined ? {} : { description: safe.description }),
@@ -315,6 +316,7 @@ export function booleanShape(options?: BooleanShapeOptions): BooleanShape {
 export function nullShape(options?: NullShapeOptions): NullShape {
 	return contain(() => {
 		const safe = readOptions(options, ['description'], 'nullShape', 'null')
+		refuseOptionKeys(options, ['description'], 'nullShape', 'null')
 		const shape: NullShape = {
 			category: 'null',
 			...(safe?.description === undefined ? {} : { description: safe.description }),
@@ -357,6 +359,7 @@ export function literalShape(
 			})
 		}
 		const safe = readOptions(options, ['description'], 'literalShape', 'literal')
+		refuseOptionKeys(options, ['description'], 'literalShape', 'literal')
 		const snapshot = readArrayEntries(values)
 		if (isFailure(snapshot)) {
 			throw new ContractError('literalShape: values could not be copied', {
@@ -418,6 +421,7 @@ export function arrayShape<S extends ContractShape>(
 ): ArrayShape<S> {
 	return contain(() => {
 		const safe = readOptions(options, ['min', 'max', 'description'], 'arrayShape', 'array')
+		refuseOptionKeys(options, ['min', 'max', 'description'], 'arrayShape', 'array')
 		if (safe?.min !== undefined && (!INTRINSICS.safe(safe.min) || safe.min < 0)) {
 			throw new ContractError('arrayShape: min must be a non-negative safe integer', {
 				code: 'bound',
@@ -482,48 +486,12 @@ export function objectShape<
 				context: { path: ['properties'], shape: 'object' },
 			})
 		}
-		const safe = readOptions(
-			options,
-			['additionalProperties', 'description'],
-			'objectShape',
-			'object',
-		)
-		const copied = readValue(
-			() => {
-				const record = matchesRecordBrand(input)
-				const keyList = INTRINSICS.keys(input)
-				const entries: ReadonlyArray<readonly [string, PropertyDescriptor]> =
-					INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(keyList), [
-						(key: string) => [
-							key,
-							{
-								value: INTRINSICS.reflect.read(input, key),
-								enumerable: true,
-								configurable: true,
-								writable: true,
-							},
-						],
-					])
-				const descriptors = INTRINSICS.record<PropertyDescriptor>({
-					[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
-						entries,
-					]),
-				})
-				const snapshot: { [K in keyof P]: P[K] } = INTRINSICS.create(null, descriptors)
-				return { record, snapshot: INTRINSICS.freeze(snapshot) }
-			},
-			'objectShape',
-			{ subject: 'properties', context: { path: ['properties'], shape: 'object' } },
-		)
-		if (!copied.record) {
-			throw new ContractError('objectShape: properties must be a plain record', {
-				code: 'structure',
-				context: { path: ['properties'], shape: 'object' },
-			})
-		}
+		const keys = ['additionalProperties', 'description'] as const
+		const safe = readOptions(options, keys, 'objectShape', 'object')
+		refuseOptionKeys(options, keys, 'objectShape', 'object')
 		const shape: ObjectShape<P, A> = {
 			category: 'object',
-			properties: copied.snapshot,
+			properties: readShapeMap(properties, 'objectShape', 'properties', 'object'),
 			...(safe?.additionalProperties === undefined
 				? {}
 				: { additionalProperties: safe.additionalProperties }),
@@ -563,6 +531,7 @@ export function recordShape<S extends ContractShape>(
 			})
 		}
 		const safe = readOptions(options, ['description'], 'recordShape', 'object')
+		refuseOptionKeys(options, ['description'], 'recordShape', 'object')
 		const shape: ObjectShape<Record<never, never>, S> = {
 			category: 'object',
 			properties: INTRINSICS.freeze({}),
@@ -654,11 +623,12 @@ export function oneOfShape<V extends readonly ContractShape[]>(
  *
  * @remarks
  * As an {@link objectShape} property, the field becomes a true optional property
- * in the inferred type. A `default` is captured as an owned frozen copy, and the
+ * in the inferred type, and as an {@link interfaceShape} member, one that may read
+ * `undefined`. A `default` is captured as an owned frozen copy, and the
  * compiled parser fills it where the property is absent or `undefined`; the guard,
  * the audit, the report, and the generator keep treating the property as optional.
- * The compilers refuse a default `inner` refuses, a default under a union, and a
- * default on a property of an open object.
+ * The compilers refuse a default `inner` refuses, a default under a union or below
+ * an interface, and a default on a property of an open object.
  *
  * @param inner - The wrapped shape
  * @param options - Optional `default`, a JSON value
@@ -677,7 +647,7 @@ export function optionalShape<S extends ContractShape>(
 	return contain(() => {
 		const safe = readOptions(options, ['default'], 'optionalShape', 'optional')
 		refuseOptionKeys(options, ['default'], 'optionalShape', 'optional')
-		// Own presence, read apart from the value: the snapshot above omits a present
+		// Own presence, read apart from the value: the preceding snapshot omits a present
 		// `undefined` and keeps an inherited value, and neither may decide this field.
 		const present = options !== undefined && INTRINSICS.own(options, 'default')
 		const value = present ? safe?.default : undefined
@@ -750,6 +720,7 @@ export function nullableShape<S extends ContractShape>(inner: S): NullableShape<
 export function jsonShape(options?: JSONShapeOptions): JSONShape {
 	return contain(() => {
 		const safe = readOptions(options, ['description'], 'jsonShape', 'json')
+		refuseOptionKeys(options, ['description'], 'jsonShape', 'json')
 		const shape: JSONShape = {
 			category: 'json',
 			...(safe?.description === undefined ? {} : { description: safe.description }),
@@ -772,6 +743,7 @@ export function jsonShape(options?: JSONShapeOptions): JSONShape {
 export function shapeShape(options?: ShapeShapeOptions): ShapeShape {
 	return contain(() => {
 		const safe = readOptions(options, ['description'], 'shapeShape', 'shape')
+		refuseOptionKeys(options, ['description'], 'shapeShape', 'shape')
 		const shape: ShapeShape = {
 			category: 'shape',
 			...(safe?.description === undefined ? {} : { description: safe.description }),
@@ -799,12 +771,85 @@ export function shapeShape(options?: ShapeShapeOptions): ShapeShape {
 export function functionShape(options?: FunctionShapeOptions): FunctionShape {
 	return contain(() => {
 		const safe = readOptions(options, ['description'], 'functionShape', 'function')
+		refuseOptionKeys(options, ['description'], 'functionShape', 'function')
 		const shape: FunctionShape = {
 			category: 'function',
 			...(safe?.description === undefined ? {} : { description: safe.description }),
 		}
 		return ShapePass.seal(shape)
 	}, 'functionShape')
+}
+
+/**
+ * Builds an {@link UndefinedShape}.
+ *
+ * @remarks
+ * Compose it as a union arm to declare a member that may be `undefined`: an object property
+ * present as `undefined` keeps its key, while `optionalShape` keeps declaring a property that may
+ * be absent.
+ *
+ * @param options - Optional description
+ * @returns An `undefined`-valued declaration
+ *
+ * @example
+ * ```ts
+ * const limits = objectShape({ max: unionShape(numberShape(), undefinedShape()) })
+ * ```
+ */
+export function undefinedShape(options?: UndefinedShapeOptions): UndefinedShape {
+	return contain(() => {
+		const safe = readOptions(options, ['description'], 'undefinedShape', 'undefined')
+		refuseOptionKeys(options, ['description'], 'undefinedShape', 'undefined')
+		const shape: UndefinedShape = {
+			category: 'undefined',
+			...(safe?.description === undefined ? {} : { description: safe.description }),
+		}
+		return ShapePass.seal(shape)
+	}, 'undefinedShape')
+}
+
+/**
+ * Builds an {@link InterfaceShape} from a member map.
+ *
+ * @remarks
+ * Declare the members a consumer calls or reads on an implementation it does not own, such as a
+ * store or a signal: a class instance, a function, or an object whose prototype carries the
+ * members passes, and an undeclared member is never read. Wrap a member in
+ * {@link optionalShape} to let it read `undefined`. Take {@link objectShape} for a plain data
+ * record.
+ *
+ * @param members - Map of member names to child shapes
+ * @param options - Optional description
+ * @returns An interface shape
+ * @throws {ContractError} When `members` is not a plain record, a member carries a default, or an option key is unread
+ *
+ * @example
+ * ```ts
+ * const store = interfaceShape({ get: functionShape(), set: functionShape(), delete: functionShape() })
+ * createContract(store).is(new Map()) // true
+ * ```
+ */
+export function interfaceShape<P extends Readonly<Record<string, ContractShape>>>(
+	members: P,
+	options?: InterfaceShapeOptions,
+): InterfaceShape<P> {
+	return contain(() => {
+		const input: unknown = members
+		if (!isObject(input)) {
+			throw new ContractError('interfaceShape: members must be a plain record', {
+				code: 'structure',
+				context: { path: ['members'], shape: 'interface' },
+			})
+		}
+		const safe = readOptions(options, ['description'], 'interfaceShape', 'interface')
+		refuseOptionKeys(options, ['description'], 'interfaceShape', 'interface')
+		const shape: InterfaceShape<P> = {
+			category: 'interface',
+			members: readShapeMap(members, 'interfaceShape', 'members', 'interface'),
+			...(safe?.description === undefined ? {} : { description: safe.description }),
+		}
+		return ShapePass.seal(shape)
+	}, 'interfaceShape')
 }
 
 /**
@@ -826,7 +871,7 @@ export function functionShape(options?: FunctionShapeOptions): FunctionShape {
  * structurally verbatim, so here the schema claims LESS than the compiled guard
  * accepts — `rawShape({ type: 'string' })` emits `{ type: 'string' }` and its
  * guard still accepts `42`, the mirror of {@link jsonShape}'s looseness.
- * `compileGenerator` throws, since an arbitrary embedded schema has no
+ * `compileGenerator` throws, because an arbitrary embedded schema has no
  * auto-generatable sample.
  *
  * @param schema - The JSON Schema fragment to embed
@@ -846,7 +891,7 @@ export function rawShape(schema: JSONSchema): RawShape {
 
 // === Schema inversion
 
-// schemaToShape walks an UNKNOWN, possibly adversarial runtime JSONSchema value
+// schemaToShape walks an UNKNOWN, possibly untrusted runtime JSONSchema value
 // (a hand-written schema, or one produced by valueToSchema / samplesToSchema)
 // and emits a validating ContractShape — the reverse direction of
 // compileSchema (compilers.ts), which walks a finite, developer-authored
@@ -863,7 +908,7 @@ export function rawShape(schema: JSONSchema): RawShape {
 // compiled guard; the returned shape is always one `validateShape` accepts.
 //
 // Every widening — an empty/unrecognized node, an exhausted budget, a cycle —
-// lands on `rawShape`, NOT `jsonShape`. A hostile throw is NOT a widening: a
+// lands on `rawShape`, NOT `jsonShape`. An untrusted throw is NOT a widening: a
 // keyword access, enumeration, or recursive traversal that throws is not
 // malformed schema vocabulary, so `schemaToShape` runs the whole walk inside
 // `readValue` and refuses it as `ContractError { code: 'structure', context: {
@@ -874,7 +919,7 @@ export function rawShape(schema: JSONSchema): RawShape {
 // also emits `{}` but its guard is the strictly narrower `isJSONValue`, so
 // widening through it would REJECT the exotic originals (`Map`, `Set`, a class
 // instance, a function, `NaN`) whose inferred schema is exactly `{}` — the
-// round trip below would then be a false claim. `jsonShape` remains the shape a
+// following round trip would then be a false claim. `jsonShape` remains the shape a
 // user AUTHORS to mean "any JSON value"; it is never inferred.
 
 /**
@@ -907,7 +952,7 @@ export function rawShape(schema: JSONSchema): RawShape {
  * `Set`, a class instance, a function, a symbol, a bigint, and readable cyclic
  * hosts), which infer `{}` and widen back to an accept-anything
  * {@link rawShape}. An unreadable host is refused by {@link valueToSchema}
- * before this law produces a schema; direct hostile input to
+ * before this law produces a schema; direct untrusted input to
  * {@link schemaToShape} receives the same coded refusal.
  * Widening is the only source of looseness. The law has three explicit host
  * limits:
@@ -949,8 +994,9 @@ export function rawShape(schema: JSONSchema): RawShape {
  *
  * STRICT: `{ strict: true }` is the door for a foreign schema. It refuses, with
  * code `structure`, every node the lenient walk would widen, every keyword it
- * would ignore (`pattern`, every `format` but `'date'` on a string node and `'function'` in
- * the function leaf, every `not` outside that leaf, `nullable`,
+ * would ignore (`pattern`, every `format` but `'date'` on a string node, `'interface'` on an
+ * object node, and `'function'` or `'undefined'` in its leaf, every `not` outside those two
+ * leaves, `nullable`,
  * `patternProperties`, `propertyNames`, `prefixItems`, and anything else outside
  * {@link STRICT_SCHEMA_KEYWORDS}), a malformed keyword or annotation, a boolean schema, an `enum` entry
  * that is neither a finite primitive nor `null`, a contradictory bound, a date format whose
@@ -959,11 +1005,16 @@ export function rawShape(schema: JSONSchema): RawShape {
  * optional property to fill. An object with no `additionalProperties` closes
  * rather than opens, and `oneOf` keeps exactly-one, because a strict walk reads
  * every keyword that could keep two arms apart. Below a `oneOf` that object refuses
- * instead, since closing it could change which arms match. A strict conversion is the
+ * instead, because closing it could change which arms match. A strict conversion is the
  * one walk that asserts a `format`: it reads `format: 'date'` on a string node as a
  * date string shape, so a compiled {@link dateShape} round-trips, and it reads the function
- * leaf `{ not: {}, format: 'function' }` back as {@link functionShape}, so a compiled
- * function shape round-trips too.
+ * leaf `{ not: {}, format: 'function' }` back as {@link functionShape} and the undefined
+ * leaf `{ not: {}, format: 'undefined' }` back as {@link undefinedShape}, so a compiled
+ * function or undefined shape round-trips too. It reads an object node with
+ * `format: 'interface'` back as {@link interfaceShape}, each property outside `required` an
+ * optional member, and refuses one without `additionalProperties: true` with code
+ * `structure`, and one under a union or with a member `default` with code `placement`. A
+ * lenient conversion reads that node as an open object.
  *
  * @param schema - The JSON Schema value to convert
  * @param options - Optional `strict`, default `false`
@@ -990,7 +1041,7 @@ export function schemaToShape(schema: JSONSchema, options?: SchemaToShapeOptions
 				context: { path: ['strict'], shape: 'schema', received: preview(strict) },
 			})
 		}
-		// The whole walk runs inside this door's own read boundary, so a hostile
+		// The whole walk runs inside this door's own read boundary, so an untrusted
 		// keyword, enumeration, or recursion anywhere below it is published under
 		// this door's name rather than under the name of an engine method no
 		// consumer can call. The engine captures its own collection constructors

@@ -44,6 +44,18 @@ import {
 	buildDeepShape,
 	buildSharedDagShape,
 	buildSparseArray,
+	buildHoledArray,
+	buildUndefinedCorpus,
+	varyMembers,
+	UNDEFINED_LAW_SHAPES,
+	UNDEFINED_ROWS,
+	buildCountedStore,
+	buildImplementationRefusals,
+	buildImplementationRows,
+	INTERFACE_LAW_SHAPES,
+	PartialStore,
+	SessionStore,
+	STORE_DECLARATION,
 	buildJudgmentPool,
 	buildRecordPool,
 	buildStringArray,
@@ -1066,7 +1078,121 @@ describe('shape factories', () => {
 				.filter(([, row]) => row.witness === undefined)
 				.map(([kind]) => kind)
 				.sort(),
-		).toEqual(['function', 'json', 'null', 'raw', 'shape'])
+		).toEqual(['function', 'interface', 'json', 'null', 'raw', 'shape', 'undefined'])
+	})
+})
+
+describe('interface fixtures', () => {
+	it('builds each implementation form with its members where its name places them', () => {
+		const rows = buildImplementationRows()
+		expect(rows.map((row) => row.name)).toEqual([
+			'a class instance with prototype methods',
+			'a plain literal',
+			'a function carrying the members',
+			'an object whose prototype carries them',
+			'a getter-backed member',
+			'an undeclared member whose getter throws',
+		])
+		const [instance, literal, callable, inherited, accessor, guarded] = rows.map((row) => row.value)
+		expect(instance).toBeInstanceOf(SessionStore)
+		expect(Object.hasOwn(Object.getPrototypeOf(instance), 'delete')).toBe(true)
+		expect(Object.getPrototypeOf(literal)).toBe(Object.prototype)
+		expect(typeof callable).toBe('function')
+		expect(Object.hasOwn(Object(callable), 'delete')).toBe(true)
+		expect(Object.hasOwn(Object(inherited), 'delete')).toBe(false)
+		expect(Reflect.get(Object(inherited), 'delete')).toBe(encodeURI)
+		expect(typeof Object.getOwnPropertyDescriptor(accessor, 'get')?.get).toBe('function')
+		expect(() => Reflect.get(Object(guarded), 'secret')).toThrow('hostile access')
+		expect(buildImplementationRows()[0]?.value).not.toBe(instance)
+	})
+
+	it('keeps a session store working and leaves a partial store without delete', () => {
+		const store = new SessionStore()
+		store.set('Ada', 1)
+		expect([store.get('Ada'), store.size]).toEqual([1, 1])
+		expect(store.delete('Ada')).toBe(true)
+		store.set('Grace', 2)
+		store.clear()
+		expect(store.size).toBe(0)
+		const partial = new PartialStore()
+		partial.set('Ada', 1)
+		expect(partial.get('Ada')).toBe(1)
+		expect('delete' in partial).toBe(false)
+	})
+
+	it('records each member read and throws on the undeclared one, on both forms', () => {
+		for (const form of ['prototype', 'function'] as const) {
+			const reads = createRecorder<readonly [string]>()
+			const store = buildCountedStore(form, reads.handler)
+			expect(typeof store).toBe(form === 'function' ? 'function' : 'object')
+			expect(Object.hasOwn(store, 'get')).toBe(form === 'function')
+			expect([Reflect.get(store, 'get'), Reflect.get(store, 'delete')]).toEqual([
+				encodeURI,
+				encodeURI,
+			])
+			expect(reads.calls).toEqual([['get'], ['delete']])
+			expect(() => Reflect.get(store, 'secret')).toThrow('hostile access')
+		}
+	})
+
+	it('declares refusal rows and law shapes that each name an interface', () => {
+		expect(buildImplementationRefusals().map((row) => row.name)).toEqual([
+			'null',
+			'a primitive',
+			'an array',
+			'a missing member',
+			'a member of the wrong kind',
+			'an optional member of the wrong kind',
+		])
+		expect(STORE_DECLARATION.category).toBe('interface')
+		expect(Object.keys(STORE_DECLARATION.members)).toEqual(['get', 'set', 'delete'])
+		expect(INTERFACE_LAW_SHAPES[0]).toBe(STORE_DECLARATION)
+		expect(INTERFACE_LAW_SHAPES.map((shape) => shape.category)).toEqual([
+			'interface',
+			'interface',
+			'interface',
+			'object',
+			'array',
+			'nullable',
+		])
+	})
+})
+
+describe('undefined member fixtures', () => {
+	it('copies an array with one hole and leaves the source dense', () => {
+		const source = ['a', undefined, 'c']
+		const holed = buildHoledArray(source, 1)
+
+		expect(holed).toHaveLength(3)
+		expect([0, 1, 2].map((index) => Object.hasOwn(holed, index))).toEqual([true, false, true])
+		expect([0, 1, 2].map((index) => Object.hasOwn(source, index))).toEqual([true, true, true])
+	})
+
+	it('varies each member of a record and each element of an array one at a time', () => {
+		expect(varyMembers({ limit: 1 })).toEqual([{}, { limit: undefined }, { limit: 'x' }])
+		expect(Object.hasOwn(varyMembers({ limit: 1 })[1] ?? {}, 'limit')).toBe(true)
+		const varied = varyMembers([1])
+		expect(varied).toHaveLength(4)
+		expect(varied.slice(0, 3)).toEqual([[1, undefined], [undefined], ['x']])
+		expect(Object.hasOwn(varied[3] ?? [], 0)).toBe(false)
+		expect(varyMembers('limit')).toEqual([])
+	})
+
+	it('keeps the table, the law shapes, and the corpus in the positions they name', () => {
+		expect(UNDEFINED_ROWS.map((row) => row.name)).toEqual([
+			'the leaf at the root',
+			'a required property',
+			'an optional property',
+			'an array element',
+			'a record value',
+			'under nullableShape',
+			'a union arm',
+		])
+		expect(UNDEFINED_LAW_SHAPES.slice(0, UNDEFINED_ROWS.length)).toEqual(
+			UNDEFINED_ROWS.map((row) => row.shape),
+		)
+		const corpus = buildUndefinedCorpus(core.createContract(core.undefinedShape()), 2)
+		expect(corpus.length).toBe(2 + SOUNDNESS_SAMPLE.length)
 	})
 })
 

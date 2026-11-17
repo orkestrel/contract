@@ -14,7 +14,7 @@ import { ShapeValidator } from './ShapeValidator.js'
 
 // The public function boundaries over the engines. `ShapeValidator` owns the
 // stateful declaration walk; `ContractCompiler` owns ownership, preparation and
-// every artifact family. Each function below is a real typed door — its own
+// every artifact family. Each following function is a real typed door — its own
 // overloads, its own containment, its own diagnostics — that requests exactly
 // the root it is named for and nothing else, so asking for a guard never
 // compiles a generator. Recursion lives in the compiler, not here: a module that
@@ -261,12 +261,12 @@ export function compileGenerator(shape: ContractShape, random?: RandomFunction):
  * match" / "no consensus" summary fault prepended to its closest variant's
  * faults — slices its return to at most {@link FAULT_LIMIT} entries, so the
  * bound holds at every level of nesting rather than at the outermost container alone, on
- * adversarial input (a huge array, a wide record, a wide union of wide
+ * untrusted input (a huge array, a wide record, a wide union of wide
  * records). A closed object's extra keys never
  * fault — `parse` silently drops them, so `explain` mirrors that leniency, and
  * {@link compileAuditor} is where they do fault; an open object with a
  * constraining `additionalProperties` shape recurses extras against it instead.
- * A hostile getter or throwing `Proxy` trap is contained through {@link attempt}
+ * An untrusted getter or throwing `Proxy` trap is contained through {@link attempt}
  * and surfaces as a single top-level type fault, never a throw, as
  * `.claude/rules/patterns.md` § Validation and contracts requires.
  * It requests exactly the `reporter` root of a fresh {@link ContractCompiler}
@@ -311,7 +311,7 @@ export function compileReporter(
  * evaluated for a valid declaration. The invariant relates two
  * separate calls, so it holds for a value whose reads are stable across calls;
  * see the read-stability precondition on {@link ContractInterface}. Every
- * recursive call returns at most {@link FAULT_LIMIT} entries. Hostile property
+ * recursive call returns at most {@link FAULT_LIMIT} entries. Untrusted property
  * access raises the shared coded read refusal with the current container path
  * and shape, so unreadability never masquerades as a type mismatch.
  * It requests exactly the `auditor` root of a fresh {@link ContractCompiler}

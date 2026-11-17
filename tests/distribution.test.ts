@@ -851,6 +851,14 @@ for (const [index, source] of copies.entries()) {
 		assert.equal(target.isContractError(indexed), true)
 		assert.equal(Reflect.set(path, '0', 42), true)
 		assert.equal(target.isContractError(indexed), false)
+		const faults = [{ reason: 'extra', path: ['typo'] }]
+		const faulted = new source.ContractError('faulted', { code: 'structure', context: { faults } })
+		assert.equal(faulted.context.faults, faults)
+		assert.equal(target.isContractError(faulted), true)
+		assert.equal(Reflect.set(faults, '0', 42), true)
+		assert.equal(target.isContractError(faulted), false)
+		const sparse = new source.ContractError('sparse', { code: 'structure', context: { faults: [,] } })
+		assert.equal(target.isContractError(sparse), false)
 		const inherited = new source.ContractError('inherited data', { code: 'structure' })
 		assert.equal(Reflect.deleteProperty(inherited, 'code'), true)
 		Object.setPrototypeOf(inherited, Object.create(source.ContractError.prototype, {

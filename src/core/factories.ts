@@ -39,7 +39,7 @@ import { ShapePass } from './ShapePass.js'
  * to touch, so the failure arrives at the call the caller made — carrying the
  * authoring door's own diagnosis, which this door adopts rather than rewraps.
  * Every compiled member is self-contained, and the compiler this call builds
- * releases its working set once every member has compiled. The contract keeps
+ * releases its working set after every member has compiled. The contract keeps
  * part of the declaration even so: the auditor and reporter plans close over the
  * leaf and array nodes they read their bounds from, and a contract with deferred
  * members retains its declaration. Nothing the caller keeps reaches back into the
@@ -49,7 +49,7 @@ import { ShapePass } from './ShapePass.js'
  * diagnostics and generator refuse.
  *
  * @param shape - The shape to compile
- * @returns A contract bundling `schema` / `is` / `parse` / `audit` / `explain` / `generate`
+ * @returns A contract bundling `schema` / `is` / `parse` / `audit` / `explain` / `generate` / `own`
  *
  * @example Compiling a contract
  * ```ts

@@ -23,8 +23,10 @@ import type {
 	KeyStep,
 	LengthReader,
 	NumberShape,
+	NumberShapeOptions,
 	RandomFunction,
 	ReadValueOptions,
+	RefuseValueOptions,
 	Result,
 	SampleMemo,
 	SchemaFormat,
@@ -320,6 +322,7 @@ export function describeFaults(
 	options?: FaultTextOptions,
 ): string {
 	const requested = options?.limit ?? FAULT_TEXT_LIMIT
+	if (isObject(options)) refuseOptionKeys(options, ['limit'], 'describeFaults', 'fault')
 	if (!isInteger(requested) || requested < 0) {
 		throw new ContractError('Fault text limit must be a non-negative integer', { code: 'range' })
 	}
@@ -1433,6 +1436,30 @@ export function attempt<T>(callback: () => T): Result<T> {
 }
 
 /**
+ * Settles a callback's outcome, synchronous or awaited, as a {@link Result}.
+ *
+ * @remarks
+ * Runs the callback one time. A synchronous throw, a rejection, and a thenable whose `then`
+ * throws each answer a `Failure` carrying the exact thrown value, and the returned promise never
+ * rejects. Use {@link attempt} where the callback is synchronous.
+ *
+ * @param callback - The callback to invoke with no arguments
+ * @returns A `Success` carrying the awaited value, or a `Failure` carrying the exact thrown value
+ *
+ * @example
+ * ```ts
+ * const outcome = await settle(async () => readFile(path))
+ * ```
+ */
+export async function settle<T>(callback: () => T | PromiseLike<T>): Promise<Result<T>> {
+	try {
+		return success(await callback())
+	} catch (error) {
+		return failure(error)
+	}
+}
+
+/**
  * Renders a thrown value as a non-empty message.
  *
  * @remarks
@@ -1496,7 +1523,7 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 		// retained the caller's object by identity. Spread copies own enumerable
 		// properties only through the spec's own copy operation, so the projection
 		// stays own-only without dispatching through a replaceable global. The
-		// copy stays EAGER because performing it is what refuses a hostile
+		// copy stays EAGER because performing it is what refuses an untrusted
 		// context: a throwing getter on any own key — advertised or not — must
 		// refuse this call whether or not the callback goes on to succeed.
 		const owned =
@@ -1507,6 +1534,7 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 						shape: undefined,
 						limit: undefined,
 						received: undefined,
+						faults: undefined,
 						...source,
 					}
 		const requested = options?.code
@@ -1549,6 +1577,7 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 						...(owned.shape === undefined ? {} : { shape: owned.shape }),
 						...(owned.limit === undefined ? {} : { limit: owned.limit }),
 						...(owned.received === undefined ? {} : { received: owned.received }),
+						...(owned.faults === undefined ? {} : { faults: owned.faults }),
 					}
 		throw new ContractError(
 			`${diagnostics.value.reader}: ${diagnostics.value.subject} could not be read`,
@@ -1560,6 +1589,81 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 		)
 	}
 	return outcome.value
+}
+
+/**
+ * Refuses a value that fails a guard with a located, uniform diagnostic, and narrows it when the
+ * guard holds.
+ *
+ * @remarks
+ * Runs the guard inside {@link holds}, so a guard that throws refuses. The refusal reads
+ * `<door>: <path> must be <limit>` and carries `path`, `limit`, and the {@link preview} of the
+ * value as context. The code defaults to `bound`.
+ *
+ * @param value - The value to check
+ * @param guard - The predicate that decides whether the value is acceptable
+ * @param door - The public door name used in the diagnostic
+ * @param options - The location, the limit text, and an optional code
+ * @throws {ContractError} When the guard refuses or throws
+ *
+ * @example
+ * ```ts
+ * refuseValue(options.size, isSafeInteger, 'openStore', { path: ['size'], limit: 'a safe integer' })
+ * ```
+ */
+export function refuseValue<T>(
+	value: unknown,
+	guard: Guard<T>,
+	door: string,
+	options: RefuseValueOptions,
+): asserts value is T {
+	if (holds(() => guard(value))) return
+	const { path, limit } = options
+	throw new ContractError(
+		`${door}: ${renderPath(isString(path) ? [path] : path)} must be ${limit}`,
+		{
+			code: options.code ?? 'bound',
+			context: { path, limit, received: preview(value) },
+		},
+	)
+}
+
+/**
+ * Builds the {@link ContractError} that reports an admission refusal.
+ *
+ * @remarks
+ * The message is `<door>: ` followed by {@link describeFaults} over the refusal's faults with the
+ * optional schema, or `<door>: value could not be read` when the refusal holds no fault. The code
+ * is `structure`, the context carries the first fault's path and every fault, and the cause is the
+ * refusal's own `cause` when it has one.
+ *
+ * @param refusal - The refusal an admission door answered
+ * @param door - The public door name used in the diagnostic
+ * @param schema - The optional schema whose keys the summary names
+ * @returns The error, ready to throw
+ *
+ * @example
+ * ```ts
+ * throw refusalToError({ faults: [{ reason: 'extra', path: ['typo'] }] }, 'openStore')
+ * ```
+ */
+export function refusalToError(
+	refusal: ContractRefusal,
+	door: string,
+	schema?: JSONSchema,
+): ContractError {
+	const { faults } = refusal
+	const first = faults[0]
+	return new ContractError(
+		first === undefined
+			? `${door}: value could not be read`
+			: `${door}: ${describeFaults(faults, schema)}`,
+		{
+			code: 'structure',
+			context: first === undefined ? { faults } : { path: extractPath(first), faults },
+			...(INTRINSICS.own(refusal, 'cause') ? { cause: refusal.cause } : {}),
+		},
+	)
 }
 
 /**
@@ -1639,7 +1743,7 @@ export function holds(callback: () => boolean): boolean {
 }
 
 /**
- * Determines whether a value carries the plain-record brand, raising a hostile
+ * Determines whether a value carries the plain-record brand, raising an untrusted
  * prototype observation instead of answering it.
  *
  * @remarks
@@ -1655,14 +1759,14 @@ export function holds(callback: () => boolean): boolean {
  * therefore identified by the own members ECMAScript requires every realm to
  * put on it (`constructor`, `hasOwnProperty`, `isPrototypeOf`,
  * `propertyIsEnumerable`, `toLocaleString`, `toString`, `valueOf`), each read
- * through its own DESCRIPTOR so no accessor on a hostile prototype ever runs.
+ * through its own DESCRIPTOR so no accessor on an untrusted prototype ever runs.
  * Each must be an own DATA property whose value is a FUNCTION — true of every
  * conformant realm, so the requirement costs a genuine foreign record nothing,
- * and it refuses the cheapest forgery (stamping the mandated names with
+ * and it refuses the cheapest fake (stamping the mandated names with
  * `undefined`) for free.
  *
  * That is a structural test, not a provenance one, and the residual is stated
- * as exactly what it is: a FUNCTION-VALUED forgery passes, and this realm's own
+ * as exactly what it is: a FUNCTION-VALUED fake passes, and this realm's own
  * `Object.prototype` supplies those functions to stamp, so the price is a
  * few lines rather than nothing. Reparenting a class prototype to `null` and
  * stamping the mandated names with real functions passes; so does leaving the
@@ -1670,31 +1774,31 @@ export function holds(callback: () => boolean): boolean {
  * `null` as its own prototype and answers those descriptor reads with
  * functions. In both cases the value is a live class instance whose methods are
  * still reachable on it. A further own-key SUBSET rule buys even less: it
- * refuses a forgery that left methods on its prototype and accepts the same
+ * refuses a fake that left methods on its prototype and accepts the same
  * class with those methods moved onto the instance, where they are
  * indistinguishable from a plain record's function
- * properties — so it raises the forgery's price and narrows the realm-agnostic
+ * properties — so it raises the fake's price and narrows the realm-agnostic
  * arm this rule exists to keep open. What the pass buys is acceptance at
  * brand-governed doors and nothing after it: every ownership engine publishes a
  * frozen plain record built only from captured data, so no class instance,
- * class behavior, or forged prototype survives into a snapshot.
+ * class behavior, or fabricated prototype survives into a snapshot.
  *
  * `Object.create(<null-prototype object>)` is refused, and NOT because it is
- * structurally identical to a reparented class instance — it is not, since a
+ * structurally identical to a reparented class instance — it is not, because a
  * class prototype always owns `constructor` and a bare `Object.create(null)`
  * owns nothing. It is refused as policy: no realm produces that chain for a
  * plain object, no consumer of it has been named, and a caller erases the
  * difference by deleting `constructor`.
  *
  * This is the diagnosing form, deliberately NOT total: a revoked `Proxy` or a
- * hostile `getPrototypeOf` trap throws out of it, so an ownership engine can
+ * untrusted `getPrototypeOf` trap throws out of it, so an ownership engine can
  * report an unreadable value as a failed read with the exact cause rather than
  * as a well-formed structural refusal. {@link isRecord} is the total form for
  * every guard consumer and contains that throw as `false`.
  *
  * @param value - The value whose record brand to inspect
  * @returns True if the value is a plain record; false otherwise
- * @throws The exact value thrown by a hostile brand observation
+ * @throws The exact value thrown by an untrusted brand observation
  *
  * @example
  * ```ts
@@ -1724,7 +1828,7 @@ export function matchesRecordBrand(value: unknown): boolean {
 		const member = mandated[index]
 		if (member === undefined) return false
 		// A descriptor read, not a value read: it answers ownership, data-ness and
-		// the member's kind in one observation while running no accessor a hostile
+		// the member's kind in one observation while running no accessor an untrusted
 		// prototype installed. Every realm's members are function-valued data
 		// properties, so requiring that costs a genuine realm nothing and costs a
 		// forger the work of finding seven functions to stamp.
@@ -1733,6 +1837,69 @@ export function matchesRecordBrand(value: unknown): boolean {
 		if (typeof descriptor.value !== 'function') return false
 	}
 	return true
+}
+
+/**
+ * Reads a shape builder's map of child shapes into a frozen null-prototype snapshot.
+ *
+ * @remarks
+ * Reads each own enumerable string key one time, so a key named `__proto__` lands as an own
+ * member and a later edit to the caller's map cannot reach the snapshot. The children are kept
+ * by identity.
+ *
+ * @param map - The caller's map of child shapes
+ * @param door - The builder the refusal names
+ * @param field - The builder field that holds the map
+ * @param shape - The shape category the refusal names
+ * @returns The frozen snapshot
+ * @throws {ContractError} When a read fails, or when the map is not a plain record
+ *
+ * @example
+ * ```ts
+ * readShapeMap({ city: stringShape() }, 'objectShape', 'properties', 'object').city // the same string shape
+ * ```
+ */
+export function readShapeMap<P extends Readonly<Record<string, ContractShape>>>(
+	map: P,
+	door: string,
+	field: string,
+	shape: string,
+): P {
+	const input: unknown = map
+	const copied = readValue(
+		() => {
+			const record = matchesRecordBrand(input)
+			const keyList = isObject(input) ? INTRINSICS.keys(input) : []
+			const entries: ReadonlyArray<readonly [string, PropertyDescriptor]> =
+				INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(keyList), [
+					(key: string) => [
+						key,
+						{
+							value: INTRINSICS.reflect.read(map, key),
+							enumerable: true,
+							configurable: true,
+							writable: true,
+						},
+					],
+				])
+			const descriptors = INTRINSICS.record<PropertyDescriptor>({
+				[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
+					entries,
+				]),
+			})
+			const snapshot: { [K in keyof P]: P[K] } = INTRINSICS.create(null, descriptors)
+			return { record, snapshot: INTRINSICS.freeze(snapshot) }
+		},
+		door,
+		{ subject: field, context: { path: [field], shape } },
+	)
+	if (!copied.record) {
+		throw new ContractError(`${door}: ${field} must be a plain record`, {
+			code: 'structure',
+			context: { path: [field], shape },
+		})
+	}
+	return copied.snapshot
 }
 
 /**
@@ -1967,7 +2134,7 @@ export function readGuardShape(
  * This is the package-wide runtime property view used by compiled object
  * guards, parsers, reporters, schema inference, and owned schema cloning. It
  * matches the object-key view serialized by `JSON.stringify`: inherited,
- * symbol, and non-enumerable properties are excluded. A hostile Proxy trap
+ * symbol, and non-enumerable properties are excluded. An untrusted Proxy trap
  * returns `undefined` rather than escaping.
  *
  * @param value - The object whose keys to snapshot
@@ -2117,7 +2284,7 @@ export function matchesStepGuard(this: Readonly<Record<string, unknown>>, step: 
  * consumed key is read exactly once, checked for presence, and inspected for an
  * own descriptor while the container is enumerated once. Every successfully
  * read non-`undefined` consumed value enters the fresh own-enumerable snapshot,
- * including an inherited or non-enumerable option. A hostile host is reported
+ * including an inherited or non-enumerable option. An untrusted host is reported
  * uniformly as an unreadable options record, while a readable array or class
  * instance retains the plain-record diagnostic.
  *
@@ -2227,7 +2394,7 @@ export function readOptions<T extends object>(
  * carries code `random` and never the `generate` code, and {@link compileGenerator}
  * rethrows it at whatever draw depth it happened instead of rotating to the next union
  * variant. The diagnostic names the consuming shape category, the `[0, 1)` limit, and a
- * total non-coercing {@link preview} of the offending sample (or `threw`), so a hostile
+ * total non-coercing {@link preview} of the offending sample (or `threw`), so an untrusted
  * object runs no conversion hook while the diagnostic is built and a primitive symbol
  * renders without consulting mutable `Symbol.prototype.toString`.
  *
@@ -2274,7 +2441,7 @@ export function drawRandom(random: RandomFunction, shape: string): number {
  * The root must satisfy {@link isRecord}; inherited properties are never fields.
  * Intermediates may be objects or arrays indexed by string. Returns `undefined`
  * the moment a segment is missing or lands on a non-object, so the lookup is
- * total — even against a hostile getter or Proxy trap that throws on read,
+ * total — even against an untrusted getter or Proxy trap that throws on read,
  * contained through {@link attempt} so the throw never escapes.
  *
  * @param record - The source record
@@ -2356,7 +2523,7 @@ export function matchesExactKeys(
  * `parse`'s coercions are published and form input relies on them, but some change what
  * a value means: `1` to `true`, `'9007199254740993'` to `...992`, `'1e-400'` to `0`,
  * `'0x10'` to `16`. A door that must not guess asks this about each fault `audit` reported,
- * since `audit` already names every nested repair with its path and the kind it wanted.
+ * because `audit` already names every nested repair with its path and the kind it wanted.
  *
  * Only a `type` fault is a repair. A number needs a string whose trim is the number's own
  * text, so `'30'` and `' 30 '` pass while `'30.0'`, `'007'`, `'0x10'`, `'1e3'`, `'+5'`,
@@ -2413,7 +2580,7 @@ export function matchesLosslessRepair(fault: AuditFault, input: unknown, parsed:
  * the alias already fit. Arrays are traversed through their reflected
  * own-index population, so sparse work is proportional to populated entries
  * rather than advertised length. Every observable operation is contained;
- * hostile or contradictory reads return `false`.
+ * untrusted or contradictory reads return `false`.
  *
  * The walk carries a settled-depth memo beside its active-path set: a
  * container that fit at depth `d` also fits at any depth `<= d`, because every
@@ -2779,8 +2946,8 @@ export function encodeLeaf(value: unknown): string | undefined {
  * - cyclic input, tracked with the same ancestor-{@link WeakSet} discipline
  *   the container branches of value inference use, so a shared (non-cyclic)
  *   reference reached twice through different paths still encodes;
- * A hostile traversal is categorically different: a throwing own-getter,
- * hostile `ownKeys` trap, or revoked `Proxy` throws a `structure`
+ * An untrusted traversal is categorically different: a throwing own-getter,
+ * untrusted `ownKeys` trap, or revoked `Proxy` throws a `structure`
  * {@link ContractError} through {@link readValue}. A caller can therefore
  * distinguish "not JSON-encodable" from "could not be read".
  *
@@ -3090,13 +3257,13 @@ export function deriveRangeBounds(min: unknown, max: unknown): BoundsRead {
  * a finite non-negative integer, selecting a valid fallback for anything else.
  *
  * @remarks
- * Guards {@link valueToSchema} / {@link samplesToSchema} against a hostile or
+ * Guards {@link valueToSchema} / {@link samplesToSchema} against an untrusted or
  * malformed budget: an unclamped `NaN` defeats every `depth <= 0` guard
  * (`NaN <= 0` is `false`, so recursion never halts), and a negative
  * `limits.properties` makes `slice(0, -1)` silently drop the LAST sorted key
  * instead of capping the list (a fractional value has a similarly undefined
  * `slice` bound). `Infinity` is rejected too — `Number.isInteger(Infinity)`
- * is `false` — since an unbounded budget is exactly the adversarial case the
+ * is `false` — because an unbounded budget is exactly the untrusted case the
  * caps exist to prevent. A valid candidate passes through unchanged without
  * inspecting the fallback. When the candidate is invalid, the fallback must
  * satisfy the same finite non-negative-integer contract or this boundary
@@ -3134,7 +3301,7 @@ export function sanitizeBudget(value: number | undefined, fallback: number): num
  * @remarks
  * {@link sanitizeBudget} decides the SHAPE of a budget and deliberately lets any
  * finite non-negative integer through, because it must never read a fallback a
- * hostile caller supplied. That left the depth axis unbounded from above, and
+ * untrusted caller supplied. That left the depth axis unbounded from above, and
  * depth is the axis that recurses: `1e9` is a valid integer, so the walk descended
  * until the call STACK failed, at a depth that varied between runs, and the
  * refusal surfaced as an unreadable value rather than as the exhaustion the guard
@@ -3231,21 +3398,100 @@ export function preview(value: unknown): string {
 			const whole = INTRINSICS.stringify(source)
 			if (whole.length <= PREVIEW_LIMIT) return whole
 		}
-		const parts = previewParts(source, 0, PREVIEW_LIMIT - (quoted ? 2 : 1), quoted)
-		const body: string = INTRINSICS.reflect.apply(INTRINSICS.join, parts, [''])
-		return quoted ? `"${body}` : body
+		return previewText(source, PREVIEW_LIMIT - (quoted ? 2 : 1), quoted)
 	}
 	if (isNumber(value) || isBoolean(value)) return INTRINSICS.text(value)
 	if (isBigInt(value)) {
 		const digits = INTRINSICS.text(value)
 		if (digits.length < PREVIEW_LIMIT) return `${digits}n`
-		const parts = previewParts(digits, 0, PREVIEW_LIMIT - 2, false)
-		const body: string = INTRINSICS.reflect.apply(INTRINSICS.join, parts, [''])
-		return `${body}n`
+		return `${previewText(digits, PREVIEW_LIMIT - 2, false)}n`
 	}
 	if (isArray(value)) return 'array'
 	if (isObject(value) && !isRecord(value)) return 'instance'
 	return typeof value
+}
+
+/**
+ * Encodes a bounded window of a source text as preview tokens in one pass.
+ *
+ * @remarks
+ * Gives the answer `previewParts` gives, joined, with a quoted source's opening quote: the first
+ * `capacity` UTF-16 code units are encoded through one `JSON.stringify` call, DEL, the C1
+ * controls, U+2028, and U+2029 take their `\u` sequences, and the encoded text is cut at
+ * `capacity` to its longest prefix of complete tokens. No token the recursion keeps lies outside
+ * the window, and a surrogate pair the window splits encodes as a 6-unit sequence that cannot fit.
+ *
+ * @param source - The source text
+ * @param capacity - The UTF-16 code units left for tokens; the closing quote or `…` takes one more
+ * @param quoted - If `true`, the text opens with a string quote and closes with one when the
+ * source fits; if `false`, the text carries no quote
+ * @returns The encoded text, closed by `…` when the source does not fit
+ *
+ * @example
+ * ```ts
+ * previewText('abc', 2, false) // 'ab…'
+ * ```
+ */
+export function previewText(source: string, capacity: number, quoted: boolean): string {
+	const window: string = INTRINSICS.reflect.apply(INTRINSICS.slice, source, [0, capacity])
+	const raw: string = INTRINSICS.reflect.apply(
+		INTRINSICS.slice,
+		INTRINSICS.stringify(window),
+		[1, -1],
+	)
+	const encoded = matchesPattern(/[\x7f-\x9f\u{2028}\u{2029}]/u, raw) ? escapeControls(raw) : raw
+	const open = quoted ? '"' : ''
+	if (window.length === source.length && encoded.length <= capacity) {
+		return `${open}${encoded}${quoted ? '"' : ''}`
+	}
+	const cut: string = INTRINSICS.reflect.apply(INTRINSICS.slice, encoded, [0, capacity])
+	const tokens = INTRINSICS.reflect.apply(
+		INTRINSICS.captures,
+		/^(?:\\u[0-9a-f]{4}|\\["\\bfnrt]|[\ud800-\udbff][\udc00-\udfff]|[^\\\ud800-\udfff])*/,
+		[cut],
+	)
+	return `${open}${tokens?.[0] ?? ''}…`
+}
+
+/**
+ * Replaces each DEL, C1 control, U+2028, and U+2029 in a text with its `\u` sequence.
+ *
+ * @param text - The text to rewrite
+ * @returns The text with those characters as lowercase `\u` sequences
+ *
+ * @example
+ * ```ts
+ * escapeControls('a\u2028b') // 'a\\u2028b'
+ * ```
+ */
+export function escapeControls(text: string): string {
+	const digits = '0123456789abcdef'
+	const parts: readonly string[] = INTRINSICS.from(
+		iterateIndices(() => text.length),
+		(index) => {
+			const character = text[index] ?? ''
+			if (
+				!(character >= '\x7f' && character <= '\x9f') &&
+				character !== '\u2028' &&
+				character !== '\u2029'
+			) {
+				return character
+			}
+			const code: number =
+				character === '\u2028'
+					? 0x2028
+					: character === '\u2029'
+						? 0x2029
+						: 0x7f +
+							INTRINSICS.reflect.apply(
+								INTRINSICS.find,
+								'\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f',
+								[(entry: unknown) => entry === character],
+							)
+			return `\\u${digits[INTRINSICS.floor(code / 4096)] ?? ''}${digits[INTRINSICS.floor(code / 256) % 16] ?? ''}${digits[INTRINSICS.floor(code / 16) % 16] ?? ''}${digits[code % 16] ?? ''}`
+		},
+	)
+	return INTRINSICS.reflect.apply(INTRINSICS.join, parts, [''])
 }
 
 /**
@@ -3391,7 +3637,7 @@ export function buildStringFaults(
  * doors for the same reason. `expected` is the shape's own kind — `'integer'`
  * when `integer: true`, otherwise `'number'` — so a caller reading the report
  * sees the declaration's vocabulary rather than the value's. Order is
- * `integer`, then `min`, then `max`. It refuses an unreadable shape through the
+ * `integer`, `min`, `over`, `max`, then `under`. It refuses an unreadable shape through the
  * same boundary and for the same reason {@link buildStringFaults} does.
  *
  * @param shape - The number shape whose refinements are checked
@@ -3439,6 +3685,16 @@ export function buildNumberFaults(
 					received: preview(value),
 				}
 			}
+			if (INTRINSICS.own(shape, 'over') && shape.over !== undefined && value <= shape.over) {
+				faults[faults.length] = {
+					reason: 'constraint',
+					path,
+					expected,
+					constraint: 'over',
+					limit: shape.over,
+					received: preview(value),
+				}
+			}
 			if (INTRINSICS.own(shape, 'max') && shape.max !== undefined && value > shape.max) {
 				faults[faults.length] = {
 					reason: 'constraint',
@@ -3449,11 +3705,94 @@ export function buildNumberFaults(
 					received: preview(value),
 				}
 			}
+			if (INTRINSICS.own(shape, 'under') && shape.under !== undefined && value >= shape.under) {
+				faults[faults.length] = {
+					reason: 'constraint',
+					path,
+					expected,
+					constraint: 'under',
+					limit: shape.under,
+					received: preview(value),
+				}
+			}
 			return faults
 		},
 		'buildNumberFaults',
 		{ subject: 'shape' },
 	)
+}
+
+/**
+ * Checks whether no number satisfies a set of number bounds.
+ *
+ * @remarks
+ * Compares the bounds as real numbers: `min` and `max` admit their own value, and `over` and
+ * `under` admit only a value beyond theirs. With `integer: true` a whole number must also lie
+ * between them. An absent bound constrains nothing.
+ *
+ * @param bounds - The bounds to check
+ * @returns True if no number satisfies the bounds; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesEmptyRange({ over: 1, under: 1 }) // true
+ * matchesEmptyRange({ min: 1, max: 1 }) // false
+ * matchesEmptyRange({ over: 0, under: 1, integer: true }) // true
+ * ```
+ */
+export function matchesEmptyRange(bounds: NumberShapeOptions): boolean {
+	const { min, over, max, under } = bounds
+	if (min !== undefined && max !== undefined && min > max) return true
+	if (min !== undefined && under !== undefined && min >= under) return true
+	if (over !== undefined && max !== undefined && over >= max) return true
+	if (over !== undefined && under !== undefined && over >= under) return true
+	if (bounds.integer !== true) return false
+	const lowest = INTRINSICS.max(
+		INTRINSICS.ceil(min ?? Number.NEGATIVE_INFINITY),
+		over === undefined ? Number.NEGATIVE_INFINITY : INTRINSICS.floor(over) + 1,
+	)
+	const highest = INTRINSICS.min(
+		INTRINSICS.floor(max ?? Number.POSITIVE_INFINITY),
+		under === undefined ? Number.POSITIVE_INFINITY : INTRINSICS.ceil(under) - 1,
+	)
+	return lowest > highest
+}
+
+/**
+ * Checks whether a shape node admits `undefined`, from its category, its union mode, and its
+ * children's answers.
+ *
+ * @remarks
+ * The `undefined` leaf admits it. A nullable node admits it when its inner shape does, an
+ * `anyOf` union when an arm does, and a `oneOf` union when exactly one arm does. Every other
+ * node refuses it. For a node a contract compiles at its root, the answer equals what that
+ * contract's `is` answers for `undefined`.
+ *
+ * @param category - The node's category
+ * @param mode - The node's union mode, `'oneOf'` or anything else for `anyOf`
+ * @param children - Each structural child's answer, in slot order
+ * @returns True if the node admits `undefined`; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesUndefinedNode('undefined', undefined, []) // true
+ * matchesUndefinedNode('union', 'anyOf', [false, true]) // true
+ * matchesUndefinedNode('union', 'oneOf', [true, true]) // false
+ * ```
+ */
+export function matchesUndefinedNode(
+	category: unknown,
+	mode: unknown,
+	children: readonly boolean[],
+): boolean {
+	if (category === 'undefined') return true
+	if (category === 'nullable') return children[0] === true
+	if (category !== 'union') return false
+	const admitted: number = INTRINSICS.reflect.apply(INTRINSICS.fold, children, [
+		(total: number, answer: boolean) => total + (answer ? 1 : 0),
+		0,
+	])
+	return mode === 'oneOf' ? admitted === 1 : admitted > 0
 }
 
 /**
@@ -3571,7 +3910,8 @@ export function selectClosestFaults<T extends AuditFault>(
  * `'date'` when `date: true`, else `'string'`); `optionalShape` /
  * `nullableShape` project through to their inner shape's kind, and `rawShape`
  * (an arbitrary embedded schema with no fixed kind) projects to `'json'`.
- * `functionShape` projects to `'function'`.
+ * `functionShape` projects to `'function'`, `undefinedShape` to `'undefined'`, and
+ * `interfaceShape` to `'object'`.
  *
  * A hand-authored node carrying an unrecognized discriminant is REFUSED rather
  * than answered out of type, which keeps the declared non-optional
@@ -3615,6 +3955,10 @@ export function shapeToKind(shape: ContractShape): FaultKind {
 					return 'shape'
 				case 'function':
 					return 'function'
+				case 'undefined':
+					return 'undefined'
+				case 'interface':
+					return 'object'
 				case 'optional':
 					return shapeToKind(shape.inner)
 				case 'nullable':
@@ -4039,8 +4383,8 @@ export function renderList(entries: readonly string[]): string {
  * and a schema that says nothing reads `any`. Each nested form takes half the room of its parent, and
  * below 16 characters a form stops at its type, so a schema that holds itself still ends. Text past
  * `room` is cut and closes with `…`. A type word outside JSON Schema's vocabulary is encoded.
- * A schema with an own `not` reads `function` when its `format` is `'function'` and `never`
- * otherwise.
+ * A schema with an own `not` reads `function` when its `format` is `'function'`, `undefined`
+ * when its `format` is `'undefined'`, and `never` otherwise.
  *
  * @param schema - The schema to summarize
  * @param room - The characters the summary can take. Default: `FAULT_SCHEMA_LIMIT`
@@ -4070,7 +4414,7 @@ export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT
 		? schema.additionalProperties
 		: undefined
 	const negated = INTRINSICS.own(schema, 'not')
-	const callable = INTRINSICS.own(schema, 'format') && schema.format === 'function'
+	const format = INTRINSICS.own(schema, 'format') ? schema.format : undefined
 	const ordered: readonly string[] = deep
 		? INTRINSICS.reflect.apply(
 				INTRINSICS.order,
@@ -4114,6 +4458,8 @@ export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT
 							'maxLength',
 							'minimum',
 							'maximum',
+							'exclusiveMinimum',
+							'exclusiveMaximum',
 							'minItems',
 							'maxItems',
 							'pattern',
@@ -4136,8 +4482,8 @@ export function renderForm(schema: JSONSchema, room: number = FAULT_SCHEMA_LIMIT
 				? INTRINSICS.text(type)
 				: preview(type)
 	const text: string = negated
-		? callable
-			? 'function'
+		? format === 'function' || format === 'undefined'
+			? format
 			: 'never'
 		: forms !== undefined
 			? deep

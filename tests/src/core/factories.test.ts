@@ -9,6 +9,7 @@ import {
 	compileReporter,
 	createContract,
 	integerShape,
+	isContractError,
 	isString,
 	jsonShape,
 	nullShape,
@@ -34,7 +35,7 @@ import {
 } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
 
-const ROOTS = ['schema', 'is', 'parse', 'audit', 'explain', 'generate'] as const
+const ROOTS = ['schema', 'is', 'parse', 'audit', 'explain', 'generate', 'own'] as const
 
 describe('createContract — eager bundle', () => {
 	it('publishes plain data properties rather than getters', () => {
@@ -177,12 +178,25 @@ describe('createContract — members compile on first use', () => {
 
 	it('keeps one identity for a member across its first call', () => {
 		const contract = createContract(shape)
-		const { is, parse, audit, explain, generate } = contract
+		const { is, parse, audit, explain, generate, own } = contract
 
 		expect(is(valid)).toBe(true)
 		expect([contract.is, contract.parse, contract.audit]).toEqual([is, parse, audit])
-		expect([contract.explain, contract.generate]).toEqual([explain, generate])
+		expect([contract.explain, contract.generate, contract.own]).toEqual([explain, generate, own])
 		expect(is(valid)).toBe(true)
+	})
+
+	it('publishes own last and owns a bag on its first call as a compiled contract does', () => {
+		const compiled = createContract(shape)
+		compiled.is(valid)
+		const first = createContract(shape)
+		const { own } = first
+
+		expect(Object.keys(first)).toEqual([...ROOTS])
+		expect(own(valid)).toEqual(compiled.own(valid))
+		expect(own(valid)).toEqual({ success: true, value: valid })
+		expect(first.own({ ...valid, count: 'x' })).toEqual(compiled.own({ ...valid, count: 'x' }))
+		expect(first.own).toBe(own)
 	})
 
 	it('keeps a leaf contract on the package guard and parser', () => {
@@ -290,6 +304,7 @@ describe('createContract — members compile on first use', () => {
 			audit: readVerdict(() => contract.audit(valid)),
 			explain: readVerdict(() => contract.explain(valid)),
 			generate: readVerdict(() => contract.generate()),
+			own: contract.own(valid),
 		}))
 
 		expect(answers.is).toBe(false)
@@ -297,9 +312,14 @@ describe('createContract — members compile on first use', () => {
 		expect(answers.audit).toContain('compileAuditor: a host member')
 		expect(answers.explain).toContain('compileReporter: a host member')
 		expect(answers.generate).toContain('compileGenerator: a host member')
+		expect(answers.own.success).toBe(false)
+		expect(!answers.own.success && answers.own.error.faults).toEqual([])
+		const cause = answers.own.success ? undefined : answers.own.error.cause
+		expect(isContractError(cause) && cause.message).toContain('own: a host member')
 		expect(contract.is(valid)).toBe(true)
 		expect(contract.parse(valid)).toBeDefined()
 		expect(contract.audit(valid)).toEqual([])
+		expect(contract.own(valid).success).toBe(true)
 	})
 
 	it('keeps no plan compiled while a flag getter lies', () => {

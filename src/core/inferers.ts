@@ -14,6 +14,7 @@ import {
 	readArrayEntries,
 	readOptions,
 	readValue,
+	refuseOptionKeys,
 	sanitizeBudget,
 	sanitizeDepth,
 	sortValues,
@@ -21,7 +22,7 @@ import {
 import { SampleInferer } from './SampleInferer.js'
 import { ValueInferer } from './ValueInferer.js'
 
-// The inferers walk an UNKNOWN, possibly adversarial runtime value (or a set
+// The inferers walk an UNKNOWN, possibly untrusted runtime value (or a set
 // of example values) and emit a JSONSchema — the reverse direction of
 // compileSchema (compilers.ts), which walks a finite, developer-authored
 // ContractShape tree. Recursion here is runtime-only and bounded on three
@@ -48,7 +49,7 @@ import { ValueInferer } from './ValueInferer.js'
  *
  * A readable member {@link canonicalStringify} cannot key — a cyclic or
  * otherwise JSON-inexpressible fragment, which only a direct caller can supply
- * since the inferers always build plain encodable fragments — has NO
+ * because the inferers always build plain encodable fragments — has NO
  * de-duplication key, so it can participate in neither de-duplication nor the
  * canonical-key ordering. It is KEPT (dropping a variant would narrow the
  * union, and unification only ever widens), appended in input order after the
@@ -171,7 +172,7 @@ export function unifySchemas(schemas: readonly JSONSchema[]): JSONSchema {
 export function stringToFormat(value: string): SchemaFormat | undefined {
 	if (!isString(value)) return undefined
 	if (value.length > FORMAT_MAX_LENGTH) return undefined
-	// Total by containment at the door: every classification below dispatches
+	// Total by containment at the door: every following classification dispatches
 	// through `RegExp.prototype.test`/`.exec`, caller-writable members reached by
 	// name, and this reader is documented to answer `SchemaFormat | undefined`
 	// with no `@throws` at all.
@@ -239,7 +240,7 @@ export function samplesToFormat(values: readonly unknown[]): SchemaFormat | unde
  * Fires only when ALL of: every value is the same primitive kind (all string
  * or all FINITE number through {@link isFiniteNumber} — any `null`/boolean/mixed
  * slot never qualifies, and a slot containing `NaN` / `±Infinity` never
- * qualifies either, since {@link canonicalStringify} collapses `NaN` to
+ * qualifies either, because {@link canonicalStringify} collapses `NaN` to
  * `'null'` and would otherwise risk an invalid-JSON `enum`); at least 2
  * values are given; the distinct-by-{@link canonicalStringify} count is LESS
  * than the value count (repetition required — separates a categorical column
@@ -374,14 +375,11 @@ export function inferPrimitiveEnum(
  */
 export function valueToSchema(value: unknown, options?: ValueToSchemaOptions): JSONSchema {
 	return contain(() => {
-		const optionsSnapshot = readOptions(
-			options,
-			['limits', 'closed', 'format', 'enum'],
-			'valueToSchema',
-			'schema',
-		)
+		const keys = ['limits', 'closed', 'format', 'enum'] as const
+		const optionsSnapshot = readOptions(options, keys, 'valueToSchema', 'schema')
+		refuseOptionKeys(options, keys, 'valueToSchema', 'schema')
 		// The grouped budgets cross the same contained read the flat keys crossed:
-		// `limits` is a caller-owned record, so a hostile getter or `ownKeys` trap
+		// `limits` is a caller-owned record, so an untrusted getter or `ownKeys` trap
 		// on it refuses under this door's name rather than reaching the walk.
 		const limits = readOptions(
 			optionsSnapshot?.limits,
@@ -393,7 +391,7 @@ export function valueToSchema(value: unknown, options?: ValueToSchemaOptions): J
 		const properties = sanitizeBudget(limits?.properties, INFER_BREADTH_LIMIT)
 		const closed = optionsSnapshot?.closed ?? true
 		const format = optionsSnapshot?.format ?? false
-		// The whole walk runs inside this door's own read boundary, so a hostile
+		// The whole walk runs inside this door's own read boundary, so an untrusted
 		// getter, `length` trap, or key enumeration anywhere below it is published
 		// under this door's name rather than under the name of an engine method no
 		// consumer can call.
@@ -448,12 +446,9 @@ export function samplesToSchema(
 	options?: ValueToSchemaOptions,
 ): JSONSchema {
 	return contain(() => {
-		const optionsSnapshot = readOptions(
-			options,
-			['limits', 'closed', 'format', 'enum'],
-			'samplesToSchema',
-			'schema',
-		)
+		const keys = ['limits', 'closed', 'format', 'enum'] as const
+		const optionsSnapshot = readOptions(options, keys, 'samplesToSchema', 'schema')
+		refuseOptionKeys(options, keys, 'samplesToSchema', 'schema')
 		const limits = readOptions(
 			optionsSnapshot?.limits,
 			['depth', 'properties'],
@@ -476,7 +471,7 @@ export function samplesToSchema(
 		)
 		// A hole is READABLE. Reporting it as `samples could not be read` paired a
 		// true refusal with a false diagnosis and contradicted the guide's own
-		// attribution of that message to "a hostile getter or failed key walk".
+		// attribution of that message to "an untrusted getter or failed key walk".
 		if (!read.dense) {
 			throw new ContractError('samplesToSchema: samples must be a dense array', {
 				code: 'structure',

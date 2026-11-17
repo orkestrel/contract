@@ -120,7 +120,7 @@ export class SampleInferer {
 	// The record-specialized branch. `properties` is the union of every sample's
 	// own keys (sorted, capped at `#breadth`); a key is `required` only when
 	// present (and non-`undefined`) in EVERY sample. Each key's schema is inferred
-	// over the collected values for that key through the shared step above (one
+	// over the collected values for that key through the preceding shared step (one
 	// less depth), so a property that is itself an array or object of varying
 	// shape across rows is unified the same way the top level is, and the same
 	// format and enum gating applies per key.
@@ -128,7 +128,7 @@ export class SampleInferer {
 	// `additionalProperties` is forced to `true` regardless of the closed flag when
 	// the key union exceeds `#breadth`, a readable row carries a key as an own
 	// property holding `undefined`, or a row owns a non-enumerable string key or a
-	// symbol key. A hostile getter or failed KEY walk reaches the
+	// symbol key. An untrusted getter or failed KEY walk reaches the
 	// door's boundary instead of dropping a key or widening the whole slot.
 	//
 	// The memo is keyed by the slot's ORDERED row identities, not by a single row.

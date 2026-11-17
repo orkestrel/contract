@@ -16,7 +16,7 @@ import type {
  */
 export const SHAPE_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freeze({
 	string: Object.freeze(['min', 'max', 'pattern', 'date', 'description']),
-	number: Object.freeze(['integer', 'min', 'max', 'description']),
+	number: Object.freeze(['integer', 'min', 'over', 'max', 'under', 'description']),
 	boolean: Object.freeze(['description']),
 	null: Object.freeze(['description']),
 	literal: Object.freeze(['values', 'description']),
@@ -29,6 +29,8 @@ export const SHAPE_FIELDS: Readonly<Record<string, readonly string[]>> = Object.
 	raw: Object.freeze(['schema']),
 	shape: Object.freeze(['description']),
 	function: Object.freeze(['description']),
+	undefined: Object.freeze(['description']),
+	interface: Object.freeze(['members', 'description']),
 } satisfies Record<ContractShape['category'], readonly string[]>)
 
 /**
@@ -64,7 +66,7 @@ export const CONTRACT_ERROR_BRAND = Symbol.for('@orkestrel/contract.ContractErro
  * installed at the moment THIS module evaluated, and reading it later, at the
  * call site, is reading whatever the caller most recently installed. "Before any
  * caller code runs" is the tempting phrasing and it is false in exactly the case
- * the limit below names, so it is not used.
+ * the following limit names, so it is not used.
  *
  * The limit that follows, stated as a limit rather than as a guarantee: capture
  * is only as early as this package's own evaluation. A consumer module that
@@ -75,7 +77,7 @@ export const CONTRACT_ERROR_BRAND = Symbol.for('@orkestrel/contract.ContractErro
  * package wholesale rather than bother with the table, so it is named here
  * instead of defended.
  *
- * Membership rule, stated so a reviewer can apply it and a new call site knows
+ * Membership rule, stated so a reviewer can apply it and an added call site knows
  * where to go: **every host operation this package dispatches by name whose
  * result a published answer depends on.** That admits statics, constructors and
  * namespaces, and — this is the part the earlier wording got wrong by writing
@@ -144,7 +146,7 @@ export const INTRINSICS = Object.freeze({
 	base: Object.prototype,
 	/**
 	 * Captures the proxy-visible operations, grouped because that is what separates them:
-	 * each reports the trap's exact answer where `Object`'s flat peer above
+	 * each reports the trap's exact answer where `Object`'s preceding flat peer
 	 * reports the target's.
 	 *
 	 * @remarks
@@ -253,6 +255,8 @@ export const INTRINSICS = Object.freeze({
 	indices: Array.prototype.keys,
 	/** Captures the native array iterator advance operation. */
 	advance: Object.getPrototypeOf([][Symbol.iterator]()).next,
+	/** Captures `String.prototype.slice` — the window a preview encodes, dispatched through `apply`. */
+	slice: String.prototype.slice,
 	/** Captures `Array.prototype.join` — text assembly from derived parts. */
 	join: Array.prototype.join,
 	/** Captures `Function.prototype.bind` for a receiver-bound host operation. */
@@ -346,7 +350,8 @@ export const JSON_SCHEMA_TYPES: readonly JSONSchemaType[] = Object.freeze([
  * @remarks
  * Each asserts nothing about a value, so a converted shape drops it without loss, except
  * `description`, which the shape keeps. A strict conversion admits them beside every
- * keyword it reads, the function leaf `{ not: {}, format: 'function' }` included.
+ * keyword it reads, the function leaf `{ not: {}, format: 'function' }` and the undefined
+ * leaf `{ not: {}, format: 'undefined' }` included.
  *
  * @example
  * ```ts
@@ -374,8 +379,10 @@ export const SCHEMA_ANNOTATIONS = Object.freeze([
  * refuses. `pattern`, `format`, and `not` are absent because no compiled shape asserts
  * them, so a schema holding one would convert to a shape wider than the schema it came
  * from. The exceptions are `format: 'date'` on a string node, which a strict conversion
- * reads as a date string shape, and the function leaf `{ not: {}, format: 'function' }`,
- * which it reads as a function shape.
+ * reads as a date string shape, `format: 'interface'` on an object node, which it reads
+ * as an interface shape, the function leaf `{ not: {}, format: 'function' }`,
+ * which it reads as a function shape, and the undefined leaf
+ * `{ not: {}, format: 'undefined' }`, which it reads as an undefined shape.
  *
  * @example
  * ```ts
@@ -392,6 +399,8 @@ export const STRICT_SCHEMA_KEYWORDS: readonly string[] = Object.freeze([
 	'maxLength',
 	'minimum',
 	'maximum',
+	'exclusiveMinimum',
+	'exclusiveMaximum',
 	'minItems',
 	'maxItems',
 	'items',
@@ -461,6 +470,7 @@ export const FAULT_KINDS: readonly FaultKind[] = Object.freeze([
 	'json',
 	'shape',
 	'function',
+	'undefined',
 ])
 
 /**
@@ -476,7 +486,9 @@ export const FAULT_KINDS: readonly FaultKind[] = Object.freeze([
  */
 export const FAULT_CONSTRAINTS: readonly FaultConstraint[] = Object.freeze([
 	'min',
+	'over',
 	'max',
+	'under',
 	'pattern',
 	'date',
 	'integer',
@@ -490,9 +502,9 @@ export const FAULT_CONSTRAINTS: readonly FaultConstraint[] = Object.freeze([
  * `explain` or `audit` report ever returns, frozen.
  *
  * @remarks
- * Bounds BOTH reports against adversarial input (a giant array, a wide record)
+ * Bounds BOTH reports against untrusted input (a giant array, a wide record)
  * — `compileReporter` and `compileAuditor` each collect faults in stable
- * pre-order and stop once this cap is reached, and every recursive call slices
+ * pre-order and stop after this cap is reached, and every recursive call slices
  * to it, so the report size (and the work to build it) stays finite and
  * deterministic at every nesting level regardless of the input's size. Size a
  * diagnostic surface off this constant and it bounds `audit` exactly as it
@@ -571,7 +583,7 @@ export const COMPILE_DEPTH_LIMIT = 512
  *
  * This cap does not bound compilation, because the compilers do not expand a
  * DAG. Every artifact family is one entry per unique node, so the boundary
- * declaration above compiles its unique nodes in about a millisecond.
+ * preceding declaration compiles its unique nodes in about a millisecond.
  * What does expand is what a CONSUMER materializes from the artifacts: the
  * value `generate` builds, and the document a compiled schema serializes to,
  * are trees of exactly this size. The cap survives as a bound on what a caller
@@ -678,7 +690,7 @@ export const GENERATION_ATTEMPT_LIMIT = 32
  * Caps at `32` the object/array nesting depth {@link valueToSchema} walks, frozen.
  *
  * @remarks
- * Bounds inference against adversarial or cyclic runtime input — once the
+ * Bounds inference against untrusted or cyclic runtime input — after the
  * remaining depth budget reaches zero, inference stops descending and emits
  * the empty accept-anything schema `{}` for that branch instead of recursing
  * further. LOWERABLE per call through {@link ValueToSchemaLimits.depth}; a

@@ -1,5 +1,6 @@
 import type { ContractErrorContext, ContractErrorOptions } from './types.js'
 import { CONTRACT_CODES, CONTRACT_ERROR_BRAND, INTRINSICS } from './constants.js'
+import { isAuditFault } from './validators.js'
 
 /**
  * Carries a machine-readable contract category, optional context, and an exact optional
@@ -140,7 +141,17 @@ export function isContractError(value: unknown): value is ContractError {
 		const received: unknown = INTRINSICS.own(context, 'received')
 			? INTRINSICS.reflect.read(context, 'received')
 			: undefined
-		return received === undefined || typeof received === 'string'
+		if (received !== undefined && typeof received !== 'string') return false
+		const faults: unknown = INTRINSICS.own(context, 'faults')
+			? INTRINSICS.reflect.read(context, 'faults')
+			: undefined
+		return (
+			faults === undefined ||
+			(INTRINSICS.array(faults) &&
+				INTRINSICS.reflect.apply(INTRINSICS.find, faults, [
+					(entry: unknown, index: number) => !INTRINSICS.own(faults, index) || !isAuditFault(entry),
+				]) === -1)
+		)
 	} catch {
 		return false
 	}

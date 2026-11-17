@@ -1,9 +1,13 @@
-// Times the compiled guards a database pays per stored row and per query-door read, one `it`
-// per cell; select one with `-t`. Each answer is asserted before its cell is timed.
-import { arrayShape, compileGuard, createContract, rawShape } from '@src/core'
+// Times the compiled guards a database pays per stored row and per query-door read, and the
+// owning door against `admitValue` on the option bags a factory admits, one `it` per cell; select
+// one with an anchored `-t`. Each answer is asserted before its cell is timed, and an owning cell
+// annotates its median latency in milliseconds for an interleaved reading.
+import { admitValue, arrayShape, compileGuard, createContract, rawShape } from '@src/core'
+import { ValueCloner } from '../../../src/core/ValueCloner.js'
 import {
 	CONDITION_BENCH_SHAPE,
 	CONDITION_BENCH_VALUE,
+	OWN_BENCH_CASES,
 	QUERY_BENCH_ONE,
 	QUERY_BENCH_SHAPE,
 	QUERY_BENCH_TEN,
@@ -82,4 +86,40 @@ it('checks a ten-condition query', async ({ bench }) => {
 		query.is(QUERY_BENCH_TEN)
 	}).run({ time: 1000 })
 	expect(result.state).toBe('completed')
+})
+
+it.for(OWN_BENCH_CASES)('admits a $kind bag', async ({ kind, shape, bag }, { bench, annotate }) => {
+	const contract = createContract(shape)
+	expect(admitValue(contract, bag).success).toBe(true)
+	const result = await bench(`admits a ${kind} bag`, {}, () => {
+		admitValue(contract, bag)
+	}).run({ time: 1000 })
+	expect(result.state).toBe('completed')
+	if (result.state === 'completed') await annotate(`median ${result.latency.p50}`, 'reading')
+})
+
+it.for(OWN_BENCH_CASES)(
+	'copies and admits a $kind bag',
+	async ({ kind, shape, bag, plan }, { bench, annotate }) => {
+		const contract = createContract(shape)
+		expect(admitValue(contract, new ValueCloner(bag, plan).clone()).success).toBe(true)
+		const result = await bench(`copies and admits a ${kind} bag`, {}, () => {
+			new ValueCloner(bag, plan).clone()
+			admitValue(contract, bag)
+		}).run({ time: 1000 })
+		expect(result.state).toBe('completed')
+		if (result.state === 'completed') await annotate(`median ${result.latency.p50}`, 'reading')
+	},
+)
+
+it.for(OWN_BENCH_CASES)('owns a $kind bag', async ({ kind, shape, bag }, { bench, annotate }) => {
+	const contract = createContract(shape)
+	const owned = contract.own(bag)
+	expect(owned).toEqual(admitValue(contract, bag))
+	expect(owned.success).toBe(true)
+	const result = await bench(`owns a ${kind} bag`, {}, () => {
+		contract.own(bag)
+	}).run({ time: 1000 })
+	expect(result.state).toBe('completed')
+	if (result.state === 'completed') await annotate(`median ${result.latency.p50}`, 'reading')
 })
