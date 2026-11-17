@@ -2927,20 +2927,64 @@ export function createHostileKeys(): object {
 }
 
 /**
- * Builds an alternating array-and-record nest around a string leaf.
+ * Builds an alternating array-and-record nest around a leaf.
  *
  * @param depth - The number of container layers to add
- * @returns `'leaf'` wrapped in `depth` alternating container layers
+ * @param leaf - The innermost value. Default: `'leaf'`
+ * @returns The leaf wrapped in `depth` alternating container layers
  *
  * @example
  * ```ts
  * buildDeepNest(2) // { value: ['leaf'] }
  * ```
  */
-export function buildDeepNest(depth: number): unknown {
+export function buildDeepNest(depth: number, leaf: unknown = 'leaf'): unknown {
 	return Array.from(iterateIndices(() => depth)).reduce<unknown>(
 		(value, layer) => (layer % 2 === 0 ? [value] : { value }),
-		'leaf',
+		leaf,
+	)
+}
+
+/** Holds the clone bench's small record: five members, one of them a three-entry list. */
+export const CLONE_BENCH_ROW: Readonly<Record<string, unknown>> = Object.freeze({
+	id: 'row-1',
+	title: 'First row',
+	state: 'open',
+	count: 1,
+	tags: Object.freeze(['a', 'b', 'c']),
+})
+
+/**
+ * Builds a record of string members named `key0` onward.
+ *
+ * @param count - The number of members
+ * @returns A fresh record whose member `keyN` holds `'value N'`
+ */
+export function buildWideRecord(count: number): Readonly<Record<string, string>> {
+	return Object.fromEntries(
+		Array.from(
+			iterateIndices(() => count),
+			(index) => [`key${index}`, `value ${index}`],
+		),
+	)
+}
+
+/**
+ * Builds a list of small records shaped like {@link CLONE_BENCH_ROW}.
+ *
+ * @param count - The number of records
+ * @returns A fresh list whose records differ by their position
+ */
+export function buildRowPool(count: number): ReadonlyArray<Readonly<Record<string, unknown>>> {
+	return Array.from(
+		iterateIndices(() => count),
+		(index) => ({
+			id: `id-${index}`,
+			title: `title ${index}`,
+			state: index % 2 === 0 ? 'open' : 'closed',
+			count: index,
+			tags: ['a', 'b', `t${index}`],
+		}),
 	)
 }
 
@@ -6839,6 +6883,44 @@ export const READ_FAULTS_ROWS: readonly ReadFaultsRow[] = Object.freeze([
 		carried: false,
 	},
 	{ name: 'null', faults: null, carried: false },
+])
+
+/**
+ * Builds a record whose middle member is an own enumerable data member named `__proto__`.
+ *
+ * @param value - The value the `__proto__` member holds
+ * @returns A fresh record with the members `first`, `__proto__`, and `last`, in that order
+ */
+export function buildProtoMember(value: unknown): Readonly<Record<string, unknown>> {
+	const record: Record<string, unknown> = { first: 1 }
+	Object.defineProperty(record, '__proto__', {
+		value,
+		enumerable: true,
+		configurable: true,
+		writable: true,
+	})
+	record.last = 2
+	return record
+}
+
+/** Describes one record position that holds an own member named `__proto__`. */
+export interface ProtoRow {
+	/** Names the position. */
+	readonly name: string
+	/** Holds the source to clone. */
+	readonly source: unknown
+	/** Names the member of the root that holds the record, or `undefined` when the root holds it. */
+	readonly key: string | undefined
+}
+
+/** Lists a `__proto__` member in the root record and in a nested record. */
+export const PROTO_ROWS: readonly ProtoRow[] = Object.freeze([
+	{ name: 'a record', source: buildProtoMember({ tag: 'inner' }), key: undefined },
+	{
+		name: 'a nested record',
+		source: { outer: buildProtoMember({ tag: 'inner' }) },
+		key: 'outer',
+	},
 ])
 
 /**
