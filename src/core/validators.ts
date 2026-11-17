@@ -827,6 +827,34 @@ export function isAuditFault(value: unknown): value is AuditFault {
 	)
 }
 
+/**
+ * Determines whether a value is a dense list of {@link AuditFault} values.
+ *
+ * @remarks
+ * Reads each index as an own member, in order, and stops at the first hole or the first entry
+ * that `isAuditFault` refuses. An empty list passes.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is a dense array whose every entry is an audit fault; false otherwise
+ *
+ * @example
+ * ```ts
+ * isAuditFaults([{ reason: 'hidden', path: ['note'] }]) // true
+ * isAuditFaults([])                                      // true
+ * isAuditFaults([{ reason: 'hidden' }])                  // false
+ * isAuditFaults('hidden')                                // false
+ * ```
+ */
+export function isAuditFaults(value: unknown): value is readonly AuditFault[] {
+	return holds(
+		() =>
+			INTRINSICS.array(value) &&
+			INTRINSICS.reflect.apply(INTRINSICS.find, value, [
+				(entry: unknown, index: number) => !INTRINSICS.own(value, index) || !isAuditFault(entry),
+			]) === -1,
+	)
+}
+
 /** Determines whether a value is a `Map`.
  *
  * @param value - The value to inspect

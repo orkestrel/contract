@@ -104,6 +104,7 @@ import {
 	GUARD_DEPTH_LIMIT,
 	isFault,
 	isAuditFault,
+	isAuditFaults,
 	createContract,
 	objectShape,
 	stringShape,
@@ -141,8 +142,12 @@ import {
 	ForgedBrandDeclaration,
 	NullBaseDeclaration,
 	ProxiedBrandDeclaration,
+	READ_FAULT,
+	READ_FAULTS_ROWS,
 	StrippedBrandDeclaration,
+	throwHostileAccess,
 } from '../../setup.js'
+import { createRecorder } from '@orkestrel/test'
 import { createForeignRecord, createForeignRegExp } from '../../setupServer.js'
 
 describe('primitive validators', () => {
@@ -1580,5 +1585,32 @@ describe('isFault and isAuditFault', () => {
 				.audit({})
 				.every(isFault),
 		).toBe(true)
+	})
+})
+
+describe('isAuditFaults', () => {
+	it.each(READ_FAULTS_ROWS)('answers $carried for $name', ({ faults, carried }) => {
+		expect(isAuditFaults(faults)).toBe(carried)
+	})
+
+	it('refuses an array-like record, a throwing index, and a revoked array proxy', () => {
+		const throwing = Object.defineProperty([], '0', { enumerable: true, get: throwHostileAccess })
+
+		expect(isAuditFaults({ length: 0 })).toBe(false)
+		expect(isAuditFaults(throwing)).toBe(false)
+		expect(isAuditFaults(createRevokedArrayProxy())).toBe(false)
+	})
+
+	it('reads each index once, in order, and stops at the first refused entry', () => {
+		const reads = createRecorder<[key: string]>()
+		const faults = new Proxy([READ_FAULT, 7, READ_FAULT], {
+			get(target, key, receiver) {
+				if (key === '0' || key === '1' || key === '2') reads.handler(key)
+				return Reflect.get(target, key, receiver)
+			},
+		})
+
+		expect(isAuditFaults(faults)).toBe(false)
+		expect(reads.calls).toEqual([['0'], ['1']])
 	})
 })

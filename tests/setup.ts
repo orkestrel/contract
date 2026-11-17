@@ -6808,6 +6808,39 @@ export function buildHoledArray(value: readonly unknown[], index: number): reado
 	return holed
 }
 
+/** Describes one `context.faults` form a caller hands `readValue`. */
+export interface ReadFaultsRow {
+	/** Names the form. */
+	readonly name: string
+	/** Holds the `faults` value of the context option. */
+	readonly faults: unknown
+	/** Declares whether the refusal's context carries the form. */
+	readonly carried: boolean
+}
+
+/** Holds the audit fault every list form of {@link READ_FAULTS_ROWS} draws on. */
+export const READ_FAULT: AuditFault = Object.freeze({
+	reason: 'type',
+	path: Object.freeze(['a']),
+	expected: 'string',
+	received: '1',
+})
+
+/** Lists the `context.faults` forms `readValue` meets: two dense fault lists and five malformed values. */
+export const READ_FAULTS_ROWS: readonly ReadFaultsRow[] = Object.freeze([
+	{ name: 'an empty list', faults: Object.freeze([]), carried: true },
+	{ name: 'a list of one fault', faults: Object.freeze([READ_FAULT]), carried: true },
+	{ name: 'a string', faults: 'x', carried: false },
+	{ name: 'a list holding a number', faults: Object.freeze([1]), carried: false },
+	{ name: 'a sparse list', faults: buildHoledArray([READ_FAULT, READ_FAULT], 0), carried: false },
+	{
+		name: 'a list holding an empty record',
+		faults: Object.freeze([READ_FAULT, {}]),
+		carried: false,
+	},
+	{ name: 'null', faults: null, carried: false },
+])
+
 /**
  * Lists the one-member variations of a generated value.
  *

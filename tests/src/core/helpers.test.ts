@@ -838,6 +838,7 @@ import {
 	ASTRAL,
 	buildSurrogateText,
 	StringDeclaration,
+	READ_FAULTS_ROWS,
 	throwSentinel,
 } from '../../setup.js'
 import { createForeignPrototype, createForeignRecord } from '../../setupServer.js'
@@ -2255,6 +2256,27 @@ describe('readValue faults', () => {
 		expect(error.context).toEqual({ path: ['id'], faults })
 		expect(isContractError(error)).toBe(true)
 	})
+
+	it.each(READ_FAULTS_ROWS)(
+		'publishes a refusal its own guard admits for $name',
+		({ faults, carried }) => {
+			const outcome = attempt(() =>
+				Reflect.apply(readValue, undefined, [
+					throwSentinel(new Error('unreadable')),
+					'openDoor',
+					{ context: { path: ['id'], faults } },
+				]),
+			)
+			if (outcome.success) throw new Error('expected readValue to refuse')
+			const error = outcome.error
+			expect(isContractError(error)).toBe(true)
+			if (!(error instanceof ContractError)) throw new Error('expected a ContractError')
+			expect(error.message).toBe('openDoor: value could not be read')
+			expect(Object.hasOwn(error.context ?? {}, 'faults')).toBe(carried)
+			expect(error.context?.faults).toBe(carried ? faults : undefined)
+			expect(error.context?.path).toEqual(['id'])
+		},
+	)
 })
 
 describe('holds', () => {
