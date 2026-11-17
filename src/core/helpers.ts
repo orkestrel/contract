@@ -26,6 +26,7 @@ import type {
 	NumberShapeOptions,
 	RandomFunction,
 	ReadValueOptions,
+	RefuseValueOptions,
 	Result,
 	SampleMemo,
 	SchemaFormat,
@@ -1435,6 +1436,30 @@ export function attempt<T>(callback: () => T): Result<T> {
 }
 
 /**
+ * Settles a callback's outcome, synchronous or awaited, as a {@link Result}.
+ *
+ * @remarks
+ * Runs the callback one time. A synchronous throw, a rejection, and a thenable whose `then`
+ * throws each answer a `Failure` carrying the exact thrown value, and the returned promise never
+ * rejects. Use {@link attempt} where the callback is synchronous.
+ *
+ * @param callback - The callback to invoke with no arguments
+ * @returns A `Success` carrying the awaited value, or a `Failure` carrying the exact thrown value
+ *
+ * @example
+ * ```ts
+ * const outcome = await settle(async () => readFile(path))
+ * ```
+ */
+export async function settle<T>(callback: () => T | PromiseLike<T>): Promise<Result<T>> {
+	try {
+		return success(await callback())
+	} catch (error) {
+		return failure(error)
+	}
+}
+
+/**
  * Renders a thrown value as a non-empty message.
  *
  * @remarks
@@ -1509,6 +1534,7 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 						shape: undefined,
 						limit: undefined,
 						received: undefined,
+						faults: undefined,
 						...source,
 					}
 		const requested = options?.code
@@ -1551,6 +1577,7 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 						...(owned.shape === undefined ? {} : { shape: owned.shape }),
 						...(owned.limit === undefined ? {} : { limit: owned.limit }),
 						...(owned.received === undefined ? {} : { received: owned.received }),
+						...(owned.faults === undefined ? {} : { faults: owned.faults }),
 					}
 		throw new ContractError(
 			`${diagnostics.value.reader}: ${diagnostics.value.subject} could not be read`,
@@ -1562,6 +1589,81 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 		)
 	}
 	return outcome.value
+}
+
+/**
+ * Refuses a value that fails a guard with a located, uniform diagnostic, and narrows it when the
+ * guard holds.
+ *
+ * @remarks
+ * Runs the guard inside {@link holds}, so a guard that throws refuses. The refusal reads
+ * `<door>: <path> must be <limit>` and carries `path`, `limit`, and the {@link preview} of the
+ * value as context. The code defaults to `bound`.
+ *
+ * @param value - The value to check
+ * @param guard - The predicate that decides whether the value is acceptable
+ * @param door - The public door name used in the diagnostic
+ * @param options - The location, the limit text, and an optional code
+ * @throws {ContractError} When the guard refuses or throws
+ *
+ * @example
+ * ```ts
+ * refuseValue(options.size, isSafeInteger, 'openStore', { path: ['size'], limit: 'a safe integer' })
+ * ```
+ */
+export function refuseValue<T>(
+	value: unknown,
+	guard: Guard<T>,
+	door: string,
+	options: RefuseValueOptions,
+): asserts value is T {
+	if (holds(() => guard(value))) return
+	const { path, limit } = options
+	throw new ContractError(
+		`${door}: ${renderPath(isString(path) ? [path] : path)} must be ${limit}`,
+		{
+			code: options.code ?? 'bound',
+			context: { path, limit, received: preview(value) },
+		},
+	)
+}
+
+/**
+ * Builds the {@link ContractError} that reports an admission refusal.
+ *
+ * @remarks
+ * The message is `<door>: ` followed by {@link describeFaults} over the refusal's faults with the
+ * optional schema, or `<door>: value could not be read` when the refusal holds no fault. The code
+ * is `structure`, the context carries the first fault's path and every fault, and the cause is the
+ * refusal's own `cause` when it has one.
+ *
+ * @param refusal - The refusal an admission door answered
+ * @param door - The public door name used in the diagnostic
+ * @param schema - The optional schema whose keys the summary names
+ * @returns The error, ready to throw
+ *
+ * @example
+ * ```ts
+ * throw refusalToError({ faults: [{ reason: 'extra', path: ['typo'] }] }, 'openStore')
+ * ```
+ */
+export function refusalToError(
+	refusal: ContractRefusal,
+	door: string,
+	schema?: JSONSchema,
+): ContractError {
+	const { faults } = refusal
+	const first = faults[0]
+	return new ContractError(
+		first === undefined
+			? `${door}: value could not be read`
+			: `${door}: ${describeFaults(faults, schema)}`,
+		{
+			code: 'structure',
+			context: first === undefined ? { faults } : { path: extractPath(first), faults },
+			...(INTRINSICS.own(refusal, 'cause') ? { cause: refusal.cause } : {}),
+		},
+	)
 }
 
 /**

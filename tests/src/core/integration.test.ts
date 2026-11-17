@@ -1039,7 +1039,11 @@ describe('no caller-reachable member decides a membership answer', () => {
 		}
 		const plain = captured.names(core).filter((name) => {
 			const exported: unknown = captured.get(core, name)
-			return typeof exported === 'function' && !owners.some((owner) => owner === exported)
+			return (
+				typeof exported === 'function' &&
+				Object.hasOwn(exported, 'prototype') &&
+				!owners.some((owner) => owner === exported)
+			)
 		})
 		expect(OWNED_MEMBERS.length).toBe(plain.length)
 		expect(

@@ -50,7 +50,9 @@ import {
 	isEmptyString,
 	isError,
 	isFalse,
+	isCodedError,
 	isFiniteNumber,
+	isSafeInteger,
 	isFloat32Array,
 	isFloat64Array,
 	isFunction,
@@ -1162,6 +1164,69 @@ describe('isInteger', () => {
 		expect(isInteger(Number.POSITIVE_INFINITY)).toBe(false)
 		expect(isInteger('42')).toBe(false)
 		expect(isInteger(42n)).toBe(false)
+	})
+})
+
+describe('isSafeInteger', () => {
+	it('answers Number.isSafeInteger over every number class and coerces nothing', () => {
+		const accepted: readonly unknown[] = [
+			0,
+			-0,
+			42,
+			-7,
+			Number.MAX_SAFE_INTEGER,
+			Number.MIN_SAFE_INTEGER,
+		]
+		const refused: readonly unknown[] = [
+			Number.MAX_SAFE_INTEGER + 1,
+			Number.MIN_SAFE_INTEGER - 1,
+			3.14,
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+			'42',
+			42n,
+			null,
+			undefined,
+			Object(1),
+		]
+		for (const value of accepted) expect(isSafeInteger(value)).toBe(true)
+		for (const value of refused) expect(isSafeInteger(value)).toBe(false)
+		expect(isInteger(Number.MAX_SAFE_INTEGER + 1)).toBe(true)
+	})
+})
+
+describe('isCodedError', () => {
+	it('accepts an Error whose one code read is a string', () => {
+		expect(isCodedError(Object.assign(new Error('refused'), { code: 'ENOENT' }))).toBe(true)
+		expect(isCodedError(Object.assign(new Error('refused'), { code: '' }))).toBe(true)
+		expect(isCodedError(Object.assign(new TypeError('refused'), { code: 'X' }))).toBe(true)
+	})
+
+	it('refuses a missing, non-string, or look-alike code', () => {
+		expect(isCodedError(new Error('plain'))).toBe(false)
+		expect(isCodedError(Object.assign(new Error('refused'), { code: 7 }))).toBe(false)
+		expect(isCodedError(Object.assign(new Error('refused'), { code: undefined }))).toBe(false)
+		expect(isCodedError({ code: 'ENOENT', message: 'look-alike' })).toBe(false)
+		expect(isCodedError('ENOENT')).toBe(false)
+		expect(isCodedError(null)).toBe(false)
+	})
+
+	it('reads the code one time and answers false for a throwing getter', () => {
+		const reads: string[] = []
+		const counted = Object.defineProperty(new Error('counted'), 'code', {
+			get() {
+				reads.push('code')
+				return 'EBUSY'
+			},
+		})
+		expect(isCodedError(counted)).toBe(true)
+		expect(reads).toStrictEqual(['code'])
+		const throwing = Object.defineProperty(new Error('throwing'), 'code', {
+			get() {
+				throw new Error('code must not escape')
+			},
+		})
+		expect(isCodedError(throwing)).toBe(false)
 	})
 })
 

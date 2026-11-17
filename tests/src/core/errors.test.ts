@@ -1,4 +1,4 @@
-import type { ContractCode, ContractErrorContext } from '@src/core'
+import type { AuditFault, ContractCode, ContractErrorContext } from '@src/core'
 import { ContractError, isConstructor, isContractError, isFunction, isRecord } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
@@ -57,6 +57,40 @@ describe('contract error', () => {
 		expect(Reflect.set(path, '1', 42)).toBe(true)
 		expect(isContractError(error)).toBe(false)
 		expect(reads.value).toBe(0)
+	})
+
+	it('checks an own faults array as dense and made of audit faults', () => {
+		const faults: readonly AuditFault[] = [
+			{ reason: 'missing', path: ['id'], expected: 'string' },
+			{ reason: 'extra', path: ['typo'] },
+		]
+		const error = new ContractError('faulted', { code: 'structure', context: { faults } })
+		expect(isContractError(error)).toBe(true)
+		expect(
+			isContractError(new ContractError('empty', { code: 'structure', context: { faults: [] } })),
+		).toBe(true)
+		const malformed: readonly unknown[] = [
+			'faults',
+			{ length: 0 },
+			[{ reason: 'missing' }],
+			[{ reason: 'extra', path: ['a'] }, 7],
+			Object.assign([], {
+				0: { reason: 'extra', path: ['a'] },
+				2: { reason: 'extra', path: ['b'] },
+			}),
+		]
+		for (const entry of malformed) {
+			const refused = new ContractError('malformed', {
+				code: 'structure',
+				context: { path: ['id'] },
+			})
+			Object.defineProperty(refused, 'context', { value: { path: ['id'], faults: entry } })
+			expect(isContractError(refused)).toBe(false)
+		}
+		const later = new ContractError('later', { code: 'structure', context: { faults } })
+		expect(isContractError(later)).toBe(true)
+		expect(Reflect.set(faults, '1', 42)).toBe(true)
+		expect(isContractError(later)).toBe(false)
 	})
 
 	it('does not inspect a cause whose declared type is unknown', () => {

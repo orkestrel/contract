@@ -156,6 +156,25 @@ export function isInteger(value: unknown): value is number {
 }
 
 /**
+ * Determines whether a value is a primitive number that is an integer within the safe range.
+ *
+ * @remarks
+ * Answers `Number.isSafeInteger`: `-0` passes, and no value is coerced.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is an integer from `Number.MIN_SAFE_INTEGER` to `Number.MAX_SAFE_INTEGER`; false otherwise
+ *
+ * @example
+ * ```ts
+ * isSafeInteger(42)                       // true
+ * isSafeInteger(Number.MAX_SAFE_INTEGER + 1) // false
+ * ```
+ */
+export function isSafeInteger(value: unknown): value is number {
+	return INTRINSICS.safe(value)
+}
+
+/**
  * Determines whether a value is a finite primitive number at or above positive zero.
  *
  * @remarks
@@ -471,6 +490,26 @@ export function isRegExp(value: unknown): value is RegExp {
  */
 export function isError(value: unknown): value is Error {
 	return isInstance(value, Error)
+}
+
+/**
+ * Determines whether a value is an `Error` whose `code` is a string.
+ *
+ * @remarks
+ * Reads `code` through one `Reflect.get` call inside {@link holds}, so a throwing getter answers
+ * false and no member is read twice.
+ *
+ * @param value - The value to inspect
+ * @returns True if the value is an `Error` and its `code` reads as a string; false otherwise
+ *
+ * @example
+ * ```ts
+ * isCodedError(Object.assign(new Error('missing'), { code: 'ENOENT' })) // true
+ * isCodedError(new Error('plain'))                                      // false
+ * ```
+ */
+export function isCodedError(value: unknown): value is Error & { readonly code: string } {
+	return isError(value) && holds(() => typeof INTRINSICS.reflect.read(value, 'code') === 'string')
 }
 
 /** Determines whether a value is a native `Promise` (use {@link isPromiseLike} for any thenable).

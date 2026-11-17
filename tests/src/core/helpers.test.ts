@@ -847,6 +847,9 @@ import {
 	buildPositions,
 	encodeParts,
 	iterateIndices,
+	refusalToError,
+	refuseValue,
+	settle,
 	escapeControls,
 	previewText,
 	previewParts,
@@ -906,7 +909,9 @@ import {
 	isBoundedJSONValue,
 	isJSONValue,
 	isContractError,
+	CONTRACT_CODES,
 	isRecord,
+	isNumber,
 	isString,
 	parseJSONValue,
 	integerShape,
@@ -2114,6 +2119,141 @@ describe('readGuardShape', () => {
 		)
 		expect(optional.code).toBe('structure')
 		expect(optional.message).toBe('recordOf: optional could not be read')
+	})
+})
+
+describe('settle', () => {
+	it('answers a returned, awaited, thrown, rejected, and throwing-then outcome without rejecting', async () => {
+		const reason = Object.freeze({ operation: 'settle' })
+		const failed = { success: false, error: reason }
+		expect(await settle(() => 7)).toEqual({ success: true, value: 7 })
+		expect(await settle(() => Promise.resolve('late'))).toEqual({ success: true, value: 'late' })
+		expect(
+			await settle(async () => {
+				throw reason
+			}),
+		).toEqual(failed)
+		expect(await settle(throwSentinel(reason))).toEqual(failed)
+		expect(await settle(() => Promise.reject(reason))).toEqual(failed)
+		expect(await settle(() => ({ then: throwSentinel(reason) }))).toEqual(failed)
+	})
+
+	it('runs the callback one time and keeps the answer attempt gives a synchronous callback', async () => {
+		const reads = new ObservationCounter()
+		const reason = Object.freeze({ operation: 'settle' })
+		const outcome = await settle(() => {
+			reads.increment()
+			return 3
+		})
+		expect(reads.value).toBe(1)
+		expect(outcome).toEqual(attempt(() => 3))
+		const attempted = attempt(async () => {
+			throw reason
+		})
+		expect(attempted.success).toBe(true)
+		await expect(isSuccess(attempted) ? attempted.value : undefined).rejects.toBe(reason)
+	})
+})
+
+describe('refuseValue', () => {
+	it.each(CONTRACT_CODES)(
+		'refuses a value under the %s code with its path, limit, and preview',
+		(code) => {
+			const error = captureContractError(() =>
+				refuseValue('abc', isNumber, 'openDoor', {
+					path: ['options', 'size'],
+					limit: 'a number',
+					code,
+				}),
+			)
+			expect(error.code).toBe(code)
+			expect(error.message).toBe('openDoor: options.size must be a number')
+			expect(error.context).toEqual({
+				path: ['options', 'size'],
+				limit: 'a number',
+				received: '"abc"',
+			})
+		},
+	)
+
+	it('defaults the code to bound and renders a string path as one segment', () => {
+		const error = captureContractError(() =>
+			refuseValue(1, isString, 'openDoor', { path: 'name', limit: 'a string' }),
+		)
+		expect(error.code).toBe('bound')
+		expect(error.message).toBe('openDoor: name must be a string')
+	})
+
+	it('refuses when the predicate throws and returns when it holds', () => {
+		const error = captureContractError(() =>
+			refuseValue(
+				1,
+				(_value): _value is number => {
+					throw new Error('predicate failure')
+				},
+				'openDoor',
+				{ path: [], limit: 'readable' },
+			),
+		)
+		expect(error.code).toBe('bound')
+		expect(error.context?.received).toBe('1')
+		expect(() =>
+			refuseValue(1, isNumber, 'openDoor', { path: [], limit: 'a number' }),
+		).not.toThrow()
+	})
+
+	it('narrows the value at the call with no assertion', () => {
+		const value: unknown = 5
+		refuseValue(value, isNumber, 'openDoor', { path: ['n'], limit: 'a number' })
+		expectTypeOf(value).toEqualTypeOf<number>()
+		expect(value + 1).toBe(6)
+	})
+})
+
+describe('refusalToError', () => {
+	it('carries every fault, the first fault path, the structure code, and the refusal cause', () => {
+		const cause = new Error('unreadable')
+		const faults: readonly AuditFault[] = [
+			{ reason: 'missing', path: ['age'], expected: 'number' },
+			{ reason: 'extra', path: ['typo'] },
+		]
+		const error = refusalToError({ faults, cause }, 'openDoor')
+		expect(error).toBeInstanceOf(door.ContractError)
+		expect(error.code).toBe('structure')
+		expect(error.message).toBe(`openDoor: ${describeFaults(faults)}`)
+		expect(error.context).toEqual({ path: ['age'], faults })
+		expect(error.context?.faults).toBe(faults)
+		expect(error.cause).toBe(cause)
+		expect(isContractError(error)).toBe(true)
+	})
+
+	it('puts the schema summary in the message and reports an empty refusal as unreadable', () => {
+		const schema: JSONSchema = { type: 'object', properties: { age: { type: 'number' } } }
+		const faults: readonly AuditFault[] = [{ reason: 'missing', path: 'age', expected: 'number' }]
+		expect(refusalToError({ faults }, 'openDoor', schema).message).toBe(
+			`openDoor: ${describeFaults(faults, schema)}`,
+		)
+		const empty = refusalToError({ faults: [] }, 'openDoor')
+		expect(empty.message).toBe('openDoor: value could not be read')
+		expect(empty.context).toEqual({ faults: [] })
+		expect('cause' in empty).toBe(false)
+	})
+})
+
+describe('readValue faults', () => {
+	it('carries the faults of the context a failed read refuses with', () => {
+		const faults: readonly AuditFault[] = [{ reason: 'missing', path: ['id'], expected: 'string' }]
+		const error = captureContractError(() =>
+			readValue(
+				() => {
+					throw new Error('unreadable')
+				},
+				'openDoor',
+				{ context: { path: ['id'], faults } },
+			),
+		)
+		expect(error.context).toEqual({ path: ['id'], faults })
+		expect(isContractError(error)).toBe(true)
 	})
 })
 
