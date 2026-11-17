@@ -55,7 +55,7 @@ import { ShapePass } from './ShapePass.js'
  * permanently. Success replays the exact frozen root; failure rethrows the
  * exact class-owned or directly adopted error. Nonredirectable settlement
  * releases populated traversal state before publishing that result. Reentry
- * poisons the active operation and every later call with one shared cause-free
+ * invalidates the active operation and every later call with one shared cause-free
  * error.
  *
  * @param shape - The contract-shape graph to retain for cloning
@@ -75,8 +75,8 @@ export class ShapeCloner implements ShapeClonerInterface {
 	// them. Terminal settlement must reach the genuine implementation of every
 	// intrinsic it dispatches through, or a caller who redirects one after
 	// construction makes the first call escape with a raw caller value while the
-	// replay reports the reentry poison — two different answers for one
-	// operation. The constructor is already too late: a poison error, and so its
+	// replay reports the reentry refusal — two different answers for one
+	// operation. The constructor is already too late: a reentry error, and so its
 	// ownership record, is created before the source is ever observed. The
 	// CONSTRUCTOR of each collection is captured beside its members, because
 	// construction happens first: capturing `WeakSet.prototype.has` while still
@@ -187,7 +187,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 
 	#execute(): ContractShape {
 		const budget = { left: CLONE_NODE_LIMIT }
-		// Narrowed once at the door, because both dispatches below take their
+		// Narrowed once at the door, because both following dispatches take their
 		// receiver type from these values. The walk runs before `#settle` drops
 		// them, so it always finds the maps the constructor built; this refusal is
 		// what keeps that a statement the types carry rather than one a comment
@@ -385,7 +385,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 		// are what get compared. Reading scalars here and then handing a
 		// already-observed RegExp back to that routine would observe it twice, so
 		// an accessor that answers one observation per value lost its deferred
-		// stable-pattern diagnosis to an outer hostile-read translation.
+		// stable-pattern diagnosis to an outer untrusted-read translation.
 		const firstValue = this.#capturePatternValue(first, path)
 		if (firstValue === undefined) return undefined
 		const secondValue = this.#capturePatternValue(second, path)

@@ -198,7 +198,7 @@ export function parseNull(value: unknown): null | undefined {
  *
  * @remarks
  * Probes the record's own enumerable values before returning the reference, so a
- * hostile getter is met here rather than at the caller. A failed probe throws
+ * untrusted getter is met here rather than at the caller. A failed probe throws
  * `ContractError { code: 'structure' }` carrying `parseRecord: value could not be
  * read`; a readable non-record answers `undefined`.
  *

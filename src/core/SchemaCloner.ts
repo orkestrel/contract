@@ -22,7 +22,7 @@ import { isObject } from './validators.js'
  * permanently. Success replays the exact frozen root; failure rethrows the
  * exact class-owned error. Nonredirectable terminal settlement releases
  * populated traversal state before publishing that result, while retaining
- * the source and exact result afterward. Reentry poisons the active operation
+ * the source and exact result afterward. Reentry invalidates the active operation
  * and every later call with one shared cause-free error.
  *
  * @param schema - The JSON Schema graph to retain for cloning
@@ -44,8 +44,8 @@ export class SchemaCloner implements SchemaClonerInterface {
 	// them. Terminal settlement must reach the genuine implementation of every
 	// intrinsic it dispatches through, or a caller who redirects one after
 	// construction makes the first call escape with a raw caller value while the
-	// replay reports the reentry poison — two different answers for one
-	// operation. The constructor is already too late: a poison error, and so its
+	// replay reports the reentry refusal — two different answers for one
+	// operation. The constructor is already too late: a reentry error, and so its
 	// ownership record, is created before the source is ever observed. The
 	// CONSTRUCTOR of each collection is captured beside its members, because
 	// construction happens first: capturing `WeakSet.prototype.has` while still
@@ -148,7 +148,7 @@ export class SchemaCloner implements SchemaClonerInterface {
 		if (INTRINSICS.array(this.#source)) {
 			this.#refuse('cloneSchema: a schema root must be a record, not an array', 'structure', [])
 		}
-		// Narrowed once at the door, because the dispatch below takes its receiver
+		// Narrowed once at the door, because the following dispatch takes its receiver
 		// type from this value. The walk runs before `#settle` drops the map, so it
 		// always finds the one the constructor built; this refusal is what keeps
 		// that a statement the types carry rather than one a comment makes.
@@ -245,7 +245,7 @@ export class SchemaCloner implements SchemaClonerInterface {
 		options?: { readonly path?: readonly string[]; readonly cause?: unknown },
 	): ContractError {
 		// Own reads only, exactly as the diagnostic's `cause` already was: the
-		// translation literal below carries `cause` and no `path`, so an
+		// following translation literal carries `cause` and no `path`, so an
 		// unqualified `options.path` would leave the literal and consult
 		// `Object.prototype`, which the caller being diagnosed can write.
 		const path =

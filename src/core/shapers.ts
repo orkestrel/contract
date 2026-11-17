@@ -647,7 +647,7 @@ export function optionalShape<S extends ContractShape>(
 	return contain(() => {
 		const safe = readOptions(options, ['default'], 'optionalShape', 'optional')
 		refuseOptionKeys(options, ['default'], 'optionalShape', 'optional')
-		// Own presence, read apart from the value: the snapshot above omits a present
+		// Own presence, read apart from the value: the preceding snapshot omits a present
 		// `undefined` and keeps an inherited value, and neither may decide this field.
 		const present = options !== undefined && INTRINSICS.own(options, 'default')
 		const value = present ? safe?.default : undefined
@@ -871,7 +871,7 @@ export function interfaceShape<P extends Readonly<Record<string, ContractShape>>
  * structurally verbatim, so here the schema claims LESS than the compiled guard
  * accepts — `rawShape({ type: 'string' })` emits `{ type: 'string' }` and its
  * guard still accepts `42`, the mirror of {@link jsonShape}'s looseness.
- * `compileGenerator` throws, since an arbitrary embedded schema has no
+ * `compileGenerator` throws, because an arbitrary embedded schema has no
  * auto-generatable sample.
  *
  * @param schema - The JSON Schema fragment to embed
@@ -891,7 +891,7 @@ export function rawShape(schema: JSONSchema): RawShape {
 
 // === Schema inversion
 
-// schemaToShape walks an UNKNOWN, possibly adversarial runtime JSONSchema value
+// schemaToShape walks an UNKNOWN, possibly untrusted runtime JSONSchema value
 // (a hand-written schema, or one produced by valueToSchema / samplesToSchema)
 // and emits a validating ContractShape — the reverse direction of
 // compileSchema (compilers.ts), which walks a finite, developer-authored
@@ -908,7 +908,7 @@ export function rawShape(schema: JSONSchema): RawShape {
 // compiled guard; the returned shape is always one `validateShape` accepts.
 //
 // Every widening — an empty/unrecognized node, an exhausted budget, a cycle —
-// lands on `rawShape`, NOT `jsonShape`. A hostile throw is NOT a widening: a
+// lands on `rawShape`, NOT `jsonShape`. An untrusted throw is NOT a widening: a
 // keyword access, enumeration, or recursive traversal that throws is not
 // malformed schema vocabulary, so `schemaToShape` runs the whole walk inside
 // `readValue` and refuses it as `ContractError { code: 'structure', context: {
@@ -919,7 +919,7 @@ export function rawShape(schema: JSONSchema): RawShape {
 // also emits `{}` but its guard is the strictly narrower `isJSONValue`, so
 // widening through it would REJECT the exotic originals (`Map`, `Set`, a class
 // instance, a function, `NaN`) whose inferred schema is exactly `{}` — the
-// round trip below would then be a false claim. `jsonShape` remains the shape a
+// following round trip would then be a false claim. `jsonShape` remains the shape a
 // user AUTHORS to mean "any JSON value"; it is never inferred.
 
 /**
@@ -952,7 +952,7 @@ export function rawShape(schema: JSONSchema): RawShape {
  * `Set`, a class instance, a function, a symbol, a bigint, and readable cyclic
  * hosts), which infer `{}` and widen back to an accept-anything
  * {@link rawShape}. An unreadable host is refused by {@link valueToSchema}
- * before this law produces a schema; direct hostile input to
+ * before this law produces a schema; direct untrusted input to
  * {@link schemaToShape} receives the same coded refusal.
  * Widening is the only source of looseness. The law has three explicit host
  * limits:
@@ -1005,7 +1005,7 @@ export function rawShape(schema: JSONSchema): RawShape {
  * optional property to fill. An object with no `additionalProperties` closes
  * rather than opens, and `oneOf` keeps exactly-one, because a strict walk reads
  * every keyword that could keep two arms apart. Below a `oneOf` that object refuses
- * instead, since closing it could change which arms match. A strict conversion is the
+ * instead, because closing it could change which arms match. A strict conversion is the
  * one walk that asserts a `format`: it reads `format: 'date'` on a string node as a
  * date string shape, so a compiled {@link dateShape} round-trips, and it reads the function
  * leaf `{ not: {}, format: 'function' }` back as {@link functionShape} and the undefined
@@ -1041,7 +1041,7 @@ export function schemaToShape(schema: JSONSchema, options?: SchemaToShapeOptions
 				context: { path: ['strict'], shape: 'schema', received: preview(strict) },
 			})
 		}
-		// The whole walk runs inside this door's own read boundary, so a hostile
+		// The whole walk runs inside this door's own read boundary, so an untrusted
 		// keyword, enumeration, or recursion anywhere below it is published under
 		// this door's name rather than under the name of an engine method no
 		// consumer can call. The engine captures its own collection constructors

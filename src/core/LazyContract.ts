@@ -28,7 +28,7 @@ import { ShapePass } from './ShapePass.js'
  *
  * A compile can still fail for the host's reasons: a first call near the stack limit,
  * or a host whose members were replaced after this contract was created, which it
- * refuses to compile on since the result would outlive the replacement. Neither says
+ * refuses to compile on because the result would outlive the replacement. Neither says
  * anything about a later call, which compiles afresh. Until then a guard answers
  * `false`, a parser `undefined`, and `own` a refusal carrying the failure as its
  * cause, and the diagnostic and seed members publish the failure as their doors do.

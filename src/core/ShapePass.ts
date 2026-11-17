@@ -31,7 +31,7 @@ import {
 } from './helpers.js'
 import { isJSONValue, isLiteralValue, isRecord, isRegExp } from './validators.js'
 
-/** Owns the traversal and reentry poison of one validation call. */
+/** Owns the traversal and reentry refusal of one validation call. */
 export class ShapePass {
 	static readonly #weakSet = WeakSet
 	static readonly #weakMap = WeakMap
@@ -242,7 +242,7 @@ export class ShapePass {
 		return !holds(() => readPatternFlags(ShapePass.#blank) === '')
 	}
 
-	/** Poisons this pass and throws the same refusal on every reentry. */
+	/** Invalidates this pass and throws the same refusal on every reentry. */
 	interrupt(): never {
 		this.#poison ??= new ContractError(
 			'ShapeValidator.validate: shape validation may not be reentered',
@@ -1073,7 +1073,7 @@ export class ShapePass {
 				const values = collectMembers([])
 				for (const valueIndex of iterateIndices(() => snapshot.value.entries.length)) {
 					// A present member whose captured value is `undefined` is refused by
-					// the literal test below rather than skipped.
+					// the following literal test rather than skipped.
 					const value = snapshot.value.entries[valueIndex]
 					if (
 						!isLiteralValue(value) ||

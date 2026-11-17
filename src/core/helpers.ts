@@ -1523,7 +1523,7 @@ export function readValue<T>(callback: () => T, reader: string, options?: ReadVa
 		// retained the caller's object by identity. Spread copies own enumerable
 		// properties only through the spec's own copy operation, so the projection
 		// stays own-only without dispatching through a replaceable global. The
-		// copy stays EAGER because performing it is what refuses a hostile
+		// copy stays EAGER because performing it is what refuses an untrusted
 		// context: a throwing getter on any own key — advertised or not — must
 		// refuse this call whether or not the callback goes on to succeed.
 		const owned =
@@ -1743,7 +1743,7 @@ export function holds(callback: () => boolean): boolean {
 }
 
 /**
- * Determines whether a value carries the plain-record brand, raising a hostile
+ * Determines whether a value carries the plain-record brand, raising an untrusted
  * prototype observation instead of answering it.
  *
  * @remarks
@@ -1759,14 +1759,14 @@ export function holds(callback: () => boolean): boolean {
  * therefore identified by the own members ECMAScript requires every realm to
  * put on it (`constructor`, `hasOwnProperty`, `isPrototypeOf`,
  * `propertyIsEnumerable`, `toLocaleString`, `toString`, `valueOf`), each read
- * through its own DESCRIPTOR so no accessor on a hostile prototype ever runs.
+ * through its own DESCRIPTOR so no accessor on an untrusted prototype ever runs.
  * Each must be an own DATA property whose value is a FUNCTION — true of every
  * conformant realm, so the requirement costs a genuine foreign record nothing,
- * and it refuses the cheapest forgery (stamping the mandated names with
+ * and it refuses the cheapest fake (stamping the mandated names with
  * `undefined`) for free.
  *
  * That is a structural test, not a provenance one, and the residual is stated
- * as exactly what it is: a FUNCTION-VALUED forgery passes, and this realm's own
+ * as exactly what it is: a FUNCTION-VALUED fake passes, and this realm's own
  * `Object.prototype` supplies those functions to stamp, so the price is a
  * few lines rather than nothing. Reparenting a class prototype to `null` and
  * stamping the mandated names with real functions passes; so does leaving the
@@ -1774,31 +1774,31 @@ export function holds(callback: () => boolean): boolean {
  * `null` as its own prototype and answers those descriptor reads with
  * functions. In both cases the value is a live class instance whose methods are
  * still reachable on it. A further own-key SUBSET rule buys even less: it
- * refuses a forgery that left methods on its prototype and accepts the same
+ * refuses a fake that left methods on its prototype and accepts the same
  * class with those methods moved onto the instance, where they are
  * indistinguishable from a plain record's function
- * properties — so it raises the forgery's price and narrows the realm-agnostic
+ * properties — so it raises the fake's price and narrows the realm-agnostic
  * arm this rule exists to keep open. What the pass buys is acceptance at
  * brand-governed doors and nothing after it: every ownership engine publishes a
  * frozen plain record built only from captured data, so no class instance,
- * class behavior, or forged prototype survives into a snapshot.
+ * class behavior, or fabricated prototype survives into a snapshot.
  *
  * `Object.create(<null-prototype object>)` is refused, and NOT because it is
- * structurally identical to a reparented class instance — it is not, since a
+ * structurally identical to a reparented class instance — it is not, because a
  * class prototype always owns `constructor` and a bare `Object.create(null)`
  * owns nothing. It is refused as policy: no realm produces that chain for a
  * plain object, no consumer of it has been named, and a caller erases the
  * difference by deleting `constructor`.
  *
  * This is the diagnosing form, deliberately NOT total: a revoked `Proxy` or a
- * hostile `getPrototypeOf` trap throws out of it, so an ownership engine can
+ * untrusted `getPrototypeOf` trap throws out of it, so an ownership engine can
  * report an unreadable value as a failed read with the exact cause rather than
  * as a well-formed structural refusal. {@link isRecord} is the total form for
  * every guard consumer and contains that throw as `false`.
  *
  * @param value - The value whose record brand to inspect
  * @returns True if the value is a plain record; false otherwise
- * @throws The exact value thrown by a hostile brand observation
+ * @throws The exact value thrown by an untrusted brand observation
  *
  * @example
  * ```ts
@@ -1828,7 +1828,7 @@ export function matchesRecordBrand(value: unknown): boolean {
 		const member = mandated[index]
 		if (member === undefined) return false
 		// A descriptor read, not a value read: it answers ownership, data-ness and
-		// the member's kind in one observation while running no accessor a hostile
+		// the member's kind in one observation while running no accessor an untrusted
 		// prototype installed. Every realm's members are function-valued data
 		// properties, so requiring that costs a genuine realm nothing and costs a
 		// forger the work of finding seven functions to stamp.
@@ -2134,7 +2134,7 @@ export function readGuardShape(
  * This is the package-wide runtime property view used by compiled object
  * guards, parsers, reporters, schema inference, and owned schema cloning. It
  * matches the object-key view serialized by `JSON.stringify`: inherited,
- * symbol, and non-enumerable properties are excluded. A hostile Proxy trap
+ * symbol, and non-enumerable properties are excluded. An untrusted Proxy trap
  * returns `undefined` rather than escaping.
  *
  * @param value - The object whose keys to snapshot
@@ -2284,7 +2284,7 @@ export function matchesStepGuard(this: Readonly<Record<string, unknown>>, step: 
  * consumed key is read exactly once, checked for presence, and inspected for an
  * own descriptor while the container is enumerated once. Every successfully
  * read non-`undefined` consumed value enters the fresh own-enumerable snapshot,
- * including an inherited or non-enumerable option. A hostile host is reported
+ * including an inherited or non-enumerable option. An untrusted host is reported
  * uniformly as an unreadable options record, while a readable array or class
  * instance retains the plain-record diagnostic.
  *
@@ -2394,7 +2394,7 @@ export function readOptions<T extends object>(
  * carries code `random` and never the `generate` code, and {@link compileGenerator}
  * rethrows it at whatever draw depth it happened instead of rotating to the next union
  * variant. The diagnostic names the consuming shape category, the `[0, 1)` limit, and a
- * total non-coercing {@link preview} of the offending sample (or `threw`), so a hostile
+ * total non-coercing {@link preview} of the offending sample (or `threw`), so an untrusted
  * object runs no conversion hook while the diagnostic is built and a primitive symbol
  * renders without consulting mutable `Symbol.prototype.toString`.
  *
@@ -2441,7 +2441,7 @@ export function drawRandom(random: RandomFunction, shape: string): number {
  * The root must satisfy {@link isRecord}; inherited properties are never fields.
  * Intermediates may be objects or arrays indexed by string. Returns `undefined`
  * the moment a segment is missing or lands on a non-object, so the lookup is
- * total — even against a hostile getter or Proxy trap that throws on read,
+ * total — even against an untrusted getter or Proxy trap that throws on read,
  * contained through {@link attempt} so the throw never escapes.
  *
  * @param record - The source record
@@ -2523,7 +2523,7 @@ export function matchesExactKeys(
  * `parse`'s coercions are published and form input relies on them, but some change what
  * a value means: `1` to `true`, `'9007199254740993'` to `...992`, `'1e-400'` to `0`,
  * `'0x10'` to `16`. A door that must not guess asks this about each fault `audit` reported,
- * since `audit` already names every nested repair with its path and the kind it wanted.
+ * because `audit` already names every nested repair with its path and the kind it wanted.
  *
  * Only a `type` fault is a repair. A number needs a string whose trim is the number's own
  * text, so `'30'` and `' 30 '` pass while `'30.0'`, `'007'`, `'0x10'`, `'1e3'`, `'+5'`,
@@ -2580,7 +2580,7 @@ export function matchesLosslessRepair(fault: AuditFault, input: unknown, parsed:
  * the alias already fit. Arrays are traversed through their reflected
  * own-index population, so sparse work is proportional to populated entries
  * rather than advertised length. Every observable operation is contained;
- * hostile or contradictory reads return `false`.
+ * untrusted or contradictory reads return `false`.
  *
  * The walk carries a settled-depth memo beside its active-path set: a
  * container that fit at depth `d` also fits at any depth `<= d`, because every
@@ -2946,8 +2946,8 @@ export function encodeLeaf(value: unknown): string | undefined {
  * - cyclic input, tracked with the same ancestor-{@link WeakSet} discipline
  *   the container branches of value inference use, so a shared (non-cyclic)
  *   reference reached twice through different paths still encodes;
- * A hostile traversal is categorically different: a throwing own-getter,
- * hostile `ownKeys` trap, or revoked `Proxy` throws a `structure`
+ * An untrusted traversal is categorically different: a throwing own-getter,
+ * untrusted `ownKeys` trap, or revoked `Proxy` throws a `structure`
  * {@link ContractError} through {@link readValue}. A caller can therefore
  * distinguish "not JSON-encodable" from "could not be read".
  *
@@ -3257,13 +3257,13 @@ export function deriveRangeBounds(min: unknown, max: unknown): BoundsRead {
  * a finite non-negative integer, selecting a valid fallback for anything else.
  *
  * @remarks
- * Guards {@link valueToSchema} / {@link samplesToSchema} against a hostile or
+ * Guards {@link valueToSchema} / {@link samplesToSchema} against an untrusted or
  * malformed budget: an unclamped `NaN` defeats every `depth <= 0` guard
  * (`NaN <= 0` is `false`, so recursion never halts), and a negative
  * `limits.properties` makes `slice(0, -1)` silently drop the LAST sorted key
  * instead of capping the list (a fractional value has a similarly undefined
  * `slice` bound). `Infinity` is rejected too — `Number.isInteger(Infinity)`
- * is `false` — since an unbounded budget is exactly the adversarial case the
+ * is `false` — because an unbounded budget is exactly the untrusted case the
  * caps exist to prevent. A valid candidate passes through unchanged without
  * inspecting the fallback. When the candidate is invalid, the fallback must
  * satisfy the same finite non-negative-integer contract or this boundary
@@ -3301,7 +3301,7 @@ export function sanitizeBudget(value: number | undefined, fallback: number): num
  * @remarks
  * {@link sanitizeBudget} decides the SHAPE of a budget and deliberately lets any
  * finite non-negative integer through, because it must never read a fallback a
- * hostile caller supplied. That left the depth axis unbounded from above, and
+ * untrusted caller supplied. That left the depth axis unbounded from above, and
  * depth is the axis that recurses: `1e9` is a valid integer, so the walk descended
  * until the call STACK failed, at a depth that varied between runs, and the
  * refusal surfaced as an unreadable value rather than as the exhaustion the guard

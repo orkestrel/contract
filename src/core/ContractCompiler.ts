@@ -140,8 +140,8 @@ import { seededRandom } from './seeders.js'
  * the compiler: later getters rethrow that exact error, while an artifact
  * already handed out keeps working, because each compiled artifact is
  * self-contained. Reentry — reachable only through a caller accessor the
- * declaration itself exposes, since a `pattern` getter is the one accessor
- * ownership invokes — poisons the nested read, the interrupted outer read, and
+ * declaration itself exposes, because a `pattern` getter is the one accessor
+ * ownership invokes — invalidates the nested read, the interrupted outer read, and
  * every later read with one shared cause-free error.
  *
  * @typeParam S - The declaration's shape type, which types the published artifacts
@@ -395,7 +395,7 @@ export class ContractCompiler<
 			throw state.poison
 		}
 		// Created BEFORE the source is observed, for the same reason the cloners
-		// create theirs there: a poison built on the settlement path would be built
+		// create theirs there: a reentry refusal built on the settlement path would be built
 		// under whatever the caller installed while the build was running.
 		const poison = new ContractError(
 			'ContractCompiler: contract compilation may not be reentered',
@@ -430,7 +430,7 @@ export class ContractCompiler<
 		throw error
 	}
 
-	// Once every root exists nothing can need the graph again, so the graph, the
+	// After every root exists nothing can need the graph again, so the graph, the
 	// index, the order and every family plan go. The roots and the optional
 	// frozen bundle stay, and so does terminal state.
 	#collect(): void {
@@ -483,7 +483,7 @@ export class ContractCompiler<
 		}
 		// ONE ownership population for the whole compiler. `ownShape` runs the
 		// accepted `ShapeCloner`, whose completed-root pass validates what it built;
-		// the pass below is this compiler's own single validation of that owned
+		// the following pass is this compiler's own single validation of that owned
 		// result, and it is where the emitted-node bound is applied — the gate that
 		// owns that rule authors its diagnosis, so the refusal reads identically
 		// however the caller arrived.
@@ -496,7 +496,7 @@ export class ContractCompiler<
 	}
 
 	#discover(root: ContractShape): void {
-		// Narrowed once at the door, because both dispatches below take their
+		// Narrowed once at the door, because both following dispatches take their
 		// receiver type from this value. `#prepare` is the only caller and it
 		// refuses while the declaration is gone, so the walk always finds the map
 		// the constructor built; this refusal is what keeps that a statement the
@@ -765,7 +765,7 @@ export class ContractCompiler<
 	// carries the path it was found at while emptiness carries nothing: a node
 	// that reported no fault about an object reports none about it wherever else
 	// the walk arrives. A faulted node is re-walked at its new path, and stays
-	// bounded by `FAULT_LIMIT` — every collector stops once the cap is reached, so
+	// bounded by `FAULT_LIMIT` — every collector stops after the cap is reached, so
 	// a value that faults everywhere saturates instead of expanding.
 	#trackFaults<T>(
 		plan: (value: unknown, path: readonly string[]) => readonly T[],
@@ -1271,7 +1271,7 @@ export class ContractCompiler<
 				const closed = extra === undefined || extra === false
 				const additional = closed || extra === true ? undefined : this.#guardAt(extra)
 				// Indexed, not `filter`/`includes`: both are caller-writable members of
-				// `Array.prototype` reached by name, one line above a boundary whose own
+				// `Array.prototype` reached by name, one line before a boundary whose own
 				// comment promises this walk never throws.
 				const required: readonly string[] = INTRINSICS.reflect.apply(
 					INTRINSICS.select,
@@ -1289,14 +1289,14 @@ export class ContractCompiler<
 				// key it recognizes and compares the result against the full mask. The
 				// record is null-prototype own data so a key literally named
 				// '__proto__' takes a position like any other. Past the mask's width
-				// the collected-vocabulary form below still answers.
+				// the following collected-vocabulary form still answers.
 				const maskable = required.length <= PRESENCE_MASK_LIMIT
 				const positions = buildPositions(maskable ? required : [])
 				const full = maskable ? readPresence(required, positions) : 0
 				const plans = closed ? new KeyPlanCache(map) : undefined
 				return (value: unknown): value is unknown => {
 					if (!isRecord(value)) return false
-					// Contain the whole key-enumeration + value-read walk — a hostile
+					// Contain the whole key-enumeration + value-read walk — an untrusted
 					// getter on `value`, or a replaced `globalThis.Set` reached by the
 					// presence view, must yield `false`, never throw, as
 					// `.claude/rules/patterns.md` § Validation and contracts requires.
@@ -1355,7 +1355,7 @@ export class ContractCompiler<
 				// A `oneOf`-mode union matches the emitted JSON Schema `oneOf` keyword —
 				// EXACTLY one variant must guard-accept the value, not "at least one"
 				// (unionOf's anyOf semantics). A value matching two-or-more variants is
-				// rejected, since it would violate the compiled schema.
+				// rejected, because it would violate the compiled schema.
 				if (owned.mode === 'oneOf') {
 					return (value: unknown): value is unknown => {
 						const arm = discriminated?.select(value)
@@ -1602,13 +1602,13 @@ export class ContractCompiler<
 					// whose input carried one throwing extra therefore refused as
 					// unreadable while `explain` — which never performs that probe —
 					// published the empty report that means "parse will succeed". The
-					// reads this parser genuinely needs are the per-key reads below, and
+					// reads this parser genuinely needs are the following per-key reads, and
 					// they are already contained.
 					if (!isRecord(value)) return undefined
 					const record = value
 					const keys = enumerableKeys(record)
 					if (keys === undefined) return undefined
-					// Contain the whole record walk — a hostile getter on `record`, or a
+					// Contain the whole record walk — an untrusted getter on `record`, or a
 					// replaced `globalThis.Set` reached by the presence view, must yield
 					// `undefined`, never throw, as `.claude/rules/patterns.md`
 					// § Validation and contracts requires.
@@ -1846,7 +1846,7 @@ export class ContractCompiler<
 	}
 
 	// The published root supplies the documented default root path and carries the
-	// door boundary around the whole walk, so a host failure under a hostile value
+	// door boundary around the whole walk, so a host failure under an untrusted value
 	// publishes this package's error class rather than the caller's raw value.
 	#exposeAudit(
 		plan: (value: unknown, path: readonly string[]) => readonly AuditFault[],
@@ -1874,7 +1874,7 @@ export class ContractCompiler<
 			// A leaf's refinement fields are fixed when its plan is built, exactly as
 			// its `kind` is, so a declaration carrying none has no refinement report
 			// to build at all: the only question such a leaf asks is the type test
-			// above the gate, and its answer past that test is empty for every
+			// before the gate, and its answer past that test is empty for every
 			// accepted value. The helper stays the single source for every REFINED
 			// leaf and is entered unchanged there — the gate decides whether the leaf
 			// has a refinement question, never how one is answered. Each clean answer

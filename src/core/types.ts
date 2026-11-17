@@ -442,7 +442,7 @@ export type JSONRecord = { readonly [key: string]: JSONValue }
  *
  * @remarks
  * The static type admits any `number` because TypeScript cannot express
- * finiteness. The {@link isJSONValue} guard rejects `NaN` and `±Infinity` since
+ * finiteness. The {@link isJSONValue} guard rejects `NaN` and `±Infinity` because
  * they have no JSON representation.
  *
  * @example
@@ -473,7 +473,7 @@ export interface JSONClonerInterface {
 	 * loaded and read every diagnostic option as an own property, so terminal settlement
 	 * stays nonredirectable against a replaced intrinsic and against a polluted prototype
 	 * alike. Active reentry permanently settles the instance with one exact cause-free
-	 * `clone` poison shared by the nested call, the outer call, and every later call.
+	 * `clone` refusal shared by the nested call, the outer call, and every later call.
 	 *
 	 * @param budget - Remaining nodes shared with an enclosing ownership operation; omitted for an independent snapshot
 	 * @returns The settled JSON snapshot
@@ -502,7 +502,7 @@ export interface SchemaClonerInterface {
 	 * Success and failure both release traversal frames and the active memo through
 	 * preconstructed references before nonredirectable terminal publication, while
 	 * retaining the source and the exact root or class-owned error. Active reentry
-	 * permanently settles the instance with one exact cause-free `clone` poison shared by
+	 * permanently settles the instance with one exact cause-free `clone` refusal shared by
 	 * the nested call, the outer call, and every later call, and a property-read cause
 	 * stays exact.
 	 *
@@ -540,7 +540,7 @@ export interface ShapeProperty {
  * shape or exact same owned {@link ContractError}. Nonredirectable terminal
  * settlement releases populated traversal state before publishing that exact
  * result, while retaining the source and result afterward.
- * Reentry permanently poisons the active operation with one shared error.
+ * Reentry permanently invalidates the active operation with one shared error.
  */
 export interface ShapeClonerInterface {
 	/**
@@ -555,7 +555,7 @@ export interface ShapeClonerInterface {
 	 * failure rethrows the exact class-owned or adopted {@link ContractError}. Both
 	 * release graph-working state through preconstructed references before nonredirectable
 	 * terminal publication. Active reentry permanently settles the instance with one exact
-	 * cause-free poison shared by the nested call, the outer call, and every later call.
+	 * cause-free refusal shared by the nested call, the outer call, and every later call.
 	 *
 	 * @returns The settled contract-shape snapshot
 	 * @throws {ContractError} When the declaration is malformed, unreadable, cyclic, too deep, or cloning is reentered
@@ -1070,7 +1070,7 @@ export interface RawShape {
  * full union is a fixed point that can never shrink — the compiler would fan
  * out until it aborts with TS2589. Bailing out lazily short-circuits that
  * fixed point (the untaken branch is never instantiated) while every narrow
- * shape and every partial union still flows through the exact chain below.
+ * shape and every partial union still flows through the exact following chain.
  *
  * The `ObjectShape` branch's `additionalProperties` guard (`[A] extends
  * [boolean | ContractShape]`) is likewise wrapped in a tuple to stay
@@ -1750,7 +1750,7 @@ export interface ContractInterface<T> {
  * a failure anywhere settles the compiler permanently — later getters rethrow
  * that exact error while an artifact already handed out stays usable, because
  * each one is self-contained. Cross-getter reentry (only reachable through a
- * caller accessor the declaration exposes) poisons the nested read, the
+ * caller accessor the declaration exposes) invalidates the nested read, the
  * interrupted outer read, and every later read with one shared cause-free
  * error.
  *

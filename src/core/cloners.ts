@@ -20,7 +20,7 @@ import { ShapeCloner } from './ShapeCloner.js'
  * wired. Array keys must be exactly `length` plus every canonical index.
  * Writable and configurable index flags are normalized rather than treated as
  * JSON data, so frozen arrays remain valid. Property descriptors are inspected
- * without reading values through accessors, and every hostile reflective
+ * without reading values through accessors, and every untrusted reflective
  * operation is contained before a new clone-coded error is exposed.
  * Each call creates a fresh {@link JSONCloner}; use the class directly when
  * terminal success or failure identity must be replayed without another read.
@@ -92,14 +92,14 @@ export function cloneJSONRecord(value: unknown): JSONRecord {
  * references and closing cyclic edges onto their cloned nodes. Primitive
  * values and own enumerable string-keyed edges are copied; record nodes use
  * null prototypes, arrays retain only their intrinsic array prototype, and
- * every produced object is frozen after its edges are wired. Hostile traversal
+ * every produced object is frozen after its edges are wired. Untrusted traversal
  * throws a clone-coded {@link ContractError}, never a caller-owned raw error.
  * Each call creates a fresh {@link SchemaCloner}; use the class directly when
  * terminal success or failure identity must be replayed without another read.
  *
  * @param schema - The JSON Schema graph to snapshot
  * @returns A deeply cloned and frozen JSON Schema graph
- * @throws {ContractError} When hostile schema traversal prevents ownership
+ * @throws {ContractError} When untrusted schema traversal prevents ownership
  *
  * @example
  * ```ts
@@ -120,7 +120,7 @@ export function cloneSchema(schema: JSONSchema): JSONSchema {
  * @remarks
  * A fresh public {@link ShapeCloner} preserves shared-child identity while
  * building the candidate snapshot, owns raw schemas, validates the exact
- * completed root, applies deferred fidelity, and translates unexpected hostile
+ * completed root, applies deferred fidelity, and translates unexpected untrusted
  * failures. Inside the engine, each node's own data discriminant and every
  * declared field are captured descriptor-first from two agreeing reads, and the
  * carried population alone supplies its shallow shell, semantic checks, child
@@ -136,12 +136,12 @@ export function cloneSchema(schema: JSONSchema): JSONSchema {
  * {@link cloneSchema}. Before return, a fresh {@link ShapeValidator} independently
  * validates the exact cloned root. Ownership never erases a structural edge or
  * normalizes an invalid scalar/bound into a plausible declaration: those
- * inputs throw their coded structure/bound error. Hostile traversal remains
+ * inputs throw their coded structure/bound error. Untrusted traversal remains
  * distinct and throws a clone-coded {@link ContractError}.
  *
  * @param shape - The contract shape graph to snapshot
  * @returns A deeply cloned and frozen shape graph
- * @throws {ContractError} When the declaration cannot be copied faithfully or hostile shape or raw-schema traversal prevents ownership
+ * @throws {ContractError} When the declaration cannot be copied faithfully or untrusted shape or raw-schema traversal prevents ownership
  *
  * @example
  * ```ts
@@ -175,7 +175,7 @@ export function cloneShape(shape: ContractShape): ContractShape {
  *
  * @param shape - The contract shape to own
  * @returns A deeply cloned frozen snapshot
- * @throws {ContractError} When the declaration cannot be copied faithfully, when hostile shape or raw-schema traversal prevents ownership, or when a frozen root fails validation
+ * @throws {ContractError} When the declaration cannot be copied faithfully, when untrusted shape or raw-schema traversal prevents ownership, or when a frozen root fails validation
  *
  * @example
  * ```ts

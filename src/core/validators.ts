@@ -25,8 +25,8 @@ import {
 } from './helpers.js'
 
 // `.claude/rules/patterns.md` § Validation and contracts: guards are total
-// functions — a guard NEVER throws. Adversarial
-// input (hostile getters, exotic objects, cycles) returns `false`, never an
+// functions — a guard NEVER throws. Untrusted
+// input (untrusted getters, exotic objects, cycles) returns `false`, never an
 // error. Guards built from a single `typeof` / strict-equality test are
 // immediately total — no probe of the value's internals can throw. Every
 // OTHER guard here probes the value in some way — a property read through
@@ -34,7 +34,7 @@ import {
 // `isAsyncIterable`, `isJSONValue`, `isRecord`), an `instanceof` check (which
 // invokes the target's `[Symbol.hasInstance]` / triggers a `getPrototypeOf`
 // trap), or an own-key enumeration (`isEmptyObject` / `isNonEmptyObject`) —
-// so a hostile getter, a revoked `Proxy`, or an exotic trap can throw
+// so an untrusted getter, a revoked `Proxy`, or an exotic trap can throw
 // mid-probe. Totality is NOT automatic for these: each contains its whole
 // probe/walk in `holds` (see ./helpers.js) and returns `false` on a caught
 // throw. Every `instanceof`-based guard in this file routes through the
@@ -376,7 +376,7 @@ export function isNullableBoolean(value: unknown): value is boolean | null {
 
 // === Built-in guards
 //
-// The `instanceof`-based guard families below (Date/RegExp/Error/Promise,
+// The `instanceof`-based guard families that follow (Date/RegExp/Error/Promise,
 // Map/Set/WeakMap/WeakSet, the typed-array guards) are same-realm checks:
 // `instanceof` compares against the constructor's prototype in the CURRENT
 // realm, so a value built by another realm (a different `vm.Context`, iframe,
@@ -454,7 +454,7 @@ export function isDate(value: unknown): value is Date {
  * @remarks
  * A total native internal-slot brand check rather than a property read: it accepts a
  * genuine pattern from this realm and from another, and refuses a proxy or a hand-built
- * forgery without reading an advertised field.
+ * fake without reading an advertised field.
  *
  * @param value - The value to inspect
  * @returns True if the value is a `RegExp`; false otherwise
@@ -671,7 +671,7 @@ export function isObject(value: unknown): value is object {
  * The total form of the shared {@link matchesRecordBrand} rule, and the only
  * one a guard may use: the whole brand runs inside `holds`, as
  * `.claude/rules/patterns.md` § Validation and contracts requires, so a
- * revoked `Proxy` or a hostile `getPrototypeOf` trap answers `false` instead of
+ * revoked `Proxy` or an untrusted `getPrototypeOf` trap answers `false` instead of
  * escaping as a thrown error. Use instead of {@link isObject} to distinguish a
  * plain `{}` / `Object.create(null)` — or a plain object from another realm,
  * whose prototype is that realm's `Object.prototype` — from arrays, `Date`,
@@ -1441,7 +1441,7 @@ export function isConstructor(value: unknown): value is AnyConstructor<object> {
  * instances, class instances, `NaN`, and `±Infinity`. Arrays and plain records
  * are walked with an ancestor set so recursive input fails instead of hanging.
  * The whole walk runs inside `holds`, as `.claude/rules/patterns.md`
- * § Validation and contracts requires: a hostile getter on a
+ * § Validation and contracts requires: an untrusted getter on a
  * record property, or a revoked `Proxy` anywhere in the structure, is caught
  * and yields `false` instead of escaping as a thrown error.
  *

@@ -66,7 +66,7 @@ export const CONTRACT_ERROR_BRAND = Symbol.for('@orkestrel/contract.ContractErro
  * installed at the moment THIS module evaluated, and reading it later, at the
  * call site, is reading whatever the caller most recently installed. "Before any
  * caller code runs" is the tempting phrasing and it is false in exactly the case
- * the limit below names, so it is not used.
+ * the following limit names, so it is not used.
  *
  * The limit that follows, stated as a limit rather than as a guarantee: capture
  * is only as early as this package's own evaluation. A consumer module that
@@ -77,7 +77,7 @@ export const CONTRACT_ERROR_BRAND = Symbol.for('@orkestrel/contract.ContractErro
  * package wholesale rather than bother with the table, so it is named here
  * instead of defended.
  *
- * Membership rule, stated so a reviewer can apply it and a new call site knows
+ * Membership rule, stated so a reviewer can apply it and an added call site knows
  * where to go: **every host operation this package dispatches by name whose
  * result a published answer depends on.** That admits statics, constructors and
  * namespaces, and — this is the part the earlier wording got wrong by writing
@@ -146,7 +146,7 @@ export const INTRINSICS = Object.freeze({
 	base: Object.prototype,
 	/**
 	 * Captures the proxy-visible operations, grouped because that is what separates them:
-	 * each reports the trap's exact answer where `Object`'s flat peer above
+	 * each reports the trap's exact answer where `Object`'s preceding flat peer
 	 * reports the target's.
 	 *
 	 * @remarks
@@ -502,9 +502,9 @@ export const FAULT_CONSTRAINTS: readonly FaultConstraint[] = Object.freeze([
  * `explain` or `audit` report ever returns, frozen.
  *
  * @remarks
- * Bounds BOTH reports against adversarial input (a giant array, a wide record)
+ * Bounds BOTH reports against untrusted input (a giant array, a wide record)
  * — `compileReporter` and `compileAuditor` each collect faults in stable
- * pre-order and stop once this cap is reached, and every recursive call slices
+ * pre-order and stop after this cap is reached, and every recursive call slices
  * to it, so the report size (and the work to build it) stays finite and
  * deterministic at every nesting level regardless of the input's size. Size a
  * diagnostic surface off this constant and it bounds `audit` exactly as it
@@ -583,7 +583,7 @@ export const COMPILE_DEPTH_LIMIT = 512
  *
  * This cap does not bound compilation, because the compilers do not expand a
  * DAG. Every artifact family is one entry per unique node, so the boundary
- * declaration above compiles its unique nodes in about a millisecond.
+ * preceding declaration compiles its unique nodes in about a millisecond.
  * What does expand is what a CONSUMER materializes from the artifacts: the
  * value `generate` builds, and the document a compiled schema serializes to,
  * are trees of exactly this size. The cap survives as a bound on what a caller
@@ -690,7 +690,7 @@ export const GENERATION_ATTEMPT_LIMIT = 32
  * Caps at `32` the object/array nesting depth {@link valueToSchema} walks, frozen.
  *
  * @remarks
- * Bounds inference against adversarial or cyclic runtime input — once the
+ * Bounds inference against untrusted or cyclic runtime input — after the
  * remaining depth budget reaches zero, inference stops descending and emits
  * the empty accept-anything schema `{}` for that branch instead of recursing
  * further. LOWERABLE per call through {@link ValueToSchemaLimits.depth}; a
