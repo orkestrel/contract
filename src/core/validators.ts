@@ -676,7 +676,9 @@ export function isObject(value: unknown): value is object {
  * plain `{}` / `Object.create(null)` — or a plain object from another realm,
  * whose prototype is that realm's `Object.prototype` — from arrays, `Date`,
  * `Map`, and class instances, including a class whose prototype a caller
- * reparented to `null`.
+ * reparented to `null`. For a value another package or the host returns, such as a
+ * socket or a store, guard the members you read with {@link objectOf} or declare them
+ * with {@link interfaceShape}.
  *
  * @param value - The value to inspect
  * @returns True if the value is a plain record; false otherwise

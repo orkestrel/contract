@@ -3423,8 +3423,9 @@ export function preview(value: unknown): string {
  *
  * @param source - The source text
  * @param capacity - The UTF-16 code units left for tokens; the closing quote or `…` takes one more
- * @param quoted - Whether the text opens and closes with a string quote
- * @returns The encoded text, closed by its quote or by `…`
+ * @param quoted - If `true`, the text opens with a string quote and closes with one when the
+ * source fits; if `false`, the text carries no quote
+ * @returns The encoded text, closed by `…` when the source does not fit
  *
  * @example
  * ```ts

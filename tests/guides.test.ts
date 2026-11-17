@@ -58,7 +58,10 @@ await new GuideCommand({
 		ShapeValidator,
 		createContract,
 		dateShape,
+		functionShape,
 		integerShape,
+		interfaceShape,
+		numberShape,
 		objectShape,
 		optionalShape,
 		stringShape,
@@ -415,6 +418,70 @@ await new GuideCommand({
 			expect(guideText).toContain(
 				"booking.schema.properties?.arrival // { type: 'string', format: 'date' }",
 			)
+		})
+	})
+
+	describe('owned admission and interface fences', () => {
+		const guideText = requireValue(files[GUIDE_SPEC], `Missing file: ${GUIDE_SPEC}`)
+
+		it('holds the implementation by identity and refuses the uncoerced member', () => {
+			// The lossless-admission `own` fence. Each expectation is that fence's own comment, executed.
+			const store = { get: encodeURI, set: encodeURI }
+			const contract = createContract(
+				objectShape({ ttl: numberShape(), store: interfaceShape({ get: functionShape() }) }),
+			)
+			const owned = contract.own({ ttl: 60, store })
+			const refused = contract.own({ ttl: '60', store })
+
+			expect(owned.success && owned.value.store === store).toBe(true)
+			expect(refused.success).toBe(false)
+			expect(
+				refused.success ? [] : refused.error.faults.map((fault) => [fault.reason, fault.path]),
+			).toEqual([['type', ['ttl']]])
+		})
+
+		it('carries the own fence lines the transcription copies', () => {
+			expect(guideText).toContain('const store = { get: encodeURI, set: encodeURI }')
+			expect(guideText).toContain(
+				'objectShape({ ttl: numberShape(), store: interfaceShape({ get: functionShape() }) }),',
+			)
+			expect(guideText).toContain(
+				'owned.success && owned.value.store === store // true — the implementation is held by identity',
+			)
+			expect(guideText).toContain(
+				"contract.own({ ttl: '60', store }).success // false — the refusal carries the type fault at ['ttl']",
+			)
+		})
+
+		it('admits, returns, and reports a store as the interface fence shows', () => {
+			// The interface-members fence. Each expectation is that fence's own comment, executed.
+			const store = createContract(
+				interfaceShape({ get: functionShape(), set: functionShape(), delete: functionShape() }),
+			)
+
+			expect(store.is(new Map())).toBe(true)
+			expect(store.parse(new Map()) instanceof Map).toBe(true)
+			expect(store.audit({ get() {}, set() {} })).toEqual([
+				{ reason: 'missing', path: ['delete'], expected: 'function' },
+			])
+			expect(store.schema.format).toBe('interface')
+		})
+
+		it('carries the interface fence lines the transcription copies', () => {
+			expect(guideText).toContain(
+				'interfaceShape({ get: functionShape(), set: functionShape(), delete: functionShape() }),',
+			)
+			expect(guideText).toContain(
+				'store.is(new Map()) // true — Map.prototype carries the three methods',
+			)
+			expect(guideText).toContain(
+				'store.parse(new Map()) instanceof Map // true — returned by identity',
+			)
+			expect(guideText).toContain('store.audit({ get() {}, set() {} })')
+			expect(guideText).toContain(
+				"// [{ reason: 'missing', path: ['delete'], expected: 'function' }]",
+			)
+			expect(guideText).toContain("store.schema.format // 'interface'")
 		})
 	})
 
