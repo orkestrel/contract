@@ -47,6 +47,7 @@ import {
 } from '@src/core'
 import {
 	buildHoledArray,
+	buildReportingRecord,
 	buildUndefinedCorpus,
 	findUndefinedLawViolations,
 	UNDEFINED_LAW_SHAPES,
@@ -1880,5 +1881,141 @@ describe('ContractCompiler — own', () => {
 
 		expect(compiler.owner).toBe(compiler.owner)
 		expect(compiler.contract.own).toBe(compiler.owner)
+	})
+})
+
+describe('ContractCompiler — counted guard walks', () => {
+	it('answers the array guard over empty, single, signed-zero, and NaN items', () => {
+		const numbers = createContract(arrayShape(numberShape()))
+		const bounded = createContract(arrayShape(numberShape(), { min: 1 }))
+
+		expect(numbers.is([])).toBe(true)
+		expect(numbers.is([1.5])).toBe(true)
+		expect(numbers.is([-0, 0])).toBe(true)
+		expect(numbers.is([Number.NaN])).toBe(false)
+		expect(numbers.is([1, 2, 'three'])).toBe(false)
+		expect(numbers.is(buildHoledArray([1, 2, 3], 1))).toBe(false)
+		expect(bounded.is([])).toBe(false)
+		expect(bounded.is(['one'])).toBe(false)
+	})
+
+	it('stops the array guard at the first refused item and reads no later item', () => {
+		const reads = createRecorder<[key: string]>()
+		const rows = createContract(arrayShape(objectShape({ id: numberShape() })))
+		const refused = buildReportingRecord([['id', 'one']], reads.handler)
+		const later = buildReportingRecord([['id', 2]], reads.handler)
+
+		expect(rows.is([refused, later])).toBe(false)
+		expect(reads.calls).toEqual([['id']])
+		reads.clear()
+		expect(rows.is([later, refused])).toBe(false)
+		expect(reads.calls).toEqual([['id'], ['id']])
+	})
+
+	it('answers a kept key plan in plan order and stops at the first refused member', () => {
+		const reads = createRecorder<[key: string]>()
+		const rows = createContract(objectShape({ id: numberShape(), rank: numberShape() }))
+		const empty = createContract(objectShape({}))
+
+		expect(rows.is({ id: 1, rank: 2 })).toBe(true)
+		expect(
+			rows.is(
+				buildReportingRecord(
+					[
+						['id', -0],
+						['rank', 2],
+					],
+					reads.handler,
+				),
+			),
+		).toBe(true)
+		expect(reads.calls).toEqual([['id'], ['rank']])
+		reads.clear()
+		expect(
+			rows.is(
+				buildReportingRecord(
+					[
+						['id', Number.NaN],
+						['rank', 2],
+					],
+					reads.handler,
+				),
+			),
+		).toBe(false)
+		expect(reads.calls).toEqual([['id']])
+		expect(empty.is({})).toBe(true)
+		expect(empty.is({})).toBe(true)
+		expect(empty.is({ id: 1 })).toBe(false)
+	})
+
+	it('asks discriminant keys in declared order and stops at the first that names an arm', () => {
+		const reads = createRecorder<[key: string]>()
+		const left = objectShape({ version: literalShape([1]), kind: literalShape(['a']) })
+		const right = objectShape({
+			version: literalShape([2]),
+			kind: literalShape(['b']),
+			n: numberShape(),
+		})
+		const contract = createContract(unionShape(left, right))
+		const rows: ReadonlyArray<readonly [object, boolean, readonly string[]]> = [
+			[{ version: 2, kind: 'b', n: 1 }, true, ['version', 'version', 'kind', 'n']],
+			[{ version: 3, kind: 'b', n: 1 }, false, ['version', 'kind', 'version', 'kind', 'n']],
+			[
+				{ version: 3, kind: 'c', n: 1 },
+				false,
+				['version', 'kind', 'version', 'kind', 'n', 'version', 'kind', 'n'],
+			],
+		]
+
+		for (const [value, accepted, keys] of rows) {
+			reads.clear()
+			const observed = new Proxy(value, {
+				getOwnPropertyDescriptor: (target, key) => {
+					reads.handler(String(key))
+					return Reflect.getOwnPropertyDescriptor(target, key)
+				},
+			})
+			expect(contract.is(observed)).toBe(accepted)
+			expect(reads.calls.map(([key]) => key)).toEqual(keys)
+		}
+	})
+})
+
+describe('ContractCompiler — counted parser walks', () => {
+	it('parses a union by identity first, then through the first arm that coerces', () => {
+		const numeric = createContract(unionShape(numberShape(), booleanShape()))
+		const flag = createContract(unionShape(booleanShape(), numberShape()))
+		const single = createContract(unionShape(numberShape()))
+
+		expect(numeric.parse('1')).toBe(1)
+		expect(flag.parse('1')).toBe(true)
+		expect(numeric.parse(true)).toBe(true)
+		expect(Object.is(numeric.parse(-0), -0)).toBe(true)
+		expect(numeric.parse(Number.NaN)).toBeUndefined()
+		expect(single.parse('2')).toBe(2)
+		expect(single.parse('two')).toBeUndefined()
+	})
+
+	it('stops each union pass at the first arm that answers', () => {
+		const reads = createRecorder<[key: string]>()
+		const contract = createContract(
+			unionShape(objectShape({ id: numberShape() }), objectShape({ id: booleanShape() })),
+		)
+		const rows: ReadonlyArray<readonly [unknown, boolean, unknown, number]> = [
+			[1, true, { id: 1 }, 1],
+			[true, true, { id: true }, 2],
+			['7', false, { id: 7 }, 3],
+			['x', false, undefined, 4],
+		]
+
+		for (const [id, same, parsed, count] of rows) {
+			reads.clear()
+			const record = buildReportingRecord([['id', id]], reads.handler)
+			const result = contract.parse(record)
+			const observed = reads.count
+			expect(observed).toBe(count)
+			expect(result === record).toBe(same)
+			expect(result).toEqual(parsed)
+		}
 	})
 })

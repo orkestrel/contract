@@ -58,7 +58,6 @@ import {
 	matchesCalendarDate,
 	matchesEnumerableKeys,
 	matchesMember,
-	matchesStepGuard,
 	matchesUndefinedNode,
 	ownPattern,
 	pathOf,
@@ -816,7 +815,7 @@ export class ContractCompiler<
 			hint: INTRINSICS.freeze({ key: named.key, expected: named.expected }),
 			select: (value: unknown): number | undefined => {
 				if (!isObject(value)) return undefined
-				for (const index of iterateIndices(() => tables.length)) {
+				for (let index = 0, count = tables.length; index < count; index++) {
 					const table = tables[index]
 					if (table === undefined) continue
 					const held = attempt(() => INTRINSICS.describe(value, table.key))
@@ -1225,10 +1224,11 @@ export class ContractCompiler<
 						if (!INTRINSICS.array(value)) return false
 						const read = collectArrayEntries(value)
 						if (!read.dense || !read.exact) return false
-						const refused: boolean = INTRINSICS.reflect.apply(INTRINSICS.some, read.entries, [
-							(entry: unknown) => !element(entry),
-						])
-						return !refused && (withinLength === undefined || withinLength(read.entries.length))
+						const entries = read.entries
+						for (let position = 0, count = entries.length; position < count; position++) {
+							if (!element(entries[position])) return false
+						}
+						return withinLength === undefined || withinLength(entries.length)
 					})
 			}
 			case 'object': {
@@ -1307,7 +1307,11 @@ export class ContractCompiler<
 						if (extra !== true && !matchesEnumerableKeys(value, keys)) return false
 						const plan = plans?.recall(keys)
 						if (plan !== undefined) {
-							return INTRINSICS.reflect.apply(INTRINSICS.every, plan, [matchesStepGuard, value])
+							for (let position = 0, count = plan.length; position < count; position++) {
+								const step = plan[position]
+								if (step !== undefined && !step.guard(value[step.key])) return false
+							}
+							return true
 						}
 						if (maskable) {
 							if (readPresence(keys, positions) !== full) return false
@@ -1742,14 +1746,22 @@ export class ContractCompiler<
 					// parser (`.claude/rules/patterns.md` § Validation and contracts): a
 					// value already valid against ANY variant's guard is returned
 					// unchanged, so an earlier variant's coercion never overwrites it.
-					for (const variantIndex of iterateIndices(() => variants.length)) {
+					for (
+						let variantIndex = 0, count = variants.length;
+						variantIndex < count;
+						variantIndex++
+					) {
 						const variant = variants[variantIndex]
 						if (variant === undefined) continue
 						if (variant.guard(value)) return value
 					}
 					// Coercion pass: no variant matched as-is, so parse-then-guard,
 					// first variant that both parses and guards wins.
-					for (const variantIndex of iterateIndices(() => variants.length)) {
+					for (
+						let variantIndex = 0, count = variants.length;
+						variantIndex < count;
+						variantIndex++
+					) {
 						const variant = variants[variantIndex]
 						if (variant === undefined) continue
 						const parsed = variant.parse(value)

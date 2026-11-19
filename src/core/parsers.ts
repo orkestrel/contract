@@ -326,16 +326,19 @@ export function parseEnum(
 	if (isFailure(outcome) || !outcome.value.dense) return undefined
 	// A parser answers `undefined`, never throws, so the vocabulary is consulted inside
 	// the never-throw boundary — and the membership question is asked of the frozen
-	// snapshot through a captured method rather than any property, because a coercer
+	// snapshot by index rather than through any property, because a coercer
 	// that returns a value outside its own allowed list is the same silent lie the
 	// paired guard was answering: `Set.prototype.has = () => true` made
 	// `parseEnum('zzz', ['a', 'b'])` answer `'zzz'`. One SameValueZero pass over the
 	// snapshot answers what a collected `Set` would, without building one per call.
-	const member = holds(() =>
-		INTRINSICS.reflect.apply(INTRINSICS.some, outcome.value.entries, [
-			(entry: unknown) => entry === value || INTRINSICS.same(entry, value),
-		]),
-	)
+	const entries = outcome.value.entries
+	const member = holds(() => {
+		for (let index = 0, count = entries.length; index < count; index++) {
+			const entry = entries[index]
+			if (entry === value || INTRINSICS.same(entry, value)) return true
+		}
+		return false
+	})
 	if (!member) return undefined
 	return isLiteralValue(value) ? value : undefined
 }

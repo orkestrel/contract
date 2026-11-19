@@ -31,6 +31,7 @@ import type {
 } from '@src/core'
 import * as door from '@src/core'
 import {
+	buildHoledArray,
 	buildReportingRecord,
 	createNonEnumerableRecord,
 	DATE_ADMITTED,
@@ -2075,6 +2076,25 @@ describe('collectArrayEntries', () => {
 		]) {
 			expect(collectArrayEntries(source).exact).toBe(false)
 		}
+	})
+
+	it('walks a population whose first or last index key is not canonical', () => {
+		const first = new Proxy(['a', 'b'], { ownKeys: () => ['note', '1', 'length'] })
+		const last = new Proxy(['a', 'b'], { ownKeys: () => ['0', 'note', 'length'] })
+		const swapped = new Proxy(['a', 'b'], { ownKeys: () => ['1', '0', 'length'] })
+
+		const leading = collectArrayEntries(first)
+		expect(leading).toEqual({ entries: [undefined, 'b'], dense: false, exact: false })
+		expect(Object.hasOwn(leading.entries, 0)).toBe(false)
+		const trailing = collectArrayEntries(last)
+		expect(trailing).toEqual({ entries: ['a', undefined], dense: false, exact: false })
+		expect(Object.hasOwn(trailing.entries, 1)).toBe(false)
+		expect(collectArrayEntries(swapped)).toEqual({ entries: ['a', 'b'], dense: true, exact: true })
+		expect(collectArrayEntries([-0, Number.NaN])).toEqual({
+			entries: [-0, Number.NaN],
+			dense: true,
+			exact: true,
+		})
 	})
 
 	it('throws the exact reason an unreadable array raises', () => {
@@ -5557,6 +5577,28 @@ describe('indexed derivation helpers', () => {
 
 		expect(masks).toEqual([3, 2, 0])
 	})
+
+	it('reads the length once and each present name once, in order, skipping a hole unread', () => {
+		const reads = createRecorder<[key: string]>()
+		const positions = buildPositions(['id', 'name'])
+		const holed: string[] = ['id']
+		holed[2] = 'name'
+		const observed = new Proxy(holed, {
+			get: (target, key, receiver) => {
+				reads.handler(String(key))
+				return Reflect.get(target, key, receiver)
+			},
+			has: (target, key) => {
+				reads.handler(`has ${String(key)}`)
+				return Reflect.has(target, key)
+			},
+		})
+
+		expect(readPresence(observed, positions)).toBe(3)
+		expect(reads.calls.map(([key]) => key)).toEqual(['length', 'has 0', '0', 'has 1', 'has 2', '2'])
+		expect(readPresence(['name'], positions)).toBe(2)
+		expect(readPresence(['missing'], positions)).toBe(0)
+	})
 })
 
 describe('matchesStringLength', () => {
@@ -6573,6 +6615,16 @@ describe('key plan dispatch helpers', () => {
 		expect(Reflect.apply(door.matchesKeyPlan, ['rank', 'id'], [plan])).toBe(false)
 		expect(Reflect.apply(door.matchesKeyPlan, ['id'], [plan])).toBe(false)
 		expect(Reflect.apply(door.matchesKeyPlan, ['id', 'rank', 'note'], [plan])).toBe(false)
+	})
+
+	it('matches an empty and a one-step plan and skips a hole in a caller plan', () => {
+		const holed = buildHoledArray(plan, 0)
+
+		expect(Reflect.apply(door.matchesKeyPlan, [], [[]])).toBe(true)
+		expect(Reflect.apply(door.matchesKeyPlan, ['id'], [[plan[0]]])).toBe(true)
+		expect(Reflect.apply(door.matchesKeyPlan, ['rank'], [[plan[0]]])).toBe(false)
+		expect(Reflect.apply(door.matchesKeyPlan, ['secret', 'rank'], [holed])).toBe(true)
+		expect(Reflect.apply(door.matchesKeyPlan, ['secret', 'note'], [holed])).toBe(false)
 	})
 
 	it('matches a step whose key equals the bound list at its index', () => {

@@ -1943,12 +1943,10 @@ export function collectArrayEntries<T>(value: readonly T[]): ArrayRead<T> {
 	// ascending index texts and `length`, and nothing else. The scan stops at
 	// the first disagreement, so a population that fails the question pays for
 	// the prefix it shares with a canonical one before it walks.
-	const canonical =
-		members.length === length + 1 &&
-		members[length] === 'length' &&
-		!INTRINSICS.reflect.apply(INTRINSICS.some, members, [
-			(key: PropertyKey, index: number) => index < length && key !== INTRINSICS.text(index),
-		])
+	let canonical = members.length === length + 1 && members[length] === 'length'
+	for (let index = 0; canonical && index < length; index++) {
+		canonical = members[index] === INTRINSICS.text(index)
+	}
 	if (canonical) {
 		// An array-like with no prototype reaches no iterator and no caller member, and
 		// hands the mapper each index once, in order.
@@ -2231,17 +2229,20 @@ export function buildKeyPlan(
  * ```
  */
 export function matchesKeyPlan(this: readonly string[], plan: readonly KeyStep[]): boolean {
-	return (
-		plan.length === this.length &&
-		INTRINSICS.reflect.apply(INTRINSICS.every, plan, [matchesStepKey, this])
-	)
+	if (plan.length !== this.length) return false
+	// `in` asks what the captured `every` asked first, so a hole in a caller's plan is skipped unread.
+	for (let index = 0, count = plan.length; index < count; index++) {
+		if (index in plan && plan[index]?.key !== this[index]) return false
+	}
+	return true
 }
 
 /**
  * Checks whether a key-plan step names the key at its index in the list bound as `this`.
  *
  * @remarks
- * Passed with the key list as the `thisArg` argument to the captured `every` member over a key plan.
+ * Answers one step of the comparison {@link matchesKeyPlan} makes, for a caller that passes it with
+ * the key list as the `thisArg` argument to an `every` walk over a key plan.
  *
  * @param step - The step to compare
  * @param index - The step's position in its plan
@@ -2260,8 +2261,9 @@ export function matchesStepKey(this: readonly string[], step: KeyStep, index: nu
  * Checks whether the member of the record bound as `this` passes a key-plan step's guard.
  *
  * @remarks
- * Passed with the record as the `thisArg` argument to the captured `every` member over a key plan, so the
- * walk reads each member once, in the plan's order, and stops at the first refusal.
+ * Answers one step of the walk a compiled closed-object guard makes over a kept key plan, for a
+ * caller that passes it with the record as the `thisArg` argument to an `every` walk over the plan,
+ * which reads each member once, in the plan's order, and stops at the first refusal.
  *
  * @param step - The step whose member to read and guard
  * @returns True if the member under the step's key passes its guard; false otherwise
@@ -4148,8 +4150,8 @@ export function buildPositions(names: readonly string[]): Readonly<Record<string
  * Derives the bit mask of names present in an indexed lookup.
  *
  * @remarks
- * Takes `names` as the array it declares and reads each present index once, in order,
- * through the captured fold, so a hole adds no bit. An array-like that is not an array
+ * Takes `names` as the array it declares, reads its length once, and reads each present
+ * index once, in order, so a hole adds no bit and is never read. An array-like that is not an array
  * is outside this contract.
  *
  * @param names - Names to observe in order
@@ -4165,16 +4167,17 @@ export function readPresence(
 	names: readonly string[],
 	positions: Readonly<Record<string, number>>,
 ): number {
-	// The captured fold reads each present index once, in order, and creates no array, so
+	// `in` asks what the captured fold asked before each read, and the loop creates no array, so
 	// neither an iterator nor a species constructor takes part in the walk.
-	return INTRINSICS.reflect.apply(INTRINSICS.fold, names, [
-		(mask: number, name: string | undefined) => {
-			if (name === undefined || !INTRINSICS.own(positions, name)) return mask
-			const position = positions[name]
-			return position === undefined ? mask : mask | (1 << position)
-		},
-		0,
-	])
+	let mask = 0
+	for (let index = 0, count = names.length; index < count; index++) {
+		if (!(index in names)) continue
+		const name = names[index]
+		if (name === undefined || !INTRINSICS.own(positions, name)) continue
+		const position = positions[name]
+		if (position !== undefined) mask |= 1 << position
+	}
+	return mask
 }
 
 // Pin the iterator protocol before any caller can reach these exported generators.
