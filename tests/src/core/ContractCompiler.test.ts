@@ -21,6 +21,7 @@ import {
 	compileReporter,
 	compileSchema,
 	ContractCompiler,
+	ContractError,
 	cloneJSONValue,
 	cloneShape,
 	createContract,
@@ -322,6 +323,22 @@ describe('ContractCompiler', () => {
 		expect(nested !== undefined && !nested.success ? nested.error : undefined).toBe(outer)
 		expect(captureContractError(() => holder.compiler?.parser)).toBe(outer)
 		expect(captureContractError(() => holder.compiler?.contract)).toBe(outer)
+		const reference = new ContractError(
+			'ContractCompiler: contract compilation may not be reentered',
+			{
+				code: 'structure',
+				context: { path: [], shape: 'contract' },
+			},
+		)
+		expect({
+			prototype: Object.getPrototypeOf(outer) === ContractError.prototype,
+			keys: Reflect.ownKeys(outer),
+			header: outer.stack?.split('\n')[0],
+		}).toEqual({
+			prototype: true,
+			keys: Reflect.ownKeys(reference),
+			header: reference.stack?.split('\n')[0],
+		})
 	})
 
 	it('adopts an ownership refusal by identity and replays it at every later getter', () => {
