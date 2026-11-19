@@ -1943,12 +1943,10 @@ export function collectArrayEntries<T>(value: readonly T[]): ArrayRead<T> {
 	// ascending index texts and `length`, and nothing else. The scan stops at
 	// the first disagreement, so a population that fails the question pays for
 	// the prefix it shares with a canonical one before it walks.
-	const canonical =
-		members.length === length + 1 &&
-		members[length] === 'length' &&
-		!INTRINSICS.reflect.apply(INTRINSICS.some, members, [
-			(key: PropertyKey, index: number) => index < length && key !== INTRINSICS.text(index),
-		])
+	let canonical = members.length === length + 1 && members[length] === 'length'
+	for (let index = 0; canonical && index < length; index++) {
+		canonical = members[index] === INTRINSICS.text(index)
+	}
 	if (canonical) {
 		// An array-like with no prototype reaches no iterator and no caller member, and
 		// hands the mapper each index once, in order.

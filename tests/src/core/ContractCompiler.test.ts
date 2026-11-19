@@ -47,6 +47,7 @@ import {
 } from '@src/core'
 import {
 	buildHoledArray,
+	buildReportingRecord,
 	buildUndefinedCorpus,
 	findUndefinedLawViolations,
 	UNDEFINED_LAW_SHAPES,
@@ -1880,5 +1881,34 @@ describe('ContractCompiler — own', () => {
 
 		expect(compiler.owner).toBe(compiler.owner)
 		expect(compiler.contract.own).toBe(compiler.owner)
+	})
+})
+
+describe('ContractCompiler — counted guard walks', () => {
+	it('answers the array guard over empty, single, signed-zero, and NaN items', () => {
+		const numbers = createContract(arrayShape(numberShape()))
+		const bounded = createContract(arrayShape(numberShape(), { min: 1 }))
+
+		expect(numbers.is([])).toBe(true)
+		expect(numbers.is([1.5])).toBe(true)
+		expect(numbers.is([-0, 0])).toBe(true)
+		expect(numbers.is([Number.NaN])).toBe(false)
+		expect(numbers.is([1, 2, 'three'])).toBe(false)
+		expect(numbers.is(buildHoledArray([1, 2, 3], 1))).toBe(false)
+		expect(bounded.is([])).toBe(false)
+		expect(bounded.is(['one'])).toBe(false)
+	})
+
+	it('stops the array guard at the first refused item and reads no later item', () => {
+		const reads = createRecorder<[key: string]>()
+		const rows = createContract(arrayShape(objectShape({ id: numberShape() })))
+		const refused = buildReportingRecord([['id', 'one']], reads.handler)
+		const later = buildReportingRecord([['id', 2]], reads.handler)
+
+		expect(rows.is([refused, later])).toBe(false)
+		expect(reads.calls).toEqual([['id']])
+		reads.clear()
+		expect(rows.is([later, refused])).toBe(false)
+		expect(reads.calls).toEqual([['id'], ['id']])
 	})
 })

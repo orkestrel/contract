@@ -2077,6 +2077,25 @@ describe('collectArrayEntries', () => {
 		}
 	})
 
+	it('walks a population whose first or last index key is not canonical', () => {
+		const first = new Proxy(['a', 'b'], { ownKeys: () => ['note', '1', 'length'] })
+		const last = new Proxy(['a', 'b'], { ownKeys: () => ['0', 'note', 'length'] })
+		const swapped = new Proxy(['a', 'b'], { ownKeys: () => ['1', '0', 'length'] })
+
+		const leading = collectArrayEntries(first)
+		expect(leading).toEqual({ entries: [undefined, 'b'], dense: false, exact: false })
+		expect(Object.hasOwn(leading.entries, 0)).toBe(false)
+		const trailing = collectArrayEntries(last)
+		expect(trailing).toEqual({ entries: ['a', undefined], dense: false, exact: false })
+		expect(Object.hasOwn(trailing.entries, 1)).toBe(false)
+		expect(collectArrayEntries(swapped)).toEqual({ entries: ['a', 'b'], dense: true, exact: true })
+		expect(collectArrayEntries([-0, Number.NaN])).toEqual({
+			entries: [-0, Number.NaN],
+			dense: true,
+			exact: true,
+		})
+	})
+
 	it('throws the exact reason an unreadable array raises', () => {
 		const reason = Object.freeze({ operation: 'keys' })
 		const hostile = new Proxy([], {

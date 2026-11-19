@@ -1225,10 +1225,11 @@ export class ContractCompiler<
 						if (!INTRINSICS.array(value)) return false
 						const read = collectArrayEntries(value)
 						if (!read.dense || !read.exact) return false
-						const refused: boolean = INTRINSICS.reflect.apply(INTRINSICS.some, read.entries, [
-							(entry: unknown) => !element(entry),
-						])
-						return !refused && (withinLength === undefined || withinLength(read.entries.length))
+						const entries = read.entries
+						for (let position = 0, count = entries.length; position < count; position++) {
+							if (!element(entries[position])) return false
+						}
+						return withinLength === undefined || withinLength(entries.length)
 					})
 			}
 			case 'object': {
