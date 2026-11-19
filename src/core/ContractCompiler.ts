@@ -815,7 +815,7 @@ export class ContractCompiler<
 			hint: INTRINSICS.freeze({ key: named.key, expected: named.expected }),
 			select: (value: unknown): number | undefined => {
 				if (!isObject(value)) return undefined
-				for (const index of iterateIndices(() => tables.length)) {
+				for (let index = 0, count = tables.length; index < count; index++) {
 					const table = tables[index]
 					if (table === undefined) continue
 					const held = attempt(() => INTRINSICS.describe(value, table.key))

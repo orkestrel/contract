@@ -1947,4 +1947,36 @@ describe('ContractCompiler — counted guard walks', () => {
 		expect(empty.is({})).toBe(true)
 		expect(empty.is({ id: 1 })).toBe(false)
 	})
+
+	it('asks discriminant keys in declared order and stops at the first that names an arm', () => {
+		const reads = createRecorder<[key: string]>()
+		const left = objectShape({ version: literalShape([1]), kind: literalShape(['a']) })
+		const right = objectShape({
+			version: literalShape([2]),
+			kind: literalShape(['b']),
+			n: numberShape(),
+		})
+		const contract = createContract(unionShape(left, right))
+		const rows: ReadonlyArray<readonly [object, boolean, readonly string[]]> = [
+			[{ version: 2, kind: 'b', n: 1 }, true, ['version', 'version', 'kind', 'n']],
+			[{ version: 3, kind: 'b', n: 1 }, false, ['version', 'kind', 'version', 'kind', 'n']],
+			[
+				{ version: 3, kind: 'c', n: 1 },
+				false,
+				['version', 'kind', 'version', 'kind', 'n', 'version', 'kind', 'n'],
+			],
+		]
+
+		for (const [value, accepted, keys] of rows) {
+			reads.clear()
+			const observed = new Proxy(value, {
+				getOwnPropertyDescriptor: (target, key) => {
+					reads.handler(String(key))
+					return Reflect.getOwnPropertyDescriptor(target, key)
+				},
+			})
+			expect(contract.is(observed)).toBe(accepted)
+			expect(reads.calls.map(([key]) => key)).toEqual(keys)
+		}
+	})
 })
