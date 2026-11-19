@@ -21,6 +21,7 @@ import {
 	compileReporter,
 	compileSchema,
 	ContractCompiler,
+	ContractError,
 	cloneJSONValue,
 	cloneShape,
 	createContract,
@@ -44,6 +45,7 @@ import {
 	stringShape,
 	undefinedShape,
 	unionShape,
+	CONTRACT_ERROR_BRAND,
 } from '@src/core'
 import {
 	buildHoledArray,
@@ -85,6 +87,7 @@ import {
 	drawLawShape,
 	OWNED_BAG_SHAPE,
 	throwSentinel,
+	DESCRIPTOR_POLLUTION_ROWS,
 } from '../../setup.js'
 import { createRecorder } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
@@ -322,6 +325,66 @@ describe('ContractCompiler', () => {
 		expect(nested !== undefined && !nested.success ? nested.error : undefined).toBe(outer)
 		expect(captureContractError(() => holder.compiler?.parser)).toBe(outer)
 		expect(captureContractError(() => holder.compiler?.contract)).toBe(outer)
+		const reference = new ContractError(
+			'ContractCompiler: contract compilation may not be reentered',
+			{
+				code: 'structure',
+				context: { path: [], shape: 'contract' },
+			},
+		)
+		expect({
+			prototype: Object.getPrototypeOf(outer) === ContractError.prototype,
+			keys: Reflect.ownKeys(outer),
+			header: outer.stack?.split('\n')[0],
+		}).toEqual({
+			prototype: true,
+			keys: Reflect.ownKeys(reference),
+			header: reference.stack?.split('\n')[0],
+		})
+	})
+
+	it('builds the reentry refusal and its brand alike while the reentering getter pollutes descriptor fields', () => {
+		const readings = [undefined, ...DESCRIPTOR_POLLUTION_ROWS].map((row) => {
+			const holder: { compiler?: ContractCompiler<StringShape> } = {}
+			const fixture = new ReentrantShape(() =>
+				row === undefined
+					? holder.compiler?.schema
+					: pollutePrototype(
+							Object.prototype,
+							row.key,
+							() => row.value,
+							() => holder.compiler?.schema,
+						),
+			)
+			holder.compiler = new ContractCompiler(fixture.shape)
+			const outer = attempt(() => holder.compiler?.guard)
+			const later = attempt(() => holder.compiler?.parser)
+			const nested = fixture.nested
+			const error = outer.success ? undefined : outer.error
+			const brand = isContractError(error)
+				? Object.getOwnPropertyDescriptor(error, CONTRACT_ERROR_BRAND)
+				: undefined
+			return {
+				row: row?.key ?? 'none',
+				nested: nested !== undefined && !nested.success && nested.error === error,
+				later: !later.success && later.error === error,
+				message: isContractError(error) ? error.message : String(error),
+				brand: brand === undefined ? undefined : { ...brand, value: brand.value === error },
+			}
+		})
+
+		const expected = {
+			nested: true,
+			later: true,
+			message: 'ContractCompiler: contract compilation may not be reentered',
+			brand: { value: true, writable: false, enumerable: false, configurable: true },
+		}
+		expect(readings).toEqual(
+			[undefined, ...DESCRIPTOR_POLLUTION_ROWS].map((row) => ({
+				row: row?.key ?? 'none',
+				...expected,
+			})),
+		)
 	})
 
 	it('adopts an ownership refusal by identity and replays it at every later getter', () => {

@@ -226,7 +226,7 @@ export class ContractCompiler<
 	#source: ContractShape | undefined
 	#state:
 		| { readonly phase: 'ready' }
-		| { readonly phase: 'running'; readonly poison: ContractError }
+		| { readonly phase: 'running' }
 		| { readonly phase: 'interrupted'; readonly poison: ContractError }
 		| { readonly phase: 'failed'; readonly error: ContractError }
 	#stack: Array<
@@ -389,18 +389,20 @@ export class ContractCompiler<
 	#enter<T>(build: () => T): T {
 		const state = this.#state
 		if (state.phase === 'failed') throw state.error
-		if (state.phase === 'running' || state.phase === 'interrupted') {
+		if (state.phase === 'interrupted') {
 			this.#state = { phase: 'interrupted', poison: state.poison }
 			throw state.poison
 		}
-		// Created BEFORE the source is observed, for the same reason the cloners
-		// create theirs there: a reentry refusal built on the settlement path would be built
-		// under whatever the caller installed while the build was running.
-		const poison = new ContractError(
-			'ContractCompiler: contract compilation may not be reentered',
-			{ code: 'structure', context: { path: [], shape: 'contract' } },
-		)
-		this.#state = { phase: 'running', poison }
+		// Built on reentry alone, because constructing an error captures a stack trace.
+		if (state.phase === 'running') {
+			const poison = new ContractError(
+				'ContractCompiler: contract compilation may not be reentered',
+				{ code: 'structure', context: { path: [], shape: 'contract' } },
+			)
+			this.#state = { phase: 'interrupted', poison }
+			throw poison
+		}
+		this.#state = { phase: 'running' }
 		return this.#leave(attempt(build))
 	}
 

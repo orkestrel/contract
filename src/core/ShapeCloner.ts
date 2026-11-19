@@ -76,9 +76,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 	// intrinsic it dispatches through, or a caller who redirects one after
 	// construction makes the first call escape with a raw caller value while the
 	// replay reports the reentry refusal — two different answers for one
-	// operation. The constructor is already too late: a reentry error, and so its
-	// ownership record, is created before the source is ever observed. The
-	// CONSTRUCTOR of each collection is captured beside its members, because
+	// operation. The CONSTRUCTOR of each collection is captured beside its members, because
 	// construction happens first: capturing `WeakSet.prototype.has` while still
 	// reaching `globalThis.WeakSet` leaves the door open one call earlier than
 	// the member rows can see, and the constructor runs outside every
@@ -126,7 +124,7 @@ export class ShapeCloner implements ShapeClonerInterface {
 	#fidelity: ContractError | undefined
 	#state:
 		| { readonly phase: 'ready' }
-		| { readonly phase: 'running'; readonly poison: ContractError }
+		| { readonly phase: 'running' }
 		| { readonly phase: 'interrupted'; readonly poison: ContractError }
 		| { readonly phase: 'settled'; readonly result: Result<ContractShape, ContractError> }
 
@@ -155,16 +153,21 @@ export class ShapeCloner implements ShapeClonerInterface {
 			if (isSuccess(state.result)) return state.result.value
 			throw state.result.error
 		}
-		if (state.phase === 'running' || state.phase === 'interrupted') {
+		if (state.phase === 'interrupted') {
 			this.#state = { phase: 'interrupted', poison: state.poison }
 			throw state.poison
 		}
+		// Built on reentry alone, because constructing an error captures a stack trace.
+		if (state.phase === 'running') {
+			const poison = this.#create('ShapeCloner.clone: shape cloning may not be reentered', {
+				code: 'clone',
+				context: { shape: 'shape' },
+			})
+			this.#state = { phase: 'interrupted', poison }
+			throw poison
+		}
 
-		const poison = this.#create('ShapeCloner.clone: shape cloning may not be reentered', {
-			code: 'clone',
-			context: { shape: 'shape' },
-		})
-		this.#state = { phase: 'running', poison }
+		this.#state = { phase: 'running' }
 		return this.#complete(attempt(() => this.#execute()))
 	}
 

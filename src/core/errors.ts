@@ -33,7 +33,9 @@ export class ContractError extends Error {
 	 */
 	constructor(message: string, options: ContractErrorOptions) {
 		super(message, INTRINSICS.own(options, 'cause') ? { cause: options.cause } : undefined)
-		INTRINSICS.define(this, CONTRACT_ERROR_BRAND, { value: this, configurable: true })
+		// Null-prototype, so a field the descriptor omits is never read from `Object.prototype`.
+		const brand = { __proto__: null, value: this, configurable: true }
+		INTRINSICS.define(this, CONTRACT_ERROR_BRAND, brand)
 		this.code = options.code
 		this.context = INTRINSICS.own(options, 'context') ? options.context : undefined
 	}
@@ -49,11 +51,10 @@ export class ContractError extends Error {
 			if (key === undefined) continue
 			const declared = INTRINSICS.describe(this.prototype, key)
 			const accessor = declared !== undefined && !INTRINSICS.own(declared, 'value')
-			INTRINSICS.reflect.define(
-				this.prototype,
-				key,
-				accessor ? { configurable: false } : { writable: false, configurable: false },
-			)
+			const pin = accessor
+				? { __proto__: null, configurable: false }
+				: { __proto__: null, writable: false, configurable: false }
+			INTRINSICS.reflect.define(this.prototype, key, pin)
 			const pinned = INTRINSICS.describe(this.prototype, key)
 			if (pinned?.configurable !== false || (!accessor && pinned.writable !== false)) {
 				throw new ContractError('ContractError: a prototype member could not be pinned', {

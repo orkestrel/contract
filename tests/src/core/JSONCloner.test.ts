@@ -1,4 +1,4 @@
-import type { JSONClonerInterface, JSONRecord, JSONValue } from '@src/core'
+import type { JSONClonerInterface, JSONRecord, JSONValue, Result } from '@src/core'
 import type { TerminalIntrinsic } from '../../setup.js'
 import {
 	attempt,
@@ -8,6 +8,7 @@ import {
 	isContractError,
 	isRecord,
 	JSONCloner,
+	CONTRACT_ERROR_BRAND,
 } from '@src/core'
 import {
 	polluteArrayConstruction,
@@ -22,6 +23,7 @@ import {
 	ReentrantPollution,
 	replaceIntrinsic,
 	throwSentinel,
+	DESCRIPTOR_POLLUTION_ROWS,
 } from '../../setup.js'
 import { requestWeakReferenceCollection } from '../../setupServer.js'
 import { requireValue } from '@orkestrel/test'
@@ -364,6 +366,148 @@ describe('JSONCloner', () => {
 		expect(later).toBe(outer)
 		expect(outer.message).toBe('JSONCloner.clone: JSON cloning may not be reentered')
 		expect(Object.hasOwn(outer, 'cause')).toBe(false)
+	})
+
+	it('throws a reentry from a nested member read with the shape of a directly built refusal', () => {
+		const state = new ObservedValue<JSONClonerInterface | undefined>(undefined)
+		const nested = new ObservedValue<unknown>(undefined)
+		const reads = new ObservationCounter()
+		const settings = new Proxy(
+			{ theme: 'dark' },
+			{
+				getOwnPropertyDescriptor(target, key) {
+					if (reads.increment() === 1) nested.value = attempt(() => state.value?.clone())
+					return Reflect.getOwnPropertyDescriptor(target, key)
+				},
+			},
+		)
+		state.value = new JSONCloner({ label: 'north', settings })
+
+		const outer = captureContractError(() => state.value?.clone())
+		const later = captureContractError(() => state.value?.clone())
+		const reference = new ContractError('JSONCloner.clone: JSON cloning may not be reentered', {
+			code: 'clone',
+			context: { shape: 'json' },
+		})
+
+		expect(nested.value).toEqual({ success: false, error: outer })
+		expect(later).toBe(outer)
+		expect({
+			prototype: Object.getPrototypeOf(outer) === ContractError.prototype,
+			recognized: isContractError(outer),
+			name: outer.name,
+			code: outer.code,
+			message: outer.message,
+			context: outer.context,
+			cause: Object.hasOwn(outer, 'cause'),
+			keys: Reflect.ownKeys(outer),
+			header: outer.stack?.split('\n')[0],
+		}).toEqual({
+			prototype: true,
+			recognized: true,
+			name: reference.name,
+			code: reference.code,
+			message: reference.message,
+			context: reference.context,
+			cause: false,
+			keys: Reflect.ownKeys(reference),
+			header: reference.stack?.split('\n')[0],
+		})
+	})
+
+	it('builds the reentry refusal cause-free while the trap that reenters pollutes Object.prototype', () => {
+		const sentinel = Object.freeze({ stage: 'reentry pollution' })
+		const state = new ObservedValue<JSONClonerInterface | undefined>(undefined)
+		const reads = new ObservationCounter()
+		const settings = new Proxy(
+			{ theme: 'dark' },
+			{
+				getOwnPropertyDescriptor(target, key) {
+					if (reads.increment() === 1) {
+						pollutePrototype(Object.prototype, 'cause', throwSentinel(sentinel), () =>
+							pollutePrototype(Object.prototype, 'context', throwSentinel(sentinel), () =>
+								pollutePrototype(Object.prototype, 'path', throwSentinel(sentinel), () =>
+									attempt(() => state.value?.clone()),
+								),
+							),
+						)
+					}
+					return Reflect.getOwnPropertyDescriptor(target, key)
+				},
+			},
+		)
+		state.value = new JSONCloner({ label: 'north', settings })
+
+		const outer = captureContractError(() => state.value?.clone())
+
+		expect({
+			code: outer.code,
+			message: outer.message,
+			context: outer.context,
+			cause: Object.hasOwn(outer, 'cause'),
+			replayed: captureContractError(() => state.value?.clone()) === outer,
+		}).toEqual({
+			code: 'clone',
+			message: 'JSONCloner.clone: JSON cloning may not be reentered',
+			context: { shape: 'json' },
+			cause: false,
+			replayed: true,
+		})
+	})
+
+	it('builds the reentry refusal and its brand alike while the reentering trap pollutes descriptor fields', () => {
+		const readings = [undefined, ...DESCRIPTOR_POLLUTION_ROWS].map((row) => {
+			const state = new ObservedValue<JSONClonerInterface | undefined>(undefined)
+			const settled = new ObservedValue<Result<unknown> | undefined>(undefined)
+			const reads = new ObservationCounter()
+			const settings = new Proxy(
+				{ theme: 'dark' },
+				{
+					getOwnPropertyDescriptor(target, key) {
+						if (reads.increment() === 1) {
+							settled.value =
+								row === undefined
+									? attempt(() => state.value?.clone())
+									: pollutePrototype(
+											Object.prototype,
+											row.key,
+											() => row.value,
+											() => attempt(() => state.value?.clone()),
+										)
+						}
+						return Reflect.getOwnPropertyDescriptor(target, key)
+					},
+				},
+			)
+			state.value = new JSONCloner({ label: 'north', settings })
+			const outer = attempt(() => state.value?.clone())
+			const later = attempt(() => state.value?.clone())
+			const nested = settled.value
+			const error = outer.success ? undefined : outer.error
+			const brand = isContractError(error)
+				? Object.getOwnPropertyDescriptor(error, CONTRACT_ERROR_BRAND)
+				: undefined
+			return {
+				row: row?.key ?? 'none',
+				nested: nested !== undefined && !nested.success && nested.error === error,
+				later: !later.success && later.error === error,
+				message: isContractError(error) ? error.message : String(error),
+				brand: brand === undefined ? undefined : { ...brand, value: brand.value === error },
+			}
+		})
+
+		const expected = {
+			nested: true,
+			later: true,
+			message: 'JSONCloner.clone: JSON cloning may not be reentered',
+			brand: { value: true, writable: false, enumerable: false, configurable: true },
+		}
+		expect(readings).toEqual(
+			[undefined, ...DESCRIPTOR_POLLUTION_ROWS].map((row) => ({
+				row: row?.key ?? 'none',
+				...expected,
+			})),
+		)
 	})
 
 	it('keeps class instances and eager operations observably fresh', () => {

@@ -45,9 +45,7 @@ export class SchemaCloner implements SchemaClonerInterface {
 	// intrinsic it dispatches through, or a caller who redirects one after
 	// construction makes the first call escape with a raw caller value while the
 	// replay reports the reentry refusal — two different answers for one
-	// operation. The constructor is already too late: a reentry error, and so its
-	// ownership record, is created before the source is ever observed. The
-	// CONSTRUCTOR of each collection is captured beside its members, because
+	// operation. The CONSTRUCTOR of each collection is captured beside its members, because
 	// construction happens first: capturing `WeakSet.prototype.has` while still
 	// reaching `globalThis.Map` leaves the door open one call earlier than the
 	// member rows can see, and the constructor runs outside every containment
@@ -84,7 +82,7 @@ export class SchemaCloner implements SchemaClonerInterface {
 	}>
 	#state:
 		| { readonly phase: 'ready' }
-		| { readonly phase: 'running'; readonly poison: ContractError }
+		| { readonly phase: 'running' }
 		| { readonly phase: 'interrupted'; readonly poison: ContractError }
 		| { readonly phase: 'settled'; readonly result: Result<JSONSchema, ContractError> }
 
@@ -108,7 +106,12 @@ export class SchemaCloner implements SchemaClonerInterface {
 			case 'settled':
 				if (isSuccess(state.result)) return state.result.value
 				throw state.result.error
-			case 'running':
+			case 'running': {
+				// Built on reentry alone, because constructing an error captures a stack trace.
+				const poison = this.#create('SchemaCloner.clone: schema cloning may not be reentered')
+				this.#state = { phase: 'interrupted', poison }
+				throw poison
+			}
 			case 'interrupted':
 				this.#state = { phase: 'interrupted', poison: state.poison }
 				throw state.poison
@@ -116,8 +119,7 @@ export class SchemaCloner implements SchemaClonerInterface {
 				break
 		}
 
-		const poison = this.#create('SchemaCloner.clone: schema cloning may not be reentered')
-		this.#state = { phase: 'running', poison }
+		this.#state = { phase: 'running' }
 		return this.#complete(attempt(() => this.#execute()))
 	}
 
