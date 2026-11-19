@@ -1,6 +1,5 @@
 import type { EvaluationFunction } from './types.js'
 import { INTRINSICS } from './constants.js'
-import { isFailure, readSetEntries } from './helpers.js'
 import { isFunction, isObject } from './validators.js'
 
 /** Owns compiled-node memo entries for one synchronous evaluation. */
@@ -37,9 +36,13 @@ export class EvaluationScope {
 		if (count !== undefined && INTRINSICS.reflect.apply(count, EvaluationScope.#active, []) === 0) {
 			return undefined
 		}
-		const entries = readSetEntries(EvaluationScope.#active)
-		if (isFailure(entries)) throw entries.error
-		return entries.value[0]
+		const cursor = INTRINSICS.reflect.apply(INTRINSICS.cursor, EvaluationScope.#active, [])
+		const step: IteratorResult<unknown, undefined> = INTRINSICS.reflect.apply(
+			INTRINSICS.step,
+			cursor,
+			[],
+		)
+		return step.done === true ? undefined : step.value
 	}
 
 	#evaluate<T>(
