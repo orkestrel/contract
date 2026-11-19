@@ -7,7 +7,7 @@ import { isFunction, isObject } from './validators.js'
 export class EvaluationScope {
 	static readonly #active = new INTRINSICS.set<EvaluationScope>()
 	static readonly #path: readonly string[] = INTRINSICS.freeze([])
-	readonly #answers = new INTRINSICS.weakMap<object, WeakMap<object, unknown>>()
+	#answers: WeakMap<object, WeakMap<object, unknown>> | undefined
 
 	/** Evaluates a node within the active call, disposing a newly opened scope on settlement. */
 	static run<T>(
@@ -48,14 +48,16 @@ export class EvaluationScope {
 		path: readonly string[],
 		clean: boolean,
 	): T {
+		// A root call that reaches no nested node never builds the per-plan table.
+		const answers = (this.#answers ??= new INTRINSICS.weakMap<object, WeakMap<object, unknown>>())
 		const cached: WeakMap<object, unknown> | undefined = INTRINSICS.reflect.apply(
 			INTRINSICS.recall,
-			this.#answers,
+			answers,
 			[plan],
 		)
 		const memo = cached ?? new INTRINSICS.weakMap<object, unknown>()
 		if (cached === undefined) {
-			INTRINSICS.reflect.apply(INTRINSICS.retain, this.#answers, [plan, memo])
+			INTRINSICS.reflect.apply(INTRINSICS.retain, answers, [plan, memo])
 		}
 		const recalled: T | undefined = INTRINSICS.reflect.apply(INTRINSICS.recall, memo, [value])
 		if (recalled !== undefined) return recalled
