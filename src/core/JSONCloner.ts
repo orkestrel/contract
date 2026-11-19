@@ -55,9 +55,7 @@ export class JSONCloner implements JSONClonerInterface {
 	// intrinsic it dispatches through, or a caller who redirects one after
 	// construction makes the first call escape with a raw caller value while the
 	// replay reports the reentry refusal — two different answers for one
-	// operation. The constructor is already too late: a reentry error, and so its
-	// ownership record, is created before the source is ever observed. The
-	// The active-path set is NOT an exception to that, and the sentence that made
+	// operation. The active-path set is NOT an exception to that, and the sentence that made
 	// it one was wrong: a redirected member there does not produce an owned
 	// refusal, it removes the cycle test, and `WeakSet.prototype.has` answering
 	// `false` made this class grow `#pending` without bound on a cyclic source —
@@ -108,7 +106,7 @@ export class JSONCloner implements JSONClonerInterface {
 				index: number
 		  }
 	>
-	#poison: ContractError | undefined
+	#entered: boolean
 	#terminal: Result<JSONValue, ContractError> | undefined
 
 	constructor(value: unknown) {
@@ -116,7 +114,7 @@ export class JSONCloner implements JSONClonerInterface {
 		this.#owned = new JSONCloner.#weakSet()
 		this.#active = new JSONCloner.#weakSet()
 		this.#pending = []
-		this.#poison = undefined
+		this.#entered = false
 		this.#terminal = undefined
 	}
 
@@ -134,15 +132,16 @@ export class JSONCloner implements JSONClonerInterface {
 			throw terminal.error
 		}
 
-		const poison = this.#poison
-		if (poison !== undefined) {
-			this.#terminal = failure(poison)
-			throw poison
+		// Built on reentry alone, because constructing an error captures a stack trace.
+		if (this.#entered) {
+			const reentry = this.#create('JSONCloner.clone: JSON cloning may not be reentered', {
+				shape: 'json',
+			})
+			this.#terminal = failure(reentry)
+			throw reentry
 		}
 
-		this.#poison = this.#create('JSONCloner.clone: JSON cloning may not be reentered', {
-			shape: 'json',
-		})
+		this.#entered = true
 		const outcome = attempt(() => this.#execute(budget))
 		const interruption = this.#terminal
 		if (interruption !== undefined) {
