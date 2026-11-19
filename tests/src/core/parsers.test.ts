@@ -219,6 +219,18 @@ describe('structural parsers', () => {
 		expect(Object.is(parseEnum(-0, allowed), -0)).toBe(true)
 	})
 
+	it('parseEnum answers an empty, a holed, and a one-member vocabulary and a match at either end', () => {
+		const holed = ['a', 'b']
+		Reflect.deleteProperty(holed, '1')
+
+		expect(parseEnum('a', [])).toBeUndefined()
+		expect(parseEnum('a', ['a'])).toBe('a')
+		expect(parseEnum('b', ['a'])).toBeUndefined()
+		expect(parseEnum('a', holed)).toBeUndefined()
+		expect(parseEnum('z', ['z', 'y', 'x'])).toBe('z')
+		expect(parseEnum('x', ['z', 'y', 'x'])).toBe('x')
+	})
+
 	it('parseEnum returns undefined when the allowed array is a revoked Proxy', () => {
 		const allowed = createRevokedArrayProxy<string>()
 
