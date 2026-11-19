@@ -2229,17 +2229,20 @@ export function buildKeyPlan(
  * ```
  */
 export function matchesKeyPlan(this: readonly string[], plan: readonly KeyStep[]): boolean {
-	return (
-		plan.length === this.length &&
-		INTRINSICS.reflect.apply(INTRINSICS.every, plan, [matchesStepKey, this])
-	)
+	if (plan.length !== this.length) return false
+	// `in` asks what the captured `every` asked first, so a hole in a caller's plan is skipped unread.
+	for (let index = 0, count = plan.length; index < count; index++) {
+		if (index in plan && plan[index]?.key !== this[index]) return false
+	}
+	return true
 }
 
 /**
  * Checks whether a key-plan step names the key at its index in the list bound as `this`.
  *
  * @remarks
- * Passed with the key list as the `thisArg` argument to the captured `every` member over a key plan.
+ * Answers one step of the comparison {@link matchesKeyPlan} makes, for a caller that passes it with
+ * the key list as the `thisArg` argument to an `every` walk over a key plan.
  *
  * @param step - The step to compare
  * @param index - The step's position in its plan
@@ -2258,8 +2261,9 @@ export function matchesStepKey(this: readonly string[], step: KeyStep, index: nu
  * Checks whether the member of the record bound as `this` passes a key-plan step's guard.
  *
  * @remarks
- * Passed with the record as the `thisArg` argument to the captured `every` member over a key plan, so the
- * walk reads each member once, in the plan's order, and stops at the first refusal.
+ * Answers one step of the walk a compiled closed-object guard makes over a kept key plan, for a
+ * caller that passes it with the record as the `thisArg` argument to an `every` walk over the plan,
+ * which reads each member once, in the plan's order, and stops at the first refusal.
  *
  * @param step - The step whose member to read and guard
  * @returns True if the member under the step's key passes its guard; false otherwise

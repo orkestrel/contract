@@ -58,7 +58,6 @@ import {
 	matchesCalendarDate,
 	matchesEnumerableKeys,
 	matchesMember,
-	matchesStepGuard,
 	matchesUndefinedNode,
 	ownPattern,
 	pathOf,
@@ -1308,7 +1307,11 @@ export class ContractCompiler<
 						if (extra !== true && !matchesEnumerableKeys(value, keys)) return false
 						const plan = plans?.recall(keys)
 						if (plan !== undefined) {
-							return INTRINSICS.reflect.apply(INTRINSICS.every, plan, [matchesStepGuard, value])
+							for (let position = 0, count = plan.length; position < count; position++) {
+								const step = plan[position]
+								if (step !== undefined && !step.guard(value[step.key])) return false
+							}
+							return true
 						}
 						if (maskable) {
 							if (readPresence(keys, positions) !== full) return false

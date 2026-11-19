@@ -31,6 +31,7 @@ import type {
 } from '@src/core'
 import * as door from '@src/core'
 import {
+	buildHoledArray,
 	buildReportingRecord,
 	createNonEnumerableRecord,
 	DATE_ADMITTED,
@@ -6592,6 +6593,16 @@ describe('key plan dispatch helpers', () => {
 		expect(Reflect.apply(door.matchesKeyPlan, ['rank', 'id'], [plan])).toBe(false)
 		expect(Reflect.apply(door.matchesKeyPlan, ['id'], [plan])).toBe(false)
 		expect(Reflect.apply(door.matchesKeyPlan, ['id', 'rank', 'note'], [plan])).toBe(false)
+	})
+
+	it('matches an empty and a one-step plan and skips a hole in a caller plan', () => {
+		const holed = buildHoledArray(plan, 0)
+
+		expect(Reflect.apply(door.matchesKeyPlan, [], [[]])).toBe(true)
+		expect(Reflect.apply(door.matchesKeyPlan, ['id'], [[plan[0]]])).toBe(true)
+		expect(Reflect.apply(door.matchesKeyPlan, ['rank'], [[plan[0]]])).toBe(false)
+		expect(Reflect.apply(door.matchesKeyPlan, ['secret', 'rank'], [holed])).toBe(true)
+		expect(Reflect.apply(door.matchesKeyPlan, ['secret', 'note'], [holed])).toBe(false)
 	})
 
 	it('matches a step whose key equals the bound list at its index', () => {

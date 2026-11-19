@@ -1911,4 +1911,40 @@ describe('ContractCompiler — counted guard walks', () => {
 		expect(rows.is([later, refused])).toBe(false)
 		expect(reads.calls).toEqual([['id'], ['id']])
 	})
+
+	it('answers a kept key plan in plan order and stops at the first refused member', () => {
+		const reads = createRecorder<[key: string]>()
+		const rows = createContract(objectShape({ id: numberShape(), rank: numberShape() }))
+		const empty = createContract(objectShape({}))
+
+		expect(rows.is({ id: 1, rank: 2 })).toBe(true)
+		expect(
+			rows.is(
+				buildReportingRecord(
+					[
+						['id', -0],
+						['rank', 2],
+					],
+					reads.handler,
+				),
+			),
+		).toBe(true)
+		expect(reads.calls).toEqual([['id'], ['rank']])
+		reads.clear()
+		expect(
+			rows.is(
+				buildReportingRecord(
+					[
+						['id', Number.NaN],
+						['rank', 2],
+					],
+					reads.handler,
+				),
+			),
+		).toBe(false)
+		expect(reads.calls).toEqual([['id']])
+		expect(empty.is({})).toBe(true)
+		expect(empty.is({})).toBe(true)
+		expect(empty.is({ id: 1 })).toBe(false)
+	})
 })
