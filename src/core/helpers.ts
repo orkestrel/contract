@@ -1320,11 +1320,11 @@ export function pinMembers(prototype: object, owner: string): void {
 		// exists to make impossible.
 		const declared = INTRINSICS.describe(prototype, key)
 		const accessor = declared !== undefined && !INTRINSICS.own(declared, 'value')
-		INTRINSICS.reflect.define(
-			prototype,
-			key,
-			accessor ? { configurable: false } : { writable: false, configurable: false },
-		)
+		// Null-prototype, so a field the descriptor omits is never read from `Object.prototype`.
+		const pin = accessor
+			? { __proto__: null, configurable: false }
+			: { __proto__: null, writable: false, configurable: false }
+		INTRINSICS.reflect.define(prototype, key, pin)
 		const pinned = INTRINSICS.describe(prototype, key)
 		if (pinned?.configurable !== false || (!accessor && pinned.writable !== false)) {
 			throw new ContractError(`${owner}: a prototype member could not be pinned`, {

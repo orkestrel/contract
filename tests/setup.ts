@@ -730,6 +730,26 @@ export function pollutePrototypeData<T>(key: string, value: unknown, operation: 
 	)
 }
 
+/** Names one descriptor field a caller answers on `Object.prototype`, and the value it answers. */
+export interface DescriptorPollution {
+	/** Names the field that a descriptor literal omitting it reads through its prototype. */
+	readonly key: 'get' | 'set' | 'enumerable' | 'writable'
+	/** Holds the value the installed field answers. */
+	readonly value: unknown
+}
+
+/**
+ * Lists the inherited descriptor fields that change what defining a `value` and
+ * `configurable` descriptor literal does: an accessor field makes the definition throw, and
+ * a flag field changes the defined property.
+ */
+export const DESCRIPTOR_POLLUTION_ROWS: readonly DescriptorPollution[] = Object.freeze([
+	{ key: 'get', value: undefined },
+	{ key: 'set', value: undefined },
+	{ key: 'enumerable', value: true },
+	{ key: 'writable', value: true },
+])
+
 /**
  * Arms a prototype pollution from inside a caller-supplied source's own
  * reflective trap, after the operation walking it has already begun.

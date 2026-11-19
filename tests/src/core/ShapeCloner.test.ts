@@ -4,6 +4,7 @@ import type {
 	LiteralValue,
 	ShapeClonerInterface,
 	StringShape,
+	Result,
 } from '@src/core'
 import type { TerminalIntrinsic } from '../../setup.js'
 import {
@@ -25,6 +26,7 @@ import {
 	ShapeCloner,
 	stringShape,
 	validateShape,
+	CONTRACT_ERROR_BRAND,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
@@ -46,6 +48,7 @@ import {
 	replaceIntrinsic,
 	SingleReadPattern,
 	StringDeclaration,
+	DESCRIPTOR_POLLUTION_ROWS,
 } from '../../setup.js'
 import {
 	createForeignRegExp,
@@ -361,6 +364,61 @@ describe('ShapeCloner', () => {
 			keys: Reflect.ownKeys(reference),
 			header: reference.stack?.split('\n')[0],
 		})
+	})
+
+	it('builds the reentry refusal and its brand alike while the reentering trap pollutes descriptor fields', () => {
+		const readings = [undefined, ...DESCRIPTOR_POLLUTION_ROWS].map((row) => {
+			const state = new ObservedValue<ShapeClonerInterface | undefined>(undefined)
+			const settled = new ObservedValue<Result<unknown> | undefined>(undefined)
+			const reads = new ObservationCounter()
+			const source = new Proxy<StringShape>(
+				{ category: 'string' },
+				{
+					getOwnPropertyDescriptor(target, key) {
+						if (key === 'min' && reads.increment() === 1) {
+							settled.value =
+								row === undefined
+									? attempt(() => state.value?.clone())
+									: pollutePrototype(
+											Object.prototype,
+											row.key,
+											() => row.value,
+											() => attempt(() => state.value?.clone()),
+										)
+						}
+						return Reflect.getOwnPropertyDescriptor(target, key)
+					},
+				},
+			)
+			state.value = new ShapeCloner(source)
+			const outer = attempt(() => state.value?.clone())
+			const later = attempt(() => state.value?.clone())
+			const nested = settled.value
+			const error = outer.success ? undefined : outer.error
+			const brand = isContractError(error)
+				? Object.getOwnPropertyDescriptor(error, CONTRACT_ERROR_BRAND)
+				: undefined
+			return {
+				row: row?.key ?? 'none',
+				nested: nested !== undefined && !nested.success && nested.error === error,
+				later: !later.success && later.error === error,
+				message: isContractError(error) ? error.message : String(error),
+				brand: brand === undefined ? undefined : { ...brand, value: brand.value === error },
+			}
+		})
+
+		const expected = {
+			nested: true,
+			later: true,
+			message: 'ShapeCloner.clone: shape cloning may not be reentered',
+			brand: { value: true, writable: false, enumerable: false, configurable: true },
+		}
+		expect(readings).toEqual(
+			[undefined, ...DESCRIPTOR_POLLUTION_ROWS].map((row) => ({
+				row: row?.key ?? 'none',
+				...expected,
+			})),
+		)
 	})
 
 	it('promotes uncaught reentry and caught reentry before replacement failure', () => {
