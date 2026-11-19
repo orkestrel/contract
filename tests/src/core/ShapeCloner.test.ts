@@ -348,6 +348,19 @@ describe('ShapeCloner', () => {
 		expect(outer.code).toBe('clone')
 		expect(outer.context).toEqual({ shape: 'shape' })
 		expect(Object.hasOwn(outer, 'cause')).toBe(false)
+		const reference = new ContractError('ShapeCloner.clone: shape cloning may not be reentered', {
+			code: 'clone',
+			context: { shape: 'shape' },
+		})
+		expect({
+			prototype: Object.getPrototypeOf(outer) === ContractError.prototype,
+			keys: Reflect.ownKeys(outer),
+			header: outer.stack?.split('\n')[0],
+		}).toEqual({
+			prototype: true,
+			keys: Reflect.ownKeys(reference),
+			header: reference.stack?.split('\n')[0],
+		})
 	})
 
 	it('promotes uncaught reentry and caught reentry before replacement failure', () => {
