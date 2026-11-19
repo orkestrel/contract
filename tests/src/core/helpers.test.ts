@@ -5577,6 +5577,28 @@ describe('indexed derivation helpers', () => {
 
 		expect(masks).toEqual([3, 2, 0])
 	})
+
+	it('reads the length once and each present name once, in order, skipping a hole unread', () => {
+		const reads = createRecorder<[key: string]>()
+		const positions = buildPositions(['id', 'name'])
+		const holed: string[] = ['id']
+		holed[2] = 'name'
+		const observed = new Proxy(holed, {
+			get: (target, key, receiver) => {
+				reads.handler(String(key))
+				return Reflect.get(target, key, receiver)
+			},
+			has: (target, key) => {
+				reads.handler(`has ${String(key)}`)
+				return Reflect.has(target, key)
+			},
+		})
+
+		expect(readPresence(observed, positions)).toBe(3)
+		expect(reads.calls.map(([key]) => key)).toEqual(['length', 'has 0', '0', 'has 1', 'has 2', '2'])
+		expect(readPresence(['name'], positions)).toBe(2)
+		expect(readPresence(['missing'], positions)).toBe(0)
+	})
 })
 
 describe('matchesStringLength', () => {

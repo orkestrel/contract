@@ -4150,8 +4150,8 @@ export function buildPositions(names: readonly string[]): Readonly<Record<string
  * Derives the bit mask of names present in an indexed lookup.
  *
  * @remarks
- * Takes `names` as the array it declares and reads each present index once, in order,
- * through the captured fold, so a hole adds no bit. An array-like that is not an array
+ * Takes `names` as the array it declares, reads its length once, and reads each present
+ * index once, in order, so a hole adds no bit and is never read. An array-like that is not an array
  * is outside this contract.
  *
  * @param names - Names to observe in order
@@ -4167,16 +4167,17 @@ export function readPresence(
 	names: readonly string[],
 	positions: Readonly<Record<string, number>>,
 ): number {
-	// The captured fold reads each present index once, in order, and creates no array, so
+	// `in` asks what the captured fold asked before each read, and the loop creates no array, so
 	// neither an iterator nor a species constructor takes part in the walk.
-	return INTRINSICS.reflect.apply(INTRINSICS.fold, names, [
-		(mask: number, name: string | undefined) => {
-			if (name === undefined || !INTRINSICS.own(positions, name)) return mask
-			const position = positions[name]
-			return position === undefined ? mask : mask | (1 << position)
-		},
-		0,
-	])
+	let mask = 0
+	for (let index = 0, count = names.length; index < count; index++) {
+		if (!(index in names)) continue
+		const name = names[index]
+		if (name === undefined || !INTRINSICS.own(positions, name)) continue
+		const position = positions[name]
+		if (position !== undefined) mask |= 1 << position
+	}
+	return mask
 }
 
 // Pin the iterator protocol before any caller can reach these exported generators.
