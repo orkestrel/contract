@@ -440,6 +440,30 @@ describe('recordOf, pickOf, omitOf', () => {
 		expect(guard({ id: 'u1', note: 1 })).toBe(false)
 	})
 
+	it('recordOf asks its member guards in declaration order and stops at the first refusal', () => {
+		const asked = createRecorder<readonly [string]>()
+		const guard = recordOf({
+			alpha: (value: unknown): value is string => {
+				asked.handler('alpha')
+				return isString(value)
+			},
+			beta: (value: unknown): value is string => {
+				asked.handler('beta')
+				return isString(value)
+			},
+			gamma: (value: unknown): value is string => {
+				asked.handler('gamma')
+				return isString(value)
+			},
+		})
+
+		expect(guard({ gamma: 'c', beta: 'b', alpha: 'a' })).toBe(true)
+		expect(asked.calls).toEqual([['alpha'], ['beta'], ['gamma']])
+		asked.clear()
+		expect(guard({ alpha: 'a', beta: 2, gamma: 'c' })).toBe(false)
+		expect(asked.calls).toEqual([['alpha'], ['beta']])
+	})
+
 	it('shape guards refuse an unreadable optional-key list at construction', () => {
 		for (const [reader, run] of Object.freeze<ReadonlyArray<readonly [string, () => unknown]>>([
 			['recordOf', () => recordOf({ a: isString }, createRevokedArrayProxy<'a'>())],

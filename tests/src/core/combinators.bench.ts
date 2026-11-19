@@ -11,6 +11,7 @@ import {
 	buildRecordPool,
 	buildStringArray,
 	buildStringRecord,
+	RECORD_BENCH_ROW,
 } from '../../setup.js'
 import { loadContractEntry, measureCell, readBenchSettings } from '../../setupServer.js'
 import { expect, it } from 'vitest'
@@ -25,6 +26,7 @@ const RECORD_CALLS = 260
 const POOL_CALLS = 27
 const JUDGMENT_CALLS = 1
 const SHORT_CALLS = 640
+const ROW_CALLS = 45_000
 const CELL_TIMEOUT = 300_000
 
 const STRINGS = buildStringArray(10_000)
@@ -41,6 +43,14 @@ const isSmall = recordOf({
 	state: isString,
 	model: isString,
 	tags: arrayOf(isString),
+})
+const isRow = recordOf({
+	id: isString,
+	name: isString,
+	email: isString,
+	age: isFiniteNumber,
+	city: isString,
+	score: isFiniteNumber,
 })
 const isJudgment = recordOf(
 	{
@@ -113,6 +123,18 @@ it('checks a 1000-element string array', { timeout: CELL_TIMEOUT }, async ({ ben
 	const record = await measureCell(
 		() => isStrings(SHORT_STRINGS),
 		{ ...SETTINGS, title: task.name, calls: SHORT_CALLS },
+		(sample, options) =>
+			bench(task.name, { async: false, retainSamples: true }, sample).run(options),
+	)
+	expect(record.samples).toHaveLength(15)
+	expect(record.tinybench.count).toBe(15)
+})
+
+it('checks a six-member record', { timeout: CELL_TIMEOUT }, async ({ bench, task }) => {
+	expect(isRow(RECORD_BENCH_ROW)).toBe(true)
+	const record = await measureCell(
+		() => isRow(RECORD_BENCH_ROW),
+		{ ...SETTINGS, title: task.name, calls: ROW_CALLS },
 		(sample, options) =>
 			bench(task.name, { async: false, retainSamples: true }, sample).run(options),
 	)

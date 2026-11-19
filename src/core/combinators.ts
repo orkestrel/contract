@@ -465,14 +465,15 @@ export function recordOf<
 					return false
 				}
 				const members = INTRINSICS.reflect.members(value)
-				for (const index of iterateIndices(() => members.length)) {
+				for (let index = 0, count = members.length; index < count; index++) {
 					const key = members[index]
 					if (isString(key) && !matchesMember(declared.vocabulary, key)) {
 						return false
 					}
 				}
 
-				for (const index of iterateIndices(() => declared.names.length)) {
+				// The body runs the caller's guards, so the bound is read again before each step.
+				for (let index = 0; index < declared.names.length; index++) {
 					const key = declared.names[index]
 					if (key === undefined) continue
 					const guard = declared.guards[key]

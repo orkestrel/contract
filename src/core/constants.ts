@@ -287,6 +287,12 @@ export const INTRINSICS = Object.freeze({
 	sweep: Set.prototype.forEach,
 	/** Captures `Set.prototype.delete` — settlement of an active operation. */
 	remove: Set.prototype.delete,
+	/** Captures the `Set.prototype.size` getter — the emptiness answer of a registry this package built, dispatched through `apply`. */
+	count: Object.getOwnPropertyDescriptor(Set.prototype, 'size')?.get,
+	/** Captures `Set.prototype.values` — an ordered cursor over a registry this package built, dispatched through `apply`. */
+	cursor: Set.prototype.values,
+	/** Captures the native set iterator advance operation. */
+	step: Object.getPrototypeOf(new Set().values()).next,
 	/** Captures `WeakMap` — object-keyed working state. */
 	weakMap: WeakMap,
 	/** Captures `WeakMap.prototype.get` — an object-keyed memo read a published graph embeds, dispatched through `apply`. */

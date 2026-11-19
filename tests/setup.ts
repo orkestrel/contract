@@ -394,6 +394,59 @@ export const QUERY_BENCH_TEN: Readonly<Record<string, unknown>> = Object.freeze(
 export const ENUM_BENCH_CODES: readonly string[] = Object.freeze(
 	Array.from({ length: 14 }, (_, index) => `CODE_${String(index)}`),
 )
+// A shape union of four object arms keyed on `kind`, and a value its last arm accepts.
+export const UNION_BENCH_SHAPE: ContractShape = unionShape(
+	objectShape({ kind: literalShape(['circle']), radius: numberShape() }),
+	objectShape({ kind: literalShape(['square']), side: numberShape() }),
+	objectShape({ kind: literalShape(['rect']), width: numberShape(), height: numberShape() }),
+	objectShape({ kind: literalShape(['label']), text: stringShape() }),
+)
+export const UNION_BENCH_VALUE: Readonly<Record<string, unknown>> = Object.freeze({
+	kind: 'label',
+	text: 'north',
+})
+// A chain of fifty nested records, each holding the next record and a number, over a string leaf.
+export const CHAIN_BENCH_SHAPE: ContractShape = Array.from({ length: 50 }).reduce<ContractShape>(
+	(inner) => objectShape({ next: inner, n: numberShape() }),
+	stringShape(),
+)
+export const CHAIN_BENCH_VALUE: unknown = Array.from(
+	{ length: 50 },
+	(_, index) => index,
+).reduce<unknown>((inner, index) => Object.freeze({ next: inner, n: index }), 'leaf')
+// Eight members cycling through string, integer, optional string, and nullable number, and a
+// value that omits each optional member and sets each nullable member to null.
+export const MIXED_BENCH_SHAPE: ContractShape = objectShape({
+	m0: stringShape(),
+	m1: integerShape(),
+	m2: optionalShape(stringShape()),
+	m3: nullableShape(numberShape()),
+	m4: stringShape(),
+	m5: integerShape(),
+	m6: optionalShape(stringShape()),
+	m7: nullableShape(numberShape()),
+})
+export const MIXED_BENCH_VALUE: Readonly<Record<string, unknown>> = Object.freeze({
+	m0: 's0',
+	m1: 1,
+	m3: null,
+	m4: 's4',
+	m5: 5,
+	m7: null,
+})
+// A six-member record of strings and numbers, for a `recordOf` guard over the same members.
+export const RECORD_BENCH_ROW: Readonly<Record<string, unknown>> = Object.freeze({
+	id: 'k1',
+	name: 'Ada',
+	email: 'ada@example.test',
+	age: 36,
+	city: 'Oslo',
+	score: 9.5,
+})
+// An eight-key record of numbers, for a `recordShape` of numbers.
+export const RECORD_BENCH_VALUE: Readonly<Record<string, number>> = Object.freeze(
+	Object.fromEntries(Array.from({ length: 8 }, (_, index) => [`key${String(index)}`, index])),
+)
 
 /**
  * Runs an operation expected to throw a {@link ContractError} and returns that
