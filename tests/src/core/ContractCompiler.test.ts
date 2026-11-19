@@ -1980,3 +1980,42 @@ describe('ContractCompiler — counted guard walks', () => {
 		}
 	})
 })
+
+describe('ContractCompiler — counted parser walks', () => {
+	it('parses a union by identity first, then through the first arm that coerces', () => {
+		const numeric = createContract(unionShape(numberShape(), booleanShape()))
+		const flag = createContract(unionShape(booleanShape(), numberShape()))
+		const single = createContract(unionShape(numberShape()))
+
+		expect(numeric.parse('1')).toBe(1)
+		expect(flag.parse('1')).toBe(true)
+		expect(numeric.parse(true)).toBe(true)
+		expect(Object.is(numeric.parse(-0), -0)).toBe(true)
+		expect(numeric.parse(Number.NaN)).toBeUndefined()
+		expect(single.parse('2')).toBe(2)
+		expect(single.parse('two')).toBeUndefined()
+	})
+
+	it('stops each union pass at the first arm that answers', () => {
+		const reads = createRecorder<[key: string]>()
+		const contract = createContract(
+			unionShape(objectShape({ id: numberShape() }), objectShape({ id: booleanShape() })),
+		)
+		const rows: ReadonlyArray<readonly [unknown, boolean, unknown, number]> = [
+			[1, true, { id: 1 }, 1],
+			[true, true, { id: true }, 2],
+			['7', false, { id: 7 }, 3],
+			['x', false, undefined, 4],
+		]
+
+		for (const [id, same, parsed, count] of rows) {
+			reads.clear()
+			const record = buildReportingRecord([['id', id]], reads.handler)
+			const result = contract.parse(record)
+			const observed = reads.count
+			expect(observed).toBe(count)
+			expect(result === record).toBe(same)
+			expect(result).toEqual(parsed)
+		}
+	})
+})

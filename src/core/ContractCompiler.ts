@@ -1746,14 +1746,22 @@ export class ContractCompiler<
 					// parser (`.claude/rules/patterns.md` § Validation and contracts): a
 					// value already valid against ANY variant's guard is returned
 					// unchanged, so an earlier variant's coercion never overwrites it.
-					for (const variantIndex of iterateIndices(() => variants.length)) {
+					for (
+						let variantIndex = 0, count = variants.length;
+						variantIndex < count;
+						variantIndex++
+					) {
 						const variant = variants[variantIndex]
 						if (variant === undefined) continue
 						if (variant.guard(value)) return value
 					}
 					// Coercion pass: no variant matched as-is, so parse-then-guard,
 					// first variant that both parses and guards wins.
-					for (const variantIndex of iterateIndices(() => variants.length)) {
+					for (
+						let variantIndex = 0, count = variants.length;
+						variantIndex < count;
+						variantIndex++
+					) {
 						const variant = variants[variantIndex]
 						if (variant === undefined) continue
 						const parsed = variant.parse(value)
