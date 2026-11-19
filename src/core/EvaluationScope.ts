@@ -17,9 +17,7 @@ export class EvaluationScope {
 		clean = false,
 	): T {
 		if (!isObject(value) && !isFunction(value)) return plan(value, path)
-		const entries = readSetEntries(EvaluationScope.#active)
-		if (isFailure(entries)) throw entries.error
-		const active = entries.value[0]
+		const active = EvaluationScope.#read()
 		if (active instanceof EvaluationScope) return active.#evaluate(plan, value, path, clean)
 		if (active !== undefined) throw new INTRINSICS.error('Evaluation scope is unavailable')
 		const scope = new EvaluationScope()
@@ -31,6 +29,17 @@ export class EvaluationScope {
 		} finally {
 			INTRINSICS.reflect.apply(INTRINSICS.remove, EvaluationScope.#active, [scope])
 		}
+	}
+
+	// Reads the registry's sole entry, or `undefined` while it is empty.
+	static #read(): unknown {
+		const count = INTRINSICS.count
+		if (count !== undefined && INTRINSICS.reflect.apply(count, EvaluationScope.#active, []) === 0) {
+			return undefined
+		}
+		const entries = readSetEntries(EvaluationScope.#active)
+		if (isFailure(entries)) throw entries.error
+		return entries.value[0]
 	}
 
 	#evaluate<T>(
