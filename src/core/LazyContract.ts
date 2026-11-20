@@ -83,12 +83,12 @@ export class LazyContract {
 	}
 
 	#audit(): AuditorFunction {
-		return (value: unknown, path: readonly string[] = []) =>
+		return (value: unknown, path?: readonly string[]) =>
 			(this.#settled ?? this.#settle('compileAuditor')).auditor(value, path)
 	}
 
 	#explain(): ReporterFunction {
-		return (value: unknown, path: readonly string[] = []) =>
+		return (value: unknown, path?: readonly string[]) =>
 			(this.#settled ?? this.#settle('compileReporter')).reporter(value, path)
 	}
 

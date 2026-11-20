@@ -32,6 +32,7 @@ import type {
 import * as door from '@src/core'
 import {
 	buildHoledArray,
+	buildReportingPath,
 	buildReportingRecord,
 	createNonEnumerableRecord,
 	DATE_ADMITTED,
@@ -299,6 +300,24 @@ describe('filterUncoveredFaults', () => {
 
 	it('returns an empty list for no fault', () => {
 		expect(door.filterUncoveredFaults([])).toEqual([])
+	})
+
+	it('throws the error a path segment throws when no fault covers, as the covered walk does', () => {
+		const sentinel = new RangeError('segment')
+		const path = buildReportingPath(['a'], () => {
+			throw sentinel
+		})
+		const uncovered: readonly AuditFault[] = [
+			{ reason: 'extra', path: ['b'] },
+			{ reason: 'extra', path },
+		]
+		const covered: readonly AuditFault[] = [
+			{ reason: 'variant', path: ['v'], variants: 2 },
+			{ reason: 'extra', path },
+		]
+
+		expect(() => door.filterUncoveredFaults(uncovered)).toThrow(sentinel)
+		expect(() => door.filterUncoveredFaults(covered)).toThrow(sentinel)
 	})
 })
 
@@ -2889,6 +2908,32 @@ describe('resolveField', () => {
 		expect(reads).toEqual(['length', '0'])
 	})
 
+	it('rereads the path length before each step and reads nothing after a missing field', () => {
+		const shrinking: string[] = []
+		const shrunk = new Proxy(['a', 'b', 'c', 'd'], {
+			get(target, key, receiver) {
+				const value: unknown = Reflect.get(target, key, receiver)
+				shrinking.push(`${String(key)}=${String(value)}`)
+				if (key === '0') target.length = 3
+				return value
+			},
+		})
+		const growing: string[] = []
+		const grown = new Proxy(['a'], {
+			get(target, key, receiver) {
+				const value: unknown = Reflect.get(target, key, receiver)
+				growing.push(`${String(key)}=${String(value)}`)
+				if (key === '0' && target.length === 1) target.push('b')
+				return value
+			},
+		})
+
+		expect(resolveField({ a: { b: {} } }, shrunk)).toBeUndefined()
+		expect(shrinking).toEqual(['length=4', '0=a', 'length=3', '1=b', 'length=3', '2=c'])
+		expect(resolveField({ a: { b: 5 } }, grown)).toBe(5)
+		expect(growing).toEqual(['length=1', '0=a', 'length=2', '1=b', 'length=2'])
+	})
+
 	it('resolves a long cyclic path without recursive stack growth', () => {
 		const record: Record<string, unknown> = { value: 42 }
 		record.self = record
@@ -4282,6 +4327,40 @@ describe('contain', () => {
 
 		expect(error).toBe(authored)
 		expect(error.code).toBe('literal')
+	})
+})
+
+describe('buildChildPath', () => {
+	it('copies a built path and appends the key', () => {
+		expect(door.buildChildPath(['list', '0'], 'id')).toEqual(['list', '0', 'id'])
+		expect(door.buildChildPath([], 'id')).toEqual(['id'])
+		expect(door.buildChildPath([''], '')).toEqual(['', ''])
+	})
+
+	it('returns a fresh path and leaves the parent unchanged', () => {
+		const parent = Object.freeze(['list'])
+		const child = door.buildChildPath(parent, 'id')
+
+		expect(child).not.toBe(parent)
+		expect(parent).toEqual(['list'])
+		expect(Object.isFrozen(child)).toBe(false)
+	})
+
+	it('reads each segment one time and no iterator', () => {
+		const reads = createRecorder<[index: number]>()
+		const parent = buildReportingPath(['a', 'b'], reads.handler)
+		const built = replaceIntrinsic(Array.prototype, Symbol.iterator, injectMarker, () =>
+			door.buildChildPath(parent, 'c'),
+		)
+
+		expect(built).toEqual(['a', 'b', 'c'])
+		expect(reads.calls.map(([index]) => index)).toEqual([0, 1])
+	})
+
+	it('refuses a path holding an absent segment', () => {
+		expect(() => door.buildChildPath(buildHoledArray(['a', 'gap', 'b'], 1), 'c')).toThrow(
+			'A built path holds an absent segment',
+		)
 	})
 })
 

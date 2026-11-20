@@ -280,6 +280,20 @@ describe('ValueCloner', () => {
 		expect(revoked.context).toEqual({ path: [] })
 	})
 
+	it('locates a refusal deep in nested records and arrays by every key the walk took', () => {
+		const sentinel = Object.freeze({ stage: 'deep' })
+		const member = Object.defineProperty({}, 'value', {
+			get: throwSentinel(sentinel),
+			enumerable: true,
+		})
+		const read = captureContractError(() =>
+			new ValueCloner({ list: [{ ok: 1 }, { deep: { member } }] }, undefined).clone(),
+		)
+
+		expect(read.message).toBe('own: member could not be read')
+		expect(read.context).toEqual({ path: ['list', '1', 'deep', 'member', 'value'] })
+	})
+
 	it('replays its settled snapshot and its settled refusal without another read', () => {
 		const reads = createRecorder<readonly [string]>()
 		const cloner = new ValueCloner(buildReportingRecord([['id', 7]], reads.handler), undefined)

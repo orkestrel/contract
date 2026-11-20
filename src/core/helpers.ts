@@ -498,6 +498,35 @@ export function pathOf(
 }
 
 /**
+ * Builds a child's path from a dense path this package built and the child's key, without
+ * dispatching through array iteration.
+ *
+ * @remarks
+ * Reads `length` once and each segment once, in order, through a null-prototype array-like
+ * that reaches no iterator and no caller member. A caller's path goes through {@link pathOf}
+ * instead, which rereads its length before every segment and omits an absent one.
+ *
+ * @param path - A dense path this package built
+ * @param key - The child's key
+ * @returns A fresh path carrying every segment and then the key
+ * @throws An `Error` when `path` holds an absent segment
+ *
+ * @example
+ * ```ts
+ * buildChildPath(['user'], 'name') // ['user', 'name']
+ * ```
+ */
+export function buildChildPath(path: readonly string[], key: string): readonly string[] {
+	const length = path.length
+	const indices = { __proto__: null, length: length + 1 }
+	return INTRINSICS.from(indices, (_entry: unknown, index: number): string => {
+		const segment = index < length ? path[index] : key
+		if (segment === undefined) throw new INTRINSICS.error('A built path holds an absent segment')
+		return segment
+	})
+}
+
+/**
  * Appends every element of one array onto another, by index.
  *
  * @remarks
@@ -2466,20 +2495,14 @@ export function resolveField(record: Readonly<Record<string, unknown>>, path: Fi
 		if (isString(path)) {
 			return INTRINSICS.own(record, path) ? INTRINSICS.reflect.read(record, path) : undefined
 		}
-		const keys = path
-		const indices = iterateIndices(() => keys.length)
-		return INTRINSICS.reflect.apply(INTRINSICS.reduce, indices, [
-			(current: unknown, index: number): unknown => {
-				const key = keys[index]
-				if (key === undefined || !isObject(current) || !INTRINSICS.own(current, key)) {
-					// Closing the cursor prevents even a later path-length observation.
-					indices.return()
-					return undefined
-				}
-				return INTRINSICS.reflect.read(current, key)
-			},
-			record,
-		])
+		let current: unknown = record
+		for (let index = 0; index < path.length; index++) {
+			const key = path[index]
+			// Returning at the first missing segment leaves the later segments and length unread.
+			if (key === undefined || !isObject(current) || !INTRINSICS.own(current, key)) return undefined
+			current = INTRINSICS.reflect.read(current, key)
+		}
+		return current
 	})
 	return isSuccess(outcome) ? outcome.value : undefined
 }

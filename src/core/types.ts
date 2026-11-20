@@ -1493,8 +1493,13 @@ export type RandomFunction = () => number
 /** Reads the current upper bound of an indexed walk. */
 export type LengthReader = () => number
 
-/** Evaluates a compiled node at one diagnostic path. */
-export type EvaluationFunction<T> = (value: unknown, path: readonly string[]) => T
+/**
+ * Evaluates a compiled node at one diagnostic path.
+ *
+ * @remarks
+ * `built` is true when this package built `path`, and absent or false for a caller's path.
+ */
+export type EvaluationFunction<T> = (value: unknown, path: readonly string[], built?: boolean) => T
 
 /**
  * Represents a compiled strict-domain diagnostic — the shape of `compileAuditor`

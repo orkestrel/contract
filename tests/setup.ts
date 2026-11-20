@@ -414,6 +414,21 @@ export const CHAIN_BENCH_VALUE: unknown = Array.from(
 	{ length: 50 },
 	(_, index) => index,
 ).reduce<unknown>((inner, index) => Object.freeze({ next: inner, n: index }), 'leaf')
+// The chain with a number where its leaf declares a string, so one fault sits fifty levels down.
+export const CHAIN_BENCH_FAULTED: unknown = Array.from(
+	{ length: 50 },
+	(_, index) => index,
+).reduce<unknown>((inner, index) => Object.freeze({ next: inner, n: index }), 7)
+// The bench row with a wrong type in three columns and an undeclared column, so every refusal
+// door reports four faults, none of them under a union.
+export const ROW_BENCH_REFUSED: Readonly<Record<string, unknown>> = Object.freeze({
+	id: 'k1',
+	organization: 7,
+	rank: '1',
+	body: 'x'.repeat(24),
+	active: 'no',
+	extra: true,
+})
 // Eight members cycling through string, integer, optional string, and nullable number, and a
 // value that omits each optional member and sets each nullable member to null.
 export const MIXED_BENCH_SHAPE: ContractShape = objectShape({
@@ -6918,11 +6933,43 @@ export const UNDEFINED_LAW_SHAPES: readonly ContractShape[] = Object.freeze([
  * @param index - The index left empty
  * @returns A fresh sparse array of the same length
  */
-export function buildHoledArray(value: readonly unknown[], index: number): readonly unknown[] {
-	const holed: unknown[] = []
+export function buildHoledArray<T>(value: readonly T[], index: number): readonly T[] {
+	const holed: T[] = []
 	holed.length = value.length
 	for (const [at, entry] of value.entries()) if (at !== index) holed[at] = entry
 	return holed
+}
+
+/**
+ * Builds a path whose every segment is an accessor that reports its index on each read.
+ *
+ * @param segments - The segments, in order
+ * @param report - Called with the index on every read of a segment
+ * @param resized - The segments the path holds after the first read of index 0 changes its
+ *                  length; default: the read changes nothing
+ * @returns The path, whose indices past `segments` hold plain data
+ */
+export function buildReportingPath(
+	segments: readonly string[],
+	report: (index: number) => void,
+	resized?: readonly string[],
+): string[] {
+	const path: string[] = []
+	for (const [index, segment] of segments.entries()) {
+		Object.defineProperty(path, index, {
+			get: () => {
+				report(index)
+				if (index === 0 && resized !== undefined && path.length !== resized.length) {
+					path.length = resized.length
+					for (const [at, entry] of resized.entries()) if (at >= segments.length) path[at] = entry
+				}
+				return segment
+			},
+			enumerable: true,
+			configurable: true,
+		})
+	}
+	return path
 }
 
 /** Describes one `context.faults` form a caller hands `readValue`. */

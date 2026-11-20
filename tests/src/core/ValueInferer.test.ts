@@ -99,3 +99,26 @@ describe('ValueInferer — an unsanitized breadth budget', () => {
 		})
 	})
 })
+
+describe('ValueInferer — the properties record', () => {
+	it('builds a null-prototype record of own data members in sorted key order', () => {
+		const schema = new ValueInferer(
+			JSON.parse('{"b":1,"__proto__":"p","10":true,"2":"x","a":null}'),
+			8,
+			16,
+			true,
+			false,
+		).infer()
+		const properties = schema.properties ?? {}
+
+		expect(Object.getPrototypeOf(properties)).toBeNull()
+		expect(Object.getOwnPropertyNames(properties)).toEqual(['2', '10', '__proto__', 'a', 'b'])
+		expect(Object.getOwnPropertyDescriptor(properties, '__proto__')).toEqual({
+			value: { type: 'string' },
+			writable: true,
+			enumerable: true,
+			configurable: true,
+		})
+		expect(Object.isExtensible(properties)).toBe(true)
+	})
+})

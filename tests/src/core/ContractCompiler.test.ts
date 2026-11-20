@@ -49,6 +49,7 @@ import {
 } from '@src/core'
 import {
 	buildHoledArray,
+	buildReportingPath,
 	buildReportingRecord,
 	buildUndefinedCorpus,
 	findUndefinedLawViolations,
@@ -2080,5 +2081,266 @@ describe('ContractCompiler — counted parser walks', () => {
 			expect(result === record).toBe(same)
 			expect(result).toEqual(parsed)
 		}
+	})
+})
+
+describe('ContractCompiler — fault paths', () => {
+	const RECORD = objectShape({ name: stringShape(), child: objectShape({ age: numberShape() }) })
+	const RECORD_VALUE = { name: 7, child: { age: 'x' } }
+
+	it('roots each fault at the path the walk built through nested records and arrays', () => {
+		const compiler = new ContractCompiler(
+			objectShape({
+				list: arrayShape(objectShape({ id: numberShape(), tags: arrayShape(stringShape()) })),
+			}),
+		)
+		const value = {
+			list: [
+				{ id: 1, tags: ['a'] },
+				{ id: 'x', tags: ['b', 2] },
+			],
+			more: 1,
+		}
+
+		expect(compiler.auditor(value)).toEqual([
+			{ reason: 'type', path: ['list', '1', 'id'], expected: 'number', received: '"x"' },
+			{ reason: 'type', path: ['list', '1', 'tags', '1'], expected: 'string', received: '2' },
+			{ reason: 'extra', path: ['more'] },
+		])
+		expect(compiler.reporter(value)).toEqual([
+			{ reason: 'type', path: ['list', '1', 'id'], expected: 'number', received: '"x"' },
+		])
+	})
+
+	it('roots an interface member fault at its member path for the audit the guard reads', () => {
+		const compiler = new ContractCompiler(
+			interfaceShape({ get: functionShape(), meta: objectShape({ id: numberShape() }) }),
+		)
+
+		expect(compiler.guard({ get: () => 1, meta: { id: 1 } })).toBe(true)
+		expect(compiler.guard({ get: () => 1, meta: { id: 'y' } })).toBe(false)
+		expect(compiler.auditor({ get: 1, meta: { id: 'y' } })).toEqual([
+			{ reason: 'type', path: ['get'], expected: 'function', received: '1' },
+			{ reason: 'type', path: ['meta', 'id'], expected: 'number', received: '"y"' },
+		])
+	})
+
+	it.each([
+		{
+			form: 'accessor-backed',
+			segments: ['root', 'inner'],
+			prefix: ['root', 'inner'],
+			reads: [0, 1, 0, 1],
+		},
+		{
+			form: 'growing',
+			segments: ['root'],
+			resized: ['root', 'grown'],
+			prefix: ['root', 'grown'],
+			reads: [0, 0],
+		},
+		{
+			form: 'shrinking',
+			segments: ['root', 'inner', 'tail'],
+			resized: ['root', 'inner'],
+			prefix: ['root', 'inner'],
+			reads: [0, 1, 0, 1],
+		},
+	])(
+		'reads a $form caller root path again for each child it roots',
+		({ segments, resized, prefix, reads }) => {
+			const audited = createRecorder<[index: number]>()
+			const reported = createRecorder<[index: number]>()
+			const compiler = new ContractCompiler(RECORD)
+			const auditPath = buildReportingPath(segments, audited.handler, resized)
+			const reportPath = buildReportingPath(segments, reported.handler, resized)
+
+			expect(compiler.auditor(RECORD_VALUE, auditPath)).toEqual([
+				{ reason: 'type', path: [...prefix, 'name'], expected: 'string', received: '7' },
+				{ reason: 'type', path: [...prefix, 'child', 'age'], expected: 'number', received: '"x"' },
+			])
+			expect(compiler.reporter(RECORD_VALUE, reportPath)).toEqual([
+				{ reason: 'type', path: [...prefix, 'child', 'age'], expected: 'number', received: '"x"' },
+			])
+			expect(audited.calls.map(([index]) => index)).toEqual(reads)
+			expect(reported.calls.map(([index]) => index)).toEqual(reads)
+			expect(compiler.auditor(42, auditPath)[0]?.path).toBe(auditPath)
+			expect(compiler.reporter(42, reportPath)[0]?.path).toBe(reportPath)
+		},
+	)
+
+	it('omits a hole of a caller root path from every child path, keeps the root by identity, and extends a plain one', () => {
+		const compiler = new ContractCompiler(RECORD)
+		const path = buildHoledArray(['root', 'gap', 'inner'], 1)
+
+		expect(compiler.auditor(RECORD_VALUE, path)).toEqual([
+			{ reason: 'type', path: ['root', 'inner', 'name'], expected: 'string', received: '7' },
+			{
+				reason: 'type',
+				path: ['root', 'inner', 'child', 'age'],
+				expected: 'number',
+				received: '"x"',
+			},
+		])
+		expect(compiler.reporter(RECORD_VALUE, path)).toEqual([
+			{
+				reason: 'type',
+				path: ['root', 'inner', 'child', 'age'],
+				expected: 'number',
+				received: '"x"',
+			},
+		])
+		expect(compiler.auditor(42, path)[0]?.path).toBe(path)
+		expect(compiler.reporter(42, path)[0]?.path).toBe(path)
+		expect(compiler.auditor(RECORD_VALUE, ['root'])).toEqual([
+			{ reason: 'type', path: ['root', 'name'], expected: 'string', received: '7' },
+			{ reason: 'type', path: ['root', 'child', 'age'], expected: 'number', received: '"x"' },
+		])
+	})
+
+	it('roots the fault at every derivation site under a holed caller root path without its hole', () => {
+		const record = new ContractCompiler(
+			objectShape({
+				name: stringShape(),
+				age: numberShape(),
+				note: stringShape(),
+				id: numberShape(),
+				count: numberShape(),
+			}),
+		)
+		const value: Record<string, unknown> = { name: 7, id: undefined, count: 'x', stray: true }
+		Object.defineProperty(value, 'note', { value: 'n', enumerable: false })
+		Object.defineProperty(value, 'secret', { value: 1, enumerable: false })
+		const open = new ContractCompiler(
+			objectShape({ id: numberShape() }, { additionalProperties: numberShape() }),
+		)
+		const list = new ContractCompiler(arrayShape(unionShape(numberShape(), undefinedShape())))
+		const items = buildHoledArray<unknown>([1, undefined, 'x'], 1)
+		Object.defineProperty(items, 'note', { value: 1, enumerable: true })
+		const store = new ContractCompiler(interfaceShape({ get: functionShape() }))
+		const path = buildHoledArray(['root', 'gap', 'inner'], 1)
+
+		expect(record.auditor(value, path)).toEqual([
+			{ reason: 'type', path: ['root', 'inner', 'name'], expected: 'string', received: '7' },
+			{ reason: 'missing', path: ['root', 'inner', 'age'], expected: 'number' },
+			{ reason: 'hidden', path: ['root', 'inner', 'note'] },
+			{ reason: 'type', path: ['root', 'inner', 'id'], expected: 'number', received: 'undefined' },
+			{ reason: 'type', path: ['root', 'inner', 'count'], expected: 'number', received: '"x"' },
+			{ reason: 'extra', path: ['root', 'inner', 'stray'] },
+			{ reason: 'extra', path: ['root', 'inner', 'secret'] },
+		])
+		expect(record.reporter(value, path)).toEqual([
+			{ reason: 'missing', path: ['root', 'inner', 'age'], expected: 'number' },
+			{ reason: 'missing', path: ['root', 'inner', 'note'], expected: 'string' },
+			{ reason: 'missing', path: ['root', 'inner', 'id'], expected: 'number' },
+			{ reason: 'type', path: ['root', 'inner', 'count'], expected: 'number', received: '"x"' },
+		])
+		const tail = [
+			{ reason: 'type', path: ['root', 'inner', 'extra'], expected: 'number', received: '"x"' },
+		]
+		expect(open.auditor({ id: 1, extra: 'x' }, path)).toEqual(tail)
+		expect(open.reporter({ id: 1, extra: 'x' }, path)).toEqual(tail)
+		const elements = [
+			{ reason: 'missing', path: ['root', 'inner', '1'], expected: 'union' },
+			{ reason: 'variant', path: ['root', 'inner', '2'], variants: 2 },
+			{ reason: 'type', path: ['root', 'inner', '2'], expected: 'number', received: '"x"' },
+		]
+		expect(list.auditor(items, path)).toEqual([
+			...elements,
+			{ reason: 'extra', path: ['root', 'inner', 'note'] },
+		])
+		expect(list.reporter(items, path)).toEqual(elements)
+		const member = [
+			{ reason: 'type', path: ['root', 'inner', 'get'], expected: 'function', received: '1' },
+		]
+		expect(store.auditor({ get: 1 }, path)).toEqual(member)
+		expect(store.reporter({ get: 1 }, path)).toEqual(member)
+	})
+
+	it('reads a caller root path again for each child of an array and of each union arm', () => {
+		const items = createRecorder<[index: number]>()
+		const arms = createRecorder<[index: number]>()
+		const array = new ContractCompiler(arrayShape(objectShape({ id: numberShape() })))
+		const union = new ContractCompiler(unionShape(RECORD, arrayShape(numberShape())))
+		const shrinking = buildReportingPath(['root', 'inner', 'tail'], items.handler, [
+			'root',
+			'inner',
+		])
+		const growing = buildReportingPath(['root'], arms.handler, ['root', 'grown'])
+
+		expect(array.auditor([{ id: 'x' }, 3], shrinking)).toEqual([
+			{ reason: 'type', path: ['root', 'inner', '0', 'id'], expected: 'number', received: '"x"' },
+			{ reason: 'type', path: ['root', 'inner', '1'], expected: 'object', received: '3' },
+		])
+		const faults = union.auditor(RECORD_VALUE, growing)
+		const walked = arms.calls.map(([index]) => index)
+		expect(faults).toEqual([
+			{ reason: 'variant', path: ['root', 'grown'], variants: 2 },
+			{ reason: 'type', path: ['root', 'grown'], expected: 'array', received: 'object' },
+		])
+		expect(faults[0]?.path).toBe(growing)
+		expect(items.calls.map(([index]) => index)).toEqual([0, 1, 0, 1])
+		expect(walked).toEqual([0, 0])
+	})
+})
+
+describe('ContractCompiler — the parsed record', () => {
+	it('writes each member as an own data property of a null-prototype record', () => {
+		const contract = createContract(
+			objectShape({ id: numberShape() }, { additionalProperties: true }),
+		)
+		const parsed = contract.parse(
+			JSON.parse('{"id":1,"__proto__":{"polluted":true},"10":"ten","2":"two","x":"y"}'),
+		)
+		const member = { writable: true, enumerable: true, configurable: true }
+
+		expect(Object.getPrototypeOf(parsed)).toBeNull()
+		expect(Object.getOwnPropertyNames(parsed)).toEqual(['2', '10', 'id', '__proto__', 'x'])
+		expect(Object.getOwnPropertyDescriptors(parsed)).toEqual({
+			2: { value: 'two', ...member },
+			10: { value: 'ten', ...member },
+			id: { value: 1, ...member },
+			['__proto__']: { value: { polluted: true }, ...member },
+			x: { value: 'y', ...member },
+		})
+		expect(Object.isExtensible(parsed)).toBe(true)
+		expect(Object.isFrozen(parsed)).toBe(false)
+		expect(Reflect.get({}, 'polluted')).toBeUndefined()
+	})
+
+	it('writes a declared __proto__ member and integer-like declared keys as own data', () => {
+		const properties: Record<string, ContractShape> = Object.create(null)
+		properties['b'] = stringShape()
+		properties['__proto__'] = stringShape()
+		properties['10'] = stringShape()
+		properties['2'] = stringShape()
+		const contract = createContract(objectShape(properties))
+		const parsed = contract.parse(
+			JSON.parse('{"2":"two","__proto__":"declared","b":"b","10":"ten"}'),
+		)
+
+		expect(Object.getPrototypeOf(parsed)).toBeNull()
+		expect(Object.getOwnPropertyNames(parsed)).toEqual(['2', '10', 'b', '__proto__'])
+		expect(Object.getOwnPropertyDescriptor(parsed, '__proto__')?.value).toBe('declared')
+	})
+
+	it('reads a getter-backed member one time and holds its value as data', () => {
+		const reads = createRecorder<[key: string]>()
+		const record = buildReportingRecord(
+			[
+				['id', 5],
+				['name', 'Ada'],
+			],
+			reads.handler,
+		)
+		const parsed = createContract(objectShape({ id: numberShape(), name: stringShape() })).parse(
+			record,
+		)
+
+		expect(reads.calls).toEqual([['id'], ['name']])
+		expect(Object.getOwnPropertyDescriptors(parsed)).toEqual({
+			id: { value: 5, writable: true, enumerable: true, configurable: true },
+			name: { value: 'Ada', writable: true, enumerable: true, configurable: true },
+		})
 	})
 })

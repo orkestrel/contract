@@ -3,6 +3,7 @@ import { CLONE_NODE_LIMIT, INTRINSICS } from './constants.js'
 import { ContractError } from './errors.js'
 import {
 	attempt,
+	buildChildPath,
 	isFailure,
 	isSuccess,
 	iterateIndices,
@@ -130,7 +131,7 @@ export class ValueCloner {
 			copy,
 			array,
 			plan,
-			path: key === undefined ? path : pathOf(path, key),
+			path: key === undefined ? path : buildChildPath(path, key),
 		}
 		return copy
 	}
