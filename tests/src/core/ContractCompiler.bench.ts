@@ -1,7 +1,8 @@
-// Times the compiled guards a database pays per stored row and per query-door read, and the
-// owning door against `admitValue` on the option bags a factory admits, one `it` per cell; select
-// one with an anchored `-t`. Each answer is asserted before its cell is timed, and an owning cell
-// annotates its median latency in milliseconds for an interleaved reading.
+// Times the compiled guards a database pays per stored row and per query-door read, the refusal
+// doors on the same row, the fifty-level chain's audit and ownership, and the owning door
+// against `admitValue` on the option bags a factory admits, one `it` per cell; select one with an
+// anchored `-t`. Each answer is asserted before its cell is timed, and an owning cell annotates its
+// median latency in milliseconds for an interleaved reading.
 import {
 	admitValue,
 	arrayShape,
@@ -13,6 +14,7 @@ import {
 } from '@src/core'
 import { ValueCloner } from '../../../src/core/ValueCloner.js'
 import {
+	CHAIN_BENCH_FAULTED,
 	CHAIN_BENCH_SHAPE,
 	CHAIN_BENCH_VALUE,
 	CONDITION_BENCH_SHAPE,
@@ -25,6 +27,7 @@ import {
 	QUERY_BENCH_TEN,
 	RECORD_BENCH_VALUE,
 	ROW_BENCH_ORDERS,
+	ROW_BENCH_REFUSED,
 	ROW_BENCH_SHAPE,
 	ROW_BENCH_VALUE,
 	UNION_BENCH_SHAPE,
@@ -71,6 +74,46 @@ it('admits a six-column row', async ({ bench }) => {
 	expect(admitValue(row, ROW_BENCH_VALUE).success).toBe(true)
 	const result = await bench('admits a six-column row', {}, () => {
 		admitValue(row, ROW_BENCH_VALUE)
+	}).run({ time: 1000 })
+	expect(result.state).toBe('completed')
+})
+
+it('audits a six-column row with four faults', async ({ bench }) => {
+	expect(row.audit(ROW_BENCH_REFUSED)).toHaveLength(4)
+	const result = await bench('audits a six-column row with four faults', {}, () => {
+		row.audit(ROW_BENCH_REFUSED)
+	}).run({ time: 1000 })
+	expect(result.state).toBe('completed')
+})
+
+it('refuses a six-column row with four faults', async ({ bench }) => {
+	expect(admitValue(row, ROW_BENCH_REFUSED).success).toBe(false)
+	const result = await bench('refuses a six-column row with four faults', {}, () => {
+		admitValue(row, ROW_BENCH_REFUSED)
+	}).run({ time: 1000 })
+	expect(result.state).toBe('completed')
+})
+
+it('explains a six-column row with one fault', async ({ bench }) => {
+	expect(row.explain(ROW_BENCH_REFUSED)).toHaveLength(1)
+	const result = await bench('explains a six-column row with one fault', {}, () => {
+		row.explain(ROW_BENCH_REFUSED)
+	}).run({ time: 1000 })
+	expect(result.state).toBe('completed')
+})
+
+it('audits a fifty-level chain whose leaf faults', async ({ bench }) => {
+	expect(chain.audit(CHAIN_BENCH_FAULTED)[0]?.path).toHaveLength(50)
+	const result = await bench('audits a fifty-level chain whose leaf faults', {}, () => {
+		chain.audit(CHAIN_BENCH_FAULTED)
+	}).run({ time: 1000 })
+	expect(result.state).toBe('completed')
+})
+
+it('owns a fifty-level chain', async ({ bench }) => {
+	expect(chain.own(CHAIN_BENCH_VALUE).success).toBe(true)
+	const result = await bench('owns a fifty-level chain', {}, () => {
+		chain.own(CHAIN_BENCH_VALUE)
 	}).run({ time: 1000 })
 	expect(result.state).toBe('completed')
 })

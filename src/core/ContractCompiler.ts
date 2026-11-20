@@ -43,6 +43,7 @@ import {
 	collectMembers,
 	contain,
 	buildArrayFaults,
+	buildChildPath,
 	buildPositions,
 	buildNumberFaults,
 	buildStringFaults,
@@ -186,10 +187,10 @@ export class ContractCompiler<
 	static readonly #emptyGuards: Array<Guard<unknown>> = []
 	static readonly #emptyParsers: Array<Parser<unknown>> = []
 	static readonly #emptyAudits: Array<
-		(value: unknown, path: readonly string[]) => readonly AuditFault[]
+		(value: unknown, path: readonly string[], built?: boolean) => readonly AuditFault[]
 	> = []
 	static readonly #emptyReports: Array<
-		(value: unknown, path: readonly string[]) => readonly Fault[]
+		(value: unknown, path: readonly string[], built?: boolean) => readonly Fault[]
 	> = []
 	static readonly #emptySeeds: Array<(random: RandomFunction) => unknown> = []
 	static readonly #emptyAdmitted: boolean[] = []
@@ -251,8 +252,10 @@ export class ContractCompiler<
 	#schemas: JSONSchema[]
 	#guards: Array<Guard<unknown>>
 	#parsers: Array<Parser<unknown>>
-	#audits: Array<(value: unknown, path: readonly string[]) => readonly AuditFault[]>
-	#reports: Array<(value: unknown, path: readonly string[]) => readonly Fault[]>
+	#audits: Array<
+		(value: unknown, path: readonly string[], built?: boolean) => readonly AuditFault[]
+	>
+	#reports: Array<(value: unknown, path: readonly string[], built?: boolean) => readonly Fault[]>
 	#seeds: Array<(random: RandomFunction) => unknown>
 	// The one static fact the container families share: whether each node admits `undefined`.
 	#admitted: boolean[]
@@ -769,9 +772,9 @@ export class ContractCompiler<
 	// bounded by `FAULT_LIMIT` — every collector stops after the cap is reached, so
 	// a value that faults everywhere saturates instead of expanding.
 	#trackFaults<T>(
-		plan: (value: unknown, path: readonly string[]) => readonly T[],
-	): (value: unknown, path: readonly string[]) => readonly T[] {
-		return (value, path) => EvaluationScope.run(plan, value, path, true)
+		plan: (value: unknown, path: readonly string[], built?: boolean) => readonly T[],
+	): (value: unknown, path: readonly string[], built?: boolean) => readonly T[] {
+		return (value, path, built) => EvaluationScope.run(plan, value, path, true, built)
 	}
 
 	// What tells a union's arms apart, when anything does: a property every arm is an
@@ -1392,7 +1395,7 @@ export class ContractCompiler<
 				// The tracked audit, so a scope that already holds its clean verdict reads no member again.
 				const audit = this.#auditAt(owned)
 				return (value: unknown): value is unknown =>
-					holds(() => audit(value, ContractCompiler.#root).length === 0)
+					holds(() => audit(value, ContractCompiler.#root, true).length === 0)
 			}
 			case 'raw':
 				return (value: unknown): value is unknown => value !== undefined
@@ -1786,7 +1789,7 @@ export class ContractCompiler<
 			case 'interface': {
 				const audit = this.#auditAt(owned)
 				return (value) => {
-					const outcome = attempt(() => audit(value, ContractCompiler.#root))
+					const outcome = attempt(() => audit(value, ContractCompiler.#root, true))
 					if (isSuccess(outcome)) return outcome.value.length === 0 ? value : undefined
 					if (isContractError(outcome.error)) throw outcome.error
 					return readValue(
@@ -1831,7 +1834,11 @@ export class ContractCompiler<
 	// audits its inner shape, and `admits` says whether that shape reads `undefined` as clean.
 	#membersOf(owned: InterfaceShape): ReadonlyArray<{
 		readonly key: string
-		readonly audit: (value: unknown, path: readonly string[]) => readonly AuditFault[]
+		readonly audit: (
+			value: unknown,
+			path: readonly string[],
+			built?: boolean,
+		) => readonly AuditFault[]
 		readonly optional: boolean
 		readonly admits: boolean
 		readonly kind: FaultKind
@@ -1861,17 +1868,21 @@ export class ContractCompiler<
 
 	// The published root supplies the documented default root path and carries the
 	// door boundary around the whole walk, so a host failure under an untrusted value
-	// publishes this package's error class rather than the caller's raw value.
+	// publishes this package's error class rather than the caller's raw value. `built`
+	// is true only for that default root: a caller's root path keeps `pathOf`'s reads.
 	#exposeAudit(
-		plan: (value: unknown, path: readonly string[]) => readonly AuditFault[],
+		plan: (value: unknown, path: readonly string[], built?: boolean) => readonly AuditFault[],
 	): AuditorFunction {
-		return (value: unknown, path: readonly string[] = []): readonly AuditFault[] =>
-			contain(() => plan(value, path), 'compileAuditor')
+		return (value: unknown, path?: readonly string[]): readonly AuditFault[] =>
+			contain(
+				() => (path === undefined ? plan(value, [], true) : plan(value, path, false)),
+				'compileAuditor',
+			)
 	}
 
 	#auditAt(
 		shape: ContractShape,
-	): (value: unknown, path: readonly string[]) => readonly AuditFault[] {
+	): (value: unknown, path: readonly string[], built?: boolean) => readonly AuditFault[] {
 		const compiled = this.#audits[this.#locate(shape)]
 		if (compiled === undefined) {
 			throw new ContractError('ContractCompiler: a child auditor is unavailable', {
@@ -1882,7 +1893,9 @@ export class ContractCompiler<
 		return compiled
 	}
 
-	#auditOf(index: number): (value: unknown, path: readonly string[]) => readonly AuditFault[] {
+	#auditOf(
+		index: number,
+	): (value: unknown, path: readonly string[], built?: boolean) => readonly AuditFault[] {
 		const owned = this.#node(index)
 		switch (owned.category) {
 			// A leaf's refinement fields are fixed when its plan is built, exactly as
@@ -1977,7 +1990,7 @@ export class ContractCompiler<
 				const item = this.#auditAt(owned.items)
 				const admitted = this.#admits(owned.items)
 				const kind = shapeToKind(owned.items)
-				return (value, path) => {
+				return (value, path, built) => {
 					if (isObject(value)) {
 						readValue(() => INTRINSICS.array(value), 'compileAuditor', {
 							subject: 'array',
@@ -2003,10 +2016,21 @@ export class ContractCompiler<
 						const at = INTRINSICS.text(entryIndex)
 						// A hole is an absent element, which an element that admits `undefined` reads as clean.
 						if (admitted && !entries.value.dense && !INTRINSICS.own(entries.value.entries, at)) {
-							faults[faults.length] = { reason: 'missing', path: pathOf(path, at), expected: kind }
+							faults[faults.length] = {
+								reason: 'missing',
+								path: built ? buildChildPath(path, at) : pathOf(path, at),
+								expected: kind,
+							}
 							continue
 						}
-						appendEntries(faults, item(entries.value.entries[entryIndex], pathOf(path, at)))
+						appendEntries(
+							faults,
+							item(
+								entries.value.entries[entryIndex],
+								built ? buildChildPath(path, at) : pathOf(path, at),
+								true,
+							),
+						)
 					}
 					appendEntries(faults, buildArrayFaults(node, entries.value.entries.length, path))
 					if (entries.value.exact) return limitEntries(faults, FAULT_LIMIT)
@@ -2022,7 +2046,10 @@ export class ContractCompiler<
 						if (faults.length >= FAULT_LIMIT) break
 						if (isString(member)) {
 							if (!INTRINSICS.own(snapshot, member)) {
-								faults[faults.length] = { reason: 'extra', path: pathOf(path, member) }
+								faults[faults.length] = {
+									reason: 'extra',
+									path: built ? buildChildPath(path, member) : pathOf(path, member),
+								}
 							}
 						} else if (member !== undefined) {
 							faults[faults.length] = { reason: 'extra', path, symbol: preview(member) }
@@ -2035,7 +2062,11 @@ export class ContractCompiler<
 				const declaredKeys = INTRINSICS.keys(owned.properties)
 				const entries: ReadonlyArray<{
 					readonly key: string
-					readonly audit: (value: unknown, path: readonly string[]) => readonly AuditFault[]
+					readonly audit: (
+						value: unknown,
+						path: readonly string[],
+						built?: boolean,
+					) => readonly AuditFault[]
 					readonly optional: boolean
 					readonly kind: FaultKind
 				}> = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(declaredKeys), [
@@ -2079,7 +2110,7 @@ export class ContractCompiler<
 							])
 						: [],
 				)
-				return (value, path) => {
+				return (value, path, built) => {
 					if (isObject(value)) {
 						readValue(() => INTRINSICS.reflect.prototype(value), 'compileAuditor', {
 							subject: 'object',
@@ -2128,17 +2159,27 @@ export class ContractCompiler<
 									: !matchesMember(present, entry.key)
 							if (absent) {
 								if (matchesMember(concealed, entry.key)) {
-									faults[faults.length] = { reason: 'hidden', path: pathOf(path, entry.key) }
+									faults[faults.length] = {
+										reason: 'hidden',
+										path: built ? buildChildPath(path, entry.key) : pathOf(path, entry.key),
+									}
 								} else if (!entry.optional) {
 									faults[faults.length] = {
 										reason: 'missing',
-										path: pathOf(path, entry.key),
+										path: built ? buildChildPath(path, entry.key) : pathOf(path, entry.key),
 										expected: entry.kind,
 									}
 								}
 								continue
 							}
-							appendEntries(faults, entry.audit(record[entry.key], pathOf(path, entry.key)))
+							appendEntries(
+								faults,
+								entry.audit(
+									record[entry.key],
+									built ? buildChildPath(path, entry.key) : pathOf(path, entry.key),
+									true,
+								),
+							)
 						}
 						for (const keyIndex of iterateIndices(() => keys.length)) {
 							const key = keys[keyIndex]
@@ -2146,7 +2187,10 @@ export class ContractCompiler<
 							if (faults.length >= FAULT_LIMIT) return
 							if (matchesMember(vocabulary, key)) continue
 							if (closed) {
-								faults[faults.length] = { reason: 'extra', path: pathOf(path, key) }
+								faults[faults.length] = {
+									reason: 'extra',
+									path: built ? buildChildPath(path, key) : pathOf(path, key),
+								}
 								continue
 							}
 							// The same advertised read the compiled guard performs on an open
@@ -2154,7 +2198,10 @@ export class ContractCompiler<
 							// that `is` rejects and `parse` refuses as unreadable.
 							const observed: unknown = record[key]
 							if (additional !== undefined) {
-								appendEntries(faults, additional(observed, pathOf(path, key)))
+								appendEntries(
+									faults,
+									additional(observed, built ? buildChildPath(path, key) : pathOf(path, key), true),
+								)
 							}
 						}
 						for (const nameIndex of iterateIndices(() => outside.length)) {
@@ -2163,7 +2210,7 @@ export class ContractCompiler<
 							if (faults.length >= FAULT_LIMIT) return
 							faults[faults.length] = {
 								reason: closed ? 'extra' : 'hidden',
-								path: pathOf(path, name),
+								path: built ? buildChildPath(path, name) : pathOf(path, name),
 							}
 						}
 						const symbols = extra === true ? [] : INTRINSICS.symbols(record)
@@ -2190,23 +2237,24 @@ export class ContractCompiler<
 				}
 			}
 			case 'union': {
-				const plans: Array<(value: unknown, path: readonly string[]) => readonly AuditFault[]> =
-					INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(owned.variants), [
-						(variant: ContractShape | undefined) =>
-							variant === undefined ? [] : [this.#auditAt(variant)],
-					])
+				const plans: Array<
+					(value: unknown, path: readonly string[], built?: boolean) => readonly AuditFault[]
+				> = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(owned.variants), [
+					(variant: ContractShape | undefined) =>
+						variant === undefined ? [] : [this.#auditAt(variant)],
+				])
 				const exclusive = owned.mode === 'oneOf'
 				const count = owned.variants.length
 				const discriminated = this.#discriminate(owned)
-				return (value, path) => {
+				return (value, path, built) => {
 					const selected = discriminated?.select(value)
 					const arm = selected === undefined ? undefined : plans[selected]
-					if (arm !== undefined) return arm(value, path)
+					if (arm !== undefined) return arm(value, path, built)
 					const perVariant: Array<readonly AuditFault[]> = []
 					for (const index2 of iterateIndices(() => plans.length)) {
 						const plan = plans[index2]
 						if (plan === undefined) continue
-						const variantFaults = plan(value, path)
+						const variantFaults = plan(value, path, built)
 						if (variantFaults.length === 0) {
 							// An `anyOf` verdict is settled by the FIRST clean variant in
 							// declaration order, so no later variant plan runs for a value an
@@ -2239,17 +2287,17 @@ export class ContractCompiler<
 			}
 			case 'optional': {
 				const inner = this.#auditAt(owned.inner)
-				return (value, path) => (value === undefined ? [] : inner(value, path))
+				return (value, path, built) => (value === undefined ? [] : inner(value, path, built))
 			}
 			case 'nullable': {
 				const inner = this.#auditAt(owned.inner)
-				return (value, path) => (value === null ? [] : inner(value, path))
+				return (value, path, built) => (value === null ? [] : inner(value, path, built))
 			}
 			// Each declared member is read one time and its value handed to the child, and an
 			// undeclared member is never read, so an implementation answers through its prototype.
 			case 'interface': {
 				const entries = this.#membersOf(owned)
-				return (value, path) => {
+				return (value, path, built) => {
 					if (isObject(value)) {
 						readValue(() => INTRINSICS.array(value), 'compileAuditor', {
 							subject: 'interface',
@@ -2264,7 +2312,7 @@ export class ContractCompiler<
 						const entry = entries[entryIndex]
 						if (entry === undefined) continue
 						if (faults.length >= FAULT_LIMIT) break
-						const at = pathOf(path, entry.key)
+						const at = built ? buildChildPath(path, entry.key) : pathOf(path, entry.key)
 						const member: unknown = readValue(
 							() => INTRINSICS.reflect.read(value, entry.key),
 							'compileAuditor',
@@ -2276,7 +2324,7 @@ export class ContractCompiler<
 							}
 							continue
 						}
-						appendEntries(faults, entry.audit(member, at))
+						appendEntries(faults, entry.audit(member, at, true))
 					}
 					return limitEntries(faults, FAULT_LIMIT)
 				}
@@ -2309,13 +2357,18 @@ export class ContractCompiler<
 	}
 
 	#exposeReport(
-		plan: (value: unknown, path: readonly string[]) => readonly Fault[],
+		plan: (value: unknown, path: readonly string[], built?: boolean) => readonly Fault[],
 	): ReporterFunction {
-		return (value: unknown, path: readonly string[] = []): readonly Fault[] =>
-			contain(() => plan(value, path), 'compileReporter')
+		return (value: unknown, path?: readonly string[]): readonly Fault[] =>
+			contain(
+				() => (path === undefined ? plan(value, [], true) : plan(value, path, false)),
+				'compileReporter',
+			)
 	}
 
-	#reportAt(shape: ContractShape): (value: unknown, path: readonly string[]) => readonly Fault[] {
+	#reportAt(
+		shape: ContractShape,
+	): (value: unknown, path: readonly string[], built?: boolean) => readonly Fault[] {
 		const compiled = this.#reports[this.#locate(shape)]
 		if (compiled === undefined) {
 			throw new ContractError('ContractCompiler: a child reporter is unavailable', {
@@ -2326,7 +2379,9 @@ export class ContractCompiler<
 		return compiled
 	}
 
-	#reportOf(index: number): (value: unknown, path: readonly string[]) => readonly Fault[] {
+	#reportOf(
+		index: number,
+	): (value: unknown, path: readonly string[], built?: boolean) => readonly Fault[] {
 		const owned = this.#node(index)
 		switch (owned.category) {
 			// The same compile-time gate the auditor's leaves carry, over the COERCED
@@ -2411,7 +2466,7 @@ export class ContractCompiler<
 				const item = this.#reportAt(owned.items)
 				const admitted = this.#admits(owned.items)
 				const kind = shapeToKind(owned.items)
-				return (value, path) => {
+				return (value, path, built) => {
 					if (!isArray(value)) {
 						return [{ reason: 'type', path, expected: 'array', received: preview(value) }]
 					}
@@ -2425,10 +2480,21 @@ export class ContractCompiler<
 						const at = INTRINSICS.text(entryIndex)
 						// The parser refuses a hole, so the report names it where the element reads it as clean.
 						if (admitted && !entries.value.dense && !INTRINSICS.own(entries.value.entries, at)) {
-							faults[faults.length] = { reason: 'missing', path: pathOf(path, at), expected: kind }
+							faults[faults.length] = {
+								reason: 'missing',
+								path: built ? buildChildPath(path, at) : pathOf(path, at),
+								expected: kind,
+							}
 							continue
 						}
-						appendEntries(faults, item(entries.value.entries[entryIndex], pathOf(path, at)))
+						appendEntries(
+							faults,
+							item(
+								entries.value.entries[entryIndex],
+								built ? buildChildPath(path, at) : pathOf(path, at),
+								true,
+							),
+						)
 					}
 					appendEntries(faults, buildArrayFaults(node, entries.value.entries.length, path))
 					return limitEntries(faults, FAULT_LIMIT)
@@ -2438,7 +2504,11 @@ export class ContractCompiler<
 				const keyList = INTRINSICS.keys(owned.properties)
 				const entries: ReadonlyArray<{
 					readonly key: string
-					readonly report: (value: unknown, path: readonly string[]) => readonly Fault[]
+					readonly report: (
+						value: unknown,
+						path: readonly string[],
+						built?: boolean,
+					) => readonly Fault[]
 					readonly optional: boolean
 					readonly kind: FaultKind
 					readonly admits: boolean
@@ -2493,7 +2563,7 @@ export class ContractCompiler<
 							])
 						: [],
 				)
-				return (value, path) => {
+				return (value, path, built) => {
 					if (!isRecord(value)) {
 						return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
 					}
@@ -2528,7 +2598,7 @@ export class ContractCompiler<
 								if (!entry.optional) {
 									faults[faults.length] = {
 										reason: 'missing',
-										path: pathOf(path, entry.key),
+										path: built ? buildChildPath(path, entry.key) : pathOf(path, entry.key),
 										expected: entry.kind,
 									}
 								}
@@ -2539,13 +2609,20 @@ export class ContractCompiler<
 								if (!entry.optional) {
 									faults[faults.length] = {
 										reason: 'missing',
-										path: pathOf(path, entry.key),
+										path: built ? buildChildPath(path, entry.key) : pathOf(path, entry.key),
 										expected: entry.kind,
 									}
 								}
 								continue
 							}
-							appendEntries(faults, entry.report(raw, pathOf(path, entry.key)))
+							appendEntries(
+								faults,
+								entry.report(
+									raw,
+									built ? buildChildPath(path, entry.key) : pathOf(path, entry.key),
+									true,
+								),
+							)
 						}
 						// A CLOSED object's undeclared key is never read here, because `parse`
 						// drops it without reading it either. An OPEN one's is, because `parse`
@@ -2560,7 +2637,10 @@ export class ContractCompiler<
 								if (matchesMember(vocabulary, key)) continue
 								const observed: unknown = record[key]
 								if (tail !== undefined) {
-									appendEntries(faults, tail(observed, pathOf(path, key)))
+									appendEntries(
+										faults,
+										tail(observed, built ? buildChildPath(path, key) : pathOf(path, key), true),
+									)
 								}
 							}
 						}
@@ -2573,7 +2653,11 @@ export class ContractCompiler<
 			}
 			case 'union': {
 				const variants: ReadonlyArray<{
-					readonly report: (value: unknown, path: readonly string[]) => readonly Fault[]
+					readonly report: (
+						value: unknown,
+						path: readonly string[],
+						built?: boolean,
+					) => readonly Fault[]
 					readonly guard: Guard<unknown>
 				}> = INTRINSICS.reflect.apply(INTRINSICS.expand, readIndexView(owned.variants), [
 					(variant: ContractShape | undefined) =>
@@ -2586,10 +2670,11 @@ export class ContractCompiler<
 									},
 								],
 				])
-				const plans: ReadonlyArray<(value: unknown, path: readonly string[]) => readonly Fault[]> =
-					INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(variants), [
-						(variant: (typeof variants)[number]) => variant.report,
-					])
+				const plans: ReadonlyArray<
+					(value: unknown, path: readonly string[], built?: boolean) => readonly Fault[]
+				> = INTRINSICS.reflect.apply(INTRINSICS.project, readIndexView(variants), [
+					(variant: (typeof variants)[number]) => variant.report,
+				])
 				const guards: ReadonlyArray<Guard<unknown>> = INTRINSICS.reflect.apply(
 					INTRINSICS.project,
 					readIndexView(variants),
@@ -2598,15 +2683,15 @@ export class ContractCompiler<
 				const exclusive = owned.mode === 'oneOf'
 				const count = owned.variants.length
 				const discriminated = this.#discriminate(owned)
-				return (value, path) => {
+				return (value, path, built) => {
 					const selected = discriminated?.select(value)
 					const arm = selected === undefined ? undefined : plans[selected]
-					if (arm !== undefined) return arm(value, path)
+					if (arm !== undefined) return arm(value, path, built)
 					const perVariant: Array<readonly Fault[]> = []
 					for (const index2 of iterateIndices(() => plans.length)) {
 						const plan = plans[index2]
 						if (plan === undefined) continue
-						const variantFaults = plan(value, path)
+						const variantFaults = plan(value, path, built)
 						// The auditor's first-clean-variant stop, mirrored: an `anyOf` report
 						// is settled by the FIRST variant that reports nothing, in declaration
 						// order, and no later variant plan reads the value after it. A `oneOf`
@@ -2640,11 +2725,11 @@ export class ContractCompiler<
 			}
 			case 'optional': {
 				const inner = this.#reportAt(owned.inner)
-				return (value, path) => (value === undefined ? [] : inner(value, path))
+				return (value, path, built) => (value === undefined ? [] : inner(value, path, built))
 			}
 			case 'nullable': {
 				const inner = this.#reportAt(owned.inner)
-				return (value, path) => (value === null ? [] : inner(value, path))
+				return (value, path, built) => (value === null ? [] : inner(value, path, built))
 			}
 			// The parser returns the value by identity when the audit is clean, so the report is the
 			// audit's own walk. A member whose audit names an undeclared or hidden key reports one
@@ -2652,7 +2737,7 @@ export class ContractCompiler<
 			// member that cannot be read reports the interface as the wrong kind.
 			case 'interface': {
 				const entries = this.#membersOf(owned)
-				return (value, path) => {
+				return (value, path, built) => {
 					if ((!isObject(value) && !isFunction(value)) || isArray(value)) {
 						return [{ reason: 'type', path, expected: 'object', received: preview(value) }]
 					}
@@ -2662,7 +2747,7 @@ export class ContractCompiler<
 							const entry = entries[entryIndex]
 							if (entry === undefined) continue
 							if (faults.length >= FAULT_LIMIT) return
-							const at = pathOf(path, entry.key)
+							const at = built ? buildChildPath(path, entry.key) : pathOf(path, entry.key)
 							const member: unknown = INTRINSICS.reflect.read(value, entry.key)
 							if (member === undefined && !entry.admits) {
 								if (!entry.optional) {
@@ -2670,7 +2755,7 @@ export class ContractCompiler<
 								}
 								continue
 							}
-							const found = entry.audit(member, at)
+							const found = entry.audit(member, at, true)
 							const kept: readonly Fault[] = INTRINSICS.reflect.apply(
 								INTRINSICS.select,
 								readIndexView(found),

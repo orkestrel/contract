@@ -8,23 +8,31 @@ export class EvaluationScope {
 	static readonly #path: readonly string[] = INTRINSICS.freeze([])
 	#answers: WeakMap<object, WeakMap<object, unknown>> | undefined
 
-	/** Evaluates a node within the active call, disposing a newly opened scope on settlement. */
+	/**
+	 * Evaluates a node within the active call, disposing a newly opened scope on settlement.
+	 *
+	 * @remarks
+	 * The plan receives `built` as its third argument: true when this package built `path`.
+	 */
 	static run<T>(
 		plan: EvaluationFunction<T>,
 		value: unknown,
 		path: readonly string[] = EvaluationScope.#path,
 		clean = false,
+		built = false,
 	): T {
-		if (!isObject(value) && !isFunction(value)) return plan(value, path)
+		if (!isObject(value) && !isFunction(value)) return plan(value, path, built)
 		const active = EvaluationScope.#read()
-		if (active instanceof EvaluationScope) return active.#evaluate(plan, value, path, clean)
+		if (active instanceof EvaluationScope) {
+			return active.#evaluate(plan, value, path, clean, built)
+		}
 		if (active !== undefined) throw new INTRINSICS.error('Evaluation scope is unavailable')
 		const scope = new EvaluationScope()
 		INTRINSICS.reflect.apply(INTRINSICS.admit, EvaluationScope.#active, [scope])
 		try {
 			// The opening answer is stored only after its walk returns, and the scope settles
 			// right after, so no read could recall it: the opening call asks the plan alone.
-			return plan(value, path)
+			return plan(value, path, built)
 		} finally {
 			INTRINSICS.reflect.apply(INTRINSICS.remove, EvaluationScope.#active, [scope])
 		}
@@ -50,6 +58,7 @@ export class EvaluationScope {
 		value: object,
 		path: readonly string[],
 		clean: boolean,
+		built: boolean,
 	): T {
 		// A root call that reaches no nested node never builds the per-plan table.
 		const answers = (this.#answers ??= new INTRINSICS.weakMap<object, WeakMap<object, unknown>>())
@@ -64,7 +73,7 @@ export class EvaluationScope {
 		}
 		const recalled: T | undefined = INTRINSICS.reflect.apply(INTRINSICS.recall, memo, [value])
 		if (recalled !== undefined) return recalled
-		const answer = plan(value, path)
+		const answer = plan(value, path, built)
 		if (!clean || (INTRINSICS.array(answer) && answer.length === 0)) {
 			INTRINSICS.reflect.apply(INTRINSICS.retain, memo, [value, answer])
 		}

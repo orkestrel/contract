@@ -290,7 +290,7 @@ export function compileGenerator(shape: ContractShape, random?: RandomFunction):
 export function compileReporter(
 	shape: ContractShape,
 	value: unknown,
-	path: readonly string[] = [],
+	path?: readonly string[],
 ): readonly Fault[] {
 	return contain(() => new ContractCompiler(shape).reporter(value, path), 'compileReporter')
 }
@@ -333,7 +333,7 @@ export function compileReporter(
 export function compileAuditor(
 	shape: ContractShape,
 	value: unknown,
-	path: readonly string[] = [],
+	path?: readonly string[],
 ): readonly AuditFault[] {
 	return contain(() => new ContractCompiler(shape).auditor(value, path), 'compileAuditor')
 }
