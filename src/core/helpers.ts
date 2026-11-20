@@ -2495,20 +2495,14 @@ export function resolveField(record: Readonly<Record<string, unknown>>, path: Fi
 		if (isString(path)) {
 			return INTRINSICS.own(record, path) ? INTRINSICS.reflect.read(record, path) : undefined
 		}
-		const keys = path
-		const indices = iterateIndices(() => keys.length)
-		return INTRINSICS.reflect.apply(INTRINSICS.reduce, indices, [
-			(current: unknown, index: number): unknown => {
-				const key = keys[index]
-				if (key === undefined || !isObject(current) || !INTRINSICS.own(current, key)) {
-					// Closing the cursor prevents even a later path-length observation.
-					indices.return()
-					return undefined
-				}
-				return INTRINSICS.reflect.read(current, key)
-			},
-			record,
-		])
+		let current: unknown = record
+		for (let index = 0; index < path.length; index++) {
+			const key = path[index]
+			// Returning at the first missing segment leaves the later segments and length unread.
+			if (key === undefined || !isObject(current) || !INTRINSICS.own(current, key)) return undefined
+			current = INTRINSICS.reflect.read(current, key)
+		}
+		return current
 	})
 	return isSuccess(outcome) ? outcome.value : undefined
 }

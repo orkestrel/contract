@@ -7,11 +7,20 @@ import { expect, it } from 'vitest'
 
 const NAMES = Object.freeze(Object.keys(ROW_BENCH_VALUE))
 const POSITIONS = buildPositions(['id', 'organization', 'rank', 'body', 'active'])
+const NESTED = Object.freeze({ row: ROW_BENCH_VALUE })
 
 it('resolves a one-key path', async ({ bench }) => {
 	expect(resolveField(ROW_BENCH_VALUE, 'organization')).toBe('o1')
 	const result = await bench('resolves a one-key path', {}, () => {
 		resolveField(ROW_BENCH_VALUE, 'organization')
+	}).run({ time: 1000 })
+	expect(result.state).toBe('completed')
+})
+
+it('resolves a two-key path', async ({ bench }) => {
+	expect(resolveField(NESTED, ['row', 'organization'])).toBe('o1')
+	const result = await bench('resolves a two-key path', {}, () => {
+		resolveField(NESTED, ['row', 'organization'])
 	}).run({ time: 1000 })
 	expect(result.state).toBe('completed')
 })

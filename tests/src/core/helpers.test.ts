@@ -2908,6 +2908,32 @@ describe('resolveField', () => {
 		expect(reads).toEqual(['length', '0'])
 	})
 
+	it('rereads the path length before each step and reads nothing after a missing field', () => {
+		const shrinking: string[] = []
+		const shrunk = new Proxy(['a', 'b', 'c', 'd'], {
+			get(target, key, receiver) {
+				const value: unknown = Reflect.get(target, key, receiver)
+				shrinking.push(`${String(key)}=${String(value)}`)
+				if (key === '0') target.length = 3
+				return value
+			},
+		})
+		const growing: string[] = []
+		const grown = new Proxy(['a'], {
+			get(target, key, receiver) {
+				const value: unknown = Reflect.get(target, key, receiver)
+				growing.push(`${String(key)}=${String(value)}`)
+				if (key === '0' && target.length === 1) target.push('b')
+				return value
+			},
+		})
+
+		expect(resolveField({ a: { b: {} } }, shrunk)).toBeUndefined()
+		expect(shrinking).toEqual(['length=4', '0=a', 'length=3', '1=b', 'length=3', '2=c'])
+		expect(resolveField({ a: { b: 5 } }, grown)).toBe(5)
+		expect(growing).toEqual(['length=1', '0=a', 'length=2', '1=b', 'length=2'])
+	})
+
 	it('resolves a long cyclic path without recursive stack growth', () => {
 		const record: Record<string, unknown> = { value: 42 }
 		record.self = record
