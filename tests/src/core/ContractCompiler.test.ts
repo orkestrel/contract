@@ -2283,3 +2283,64 @@ describe('ContractCompiler — fault paths', () => {
 		expect(walked).toEqual([0, 0])
 	})
 })
+
+describe('ContractCompiler — the parsed record', () => {
+	it('writes each member as an own data property of a null-prototype record', () => {
+		const contract = createContract(
+			objectShape({ id: numberShape() }, { additionalProperties: true }),
+		)
+		const parsed = contract.parse(
+			JSON.parse('{"id":1,"__proto__":{"polluted":true},"10":"ten","2":"two","x":"y"}'),
+		)
+		const member = { writable: true, enumerable: true, configurable: true }
+
+		expect(Object.getPrototypeOf(parsed)).toBeNull()
+		expect(Object.getOwnPropertyNames(parsed)).toEqual(['2', '10', 'id', '__proto__', 'x'])
+		expect(Object.getOwnPropertyDescriptors(parsed)).toEqual({
+			2: { value: 'two', ...member },
+			10: { value: 'ten', ...member },
+			id: { value: 1, ...member },
+			['__proto__']: { value: { polluted: true }, ...member },
+			x: { value: 'y', ...member },
+		})
+		expect(Object.isExtensible(parsed)).toBe(true)
+		expect(Object.isFrozen(parsed)).toBe(false)
+		expect(Reflect.get({}, 'polluted')).toBeUndefined()
+	})
+
+	it('writes a declared __proto__ member and integer-like declared keys as own data', () => {
+		const properties: Record<string, ContractShape> = Object.create(null)
+		properties['b'] = stringShape()
+		properties['__proto__'] = stringShape()
+		properties['10'] = stringShape()
+		properties['2'] = stringShape()
+		const contract = createContract(objectShape(properties))
+		const parsed = contract.parse(
+			JSON.parse('{"2":"two","__proto__":"declared","b":"b","10":"ten"}'),
+		)
+
+		expect(Object.getPrototypeOf(parsed)).toBeNull()
+		expect(Object.getOwnPropertyNames(parsed)).toEqual(['2', '10', 'b', '__proto__'])
+		expect(Object.getOwnPropertyDescriptor(parsed, '__proto__')?.value).toBe('declared')
+	})
+
+	it('reads a getter-backed member one time and holds its value as data', () => {
+		const reads = createRecorder<[key: string]>()
+		const record = buildReportingRecord(
+			[
+				['id', 5],
+				['name', 'Ada'],
+			],
+			reads.handler,
+		)
+		const parsed = createContract(objectShape({ id: numberShape(), name: stringShape() })).parse(
+			record,
+		)
+
+		expect(reads.calls).toEqual([['id'], ['name']])
+		expect(Object.getOwnPropertyDescriptors(parsed)).toEqual({
+			id: { value: 5, writable: true, enumerable: true, configurable: true },
+			name: { value: 'Ada', writable: true, enumerable: true, configurable: true },
+		})
+	})
+})

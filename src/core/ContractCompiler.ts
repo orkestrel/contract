@@ -1624,9 +1624,6 @@ export class ContractCompiler<
 					const outcome = attempt(() => {
 						const present = maskable ? undefined : collectMembers(keys)
 						const seen = present === undefined ? readPresence(keys, positions) : 0
-						// Honest typing: a null-prototype accumulator so an input own key
-						// literally named '__proto__' lands as an own data key instead of
-						// mutating the prototype (same pattern as `pickOf`).
 						const selected: Array<readonly [string, unknown]> = []
 						// The entry list is this compiler's own and the key list this walk's own,
 						// so the captured method reads each in order and reaches no caller member.
@@ -1681,14 +1678,14 @@ export class ContractCompiler<
 								},
 							])
 						if (extras) return undefined
-						return INTRINSICS.rebase(
-							INTRINSICS.record<unknown>({
-								[Symbol.iterator]: INTRINSICS.reflect.apply(INTRINSICS.bind, INTRINSICS.iterator, [
-									selected,
-								]),
-							}),
-							null,
-						)
+						// A null-prototype record, so an input own key named '__proto__' lands as an own
+						// data key: a write to a record with no prototype reaches no setter.
+						const result: Record<string, unknown> = { __proto__: null }
+						for (let step = 0; step < selected.length; step++) {
+							const pair = selected[step]
+							if (pair !== undefined) result[pair[0]] = pair[1]
+						}
+						return result
 					})
 					if (isSuccess(outcome)) return outcome.value
 					if (isContractError(outcome.error)) throw outcome.error

@@ -1,5 +1,5 @@
 // Times the compiled guards a database pays per stored row and per query-door read, the refusal
-// doors on the same row, the fifty-level chain's audit and ownership, and the owning door
+// and parse doors on the same row, the fifty-level chain's audit and ownership, and the owning door
 // against `admitValue` on the option bags a factory admits, one `it` per cell; select one with an
 // anchored `-t`. Each answer is asserted before its cell is timed, and an owning cell annotates its
 // median latency in milliseconds for an interleaved reading.
@@ -98,6 +98,22 @@ it('explains a six-column row with one fault', async ({ bench }) => {
 	expect(row.explain(ROW_BENCH_REFUSED)).toHaveLength(1)
 	const result = await bench('explains a six-column row with one fault', {}, () => {
 		row.explain(ROW_BENCH_REFUSED)
+	}).run({ time: 1000 })
+	expect(result.state).toBe('completed')
+})
+
+it('parses a six-column row', async ({ bench }) => {
+	expect(row.parse(ROW_BENCH_VALUE)).toEqual(ROW_BENCH_VALUE)
+	const result = await bench('parses a six-column row', {}, () => {
+		row.parse(ROW_BENCH_VALUE)
+	}).run({ time: 1000 })
+	expect(result.state).toBe('completed')
+})
+
+it('parses a ten-condition query', async ({ bench }) => {
+	expect(query.parse(QUERY_BENCH_TEN)).toEqual(QUERY_BENCH_TEN)
+	const result = await bench('parses a ten-condition query', {}, () => {
+		query.parse(QUERY_BENCH_TEN)
 	}).run({ time: 1000 })
 	expect(result.state).toBe('completed')
 })
