@@ -1466,7 +1466,7 @@
 			}
 		},
 		{
-			"files": ["tests/setupBrowser.ts", "tests/setupStyles.ts"],
+			"files": ["tests/setupBrowser.ts", "tests/setupStyles.ts", "tests/setupIsolation.ts"],
 			"rules": {
 				"no-restricted-imports": [
 					"error",

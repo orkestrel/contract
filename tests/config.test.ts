@@ -5164,6 +5164,10 @@ createSomething({
 				["import { expect } from 'vitest'", 'debugger'].join('\n'),
 			)
 			scratch.write(
+				'tests/setupIsolation.ts',
+				["import { readFileSync } from 'node:fs'", 'debugger'].join('\n'),
+			)
+			scratch.write(
 				'tests/setupPolicy.ts',
 				["import { readFileSync } from 'node:fs'", "import { vi } from 'vitest'", 'debugger'].join(
 					'\n',
@@ -5381,6 +5385,7 @@ createSomething({
 				{ code: 'policy(no-mutable-property)', filename: 'src/violations/types.ts' },
 				{ code: 'eslint(no-restricted-imports)', filename: 'tests/setup.ts' },
 				{ code: 'eslint(no-restricted-imports)', filename: 'tests/setupBrowser.ts' },
+				{ code: 'eslint(no-restricted-imports)', filename: 'tests/setupIsolation.ts' },
 				{ code: 'eslint(no-restricted-imports)', filename: 'tests/setupServer.ts' },
 				{ code: 'policy(no-misplaced-type)', filename: 'src/violations/fixture.ts' },
 				{ code: 'policy(no-misplaced-data)', filename: 'src/violations/fixture.ts' },
